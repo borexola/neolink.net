@@ -24,6 +24,7 @@ public sealed record WebCameraInfo(string Name, List<WebStreamInfo> Streams, ICa
 ///   WS  /api/stream?path=...                — live fMP4 video (MSE-compatible)
 ///   GET /api/cameras/{name}/capabilities    — discovered device info + feature flags
 ///   GET /api/cameras/{name}/streaminfo      — encode profiles (resolution/fps/bitrate tables)
+///   POST/PUT .../settings/stream            — change an encode profile (needs http_address)
 ///   GET/POST .../led /pir; POST .../ptz /reboot; GET .../battery — camera control
 ///   /                                       — web UI (when enabled in the config)
 /// Mutating endpoints require HTTP Basic auth when users are configured (same
@@ -34,6 +35,8 @@ public static class WebApi
     private sealed record LedRequest(string? State, string? LightState);
     private sealed record PirRequest(bool? Enabled);
     private sealed record PtzRequest(string? Command, float? Speed);
+    private sealed record StreamSettingsRequest(string? Stream, uint? Width, uint? Height,
+        uint? Framerate, uint? Bitrate);
 
     public static async Task RunAsync(string bindAddr, int port, bool webUi,
         IReadOnlyList<WebCameraInfo> cameras, IReadOnlyDictionary<string, string> users,
@@ -137,6 +140,10 @@ public static class WebApi
             {
                 return Results.Json(new { error = ex.Message }, statusCode: 502);
             }
+            catch (ReolinkApiException ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: 502);
+            }
             catch (TimeoutException)
             {
                 return Results.Json(new { error = "camera did not reply" }, statusCode: 504);
@@ -171,6 +178,7 @@ public static class WebApi
                         led = caps.Features.Led,
                         pir = caps.Features.Pir,
                         battery = caps.Features.Battery,
+                        streamSettings = control.CanSetStreamSettings,
                     },
                     support = caps.Support == null ? null : XmlToJson(caps.Support),
                 });
@@ -194,6 +202,26 @@ public static class WebApi
                     .ToList();
                 return Results.Json(new { profiles = (object?)profiles ?? Array.Empty<object>() });
             }));
+
+        // Stream encode settings ride the camera's Reolink HTTP API (http_address in
+        // the config); the Baichuan protocol has no verified setter. The camera
+        // restarts the affected stream to apply — CameraService reconnects on its own.
+        Task<IResult> SetStreamSettings(string name, StreamSettingsRequest req, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: true, async (control, reqCt) =>
+            {
+                string[] streams = { "mainStream", "subStream", "externStream" };
+                if (req.Stream == null || !streams.Contains(req.Stream))
+                    return Results.Json(new { error = "provide stream: mainStream|subStream|externStream" }, statusCode: 400);
+                if ((req.Width == null) != (req.Height == null))
+                    return Results.Json(new { error = "width and height must be given together" }, statusCode: 400);
+                if (req.Width == null && req.Framerate == null && req.Bitrate == null)
+                    return Results.Json(new { error = "provide width+height, framerate and/or bitrate" }, statusCode: 400);
+                await control.SetStreamSettingsAsync(req.Stream, req.Width, req.Height,
+                    req.Framerate, req.Bitrate, reqCt);
+                return Results.Json(new { ok = true, note = "the camera restarts its stream to apply the change" });
+            });
+        app.MapPost("/api/cameras/{name}/settings/stream", SetStreamSettings);
+        app.MapPut("/api/cameras/{name}/settings/stream", SetStreamSettings);
 
         app.MapGet("/api/cameras/{name}/battery", (string name, HttpContext ctx) =>
             ExecAsync(name, ctx, mutating: false, async (control, reqCt) =>

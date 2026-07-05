@@ -241,6 +241,7 @@ the original Rust neolink are also accepted.
 |---|---|---|
 | `name` | *required* | Name used in the RTSP URL and web UI |
 | `address` | *required* | Camera IP/hostname; port defaults to `9000` |
+| `http_address` | *(none)* | The camera's HTTP(S) web interface (`host`, `host:port` or full URL). Enables changing stream profiles (resolution/fps/bitrate) from the web UI via the documented Reolink HTTP API |
 | `username` / `password` | *required* | The camera's own login (same as the Reolink app) |
 | `stream` | `both` | `mainStream`, `subStream`, `externStream`, `both`, or `all` |
 | `channel_id` | `0` | Channel when connecting through a Reolink NVR (0-based) |

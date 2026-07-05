@@ -33,6 +33,11 @@
       // IP or hostname of the camera. Port defaults to 9000 if omitted.
       "address": "192.168.1.187:9000",
 
+      // Optional: the camera's HTTP(S) web interface ("host", "host:port" or full URL).
+      // Enables changing stream profiles (resolution/fps/bitrate) from the web UI;
+      // most non-battery Reolink cameras serve it on port 80/443.
+      // "http_address": "192.168.1.187",
+
       // Which streams to serve: "mainStream", "subStream", "externStream", "both", or "all".
       // "both" serves /driveway (+ /driveway/mainStream) and /driveway/subStream.
       "stream": "both",
