@@ -8,7 +8,7 @@ namespace Neolink.Rtsp;
 public sealed class RtspMount
 {
     public required string Path { get; init; }
-    public required StreamHub Hub { get; init; }
+    public required IStreamHub Hub { get; init; }
     /// <summary>Users allowed to access this mount; null means no authentication required.</summary>
     public HashSet<string>? PermittedUsers { get; init; }
 }
@@ -47,24 +47,10 @@ public sealed class RtspServer
         if (mount.PermittedUsers == null || _users.Count == 0)
             return true;
 
-        if (authorizationHeader == null)
+        var creds = NetUtil.DecodeBasicAuth(authorizationHeader);
+        if (creds == null)
             return false;
-        const string prefix = "Basic ";
-        if (!authorizationHeader.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            return false;
-        string decoded;
-        try
-        {
-            decoded = Encoding.UTF8.GetString(Convert.FromBase64String(authorizationHeader[prefix.Length..].Trim()));
-        }
-        catch
-        {
-            return false;
-        }
-        int colon = decoded.IndexOf(':');
-        if (colon < 0) return false;
-        string user = decoded[..colon];
-        string pass = decoded[(colon + 1)..];
+        var (user, pass) = creds.Value;
 
         return _users.TryGetValue(user, out var expected)
             && expected == pass

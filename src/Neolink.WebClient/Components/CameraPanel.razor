@@ -1,0 +1,353 @@
+@using System.Text.Json
+@using System.Net.Http.Headers
+@inject HttpClient Http
+
+@* Per-camera settings/control dialog. Everything shown is discovered from the
+   camera: device info, encode profiles, and the controls the camera supports.
+   Deliberately modal: only the ✕ button dismisses it, so a stray click can't
+   close it mid-adjustment. *@
+
+<div class="backdrop panel-backdrop"></div>
+<aside class="campanel" role="dialog" aria-label="Camera settings">
+    <div class="campanel-head">
+        <span class="dot @(_caps?.Online == true ? "on" : "off")"></span>
+        <span class="campanel-title">@CameraName</span>
+        <button class="icon-btn" title="Close" @onclick="CloseAsync">✕</button>
+    </div>
+
+    @if (_error != null)
+    {
+        <div class="notice error">@_error</div>
+    }
+
+    @if (_loading)
+    {
+        <div class="notice">Querying camera…</div>
+    }
+    else if (_caps != null && !_caps.Online)
+    {
+        <div class="notice">Camera is offline (reconnecting). Controls appear when it comes back.</div>
+    }
+    else if (_caps != null)
+    {
+        <div class="campanel-section">
+            <div class="campanel-section-title">DEVICE</div>
+            <table class="kv">
+                @if (!string.IsNullOrEmpty(_caps.Version?.Model)) { <tr><td>Model</td><td>@_caps.Version!.Model</td></tr> }
+                @if (!string.IsNullOrEmpty(_caps.Version?.Name)) { <tr><td>Name</td><td>@_caps.Version!.Name</td></tr> }
+                @if (!string.IsNullOrEmpty(_caps.Version?.Firmware)) { <tr><td>Firmware</td><td>@_caps.Version!.Firmware</td></tr> }
+                @if (!string.IsNullOrEmpty(_caps.Version?.Hardware)) { <tr><td>Hardware</td><td>@_caps.Version!.Hardware</td></tr> }
+                @if (!string.IsNullOrEmpty(_caps.Version?.Serial)) { <tr><td>Serial</td><td>@_caps.Version!.Serial</td></tr> }
+                @if (!string.IsNullOrEmpty(_caps.Version?.Build)) { <tr><td>Build</td><td>@_caps.Version!.Build</td></tr> }
+            </table>
+        </div>
+
+        @if (_profiles is { Count: > 0 })
+        {
+            <div class="campanel-section">
+                <div class="campanel-section-title">STREAMS</div>
+                @foreach (var group in _profiles.GroupBy(p => p.Type))
+                {
+                    @* The camera reports one encode table per selectable quality level;
+                       sub-stream tables are usually identical duplicates — dedupe. *@
+                    var options = group
+                        .DistinctBy(p => (p.Width, p.Height, p.DefaultFramerate, p.DefaultBitrate))
+                        .ToList();
+                    <div class="stream-group">
+                        <span class="stream-group-name">@group.First().Label</span>
+                        <div class="stream-options">
+                            @foreach (var p in options)
+                            {
+                                <span class="chip stream-chip @(IsActiveProfile(p) ? "chip-active" : "")"
+                                      title="Framerates: @string.Join(", ", p.Framerates) fps — Bitrates: @string.Join(", ", p.Bitrates) kbps">
+                                    @(p.Width)×@(p.Height) · @p.DefaultFramerate fps · @p.DefaultBitrate kbps
+                                </span>
+                            }
+                        </div>
+                    </div>
+                }
+                <div class="notice small">
+                    Read from the camera; the highlighted profile is live. Changing profiles from here isn't supported yet.
+                </div>
+            </div>
+        }
+
+        @if (_caps.Features?.Battery == true && _battery != null)
+        {
+            <div class="campanel-section">
+                <div class="campanel-section-title">BATTERY</div>
+                <table class="kv">
+                    @if (Num(_battery, "batteryPercent") is { } pct) { <tr><td>Charge</td><td>@pct%</td></tr> }
+                    @if (Str(_battery, "chargeStatus") is { Length: > 0 } cs) { <tr><td>Status</td><td>@cs</td></tr> }
+                    @if (Num(_battery, "temperature") is { } temp) { <tr><td>Temperature</td><td>@temp °C</td></tr> }
+                </table>
+            </div>
+        }
+
+        @if (_caps.Features?.Ptz == true)
+        {
+            <div class="campanel-section">
+                <div class="campanel-section-title">PAN / TILT</div>
+                <div class="ptz-row">
+                    <div class="ptz-pad">
+                        <span></span>
+                        <button class="tool-btn" title="Up (hold)"
+                                @onpointerdown='() => PtzAsync("up")' @onpointerup="PtzStopAsync" @onpointerleave="PtzStopAsync">▲</button>
+                        <span></span>
+                        <button class="tool-btn" title="Left (hold)"
+                                @onpointerdown='() => PtzAsync("left")' @onpointerup="PtzStopAsync" @onpointerleave="PtzStopAsync">◀</button>
+                        <button class="tool-btn" title="Stop" @onclick="PtzStopAsync">■</button>
+                        <button class="tool-btn" title="Right (hold)"
+                                @onpointerdown='() => PtzAsync("right")' @onpointerup="PtzStopAsync" @onpointerleave="PtzStopAsync">▶</button>
+                        <span></span>
+                        <button class="tool-btn" title="Down (hold)"
+                                @onpointerdown='() => PtzAsync("down")' @onpointerup="PtzStopAsync" @onpointerleave="PtzStopAsync">▼</button>
+                        <span></span>
+                    </div>
+                    <label class="ptz-speed">
+                        Speed @_ptzSpeed
+                        <input type="range" min="1" max="64" @bind="_ptzSpeed" @bind:event="oninput" />
+                    </label>
+                </div>
+            </div>
+        }
+
+        @if (_caps.Features?.Led == true && _led != null)
+        {
+            <div class="campanel-section">
+                <div class="campanel-section-title">LIGHTS</div>
+                @* LedState semantics (per the BC protocol): "state" drives the IR
+                   night-vision LEDs, "lightState" the little status/power LED. *@
+                @if (Str(_led, "state") is { Length: > 0 } irState)
+                {
+                    <div class="control-row">
+                        <span>Infrared night vision</span>
+                        <select value="@irState" @onchange='e => SetLedAsync("state", (string?)e.Value)'>
+                            <option value="auto">auto</option>
+                            <option value="open">on</option>
+                            <option value="close">off</option>
+                        </select>
+                    </div>
+                }
+                @if (Str(_led, "lightState") is { Length: > 0 } statusLed)
+                {
+                    <div class="control-row">
+                        <span>Status LED</span>
+                        <button class="chip @(statusLed == "open" ? "" : "chip-off")" @onclick="ToggleStatusLedAsync">
+                            @(statusLed == "open" ? "on" : "off")
+                        </button>
+                    </div>
+                }
+            </div>
+        }
+
+        @if (_caps.Features?.Pir == true && _pir != null)
+        {
+            <div class="campanel-section">
+                <div class="campanel-section-title">PIR MOTION SENSOR</div>
+                <div class="control-row">
+                    <span>Enabled</span>
+                    <button class="chip @(PirEnabled ? "" : "chip-off")" @onclick="TogglePirAsync">
+                        @(PirEnabled ? "on" : "off")
+                    </button>
+                </div>
+            </div>
+        }
+
+        <div class="campanel-section">
+            <div class="campanel-section-title">MAINTENANCE</div>
+            <div class="control-row">
+                <span>Restart the camera</span>
+                @if (!_confirmReboot)
+                {
+                    <button class="chip" @onclick="() => _confirmReboot = true">Reboot…</button>
+                }
+                else
+                {
+                    <button class="chip chip-danger" @onclick="RebootAsync">Confirm reboot</button>
+                    <button class="chip" @onclick="() => _confirmReboot = false">Cancel</button>
+                }
+            </div>
+        </div>
+
+        @if (_status != null)
+        {
+            <div class="notice">@_status</div>
+        }
+    }
+</aside>
+
+@code {
+    [Parameter] public string Server { get; set; } = "";
+    [Parameter] public string CameraName { get; set; } = "";
+    /// <summary>Live stream state (from /api/cameras) used to highlight the active encode profile.</summary>
+    [Parameter] public ApiCamera? Camera { get; set; }
+    [Parameter] public string? User { get; set; }
+    [Parameter] public string? Pass { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private ApiCapabilities? _caps;
+    private List<ApiEncodeProfile>? _profiles;
+    private JsonElement? _battery;
+    private JsonElement? _led;
+    private JsonElement? _pir;
+    private bool _loading;
+    private string? _error;
+    private string? _status;
+    private bool _confirmReboot;
+    private int _ptzSpeed = 32;
+    private string? _loadedFor;
+
+    private bool PirEnabled => Num(_pir, "enable") == 1;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_loadedFor == CameraName) return;
+        _loadedFor = CameraName;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _error = _status = null;
+        _caps = null;
+        _profiles = null;
+        _battery = _led = _pir = null;
+        _confirmReboot = false;
+        StateHasChanged();
+
+        // Capability discovery drives everything else; the camera answers control
+        // commands one at a time, so the remaining queries run sequentially.
+        _caps = await GetAsync<ApiCapabilities>("capabilities");
+        if (_caps is { Online: true })
+        {
+            _profiles = (await GetAsync<ApiStreamProfiles>("streaminfo"))?.Profiles;
+            if (_caps.Features?.Battery == true) _battery = await GetAsync<JsonElement?>("battery");
+            if (_caps.Features?.Led == true) _led = await GetAsync<JsonElement?>("led");
+            if (_caps.Features?.Pir == true) _pir = await GetAsync<JsonElement?>("pir");
+        }
+        _loading = false;
+    }
+
+    private Task CloseAsync() => OnClose.InvokeAsync();
+
+    // ------------------------------------------------------------ actions
+
+    private Task PtzAsync(string command) => PostAsync("ptz", new { command, speed = (float)_ptzSpeed });
+    private Task PtzStopAsync() => PtzAsync("stop");
+
+    private bool IsActiveProfile(ApiEncodeProfile p) =>
+        Camera?.Streams.Any(s => s.Kind == p.Type && s.Width == p.Width && s.Height == p.Height) == true;
+
+    private async Task SetLedAsync(string field, string? value)
+    {
+        if (value == null) return;
+        object body = field == "state" ? new { state = value } : new { lightState = value };
+        if (await PostAsync("led", body))
+            _led = await GetAsync<JsonElement?>("led");
+    }
+
+    private Task ToggleStatusLedAsync() =>
+        SetLedAsync("lightState", Str(_led, "lightState") == "open" ? "close" : "open");
+
+    private async Task TogglePirAsync()
+    {
+        if (await PostAsync("pir", new { enabled = !PirEnabled }))
+            _pir = await GetAsync<JsonElement?>("pir");
+    }
+
+    private async Task RebootAsync()
+    {
+        _confirmReboot = false;
+        if (await PostAsync("reboot", new { }))
+            _status = "Reboot accepted — the camera will drop offline for a minute.";
+    }
+
+    // ------------------------------------------------------------ HTTP helpers
+
+    private string BaseUrl => $"{Server.TrimEnd('/')}/api/cameras/{Uri.EscapeDataString(CameraName)}";
+
+    private HttpRequestMessage NewRequest(HttpMethod method, string path)
+    {
+        var req = new HttpRequestMessage(method, $"{BaseUrl}/{path}");
+        if (!string.IsNullOrEmpty(User))
+        {
+            var token = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"{User}:{Pass}"));
+            req.Headers.Authorization = new AuthenticationHeaderValue("Basic", token);
+        }
+        return req;
+    }
+
+    private async Task<T?> GetAsync<T>(string path)
+    {
+        try
+        {
+            using var res = await Http.SendAsync(NewRequest(HttpMethod.Get, path));
+            if (!res.IsSuccessStatusCode) return default;
+            return await res.Content.ReadFromJsonAsync<T>();
+        }
+        catch (Exception ex)
+        {
+            _error = $"Cannot reach {Server}: {ex.Message}";
+            return default;
+        }
+    }
+
+    private async Task<bool> PostAsync(string path, object body)
+    {
+        _status = null;
+        try
+        {
+            var req = NewRequest(HttpMethod.Post, path);
+            req.Content = JsonContent.Create(body);
+            using var res = await Http.SendAsync(req);
+            if (res.IsSuccessStatusCode)
+            {
+                _error = null;
+                return true;
+            }
+            _error = res.StatusCode == System.Net.HttpStatusCode.Unauthorized
+                ? "Not authorized — set your credentials under server settings (⚙)."
+                : await ReadErrorAsync(res) ?? $"Request failed ({(int)res.StatusCode})";
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _error = $"Cannot reach {Server}: {ex.Message}";
+            return false;
+        }
+    }
+
+    private static async Task<string?> ReadErrorAsync(HttpResponseMessage res)
+    {
+        try
+        {
+            var el = await res.Content.ReadFromJsonAsync<JsonElement>();
+            return el.TryGetProperty("error", out var err) ? err.GetString() : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    // ------------------------------------------------------------ JSON helpers
+
+    private static string? Str(JsonElement? el, string name) =>
+        el is { ValueKind: JsonValueKind.Object } obj && obj.TryGetProperty(name, out var v)
+            ? v.ValueKind switch
+            {
+                JsonValueKind.String => v.GetString(),
+                JsonValueKind.Number => v.GetRawText(),
+                _ => null,
+            }
+            : null;
+
+    private static long? Num(JsonElement? el, string name) =>
+        el is { ValueKind: JsonValueKind.Object } obj
+        && obj.TryGetProperty(name, out var v)
+        && v.ValueKind == JsonValueKind.Number
+            ? v.GetInt64()
+            : null;
+}

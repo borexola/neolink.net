@@ -395,6 +395,10 @@ html, body {
 
 .icon-btn:hover { color: var(--accent); background: rgba(79, 140, 255, 0.12); }
 
+/* Browser-fullscreen toggle: glyph follows the JS-maintained body class */
+.fs-toggle::before { content: "⤢"; }
+body.is-fullscreen .fs-toggle::before { content: "⇲"; }
+
 ::-webkit-scrollbar { width: 10px; }
 ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -459,3 +463,169 @@ html, body {
 
     .tile-bar { opacity: 1; } /* no hover on touch: keep controls visible */
 }
+
+/* ---------- camera settings dialog ---------- */
+.panel-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    z-index: 60;
+}
+
+.campanel {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: min(560px, 94vw);
+    max-height: min(92vh, 960px);
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    z-index: 61;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 16px;
+    overflow-y: auto;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+}
+
+.campanel-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 700;
+    letter-spacing: 1px;
+}
+
+.campanel-title {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.campanel-section {
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 10px 12px;
+}
+
+.campanel-section-title {
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 2px;
+    margin-bottom: 8px;
+}
+
+.kv {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.kv td {
+    padding: 2px 0;
+    vertical-align: top;
+}
+
+.kv td:first-child {
+    color: var(--muted);
+    padding-right: 12px;
+    white-space: nowrap;
+}
+
+.stream-group {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 4px 0;
+}
+
+.stream-group-name {
+    flex: 0 0 44px;
+    color: var(--muted);
+    font-size: 13px;
+}
+
+.stream-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.stream-chip { cursor: default; }
+.stream-chip:hover { border-color: var(--line); color: var(--text); }
+
+.chip-active {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.stream-chip.chip-active:hover { border-color: var(--accent); color: var(--accent); }
+
+.notice.small { font-size: 11px; padding-top: 8px; }
+
+.control-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 4px 0;
+    font-size: 13px;
+}
+
+.control-row select {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 3px 6px;
+    font-size: 12px;
+}
+
+.chip-danger {
+    border-color: var(--err);
+    color: var(--err);
+}
+
+.chip-danger:hover {
+    background: var(--err);
+    border-color: var(--err);
+    color: #fff;
+}
+
+.ptz-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.ptz-pad {
+    display: grid;
+    grid-template-columns: repeat(3, 38px);
+    grid-auto-rows: 38px;
+    gap: 4px;
+}
+
+.ptz-pad .tool-btn {
+    min-width: unset;
+    padding: 0;
+    font-size: 15px;
+    user-select: none;
+    touch-action: none;
+}
+
+.ptz-speed {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--muted);
+    flex: 1;
+}
+
+.ptz-speed input[type="range"] { width: 100%; accent-color: var(--accent); }

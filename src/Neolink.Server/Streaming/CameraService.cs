@@ -5,12 +5,22 @@ using Neolink.Protocol;
 
 namespace Neolink.Streaming;
 
+/// <summary>A source of the live, logged-in camera session of one stream service.</summary>
+public interface ILiveCameraSource
+{
+    string Name { get; }
+
+    /// <summary>The current logged-in session, or null while (re)connecting.</summary>
+    IBcCamera? LiveCamera { get; }
+}
+
 /// <summary>
 /// Owns the connection to one camera stream (main/sub/extern): connects, logs in,
 /// starts the video stream, demuxes media frames into the hub, and reconnects
-/// with exponential backoff on failure.
+/// with exponential backoff on failure. While streaming, the session is published
+/// via <see cref="LiveCamera"/> so control commands can ride the same connection.
 /// </summary>
-public sealed class CameraService
+public sealed class CameraService : ILiveCameraSource
 {
     private static readonly TimeSpan MinBackoff = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan MaxBackoff = TimeSpan.FromSeconds(15);
@@ -18,16 +28,20 @@ public sealed class CameraService
 
     private readonly CameraConfig _config;
     private readonly StreamKind _kind;
-    private readonly StreamHub _hub;
+    private readonly IMediaSink _hub;
     private readonly TimeSpan _startupDelay;
+    private volatile IBcCamera? _live;
 
-    public CameraService(CameraConfig config, StreamKind kind, StreamHub hub, TimeSpan startupDelay)
+    public CameraService(CameraConfig config, StreamKind kind, IMediaSink hub, TimeSpan startupDelay)
     {
         _config = config;
         _kind = kind;
         _hub = hub;
         _startupDelay = startupDelay;
     }
+
+    public string Name => _config.Name;
+    public IBcCamera? LiveCamera => _live;
 
     private string Tag => $"{_config.Name} ({_kind})";
 
@@ -98,7 +112,7 @@ public sealed class CameraService
     private async Task StreamOnceAsync(CancellationToken ct, Action onFrame)
     {
         Log.Info($"{Tag}: connecting to {_config.Host}:{_config.Port}");
-        await using var camera = await BcCamera.ConnectAsync(_config.Host, _config.Port, _config.ChannelId, ct).ConfigureAwait(false);
+        await using IBcCamera camera = await BcCamera.ConnectAsync(_config.Host, _config.Port, _config.ChannelId, ct).ConfigureAwait(false);
 
         Log.Info($"{Tag}: logging in as '{_config.Username}'");
         await camera.LoginAsync(_config.Username, _config.Password, ct).ConfigureAwait(false);
@@ -116,6 +130,7 @@ public sealed class CameraService
 
         var reader = new MediaFrameReader(binary.Reader);
         long frames = 0;
+        _live = camera;
         try
         {
             while (!ct.IsCancellationRequested)
@@ -155,6 +170,7 @@ public sealed class CameraService
         }
         finally
         {
+            _live = null;
             linked.Cancel();
             try { await videoTask.ConfigureAwait(false); } catch { }
         }

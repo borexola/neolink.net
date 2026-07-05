@@ -22,6 +22,10 @@
             <div class="settings">
                 <label>Server API</label>
                 <input @bind="_server" @bind:after="OnServerChangedAsync" placeholder="http://host:8655" />
+                <label>Control user (optional)</label>
+                <input @bind="_user" @bind:after="SaveAsync" placeholder="username" autocomplete="off" />
+                <label>Control password</label>
+                <input type="password" @bind="_pass" @bind:after="SaveAsync" placeholder="password" autocomplete="off" />
             </div>
         }
 
@@ -43,9 +47,12 @@
         {
             <div class="cam">
                 <div class="cam-head" title="Add to view" @onclick="() => AddCamera(cam)">
-                    <span class="dot @(cam.Streams.Any(s => s.Ready) ? "on" : "off")"></span>
+                    <span class="dot @(cam.Online || cam.Streams.Any(s => s.Ready) ? "on" : "off")"></span>
                     <span class="cam-name">@cam.Name</span>
-                    <button class="icon-btn solo-btn" title="Theater view"
+                    @* solo-btn (margin-left:auto) only on the FIRST button so the pair sits together at the right *@
+                    <button class="icon-btn solo-btn" title="Camera settings & controls"
+                            @onclick="() => _panelCamera = cam.Name" @onclick:stopPropagation="true">⚙</button>
+                    <button class="icon-btn" title="Theater view"
                             @onclick="() => MaximizeCamera(cam)" @onclick:stopPropagation="true">⛶</button>
                 </div>
                 <div class="cam-streams">
@@ -134,8 +141,10 @@
                             }
                             <span class="tile-spacer"></span>
                             <button class="icon-btn" title="@(_backup != null && _mode == "theater" ? "Restore view" : "Maximize")"
-                                    @onclick="() => ToggleMaximize(index)">⛶</button>
-                            <button class="icon-btn" title="Browser fullscreen" @onclick="() => FullscreenAsync(index)">⤢</button>
+                                    @onclick="() => ToggleMaximize(index)">@(_backup != null && _mode == "theater" ? "❐" : "⛶")</button>
+                            @* glyph comes from CSS so it can follow browser fullscreen state *@
+                            <button class="icon-btn fs-toggle" title="Browser fullscreen (click again to exit)"
+                                    @onclick="() => FullscreenAsync(index)"></button>
                             <button class="icon-btn" title="Remove" @onclick="() => CloseSlot(index)">✕</button>
                         </div>
                     }
@@ -143,6 +152,14 @@
             }
         </div>
     </main>
+
+    @if (_panelCamera != null)
+    {
+        <CameraPanel Server="@_server" CameraName="@_panelCamera"
+                     Camera="_cameras.FirstOrDefault(c => c.Name == _panelCamera)"
+                     User="@_user" Pass="@_pass"
+                     OnClose="() => _panelCamera = null" />
+    }
 
 </div>
 
@@ -164,10 +181,13 @@
     private int _count = 4;
     private ViewSnapshot? _backup;
     private string _server = "";
+    private string? _user;
+    private string? _pass;
     private string? _error;
     private bool _showSettings;
     private bool _loaded;
     private bool _sidebarOpen;
+    private string? _panelCamera;
 
     private readonly Dictionary<int, string> _attached = new();
     private PeriodicTimer? _pollTimer;
@@ -203,6 +223,8 @@
                 if (v != null)
                 {
                     _server = v.Server ?? "";
+                    _user = v.User;
+                    _pass = v.Pass;
                     _mode = Modes.Any(m => m.Mode == v.Mode) ? v.Mode : "grid";
                     _count = v.Count;
                     _slots = v.Slots;
@@ -230,7 +252,11 @@
     private async Task SaveAsync()
     {
         if (!_loaded) return;
-        var v = new PersistedView { Server = _server, Mode = _mode, Count = _count, Slots = _slots, Backup = _backup };
+        var v = new PersistedView
+        {
+            Server = _server, User = _user, Pass = _pass,
+            Mode = _mode, Count = _count, Slots = _slots, Backup = _backup,
+        };
         await JS.InvokeVoidAsync("neolink.lsSet", StorageKey, JsonSerializer.Serialize(v));
     }
 
@@ -395,6 +421,7 @@
 
     private void CloseSlot(int index)
     {
+        _ = JS.InvokeVoidAsync("neolink.exitFullscreen");
         _slots[index].Clear();
         _ = SaveAsync();
     }
@@ -420,6 +447,9 @@
 
     private void ToggleMaximize(int index)
     {
+        // Layout changes are invisible while the browser is fullscreened on a
+        // tile — leave fullscreen so the action has a visible effect.
+        _ = JS.InvokeVoidAsync("neolink.exitFullscreen");
         if (_backup != null && _mode == "theater")
         {
             RestoreFromBackup();

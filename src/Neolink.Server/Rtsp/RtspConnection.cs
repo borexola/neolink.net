@@ -594,7 +594,7 @@ internal sealed class RtspSession
     }
 
     /// <summary>Prepends cached SPS/PPS(/VPS) to keyframes that lack them (players need them to decode).</summary>
-    private static byte[] EnsureParameterSets(StreamHub hub, VideoCodec codec, byte[] annexB)
+    private static byte[] EnsureParameterSets(IStreamHub hub, VideoCodec codec, byte[] annexB)
     {
         bool hasSps = false;
         foreach (var nal in H26x.SplitNals(annexB))

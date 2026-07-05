@@ -18,7 +18,7 @@ public sealed record AudioTrackInfo(bool IsAac, int SampleRate, int Channels, by
 /// Fan-out point between one camera stream and any number of RTSP sessions.
 /// Tracks codec parameters (SPS/PPS/VPS, audio config) needed to answer DESCRIBE.
 /// </summary>
-public sealed class StreamHub
+public sealed class StreamHub : IStreamHub, IMediaSink
 {
     public string Name { get; }
 

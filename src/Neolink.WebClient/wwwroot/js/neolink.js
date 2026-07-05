@@ -12,6 +12,11 @@
     class Player {
         constructor(video, wsUrl) {
             this.video = video;
+            // Blazor renders the `muted` attribute, but on dynamically created
+            // elements that only sets defaultMuted — the live property stays false,
+            // and unmuted autoplay is blocked until a user gesture (symptom: frozen
+            // first frame + "connecting…" after a page refresh). Mute for real.
+            video.muted = true;
             this.wsUrl = wsUrl;
             this.alive = true;
             this.queue = [];
@@ -137,7 +142,9 @@
                     if (this.msgGaps.length >= 1 && span >= this.latencyTarget) {
                         this.started = true;
                         this.video.currentTime = Math.max(b.start(last), end - this.latencyTarget);
-                        this.video.play().catch(() => { });
+                        // If playback is refused (autoplay policy), clear `started` so the
+                        // next delivery retries instead of freezing on the first frame.
+                        this.video.play().catch(() => { this.started = false; });
                     }
                     return;
                 }
@@ -201,6 +208,12 @@
     }
 
     const players = {};
+
+    // Fullscreen state only exists browser-side; expose it as a body class so
+    // CSS can swap the enter/exit glyph on the tile buttons without a server trip.
+    document.addEventListener('fullscreenchange', () => {
+        document.body.classList.toggle('is-fullscreen', !!document.fullscreenElement);
+    });
 
     // ---------- freeform layout (draggable/resizable tiles, geometry persisted) ----------
     const free = {
@@ -292,9 +305,17 @@
             const p = players[videoId];
             if (p) { p.destroy(); delete players[videoId]; }
         },
+        // Toggle: the same tile button enters and leaves browser fullscreen.
         fullscreen(elementId) {
+            if (document.fullscreenElement) {
+                document.exitFullscreen().catch(() => { });
+                return;
+            }
             const el = document.getElementById(elementId);
             if (el?.requestFullscreen) el.requestFullscreen().catch(() => { });
+        },
+        exitFullscreen() {
+            if (document.fullscreenElement) document.exitFullscreen().catch(() => { });
         },
         defaultServer() {
             // The UI is served by Neolink.Server itself: API is on the same origin.

@@ -46,6 +46,11 @@ The cameras are unmodified and no Reolink NVR is required.
   strip, click to promote), **Mosaic** (classic CCTV wall), **Theater** (one camera,
   center stage), **Free** (draggable, resizable floating windows)
 - Per-tile stream selection (main/sub), maximize/restore, browser fullscreen
+- **Camera settings & controls panel** (⚙ next to each camera): capabilities are
+  discovered from the camera itself — device info (model, firmware, serial), encode
+  profiles (resolution, framerate/bitrate options), battery status, and — where the
+  camera supports them — PTZ (press-and-hold pad), status LED / floodlight toggles,
+  PIR motion sensor on/off, and reboot
 - Everything persists in browser localStorage: server address, layout, tile
   assignments, window geometry
 - Adaptive jitter buffer that measures each stream's delivery cadence
@@ -199,6 +204,19 @@ dotnet publish src/Neolink.Server -c Release -r linux-x64    # or win-x64, linux
 | `http://host:8655/` | web UI |
 | `http://host:8655/api/cameras` | JSON list of cameras and stream state |
 | `ws://host:8655/api/stream?path=/driveway/subStream` | live fMP4 (MSE-compatible) |
+| `GET /api/cameras/driveway/capabilities` | device info + discovered features (ptz/led/pir/battery) |
+| `GET /api/cameras/driveway/streaminfo` | encode profiles: resolution, framerate/bitrate options |
+| `GET /api/cameras/driveway/battery` | battery charge/status (battery cameras) |
+| `GET`/`POST /api/cameras/driveway/led` | status LED & floodlight — `{"state":"open"}`, `{"lightState":"close"}` |
+| `GET`/`POST /api/cameras/driveway/pir` | PIR motion sensor — `{"enabled":true}` |
+| `POST /api/cameras/driveway/ptz` | pan/tilt — `{"command":"left","speed":32}` (`up/down/left/right/stop`) |
+| `POST /api/cameras/driveway/reboot` | reboot the camera |
+
+`POST` (control) endpoints require HTTP **Basic auth** when `users` are configured,
+honouring the same per-camera `permitted_users` rules as RTSP; with no users
+configured they are open, like everything else. Feature discovery is live: the
+server probes the camera once per connection and the web UI only shows the
+controls the camera actually supports.
 
 ## Configuration
 

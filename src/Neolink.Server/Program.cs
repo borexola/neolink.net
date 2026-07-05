@@ -103,6 +103,7 @@ foreach (var cam in config.Cameras)
 
     // Stagger the streams of one camera by 2s each so their logins don't collide.
     int streamIndex = 0;
+    CameraService? primaryService = null;
     void AddStream(StreamKind kind, string suffix, bool alsoRoot)
     {
         var hub = new StreamHub($"{cam.Name} {suffix}");
@@ -111,6 +112,7 @@ foreach (var cam in config.Cameras)
             server.AddMount(new RtspMount { Path = $"/{cam.Name}", Hub = hub, PermittedUsers = permitted });
         webStreams.Add(new WebStreamInfo(suffix, $"/{cam.Name}/{suffix}", hub));
         var service = new CameraService(cam, kind, hub, TimeSpan.FromSeconds(2 * streamIndex++));
+        primaryService ??= service;
         tasks.Add(Task.Run(() => RunCameraGuardedAsync(service, $"{cam.Name} ({kind})", shutdown.Token)));
     }
 
@@ -119,7 +121,11 @@ foreach (var cam in config.Cameras)
     if (sub) AddStream(StreamKind.Sub, "subStream", alsoRoot: !main);
     if (ext) AddStream(StreamKind.Extern, "externStream", alsoRoot: !main && !sub);
 
-    webCameras.Add(new WebCameraInfo(cam.Name, webStreams));
+    // Control commands (capabilities, PTZ, LED, ...) ride the primary stream's
+    // connection — cameras have session limits, so no extra login is spent.
+    ICameraControl control = new CameraControl(primaryService
+        ?? throw new InvalidOperationException($"camera '{cam.Name}' has no streams"));
+    webCameras.Add(new WebCameraInfo(cam.Name, webStreams, control, permitted));
 }
 
 // Web API (camera list + fMP4 live streams for browsers); guarded like the cameras.
@@ -130,7 +136,7 @@ if (config.WebPort > 0)
         try
         {
             await WebApi.RunAsync(config.WebBind ?? config.BindAddr, config.WebPort, config.WebUi,
-                webCameras, config.BindPort, shutdown.Token);
+                webCameras, users, config.BindPort, shutdown.Token);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)

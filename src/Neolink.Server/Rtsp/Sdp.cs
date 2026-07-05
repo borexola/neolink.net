@@ -9,7 +9,7 @@ public static class Sdp
     public const byte VideoPayloadType = 96;
     public const byte AudioPayloadType = 97;
 
-    public static string Build(StreamHub hub, string sessionName)
+    public static string Build(IStreamHub hub, string sessionName)
     {
         var sb = new StringBuilder();
         long sid = DateTimeOffset.UtcNow.ToUnixTimeSeconds();

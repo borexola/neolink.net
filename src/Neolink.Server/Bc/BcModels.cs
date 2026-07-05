@@ -8,14 +8,29 @@ public static class BcConstants
     public const uint MsgIdLogin = 1;
     public const uint MsgIdLogout = 2;
     public const uint MsgIdVideo = 3;
+    public const uint MsgIdPtzControl = 18;
+    public const uint MsgIdPtzPreset = 19;
     public const uint MsgIdReboot = 23;
     public const uint MsgIdMotionRequest = 31;
     public const uint MsgIdMotion = 33;
+    public const uint MsgIdGetAbilitySupport = 58;
     public const uint MsgIdVersion = 80;
     public const uint MsgIdPing = 93;
     public const uint MsgIdGetGeneral = 104;
     public const uint MsgIdSetGeneral = 105;
+    public const uint MsgIdSnap = 109;
+    public const uint MsgIdStreamInfoList = 146;
+    public const uint MsgIdAbilityInfo = 151;
+    public const uint MsgIdGetSupport = 199;
+    public const uint MsgIdGetLedStatus = 208;
+    public const uint MsgIdSetLedStatus = 209;
+    public const uint MsgIdGetPirAlarm = 212;
+    public const uint MsgIdSetPirAlarm = 213;
     public const uint MsgIdUdpKeepAlive = 234;
+    public const uint MsgIdBatteryInfoList = 252;
+    public const uint MsgIdBatteryInfo = 253;
+    public const uint MsgIdGetZoomFocus = 294;
+    public const uint MsgIdSetZoomFocus = 295;
 
     // Message classes. The class dictates the header size:
     //  0x6514: legacy, 20 byte header (initial login)

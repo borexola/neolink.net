@@ -17,6 +17,20 @@ public sealed class BcXmlBody
     public DeviceInfoXml? DeviceInfo { get; set; }
     public VersionInfoXml? VersionInfo { get; set; }
     public PreviewXml? Preview { get; set; }
+    public PtzControlXml? PtzControl { get; set; }
+    public StreamInfoListXml? StreamInfoList { get; set; }
+
+    /// <summary>
+    /// Every child element of the body as raw XML, in wire order. This keeps
+    /// messages we have no typed model for (Support, LedState, RfAlarmCfg,
+    /// BatteryInfo, ...) fully accessible, and enables read-modify-write of
+    /// camera settings without modelling — and risking reordering — every field.
+    /// </summary>
+    public List<XElement> Raw { get; } = new();
+
+    /// <summary>First raw body element with the given name, if present.</summary>
+    public XElement? RawElement(string name) =>
+        Raw.FirstOrDefault(e => e.Name.LocalName == name);
 
     public const string XmlVersion = "1.1";
 
@@ -28,6 +42,7 @@ public sealed class BcXmlBody
         var body = new BcXmlBody();
         foreach (var el in root.Elements())
         {
+            body.Raw.Add(el);
             switch (el.Name.LocalName)
             {
                 case "Encryption":
@@ -60,12 +75,17 @@ public sealed class BcXmlBody
                     body.VersionInfo = new VersionInfoXml
                     {
                         Name = (string?)el.Element("name") ?? "",
+                        Model = (string?)el.Element("model") ?? (string?)el.Element("type") ?? "",
                         SerialNumber = (string?)el.Element("serialNumber") ?? "",
                         BuildDay = (string?)el.Element("buildDay") ?? "",
                         HardwareVersion = (string?)el.Element("hardwareVersion") ?? "",
                         CfgVersion = (string?)el.Element("cfgVersion") ?? "",
                         FirmwareVersion = (string?)el.Element("firmwareVersion") ?? "",
+                        Detail = (string?)el.Element("detail") ?? "",
                     };
+                    break;
+                case "StreamInfoList":
+                    body.StreamInfoList = StreamInfoListXml.Parse(el);
                     break;
                 case "Preview":
                     body.Preview = new PreviewXml
@@ -106,7 +126,38 @@ public sealed class BcXmlBody
                 new XElement("handle", Preview.Handle),
                 new XElement("streamType", Preview.StreamType)));
         }
+        if (PtzControl != null)
+        {
+            root.Add(new XElement("PtzControl",
+                new XAttribute("version", XmlVersion),
+                new XElement("channelId", PtzControl.ChannelId),
+                new XElement("speed", PtzControl.Speed),
+                new XElement("command", PtzControl.Command)));
+        }
+        // Raw elements ride along verbatim — but never duplicate an element the
+        // typed properties above already emitted (a parsed body has both views).
+        foreach (var el in Raw)
+        {
+            bool typed = el.Name.LocalName switch
+            {
+                "LoginUser" => LoginUser != null,
+                "LoginNet" => LoginNet != null,
+                "Preview" => Preview != null,
+                "PtzControl" => PtzControl != null,
+                _ => false,
+            };
+            if (!typed)
+                root.Add(el);
+        }
         return XmlUtil.SerializeDoc(root);
+    }
+
+    /// <summary>A body carrying one raw element verbatim (read-modify-write of camera settings).</summary>
+    public static BcXmlBody FromRaw(XElement element)
+    {
+        var body = new BcXmlBody();
+        body.Raw.Add(element);
+        return body;
     }
 }
 
@@ -153,11 +204,13 @@ public sealed class DeviceInfoXml
 public sealed class VersionInfoXml
 {
     public string Name = "";
+    public string Model = "";
     public string SerialNumber = "";
     public string BuildDay = "";
     public string HardwareVersion = "";
     public string CfgVersion = "";
     public string FirmwareVersion = "";
+    public string Detail = "";
 }
 
 public sealed class PreviewXml
@@ -167,11 +220,75 @@ public sealed class PreviewXml
     public string StreamType = "mainStream";
 }
 
+/// <summary>PTZ movement command. Commands: up, down, left, right, stop.</summary>
+public sealed class PtzControlXml
+{
+    public byte ChannelId;
+    public float Speed = 32;
+    public string Command = "stop";
+}
+
+/// <summary>The encode profiles a camera supports, per stream (msg 146 reply).</summary>
+public sealed class StreamInfoListXml
+{
+    public List<StreamInfoXml> StreamInfos { get; } = new();
+
+    public static StreamInfoListXml Parse(XElement el)
+    {
+        // Lenient numeric read: cameras put surprising strings in numeric-looking
+        // fields (e.g. "none"), and an XElement uint cast throws on those.
+        static uint U(XElement? e) => e != null && uint.TryParse(e.Value.Trim(), out var v) ? v : 0;
+
+        var list = new StreamInfoListXml();
+        foreach (var si in el.Elements("StreamInfo"))
+        {
+            var info = new StreamInfoXml { ChannelBits = U(si.Element("channelBits")) };
+            foreach (var et in si.Elements("encodeTable"))
+            {
+                info.EncodeTables.Add(new EncodeTableXml
+                {
+                    Type = (string?)et.Element("type") ?? "",
+                    Width = U(et.Element("resolution")?.Element("width")),
+                    Height = U(et.Element("resolution")?.Element("height")),
+                    DefaultFramerate = U(et.Element("defaultFramerate")),
+                    DefaultBitrate = U(et.Element("defaultBitrate")),
+                    FramerateTable = (string?)et.Element("framerateTable") ?? "",
+                    BitrateTable = (string?)et.Element("bitrateTable") ?? "",
+                });
+            }
+            list.StreamInfos.Add(info);
+        }
+        return list;
+    }
+}
+
+public sealed class StreamInfoXml
+{
+    public uint ChannelBits;
+    public List<EncodeTableXml> EncodeTables { get; } = new();
+}
+
+/// <summary>One encode profile: name (e.g. "mainStream"), resolution and the framerate/bitrate options.</summary>
+public sealed class EncodeTableXml
+{
+    public string Type = "";
+    public uint Width;
+    public uint Height;
+    public uint DefaultFramerate;
+    public uint DefaultBitrate;
+    /// <summary>Space-separated list of selectable framerates.</summary>
+    public string FramerateTable = "";
+    /// <summary>Space-separated list of selectable bitrates (kbps).</summary>
+    public string BitrateTable = "";
+}
+
 /// <summary>The `Extension` XML which precedes payloads (at the payload offset).</summary>
 public sealed class ExtensionXml
 {
     public uint? BinaryData;
     public byte? ChannelId;
+    /// <summary>PIR sensor id; PIR get/set address the sensor via rfId instead of channelId.</summary>
+    public byte? RfId;
     /// <summary>Plaintext length of an encrypted (FullAes) binary payload; the ciphertext is padded.</summary>
     public uint? EncryptLen;
 
@@ -183,6 +300,7 @@ public sealed class ExtensionXml
         {
             BinaryData = (uint?)root.Element("binaryData"),
             ChannelId = (byte?)(uint?)root.Element("channelId"),
+            RfId = (byte?)(uint?)root.Element("rfId"),
             EncryptLen = (uint?)root.Element("encryptLen"),
         };
     }
@@ -192,6 +310,7 @@ public sealed class ExtensionXml
         var root = new XElement("Extension", new XAttribute("version", BcXmlBody.XmlVersion));
         if (BinaryData.HasValue) root.Add(new XElement("binaryData", BinaryData.Value));
         if (ChannelId.HasValue) root.Add(new XElement("channelId", ChannelId.Value));
+        if (RfId.HasValue) root.Add(new XElement("rfId", RfId.Value));
         return XmlUtil.SerializeDoc(root);
     }
 }

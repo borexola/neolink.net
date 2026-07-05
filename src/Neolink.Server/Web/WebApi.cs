@@ -1,30 +1,43 @@
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using System.Xml.Linq;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Neolink.Media;
+using Neolink.Protocol;
 using Neolink.Streaming;
 
 namespace Neolink.Web;
 
 /// <summary>One camera stream as exposed over the web API.</summary>
-public sealed record WebStreamInfo(string Kind, string Path, StreamHub Hub);
-public sealed record WebCameraInfo(string Name, List<WebStreamInfo> Streams);
+public sealed record WebStreamInfo(string Kind, string Path, IStreamHub Hub);
+public sealed record WebCameraInfo(string Name, List<WebStreamInfo> Streams, ICameraControl Control,
+    HashSet<string>? PermittedUsers);
 
 /// <summary>
 /// HTTP/WebSocket API for web clients, optionally serving the Blazor web UI:
-///   GET /api/cameras          — JSON list of cameras and their streams
-///   WS  /api/stream?path=...  — live fMP4 video (MSE-compatible)
-///   /                         — web UI (when enabled in the config)
+///   GET /api/cameras                        — JSON list of cameras and their streams
+///   WS  /api/stream?path=...                — live fMP4 video (MSE-compatible)
+///   GET /api/cameras/{name}/capabilities    — discovered device info + feature flags
+///   GET /api/cameras/{name}/streaminfo      — encode profiles (resolution/fps/bitrate tables)
+///   GET/POST .../led /pir; POST .../ptz /reboot; GET .../battery — camera control
+///   /                                       — web UI (when enabled in the config)
+/// Mutating endpoints require HTTP Basic auth when users are configured (same
+/// credentials and per-camera permissions as RTSP).
 /// </summary>
 public static class WebApi
 {
+    private sealed record LedRequest(string? State, string? LightState);
+    private sealed record PirRequest(bool? Enabled);
+    private sealed record PtzRequest(string? Command, float? Speed);
+
     public static async Task RunAsync(string bindAddr, int port, bool webUi,
-        IReadOnlyList<WebCameraInfo> cameras, int rtspPort, CancellationToken ct)
+        IReadOnlyList<WebCameraInfo> cameras, IReadOnlyDictionary<string, string> users,
+        int rtspPort, CancellationToken ct)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -63,6 +76,7 @@ public static class WebApi
             var payload = cameras.Select(c => new
             {
                 name = c.Name,
+                online = c.Control.Online,
                 streams = c.Streams.Select(s => new
                 {
                     kind = s.Kind,
@@ -76,6 +90,176 @@ public static class WebApi
             });
             return Results.Json(payload);
         });
+
+        // ------------------------------------------------------------ camera control
+
+        // Denies a mutating request unless it carries valid Basic credentials of a
+        // permitted user. Mirrors the RTSP rules: no configured users = open access.
+        IResult? CheckAuth(HttpContext ctx, WebCameraInfo cam)
+        {
+            if (cam.PermittedUsers == null || users.Count == 0)
+                return null;
+            var creds = NetUtil.DecodeBasicAuth(ctx.Request.Headers.Authorization);
+            if (creds != null
+                && users.TryGetValue(creds.Value.User, out var expected)
+                && expected == creds.Value.Pass
+                && cam.PermittedUsers.Contains(creds.Value.User))
+                return null;
+            ctx.Response.Headers.WWWAuthenticate = "Basic realm=\"neolink\"";
+            return Results.Json(new { error = "authentication required" }, statusCode: 401);
+        }
+
+        async Task<IResult> ExecAsync(string name, HttpContext ctx, bool mutating,
+            Func<ICameraControl, CancellationToken, Task<IResult>> action)
+        {
+            var cam = cameras.FirstOrDefault(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase));
+            if (cam == null)
+                return Results.Json(new { error = $"unknown camera '{name}'" }, statusCode: 404);
+            if (mutating && CheckAuth(ctx, cam) is { } denied)
+                return denied;
+            try
+            {
+                return await action(cam.Control, ctx.RequestAborted);
+            }
+            catch (CameraOfflineException)
+            {
+                return Results.Json(new { error = "camera offline (reconnecting)" }, statusCode: 503);
+            }
+            catch (NotSupportedException ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: 404);
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: 400);
+            }
+            catch (CameraCommandException ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: 502);
+            }
+            catch (TimeoutException)
+            {
+                return Results.Json(new { error = "camera did not reply" }, statusCode: 504);
+            }
+            catch (Exception ex) when (ex is IOException or System.Net.Sockets.SocketException)
+            {
+                return Results.Json(new { error = $"camera connection error: {ex.Message}" }, statusCode: 502);
+            }
+        }
+
+        app.MapGet("/api/cameras/{name}/capabilities", (string name, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: false, async (control, reqCt) =>
+            {
+                if (!control.Online)
+                    return Results.Json(new { online = false });
+                var caps = await control.GetCapabilitiesAsync(reqCt);
+                return Results.Json(new
+                {
+                    online = true,
+                    version = caps.Version == null ? null : new
+                    {
+                        name = caps.Version.Name,
+                        model = caps.Version.Model,
+                        serial = caps.Version.SerialNumber,
+                        firmware = caps.Version.FirmwareVersion,
+                        hardware = caps.Version.HardwareVersion,
+                        build = caps.Version.BuildDay,
+                    },
+                    features = new
+                    {
+                        ptz = caps.Features.Ptz,
+                        led = caps.Features.Led,
+                        pir = caps.Features.Pir,
+                        battery = caps.Features.Battery,
+                    },
+                    support = caps.Support == null ? null : XmlToJson(caps.Support),
+                });
+            }));
+
+        app.MapGet("/api/cameras/{name}/streaminfo", (string name, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: false, async (control, reqCt) =>
+            {
+                var info = await control.GetStreamInfoAsync(reqCt);
+                var profiles = info?.StreamInfos
+                    .SelectMany(si => si.EncodeTables.Select(t => new
+                    {
+                        type = t.Type,
+                        width = t.Width,
+                        height = t.Height,
+                        defaultFramerate = t.DefaultFramerate,
+                        defaultBitrate = t.DefaultBitrate,
+                        framerates = ParseNumberTable(t.FramerateTable),
+                        bitrates = ParseNumberTable(t.BitrateTable),
+                    }))
+                    .ToList();
+                return Results.Json(new { profiles = (object?)profiles ?? Array.Empty<object>() });
+            }));
+
+        app.MapGet("/api/cameras/{name}/battery", (string name, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: false, async (control, reqCt) =>
+            {
+                var battery = await control.GetBatteryInfoAsync(reqCt);
+                return battery == null
+                    ? Results.Json(new { error = "no battery info" }, statusCode: 404)
+                    : Results.Json(XmlToJson(battery));
+            }));
+
+        app.MapGet("/api/cameras/{name}/led", (string name, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: false, async (control, reqCt) =>
+            {
+                var led = await control.GetLedStateAsync(reqCt);
+                return led == null
+                    ? Results.Json(new { error = "no LED state" }, statusCode: 404)
+                    : Results.Json(XmlToJson(led));
+            }));
+
+        app.MapPost("/api/cameras/{name}/led", (string name, LedRequest req, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: true, async (control, reqCt) =>
+            {
+                string[] allowed = { "open", "close", "auto" };
+                if (req.State == null && req.LightState == null)
+                    return Results.Json(new { error = "provide state and/or lightState" }, statusCode: 400);
+                if ((req.State != null && !allowed.Contains(req.State)) ||
+                    (req.LightState != null && !allowed.Contains(req.LightState)))
+                    return Results.Json(new { error = "values must be open, close or auto" }, statusCode: 400);
+                await control.SetLedStateAsync(req.State, req.LightState, reqCt);
+                return Results.Json(new { ok = true });
+            }));
+
+        app.MapGet("/api/cameras/{name}/pir", (string name, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: false, async (control, reqCt) =>
+            {
+                var pir = await control.GetPirStateAsync(reqCt);
+                return pir == null
+                    ? Results.Json(new { error = "no PIR settings" }, statusCode: 404)
+                    : Results.Json(XmlToJson(pir));
+            }));
+
+        app.MapPost("/api/cameras/{name}/pir", (string name, PirRequest req, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: true, async (control, reqCt) =>
+            {
+                if (req.Enabled == null)
+                    return Results.Json(new { error = "provide enabled: true|false" }, statusCode: 400);
+                await control.SetPirEnabledAsync(req.Enabled.Value, reqCt);
+                return Results.Json(new { ok = true });
+            }));
+
+        app.MapPost("/api/cameras/{name}/ptz", (string name, PtzRequest req, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: true, async (control, reqCt) =>
+            {
+                if (string.IsNullOrEmpty(req.Command))
+                    return Results.Json(new { error = "provide command: up|down|left|right|stop" }, statusCode: 400);
+                float speed = Math.Clamp(req.Speed ?? 32f, 1f, 64f);
+                await control.PtzAsync(req.Command, speed, reqCt);
+                return Results.Json(new { ok = true });
+            }));
+
+        app.MapPost("/api/cameras/{name}/reboot", (string name, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: true, async (control, reqCt) =>
+            {
+                await control.RebootAsync(reqCt);
+                return Results.Json(new { ok = true });
+            }));
 
         app.Map("/api/stream", async ctx =>
         {
@@ -120,7 +304,7 @@ public static class WebApi
         await app.RunAsync().ConfigureAwait(false);
     }
 
-    private static StreamHub? FindHub(IReadOnlyList<WebCameraInfo> cameras, string? path)
+    private static IStreamHub? FindHub(IReadOnlyList<WebCameraInfo> cameras, string? path)
     {
         if (string.IsNullOrEmpty(path)) return null;
         path = path.TrimEnd('/');
@@ -131,13 +315,44 @@ public static class WebApi
         return null;
     }
 
+    /// <summary>
+    /// Generic camera-XML to JSON-friendly conversion, so newly discovered settings
+    /// reach clients without a typed model. Leaves: numbers stay numbers; repeated
+    /// element names become arrays; attributes are prefixed with '@'.
+    /// </summary>
+    private static object? XmlToJson(XElement el)
+    {
+        if (!el.HasElements)
+        {
+            var text = el.Value.Trim();
+            return long.TryParse(text, out var n) ? n : text;
+        }
+        var obj = new Dictionary<string, object?>();
+        foreach (var attr in el.Attributes())
+            obj["@" + attr.Name.LocalName] = attr.Value;
+        foreach (var group in el.Elements().GroupBy(e => e.Name.LocalName))
+        {
+            obj[group.Key] = group.Count() == 1
+                ? XmlToJson(group.First())
+                : group.Select(XmlToJson).ToList();
+        }
+        return obj;
+    }
+
+    /// <summary>Parses the camera's space-separated option tables ("30 25 20 15 ...").</summary>
+    private static List<uint> ParseNumberTable(string table) =>
+        table.Split(new[] { ' ', ',' }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(s => uint.TryParse(s, out var v) ? v : 0u)
+            .Where(v => v > 0)
+            .ToList();
+
     // ------------------------------------------------------------------ fMP4 over WebSocket
 
     /// <summary>
     /// Protocol: one JSON text message (mime/codec/size), then binary messages:
     /// first the init segment, then one moof+mdat fragment per video frame.
     /// </summary>
-    private static async Task StreamToWebSocketAsync(WebSocket ws, StreamHub hub, CancellationToken appCt)
+    private static async Task StreamToWebSocketAsync(WebSocket ws, IStreamHub hub, CancellationToken appCt)
     {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(appCt);
         var ct = cts.Token;

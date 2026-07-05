@@ -18,8 +18,8 @@ public sealed class AuthFailedException : Exception
     public AuthFailedException(string msg) : base(msg) { }
 }
 
-/// <summary>High-level camera operations: login, video streaming, ping.</summary>
-public sealed class BcCamera : IAsyncDisposable
+/// <summary>High-level camera operations: login, video streaming, ping, control commands.</summary>
+public sealed class BcCamera : IBcCamera
 {
     public static readonly TimeSpan RxTimeout = TimeSpan.FromSeconds(15);
 
@@ -27,6 +27,7 @@ public sealed class BcCamera : IAsyncDisposable
     private readonly byte _channelId;
     private int _messageNum = -1;
 
+    public byte ChannelId => _channelId;
     public DeviceInfoXml? DeviceInfo { get; private set; }
 
     private BcCamera(BcConnection conn, byte channelId)
@@ -191,6 +192,46 @@ public sealed class BcCamera : IAsyncDisposable
         finally
         {
             binaryOut.TryComplete();
+        }
+    }
+
+    /// <summary>
+    /// One-shot control command: subscribe to the message ID, send, await the reply.
+    /// Runs safely alongside an active video stream (the connection routes replies
+    /// by message ID), but concurrent commands with the SAME ID are not allowed —
+    /// callers serialize (see CameraControl).
+    /// </summary>
+    public async Task<BcMessage?> SendCommandAsync(uint msgId, BcXmlBody? xml = null, ExtensionXml? extension = null,
+        TimeSpan? replyTimeout = null, bool tolerateNoReply = false, CancellationToken ct = default)
+    {
+        using var sub = _conn.Subscribe(msgId);
+        var msg = new BcMessage
+        {
+            Meta = new BcMeta
+            {
+                MsgId = msgId,
+                ChannelId = _channelId,
+                MsgNum = NewMessageNum(),
+                StreamType = 0,
+                ResponseCode = 0,
+                Class = BcConstants.ClassModern,
+            },
+            Extension = extension,
+            Xml = xml,
+        };
+        await _conn.SendAsync(msg, ct).ConfigureAwait(false);
+
+        try
+        {
+            var reply = await sub.ReceiveAsync(replyTimeout ?? RxTimeout, ct).ConfigureAwait(false);
+            if (reply.Meta.ResponseCode != 200)
+                throw new CameraCommandException(msgId, reply.Meta.ResponseCode);
+            return reply;
+        }
+        catch (TimeoutException) when (tolerateNoReply)
+        {
+            // Some cameras never acknowledge accepted set commands.
+            return null;
         }
     }
 

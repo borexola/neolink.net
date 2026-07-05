@@ -71,6 +71,73 @@ public static class SelfTest
             Assert(parsed?.LoginNet?.Type == "LAN", "roundtrip lan");
         });
 
+        Test("xml raw element passthrough (read-modify-write)", () =>
+        {
+            // A settings body we have no typed model for must survive a parse →
+            // modify → serialize round trip byte-for-byte apart from the change.
+            var wire = "<?xml version=\"1.0\" encoding=\"UTF-8\" ?>" +
+                       "<body><LedState version=\"1.1\"><channelId>0</channelId><ledVersion>2</ledVersion>" +
+                       "<state>close</state><lightState>open</lightState></LedState></body>";
+            var parsed = Bc.Xml.BcXmlBody.TryParse(Encoding.UTF8.GetBytes(wire));
+            var led = parsed?.RawElement("LedState");
+            Assert(led != null, "LedState raw element present");
+            AssertEq((string?)led!.Element("state"), "close");
+
+            led.Element("state")!.Value = "open";
+            led.Element("ledVersion")?.Remove();
+            var reser = Bc.Xml.BcXmlBody.FromRaw(led).Serialize();
+            var reparsed = Bc.Xml.BcXmlBody.TryParse(reser)?.RawElement("LedState");
+            AssertEq((string?)reparsed?.Element("state"), "open");
+            AssertEq((string?)reparsed?.Element("lightState"), "open");
+            Assert(reparsed?.Element("ledVersion") == null, "ledVersion removed");
+        });
+
+        Test("xml PtzControl serialize", () =>
+        {
+            var body = new Bc.Xml.BcXmlBody
+            {
+                PtzControl = new Bc.Xml.PtzControlXml { ChannelId = 0, Speed = 32, Command = "left" },
+            };
+            var parsed = Bc.Xml.BcXmlBody.TryParse(body.Serialize());
+            var ptz = parsed?.RawElement("PtzControl");
+            AssertEq((string?)ptz?.Element("command"), "left");
+            AssertEq((uint?)ptz?.Element("speed") ?? 0, 32u);
+        });
+
+        Test("xml StreamInfoList parse", () =>
+        {
+            var wire = "<?xml version=\"1.0\" encoding=\"UTF-8\" ?>" +
+                       "<body><StreamInfoList version=\"1.1\"><StreamInfo><channelBits>1</channelBits>" +
+                       "<encodeTable><type>mainStream</type><resolution><width>2560</width><height>1440</height></resolution>" +
+                       "<defaultFramerate>30</defaultFramerate><defaultBitrate>3072</defaultBitrate>" +
+                       "<framerateTable>30 25 20 15</framerateTable><bitrateTable>1024 2048 3072</bitrateTable>" +
+                       "</encodeTable></StreamInfo></StreamInfoList></body>";
+            var parsed = Bc.Xml.BcXmlBody.TryParse(Encoding.UTF8.GetBytes(wire));
+            var list = parsed?.StreamInfoList;
+            Assert(list is { StreamInfos.Count: 1 }, "one StreamInfo");
+            var table = list!.StreamInfos[0].EncodeTables.Single();
+            AssertEq(table.Type, "mainStream");
+            AssertEq(table.Width, 2560u);
+            AssertEq(table.Height, 1440u);
+            AssertEq(table.DefaultBitrate, 3072u);
+            AssertEq(table.FramerateTable, "30 25 20 15");
+        });
+
+        Test("support flags tolerate non-numeric values", () =>
+        {
+            // Real-world Support xml (E1 Pro) uses strings where numbers were
+            // expected: ptzMode="pt" means supported, "none" means not.
+            var support = System.Xml.Linq.XElement.Parse(
+                "<Support version=\"1.1\"><ptzMode>pt</ptzMode><ptzCfg>0</ptzCfg>" +
+                "<audioTalk>1</audioTalk><rtsp>none</rtsp></Support>");
+            Assert(Streaming.CameraControl.SupportFlag(support, "ptzMode"), "ptzMode 'pt' = supported");
+            Assert(!Streaming.CameraControl.SupportFlag(support, "ptzCfg"), "ptzCfg '0' = unsupported");
+            Assert(Streaming.CameraControl.SupportFlag(support, "audioTalk"), "audioTalk '1' = supported");
+            Assert(!Streaming.CameraControl.SupportFlag(support, "rtsp"), "'none' = unsupported");
+            Assert(!Streaming.CameraControl.SupportFlag(support, "missing"), "absent = unsupported");
+            Assert(!Streaming.CameraControl.SupportFlag(null, "ptzMode"), "no Support xml = unsupported");
+        });
+
         Test("extension parse", () =>
         {
             var xml = "<?xml version=\"1.0\" encoding=\"UTF-8\" ?>\n<Extension version=\"1.1\">\n<binaryData>1</binaryData>\n</Extension>\n";
