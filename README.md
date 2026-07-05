@@ -120,10 +120,29 @@ docker logs -f neolink     # prints the ready-to-use RTSP and web UI URLs
 
 ### Or with compose
 
+Save this as `docker-compose.yml` next to your `config.json`
+(or `curl -O https://raw.githubusercontent.com/borexola/neolink.net/main/docker-compose.yml`):
+
+```yaml
+services:
+  neolink:
+    image: ghcr.io/borexola/neolink.net:latest
+    container_name: neolink
+    restart: unless-stopped
+    ports:
+      - "8554:8554"   # RTSP (TCP-interleaved works for ffmpeg/Frigate/VLC)
+      - "8555:8555"   # web UI + API; remove if webui:false and API unused
+    volumes:
+      - ./config.json:/config/config.json:ro
+    # For RTSP over UDP transport, use host networking instead of port maps:
+    # network_mode: host
+```
+
+Then:
+
 ```bash
-curl -O https://raw.githubusercontent.com/borexola/neolink.net/main/docker-compose.yml
-# put config.json next to it, then:
 docker compose up -d
+docker compose logs -f    # shows the rtsp:// and web UI URLs
 ```
 
 ### Upgrading
