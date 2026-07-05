@@ -1,0 +1,15 @@
+bin/
+obj/
+.vs/
+*.user
+publish/
+
+# Real camera credentials live in config.json — never commit it.
+# Copy config.example.json to config.json to get started.
+config.json
+src/Neolink.Server/config.json
+
+# Editor/assistant local state + leftover pre-rename folder
+.claude/
+src/Neolink/
+

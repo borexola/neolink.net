@@ -1,0 +1,9 @@
+**/bin/
+**/obj/
+**/.vs/
+**/.git/
+**/.claude/
+**/*.user
+**/config.json
+Dockerfile
+docker-compose.yml

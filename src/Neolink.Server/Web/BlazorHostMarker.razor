@@ -1,0 +1,8 @@
+@*
+    This file intentionally contains no markup.
+
+    Its presence makes the .NET SDK treat Neolink.Server as a Blazor host, which
+    pulls the framework's static web assets (notably /_framework/blazor.web.js)
+    into the static-asset manifest so MapStaticAssets can serve them. Without it,
+    the web UI renders but the interactive circuit script 404s.
+*@

@@ -1,0 +1,31 @@
+# A bind value of 0.0.0.0 means any network this computer can access.
+# You can change this to a specific interface e.g. "192.168.1.101",
+# or to this computer only: "127.0.0.1"
+bind = "0.0.0.0"
+
+# Default port is 8554; uncomment to change it
+# bind_port = 8554
+
+# You can password protect the RTSP server by adding users.
+# If you do not add [[users]] then anyone can connect without credentials.
+# Connect with e.g. rtsp://me:mepass@192.168.1.101:8554/driveway
+#
+# [[users]]
+# name = "me"
+# pass = "mepass"
+
+[[cameras]]
+name = "driveway"
+username = "admin"
+password = "12345678"
+address = "192.168.1.187:9000"
+
+# By default "both" mainStream and subStream are served.
+# If your camera has connection limits, pick one stream:
+# stream = "mainStream"     # mainStream | subStream | externStream | both | all
+
+# Restrict this camera to specific users (requires [[users]] above):
+# permitted_users = [ "me" ]
+
+# When connecting through a Reolink NVR, select the camera channel (0-based):
+# channel_id = 0

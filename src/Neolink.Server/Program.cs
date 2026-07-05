@@ -1,0 +1,225 @@
+using Neolink;
+using Neolink.Config;
+using Neolink.Protocol;
+using Neolink.Rtsp;
+using Neolink.Streaming;
+using Neolink.Web;
+
+const string Version = "0.6.0";
+
+var argList = args.ToList();
+string? command = null;
+string? configPath = null;
+
+for (int i = 0; i < argList.Count; i++)
+{
+    var a = argList[i];
+    switch (a)
+    {
+        case "--help" or "-h":
+            PrintHelp();
+            return 0;
+        case "--version" or "-V":
+            Console.WriteLine($"neolink.net {Version}");
+            return 0;
+        case "--verbose" or "-v":
+            Log.Level = Neolink.LogLevel.Debug;
+            break;
+        case "--config" or "-c":
+            if (i + 1 >= argList.Count) return Fail("--config requires a path");
+            configPath = argList[++i];
+            break;
+        case var s when s.StartsWith("--config="):
+            configPath = s["--config=".Length..];
+            break;
+        case "rtsp" or "selftest":
+            command = a;
+            break;
+        default:
+            return Fail($"Unknown argument: {a}");
+    }
+}
+
+command ??= "rtsp";
+
+if (command == "selftest")
+    return SelfTest.Run(configPath) ? 0 : 1;
+
+if (configPath == null)
+{
+    // Convenience: look for config.json in the working directory, then next to the executable
+    var candidates = new[]
+    {
+        "config.json", "config.toml",
+        Path.Combine(AppContext.BaseDirectory, "config.json"),
+        Path.Combine(AppContext.BaseDirectory, "config.toml"),
+    };
+    configPath = candidates.FirstOrDefault(File.Exists);
+    if (configPath == null)
+        return Fail("Missing --config <path-to-config.json> (no config.json found in the current directory or next to the executable)");
+    Log.Info($"Using config file: {Path.GetFullPath(configPath)}");
+}
+
+NeolinkConfig config;
+try
+{
+    config = NeolinkConfig.Load(configPath);
+}
+catch (Exception ex)
+{
+    return Fail($"Failed to load config '{configPath}': {ex.Message}");
+}
+
+Log.Info($"Neolink.NET {Version} starting");
+
+using var shutdown = new CancellationTokenSource();
+Console.CancelKeyPress += (_, e) =>
+{
+    e.Cancel = true;
+    if (!shutdown.IsCancellationRequested)
+    {
+        Log.Info("Shutting down...");
+        shutdown.Cancel();
+    }
+};
+AppDomain.CurrentDomain.ProcessExit += (_, _) => shutdown.Cancel();
+
+var users = config.Users.ToDictionary(u => u.Name, u => u.Pass);
+if (users.Count > 0)
+    Log.Warn("RTSP is unencrypted: usernames and passwords are exchanged in plaintext.");
+
+var server = new RtspServer(users);
+var tasks = new List<Task>();
+var webCameras = new List<WebCameraInfo>();
+
+foreach (var cam in config.Cameras)
+{
+    var permitted = config.PermittedUsersFor(cam);
+    bool main = cam.Stream is "both" or "all" or "mainStream";
+    bool sub = cam.Stream is "both" or "all" or "subStream";
+    bool ext = cam.Stream is "all" or "externStream";
+
+    var webStreams = new List<WebStreamInfo>();
+
+    // Stagger the streams of one camera by 2s each so their logins don't collide.
+    int streamIndex = 0;
+    void AddStream(StreamKind kind, string suffix, bool alsoRoot)
+    {
+        var hub = new StreamHub($"{cam.Name} {suffix}");
+        server.AddMount(new RtspMount { Path = $"/{cam.Name}/{suffix}", Hub = hub, PermittedUsers = permitted });
+        if (alsoRoot)
+            server.AddMount(new RtspMount { Path = $"/{cam.Name}", Hub = hub, PermittedUsers = permitted });
+        webStreams.Add(new WebStreamInfo(suffix, $"/{cam.Name}/{suffix}", hub));
+        var service = new CameraService(cam, kind, hub, TimeSpan.FromSeconds(2 * streamIndex++));
+        tasks.Add(Task.Run(() => RunCameraGuardedAsync(service, $"{cam.Name} ({kind})", shutdown.Token)));
+    }
+
+    // The bare /name mount points at the "best" configured stream
+    if (main) AddStream(StreamKind.Main, "mainStream", alsoRoot: true);
+    if (sub) AddStream(StreamKind.Sub, "subStream", alsoRoot: !main);
+    if (ext) AddStream(StreamKind.Extern, "externStream", alsoRoot: !main && !sub);
+
+    webCameras.Add(new WebCameraInfo(cam.Name, webStreams));
+}
+
+// Web API (camera list + fMP4 live streams for browsers); guarded like the cameras.
+if (config.WebPort > 0)
+{
+    tasks.Add(Task.Run(async () =>
+    {
+        try
+        {
+            await WebApi.RunAsync(config.WebBind ?? config.BindAddr, config.WebPort, config.WebUi,
+                webCameras, config.BindPort, shutdown.Token);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            Log.Error($"Web API failed (RTSP continues): {Log.Flatten(ex)}");
+        }
+    }));
+}
+
+// The RTSP server is the one component nothing works without: run the process
+// for as long as it lives. Camera tasks are individually guarded and can never
+// fault; each reconnects on its own schedule.
+int exitCode = 0;
+try
+{
+    await server.RunAsync(config.BindAddr, config.BindPort, shutdown.Token);
+}
+catch (OperationCanceledException) { }
+catch (Exception ex)
+{
+    Log.Error($"RTSP server failed: {Log.Flatten(ex)}");
+    exitCode = 1;
+}
+
+// Server is done (Ctrl+C or fatal error): wind down the camera tasks gracefully.
+shutdown.Cancel();
+try
+{
+    await Task.WhenAll(tasks);
+}
+catch (OperationCanceledException) { }
+
+Log.Info("Goodbye");
+return exitCode;
+
+// Safety net around one camera stream: a crash in CameraService must never take
+// the process (and the other cameras) down. Log it and start the service again.
+static async Task RunCameraGuardedAsync(CameraService service, string tag, CancellationToken ct)
+{
+    while (!ct.IsCancellationRequested)
+    {
+        try
+        {
+            await service.RunAsync(ct);
+            return; // clean exit (shutdown requested)
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"{tag}: camera task crashed unexpectedly: {Log.Flatten(ex)}; restarting in 15s");
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(15), ct);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+        }
+    }
+}
+
+static int Fail(string message)
+{
+    Console.Error.WriteLine($"error: {message}");
+    Console.Error.WriteLine("Run with --help for usage.");
+    return 2;
+}
+
+static void PrintHelp()
+{
+    Console.WriteLine(
+        """
+        Neolink.NET - RTSP bridge for Reolink cameras that speak the Baichuan protocol (port 9000)
+
+        USAGE:
+            neolink.net [rtsp] --config <config.json>     Serve all configured cameras over RTSP
+            neolink.net selftest [--config <samples-dir>] Run built-in protocol self-tests
+            neolink.net --version
+            neolink.net --help
+
+        OPTIONS:
+            -c, --config <PATH>   Path to the configuration file (JSON; legacy TOML also accepted)
+                                  (defaults to ./config.json if present)
+            -v, --verbose         Debug logging (or set NEOLINK_LOG=debug|trace)
+
+        Streams are served at rtsp://<bind>:<port>/<camera-name>[/mainStream|/subStream]
+        """);
+}

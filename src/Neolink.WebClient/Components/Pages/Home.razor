@@ -1,0 +1,506 @@
+@page "/"
+@using System.Text.Json
+@inject HttpClient Http
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<div class="shell">
+
+    @if (_sidebarOpen)
+    {
+        <div class="backdrop" @onclick="() => _sidebarOpen = false"></div>
+    }
+
+    <aside class="sidebar @(_sidebarOpen ? "open" : "")">
+        <div class="brand">
+            <span class="brand-dot"></span> NEOLINK<span class="brand-net">.NET</span>
+            <button class="icon-btn" title="Server settings" @onclick="() => _showSettings = !_showSettings">⚙</button>
+        </div>
+
+        @if (_showSettings)
+        {
+            <div class="settings">
+                <label>Server API</label>
+                <input @bind="_server" @bind:after="OnServerChangedAsync" placeholder="http://host:8555" />
+            </div>
+        }
+
+        <div class="section-title">
+            CAMERAS
+            <button class="icon-btn" title="Refresh" @onclick="RefreshCamerasAsync">⟳</button>
+        </div>
+
+        @if (_error != null)
+        {
+            <div class="notice error">@_error</div>
+        }
+        else if (_cameras.Count == 0)
+        {
+            <div class="notice">No cameras yet…</div>
+        }
+
+        @foreach (var cam in _cameras)
+        {
+            <div class="cam">
+                <div class="cam-head" title="Add to view" @onclick="() => AddCamera(cam)">
+                    <span class="dot @(cam.Streams.Any(s => s.Ready) ? "on" : "off")"></span>
+                    <span class="cam-name">@cam.Name</span>
+                    <button class="icon-btn solo-btn" title="Theater view"
+                            @onclick="() => MaximizeCamera(cam)" @onclick:stopPropagation="true">⛶</button>
+                </div>
+                <div class="cam-streams">
+                    @foreach (var s in cam.Streams)
+                    {
+                        <button class="chip @(s.Ready ? "" : "chip-off")"
+                                title="@s.Path @(s.Codec != null ? $"({s.Codec} {s.Width}x{s.Height})" : "")"
+                                @onclick="() => AddStream(cam, s)">
+                            @s.Label
+                            @if (s.Codec == "H265")
+                            {
+                                <span class="badge">H265</span>
+                            }
+                        </button>
+                    }
+                </div>
+            </div>
+        }
+
+        <div class="sidebar-foot">Neolink.NET web client</div>
+    </aside>
+
+    <main class="stage">
+        <div class="toolbar">
+            <button class="tool-btn menu-btn" title="Cameras" @onclick="() => _sidebarOpen = !_sidebarOpen">☰</button>
+            <span class="tool-label">VIEW</span>
+            @foreach (var (mode, icon, name) in Modes)
+            {
+                <button class="tool-btn @(_mode == mode ? "active" : "")" title="@name"
+                        @onclick="() => SetMode(mode)">@icon <span class="tool-name">@name</span></button>
+            }
+
+            @if (_mode != "theater")
+            {
+                <span class="tool-sep"></span>
+                <span class="tool-label">TILES</span>
+                <button class="tool-btn" @onclick="() => SetCount(_count - 1)">−</button>
+                <span class="tool-count">@_count</span>
+                <button class="tool-btn" @onclick="() => SetCount(_count + 1)">+</button>
+            }
+
+            @if (_backup != null)
+            {
+                <span class="tool-sep"></span>
+                <button class="tool-btn back" @onclick="RestoreFromBackup">⤡ Restore view</button>
+            }
+        </div>
+
+        <div id="stage-grid" class="grid mode-@_mode" style="@ContainerStyle()">
+            @for (int i = 0; i < _slots.Count; i++)
+            {
+                var index = i;
+                var slot = _slots[index];
+                var camera = slot.Camera == null ? null : _cameras.FirstOrDefault(c => c.Name == slot.Camera);
+
+                <div class="tile @(index == 0 && (_mode is "focus" or "mosaic") ? "hero" : "")"
+                     id="tile-@index" data-slot="@index" style="@TileStyle(index)" @key="index"
+                     @ondblclick="() => ToggleMaximize(index)"
+                     @onclick="() => OnTileClick(index)">
+                    @if (_mode == "free")
+                    {
+                        <div class="tile-head">
+                            <span class="tile-head-name">@(slot.Camera ?? "empty")</span>
+                            <span class="tile-head-hint">drag</span>
+                        </div>
+                    }
+                    @if (slot.Camera == null)
+                    {
+                        <div class="tile-empty" title="Pick a camera from the sidebar">＋</div>
+                    }
+                    else
+                    {
+                        @* no autoplay: the JS player starts playback once its jitter buffer is filled *@
+                        <video id="vid-@index" muted playsinline></video>
+                        <div class="tile-status">connecting…</div>
+                        <div class="tile-bar" @onclick:stopPropagation="true" @ondblclick:stopPropagation="true">
+                            <span class="tile-name">@slot.Camera</span>
+                            @if (camera != null && camera.Streams.Count > 1)
+                            {
+                                <select value="@slot.Path" @onchange="e => ChangeStream(index, camera, (string?)e.Value)">
+                                    @foreach (var s in camera.Streams)
+                                    {
+                                        <option value="@s.Path">@s.Label</option>
+                                    }
+                                </select>
+                            }
+                            <span class="tile-spacer"></span>
+                            <button class="icon-btn" title="@(_backup != null && _mode == "theater" ? "Restore view" : "Maximize")"
+                                    @onclick="() => ToggleMaximize(index)">⛶</button>
+                            <button class="icon-btn" title="Browser fullscreen" @onclick="() => FullscreenAsync(index)">⤢</button>
+                            <button class="icon-btn" title="Remove" @onclick="() => CloseSlot(index)">✕</button>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    </main>
+
+</div>
+
+@code {
+    private static readonly (string Mode, string Icon, string Name)[] Modes =
+    {
+        ("grid", "▦", "Grid"),
+        ("focus", "◧", "Focus"),
+        ("mosaic", "▩", "Mosaic"),
+        ("theater", "▭", "Theater"),
+        ("free", "🗔", "Free"),
+    };
+
+    private const string StorageKey = "neolink.view";
+
+    private readonly List<ApiCamera> _cameras = new();
+    private List<ViewSlot> _slots = new();
+    private string _mode = "grid";
+    private int _count = 4;
+    private ViewSnapshot? _backup;
+    private string _server = "";
+    private string? _error;
+    private bool _showSettings;
+    private bool _loaded;
+    private bool _sidebarOpen;
+
+    private readonly Dictionary<int, string> _attached = new();
+    private PeriodicTimer? _pollTimer;
+
+    protected override void OnInitialized() => EnsureSlots();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await LoadPersistedAsync();
+            _loaded = true;
+            await RefreshCamerasAsync();
+            StateHasChanged();
+            _ = PollLoopAsync();
+            return;
+        }
+        await ReconcilePlayersAsync();
+        if (_mode == "free")
+            await JS.InvokeVoidAsync("neolink.freeInit", "stage-grid");
+    }
+
+    // ------------------------------------------------------------ persistence
+
+    private async Task LoadPersistedAsync()
+    {
+        try
+        {
+            var json = await JS.InvokeAsync<string?>("neolink.lsGet", StorageKey);
+            if (json != null)
+            {
+                var v = JsonSerializer.Deserialize<PersistedView>(json);
+                if (v != null)
+                {
+                    _server = v.Server ?? "";
+                    _mode = Modes.Any(m => m.Mode == v.Mode) ? v.Mode : "grid";
+                    _count = v.Count;
+                    _slots = v.Slots;
+                    _backup = v.Backup;
+                }
+            }
+        }
+        catch { /* corrupted/old state: start fresh */ }
+
+        _count = ClampCount(_mode, _count == 0 ? 4 : _count);
+        EnsureSlots();
+
+        // Heal a bad saved default: the API is plain HTTP, https://host:8555 can never work.
+        if (_server.StartsWith("https://", StringComparison.OrdinalIgnoreCase) &&
+            _server.TrimEnd('/').EndsWith(":8555", StringComparison.Ordinal))
+        {
+            _server = "http://" + _server["https://".Length..];
+            await SaveAsync();
+        }
+
+        if (string.IsNullOrWhiteSpace(_server))
+            _server = await JS.InvokeAsync<string>("neolink.defaultServer");
+    }
+
+    private async Task SaveAsync()
+    {
+        if (!_loaded) return;
+        var v = new PersistedView { Server = _server, Mode = _mode, Count = _count, Slots = _slots, Backup = _backup };
+        await JS.InvokeVoidAsync("neolink.lsSet", StorageKey, JsonSerializer.Serialize(v));
+    }
+
+    // ------------------------------------------------------------ data
+
+    private async Task RefreshCamerasAsync()
+    {
+        if (await TryFetchCamerasAsync(_server)) return;
+
+        // The UI is served by Neolink.Server itself, so the page origin is almost
+        // always the right API address. Heal stale/typo'd saved values automatically.
+        try
+        {
+            var origin = await JS.InvokeAsync<string>("neolink.defaultServer");
+            if (!string.Equals(origin, _server, StringComparison.OrdinalIgnoreCase)
+                && await TryFetchCamerasAsync(origin))
+            {
+                _server = origin;
+                await SaveAsync();
+            }
+        }
+        catch { /* JS unavailable (prerender/disconnect): keep the original error */ }
+    }
+
+    private async Task<bool> TryFetchCamerasAsync(string server)
+    {
+        if (string.IsNullOrWhiteSpace(server)) return false;
+        try
+        {
+            var cams = await Http.GetFromJsonAsync<List<ApiCamera>>($"{server.TrimEnd('/')}/api/cameras");
+            _cameras.Clear();
+            if (cams != null) _cameras.AddRange(cams);
+            _error = null;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _error = $"Cannot reach {server}: {ex.Message}";
+            return false;
+        }
+    }
+
+    private async Task PollLoopAsync()
+    {
+        _pollTimer = new PeriodicTimer(TimeSpan.FromSeconds(10));
+        try
+        {
+            while (await _pollTimer.WaitForNextTickAsync())
+            {
+                await RefreshCamerasAsync();
+                StateHasChanged();
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (ObjectDisposedException) { }
+    }
+
+    private async Task OnServerChangedAsync()
+    {
+        await RefreshCamerasAsync();
+        await SaveAsync();
+    }
+
+    // ------------------------------------------------------------ layout
+
+    private static int ClampCount(string mode, int n) => mode switch
+    {
+        "theater" => 1,
+        "focus" => Math.Clamp(n, 2, 9),
+        "mosaic" => Math.Clamp(n, 2, 8),
+        _ => Math.Clamp(n, 1, 16),
+    };
+
+    private void EnsureSlots()
+    {
+        while (_slots.Count < _count) _slots.Add(new ViewSlot());
+        if (_slots.Count > _count) _slots = _slots.Take(_count).ToList();
+    }
+
+    private void SetMode(string mode)
+    {
+        _mode = mode;
+        _count = ClampCount(mode, _count);
+        EnsureSlots();
+        _ = SaveAsync();
+    }
+
+    private void SetCount(int n)
+    {
+        _count = ClampCount(_mode, n);
+        EnsureSlots();
+        _ = SaveAsync();
+    }
+
+    private static int GridColumns(int n) => (int)Math.Ceiling(Math.Sqrt(n));
+
+    private string? ContainerStyle() => _mode switch
+    {
+        "grid" => $"grid-template-columns: repeat({GridColumns(_count)}, 1fr); grid-auto-rows: 1fr;",
+        "focus" => $"grid-template-columns: 4fr 1fr; grid-template-rows: repeat({Math.Max(1, _count - 1)}, 1fr);",
+        "mosaic" when _count <= 6 => "grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr);",
+        "mosaic" => "grid-template-columns: repeat(4, 1fr); grid-template-rows: repeat(4, 1fr);",
+        _ => null,
+    };
+
+    // Mosaic: hero in the top-left corner, small tiles wrap around it (classic CCTV wall).
+    private static readonly (int Row, int Col)[] MosaicCells3 = { (1, 3), (2, 3), (3, 1), (3, 2), (3, 3) };
+    private static readonly (int Row, int Col)[] MosaicCells4 = { (1, 4), (2, 4), (3, 4), (4, 1), (4, 2), (4, 3), (4, 4) };
+
+    private string? TileStyle(int i)
+    {
+        switch (_mode)
+        {
+            case "focus":
+                return i == 0
+                    ? $"grid-area: 1 / 1 / span {Math.Max(1, _count - 1)} / 2;"
+                    : $"grid-area: {i} / 2 / span 1 / 3;";
+            case "mosaic":
+            {
+                if (i == 0)
+                    return _count <= 6 ? "grid-area: 1 / 1 / span 2 / span 2;" : "grid-area: 1 / 1 / span 3 / span 3;";
+                var cells = _count <= 6 ? MosaicCells3 : MosaicCells4;
+                var (r, c) = cells[Math.Min(i - 1, cells.Length - 1)];
+                return $"grid-area: {r} / {c} / span 1 / span 1;";
+            }
+            case "free":
+                return null; // geometry is owned by JS (drag/resize, persisted separately)
+            default:
+                return "";   // explicit empty: clears leftover free-mode geometry on mode switch
+        }
+    }
+
+    // ------------------------------------------------------------ slot actions
+
+    private static ApiStream? DefaultStream(ApiCamera cam) =>
+        cam.Streams.FirstOrDefault(s => s.Kind == "subStream") ?? cam.Streams.FirstOrDefault();
+
+    private void AddCamera(ApiCamera cam)
+    {
+        var s = DefaultStream(cam);
+        if (s != null) AddStream(cam, s);
+    }
+
+    private void AddStream(ApiCamera cam, ApiStream stream)
+    {
+        var slot = _slots.FirstOrDefault(s => s.Camera == null) ?? _slots[^1];
+        slot.Camera = cam.Name;
+        slot.Kind = stream.Kind;
+        slot.Path = stream.Path;
+        _sidebarOpen = false; // mobile drawer: close after picking
+        _ = SaveAsync();
+    }
+
+    private void ChangeStream(int index, ApiCamera camera, string? path)
+    {
+        var stream = camera.Streams.FirstOrDefault(s => s.Path == path);
+        if (stream == null) return;
+        _slots[index].Kind = stream.Kind;
+        _slots[index].Path = stream.Path;
+        _ = SaveAsync();
+    }
+
+    private void CloseSlot(int index)
+    {
+        _slots[index].Clear();
+        _ = SaveAsync();
+    }
+
+    private void OnTileClick(int index)
+    {
+        // In focus mode, clicking a thumbnail promotes it to the hero pane.
+        if (_mode == "focus" && index > 0 && _slots[index].Camera != null)
+        {
+            (_slots[0], _slots[index]) = (_slots[index], _slots[0]);
+            _ = SaveAsync();
+        }
+    }
+
+    // ------------------------------------------------------------ maximize / restore
+
+    private ViewSnapshot Snapshot() => new()
+    {
+        Mode = _mode,
+        Count = _count,
+        Slots = _slots.Select(s => s.Clone()).ToList(),
+    };
+
+    private void ToggleMaximize(int index)
+    {
+        if (_backup != null && _mode == "theater")
+        {
+            RestoreFromBackup();
+            return;
+        }
+        if (_slots[index].Camera == null) return;
+        _backup = Snapshot();
+        var keep = _slots[index].Clone();
+        _mode = "theater";
+        _count = 1;
+        _slots = new List<ViewSlot> { keep };
+        _ = SaveAsync();
+    }
+
+    private void MaximizeCamera(ApiCamera cam)
+    {
+        var s = cam.Streams.FirstOrDefault(x => x.Kind == "mainStream") ?? DefaultStream(cam);
+        if (s == null) return;
+        _backup ??= Snapshot();
+        _mode = "theater";
+        _count = 1;
+        _slots = new List<ViewSlot> { new() { Camera = cam.Name, Kind = s.Kind, Path = s.Path } };
+        _ = SaveAsync();
+    }
+
+    private void RestoreFromBackup()
+    {
+        if (_backup == null) return;
+        _mode = Modes.Any(m => m.Mode == _backup.Mode) ? _backup.Mode : "grid";
+        _count = ClampCount(_mode, _backup.Count);
+        _slots = _backup.Slots;
+        _backup = null;
+        EnsureSlots();
+        _ = SaveAsync();
+    }
+
+    private async Task FullscreenAsync(int index) =>
+        await JS.InvokeVoidAsync("neolink.fullscreen", $"tile-{index}");
+
+    // ------------------------------------------------------------ player reconciliation
+
+    private string? WsUrl(ViewSlot slot)
+    {
+        if (slot.Path == null || string.IsNullOrWhiteSpace(_server)) return null;
+        var baseUrl = _server.TrimEnd('/');
+        baseUrl = baseUrl.StartsWith("https", StringComparison.OrdinalIgnoreCase)
+            ? "wss" + baseUrl["https".Length..]
+            : "ws" + baseUrl["http".Length..];
+        return $"{baseUrl}/api/stream?path={Uri.EscapeDataString(slot.Path)}";
+    }
+
+    private async Task ReconcilePlayersAsync()
+    {
+        int upper = Math.Max(_slots.Count, _attached.Count == 0 ? 0 : _attached.Keys.Max() + 1);
+        for (int i = 0; i < upper; i++)
+        {
+            string? desired = i < _slots.Count ? WsUrl(_slots[i]) : null;
+            _attached.TryGetValue(i, out var current);
+            if (desired == current) continue;
+
+            if (current != null)
+            {
+                await JS.InvokeVoidAsync("neolink.detach", $"vid-{i}");
+                _attached.Remove(i);
+            }
+            if (desired != null)
+            {
+                await JS.InvokeVoidAsync("neolink.attach", $"vid-{i}", desired);
+                _attached[i] = desired;
+            }
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _pollTimer?.Dispose();
+        foreach (var i in _attached.Keys.ToList())
+        {
+            try { await JS.InvokeVoidAsync("neolink.detach", $"vid-{i}"); }
+            catch { /* circuit already gone */ }
+        }
+        _attached.Clear();
+    }
+}
