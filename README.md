@@ -61,39 +61,108 @@ The cameras are unmodified and no Reolink NVR is required.
 
 ## Quick start (Docker — recommended)
 
-Prebuilt multi-arch images (amd64 + arm64) are published to GitHub Container Registry
-on every release:
+Prebuilt multi-arch images (`linux/amd64` + `linux/arm64`) are published to GitHub
+Container Registry on every push to `main` and every `v*` release tag.
+
+### 1. Pull the image
 
 ```bash
-# 1. Get a config
-curl -o config.json https://raw.githubusercontent.com/<you>/<repo>/main/src/Neolink.Server/config.example.json
-#    ...then edit it: camera IPs + credentials
+docker pull ghcr.io/borexola/neolink.net:latest
+```
 
-# 2. Run
+Available tags:
+
+| Tag | Meaning |
+|---|---|
+| `latest` | most recent build of `main` |
+| `0.6.0`, `0.6` | a specific release (created from `v0.6.0` git tags) — pin these in production |
+| `main` | same as `latest`, explicit branch tag |
+
+Docker selects the right architecture (x86-64 server, Raspberry Pi 4/5, ARM NAS)
+automatically. Verify the pull:
+
+```bash
+docker image inspect ghcr.io/borexola/neolink.net:latest --format '{{.Os}}/{{.Architecture}} {{.Created}}'
+```
+
+> **`denied` or `unauthorized` when pulling?** The package is public, so no login is
+> needed. If you see this on a fresh setup you are likely logged into ghcr.io with an
+> expired token — run `docker logout ghcr.io` and pull again.
+> **`manifest unknown`?** The tag doesn't exist (typo, or a release tag that hasn't
+> been built yet) — check the available tags on the
+> [package page](https://github.com/borexola/neolink.net/pkgs/container/neolink.net).
+
+### 2. Create a config
+
+```bash
+curl -o config.json https://raw.githubusercontent.com/borexola/neolink.net/main/src/Neolink.Server/config.example.json
+```
+
+Edit it: camera names, IP addresses, and credentials (same login as the Reolink app).
+
+### 3. Run
+
+```bash
 docker run -d --name neolink --restart unless-stopped \
     -p 8554:8554 -p 8555:8555 \
     -v "$PWD/config.json:/config/config.json:ro" \
-    ghcr.io/<you>/<repo>:latest
+    ghcr.io/borexola/neolink.net:latest
 ```
 
-Or with compose (see [docker-compose.yml](docker-compose.yml)):
+Then check it came up:
 
 ```bash
-curl -O https://raw.githubusercontent.com/<you>/<repo>/main/docker-compose.yml
+docker logs -f neolink     # prints the ready-to-use RTSP and web UI URLs
+```
+
+- **Web UI**: http://localhost:8555
+- **RTSP**: `rtsp://localhost:8554/<camera-name>`
+
+### Or with compose
+
+Save this as `docker-compose.yml` next to your `config.json`
+(or `curl -O https://raw.githubusercontent.com/borexola/neolink.net/main/docker-compose.yml`):
+
+```yaml
+services:
+  neolink:
+    image: ghcr.io/borexola/neolink.net:latest
+    container_name: neolink
+    restart: unless-stopped
+    ports:
+      - "8554:8554"   # RTSP (TCP-interleaved works for ffmpeg/Frigate/VLC)
+      - "8555:8555"   # web UI + API; remove if webui:false and API unused
+    volumes:
+      - ./config.json:/config/config.json:ro
+    # For RTSP over UDP transport, use host networking instead of port maps:
+    # network_mode: host
+```
+
+Then:
+
+```bash
 docker compose up -d
+docker compose logs -f    # shows the rtsp:// and web UI URLs
 ```
 
-To build the image from source instead:
+### Upgrading
 
 ```bash
-git clone https://github.com/<you>/<repo>.git && cd <repo>
-docker build -t neolink-net .
-docker run -d --name neolink -p 8554:8554 -p 8555:8555 \
-    -v "$PWD/config.json:/config/config.json:ro" neolink-net
+docker pull ghcr.io/borexola/neolink.net:latest
+docker rm -f neolink
+docker run -d --name neolink ...   # same run command as above
+# or, with compose:
+docker compose pull && docker compose up -d
 ```
 
-Upgrading: `docker pull ghcr.io/<you>/<repo>:latest && docker restart neolink`
-(or `docker compose pull && docker compose up -d`).
+### Building the image from source
+
+```bash
+git clone https://github.com/borexola/neolink.net.git && cd neolink.net
+docker build -t neolink.net .
+docker run -d --name neolink -p 8554:8554 -p 8555:8555 \
+    -v "$PWD/config.json:/config/config.json:ro" neolink.net
+```
 
 Then:
 - **Web UI**: http://localhost:8555
@@ -108,8 +177,8 @@ Then:
 Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download).
 
 ```bash
-git clone https://github.com/<you>/<repo>.git
-cd <repo>
+git clone https://github.com/borexola/neolink.net.git
+cd neolink.net
 cp src/Neolink.Server/config.example.json src/Neolink.Server/config.json  # edit it
 dotnet run --project src/Neolink.Server -c Release
 ```
