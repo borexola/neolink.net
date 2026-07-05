@@ -1,7 +1,7 @@
 services:
   neolink:
-    # Prebuilt image from GitHub Container Registry (replace <you>/<repo>):
-    image: ghcr.io/<you>/<repo>:latest
+    # Prebuilt image from GitHub Container Registry:
+    image: ghcr.io/borexola/neolink.net:latest
     # ...or build from source instead: comment `image:` out and uncomment:
     # build: .
     container_name: neolink
