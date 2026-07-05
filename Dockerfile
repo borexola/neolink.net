@@ -15,14 +15,17 @@
 FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
-# Restore first for layer caching
+# NOTE: restore must run with the FULL source tree present, not just the csproj
+# files. The SDK decides at restore time whether this is a Blazor app (by seeing
+# .razor files) and only then pulls the framework's static web assets — a staged
+# csproj-only restore silently drops /_framework/blazor.web.js from the output,
+# which bricks the web UI (page loads, but the interactive circuit never starts).
 COPY Neolink.sln nuget.config* ./
-COPY src/Neolink.Server/Neolink.Server.csproj src/Neolink.Server/
-COPY src/Neolink.WebClient/Neolink.WebClient.csproj src/Neolink.WebClient/
-RUN dotnet restore src/Neolink.Server/Neolink.Server.csproj
-
 COPY src/ src/
-RUN dotnet publish src/Neolink.Server/Neolink.Server.csproj -c Release -o /app --no-restore
+RUN dotnet publish src/Neolink.Server/Neolink.Server.csproj -c Release -o /app
+
+# Fail the image build outright if the UI's interactivity script is missing.
+RUN test -f /app/wwwroot/_framework/blazor.web.js
 
 # ---------- runtime ----------
 FROM mcr.microsoft.com/dotnet/aspnet:10.0
