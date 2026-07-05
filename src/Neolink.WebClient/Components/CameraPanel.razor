@@ -44,6 +44,7 @@
 
         @if (_profiles is { Count: > 0 })
         {
+            var canSetStream = _caps.Features?.StreamSettings == true;
             <div class="campanel-section">
                 <div class="campanel-section-title">STREAMS</div>
                 @foreach (var group in _profiles.GroupBy(p => p.Type))
@@ -58,16 +59,30 @@
                         <div class="stream-options">
                             @foreach (var p in options)
                             {
-                                <span class="chip stream-chip @(IsActiveProfile(p) ? "chip-active" : "")"
-                                      title="Framerates: @string.Join(", ", p.Framerates) fps — Bitrates: @string.Join(", ", p.Bitrates) kbps">
-                                    @(p.Width)×@(p.Height) · @p.DefaultFramerate fps · @p.DefaultBitrate kbps
-                                </span>
+                                @if (canSetStream)
+                                {
+                                    <button class="chip stream-chip clickable @(IsActiveProfile(p) ? "chip-active" : "")"
+                                            disabled="@_settingProfile"
+                                            title="Framerates: @string.Join(", ", p.Framerates) fps — Bitrates: @string.Join(", ", p.Bitrates) kbps"
+                                            @onclick="() => SetProfileAsync(p)">
+                                        @(p.Width)×@(p.Height) · @p.DefaultFramerate fps · @p.DefaultBitrate kbps
+                                    </button>
+                                }
+                                else
+                                {
+                                    <span class="chip stream-chip @(IsActiveProfile(p) ? "chip-active" : "")"
+                                          title="Framerates: @string.Join(", ", p.Framerates) fps — Bitrates: @string.Join(", ", p.Bitrates) kbps">
+                                        @(p.Width)×@(p.Height) · @p.DefaultFramerate fps · @p.DefaultBitrate kbps
+                                    </span>
+                                }
                             }
                         </div>
                     </div>
                 }
                 <div class="notice small">
-                    Read from the camera; the highlighted profile is live. Changing profiles from here isn't supported yet.
+                    @(canSetStream
+                        ? "Read from the camera; the highlighted profile is live. Click a profile to apply it — the camera restarts the stream briefly."
+                        : "Read from the camera; the highlighted profile is live. To change profiles from here, set the camera's \"http_address\" in the server config.")
                 </div>
             </div>
         }
@@ -195,6 +210,7 @@
     private string? _error;
     private string? _status;
     private bool _confirmReboot;
+    private bool _settingProfile;
     private int _ptzSpeed = 32;
     private string? _loadedFor;
 
@@ -239,6 +255,31 @@
 
     private bool IsActiveProfile(ApiEncodeProfile p) =>
         Camera?.Streams.Any(s => s.Kind == p.Type && s.Width == p.Width && s.Height == p.Height) == true;
+
+    private async Task SetProfileAsync(ApiEncodeProfile p)
+    {
+        if (_settingProfile) return;
+        _settingProfile = true;
+        try
+        {
+            if (await PostAsync("settings/stream", new
+                {
+                    stream = p.Type,
+                    width = p.Width,
+                    height = p.Height,
+                    framerate = p.DefaultFramerate,
+                    bitrate = p.DefaultBitrate,
+                }))
+            {
+                _status = $"{p.Label} stream set to {p.Width}×{p.Height} — " +
+                          "the camera restarts the stream; video resumes in a few seconds.";
+            }
+        }
+        finally
+        {
+            _settingProfile = false;
+        }
+    }
 
     private async Task SetLedAsync(string field, string? value)
     {

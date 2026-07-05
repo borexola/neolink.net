@@ -21,7 +21,8 @@ public sealed record ApiCamera(string Name, bool Online, List<ApiStream> Streams
 public sealed record ApiVersion(string? Name, string? Model, string? Serial, string? Firmware,
     string? Hardware, string? Build);
 
-public sealed record ApiFeatures(bool Ptz, bool Led, bool Pir, bool Battery);
+public sealed record ApiFeatures(bool Ptz, bool Led, bool Pir, bool Battery,
+    bool StreamSettings = false);
 
 /// <summary>GET /api/cameras/{name}/capabilities — discovered device info and features.</summary>
 public sealed record ApiCapabilities(bool Online, ApiVersion? Version, ApiFeatures? Features, JsonElement Support);

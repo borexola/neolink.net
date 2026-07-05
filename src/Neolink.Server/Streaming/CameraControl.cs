@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using System.Xml.Linq;
 using Neolink.Bc.Xml;
 using Neolink.Protocol;
@@ -29,6 +30,17 @@ public interface ICameraControl
     Task<CameraCapabilities> GetCapabilitiesAsync(CancellationToken ct);
 
     Task<StreamInfoListXml?> GetStreamInfoAsync(CancellationToken ct);
+
+    /// <summary>Whether stream encode settings can be written (the camera's HTTP API is configured).</summary>
+    bool CanSetStreamSettings { get; }
+
+    /// <summary>
+    /// Changes one stream's encode settings via the camera's Reolink HTTP API.
+    /// The camera restarts the affected stream to apply them.
+    /// </summary>
+    Task SetStreamSettingsAsync(string stream, uint? width, uint? height,
+        uint? framerate, uint? bitrate, CancellationToken ct);
+
     Task<XElement?> GetBatteryInfoAsync(CancellationToken ct);
     Task<XElement?> GetLedStateAsync(CancellationToken ct);
     Task SetLedStateAsync(string? state, string? lightState, CancellationToken ct);
@@ -50,6 +62,7 @@ public sealed class CameraControl : ICameraControl
     private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(4);
 
     private readonly ILiveCameraSource _source;
+    private readonly ReolinkHttpApi? _httpApi;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     // Capabilities are cached for the lifetime of one camera session; a reconnect
@@ -57,7 +70,11 @@ public sealed class CameraControl : ICameraControl
     private IBcCamera? _capsSession;
     private CameraCapabilities? _caps;
 
-    public CameraControl(ILiveCameraSource source) => _source = source;
+    public CameraControl(ILiveCameraSource source, ReolinkHttpApi? httpApi = null)
+    {
+        _source = source;
+        _httpApi = httpApi;
+    }
 
     public string CameraName => _source.Name;
     public bool Online => _source.LiveCamera != null;
@@ -103,6 +120,36 @@ public sealed class CameraControl : ICameraControl
 
     public Task<StreamInfoListXml?> GetStreamInfoAsync(CancellationToken ct) =>
         WithCameraAsync(camera => camera.GetStreamInfoAsync(ct: ct), ct);
+
+    public bool CanSetStreamSettings => _httpApi != null;
+
+    // Rides the camera's HTTP API, not the BC connection (no verified BC setter
+    // exists), so it works even while the BC session is mid-reconnect and does
+    // not take the command gate. Read-modify-write, like the LED/PIR setters.
+    public async Task SetStreamSettingsAsync(string stream, uint? width, uint? height,
+        uint? framerate, uint? bitrate, CancellationToken ct)
+    {
+        if (_httpApi == null)
+            throw new NotSupportedException(
+                $"changing stream settings requires the camera's HTTP API; set \"http_address\" for '{CameraName}' in the config");
+
+        // Baichuan and the HTTP API name the third stream differently.
+        string key = stream == "externStream" ? "extStream" : stream;
+        var enc = await _httpApi.GetEncAsync(ct).ConfigureAwait(false);
+        if (enc[key] is not JsonObject encStream)
+            throw new NotSupportedException($"{CameraName} does not expose '{stream}' encode settings over its HTTP API");
+
+        if (width != null && height != null) encStream["size"] = $"{width}*{height}";
+        if (framerate != null) encStream["frameRate"] = framerate.Value;
+        if (bitrate != null) encStream["bitRate"] = bitrate.Value;
+        await _httpApi.SetEncAsync(enc, ct).ConfigureAwait(false);
+
+        Log.Info($"{CameraName}: {stream} encode settings changed" +
+                 $"{(width != null ? $" to {width}x{height}" : "")}" +
+                 $"{(framerate != null ? $" @{framerate}fps" : "")}" +
+                 $"{(bitrate != null ? $" {bitrate}kbps" : "")}" +
+                 " — the camera restarts the stream to apply");
+    }
 
     public Task<XElement?> GetBatteryInfoAsync(CancellationToken ct) =>
         WithCameraAsync(camera => camera.GetBatteryInfoAsync(ct: ct), ct);

@@ -108,7 +108,7 @@ public sealed class NeolinkConfig
 
     private static CameraConfig ParseJsonCamera(JsonElement el)
     {
-        string? name = null, username = null, password = null, address = null, uid = null;
+        string? name = null, username = null, password = null, address = null, uid = null, httpAddress = null;
         string stream = "both";
         byte channelId = 0;
         List<string>? permitted = null;
@@ -121,6 +121,7 @@ public sealed class NeolinkConfig
                 case "username": username = prop.Value.GetString(); break;
                 case "password": password = prop.Value.GetString(); break;
                 case "address": address = prop.Value.GetString(); break;
+                case "httpaddress": httpAddress = prop.Value.GetString(); break;
                 case "uid": uid = prop.Value.GetString(); break;
                 case "stream": stream = prop.Value.GetString() ?? "both"; break;
                 case "channelid": channelId = prop.Value.GetByte(); break;
@@ -136,7 +137,7 @@ public sealed class NeolinkConfig
             }
         }
 
-        return BuildCamera(name, username, password, address, uid, stream, channelId, permitted);
+        return BuildCamera(name, username, password, address, uid, stream, channelId, permitted, httpAddress);
     }
 
     /// <summary>Normalizes JSON keys: case-insensitive, tolerates snake_case and kebab-case.</summary>
@@ -181,7 +182,8 @@ public sealed class NeolinkConfig
                 MiniToml.GetString(c, "uid"),
                 MiniToml.GetString(c, "stream") ?? "both",
                 (byte)(MiniToml.GetInt(c, "channel_id") ?? 0),
-                MiniToml.GetStringList(c, "permitted_users")));
+                MiniToml.GetStringList(c, "permitted_users"),
+                MiniToml.GetString(c, "http_address")));
         }
         return config;
     }
@@ -193,7 +195,8 @@ public sealed class NeolinkConfig
                  "Consider a TLS-terminating proxy if you need rtsps://");
 
     private static CameraConfig BuildCamera(string? name, string? username, string? password,
-        string? address, string? uid, string stream, byte channelId, List<string>? permitted)
+        string? address, string? uid, string stream, byte channelId, List<string>? permitted,
+        string? httpAddress = null)
     {
         if (name == null) throw new FormatException("camera entry missing \"name\"");
         if (username == null) throw new FormatException($"Camera \"{name}\" missing \"username\"");
@@ -215,6 +218,7 @@ public sealed class NeolinkConfig
             Stream = stream,
             ChannelId = channelId,
             PermittedUsers = permitted,
+            HttpAddress = string.IsNullOrWhiteSpace(httpAddress) ? null : httpAddress.Trim(),
         };
     }
 
@@ -295,4 +299,9 @@ public sealed class CameraConfig
     public string Stream { get; init; } = "both";
     public byte ChannelId { get; init; }
     public List<string>? PermittedUsers { get; init; }
+    /// <summary>
+    /// The camera's Reolink HTTP(S) API ("host", "host:port" or full URL), used for
+    /// the settings Baichuan has no verified write path for (stream encode profiles).
+    /// </summary>
+    public string? HttpAddress { get; init; }
 }

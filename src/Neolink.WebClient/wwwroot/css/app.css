@@ -560,6 +560,11 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
 .stream-chip { cursor: default; }
 .stream-chip:hover { border-color: var(--line); color: var(--text); }
 
+/* Profiles become clickable when the camera's HTTP API is configured */
+.stream-chip.clickable { cursor: pointer; }
+.stream-chip.clickable:hover { border-color: var(--accent); color: var(--accent); }
+.stream-chip.clickable:disabled { opacity: 0.5; cursor: wait; }
+
 .chip-active {
     border-color: var(--accent);
     color: var(--accent);

@@ -123,8 +123,11 @@ foreach (var cam in config.Cameras)
 
     // Control commands (capabilities, PTZ, LED, ...) ride the primary stream's
     // connection — cameras have session limits, so no extra login is spent.
+    // Stream encode settings are written via the camera's HTTP API when configured.
+    var httpApi = cam.HttpAddress == null ? null
+        : new ReolinkHttpApi(cam.HttpAddress, cam.Username, cam.Password, cam.ChannelId);
     ICameraControl control = new CameraControl(primaryService
-        ?? throw new InvalidOperationException($"camera '{cam.Name}' has no streams"));
+        ?? throw new InvalidOperationException($"camera '{cam.Name}' has no streams"), httpApi);
     webCameras.Add(new WebCameraInfo(cam.Name, webStreams, control, permitted));
 }
 
