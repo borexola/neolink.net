@@ -5,9 +5,10 @@ namespace Neolink.Config;
 public sealed class NeolinkConfig
 {
     public string BindAddr { get; set; } = "0.0.0.0";
-    public int BindPort { get; set; } = 8554;
+    // Defaults chosen to never clash with Frigate/go2rtc (8554 RTSP, 8555 WebRTC).
+    public int BindPort { get; set; } = 8654;
     /// <summary>HTTP/WebSocket API port for web clients (camera list + live fMP4); 0 disables it.</summary>
-    public int WebPort { get; set; } = 8555;
+    public int WebPort { get; set; } = 8655;
     /// <summary>Bind address for the web API; defaults to the RTSP bind address.</summary>
     public string? WebBind { get; set; }
     /// <summary>Serve the browser UI on the web port (in addition to the API).</summary>
@@ -150,8 +151,8 @@ public sealed class NeolinkConfig
         var config = new NeolinkConfig
         {
             BindAddr = MiniToml.GetString(root, "bind") ?? "0.0.0.0",
-            BindPort = (int)(MiniToml.GetInt(root, "bind_port") ?? 8554),
-            WebPort = (int)(MiniToml.GetInt(root, "web_port") ?? 8555),
+            BindPort = (int)(MiniToml.GetInt(root, "bind_port") ?? 8654),
+            WebPort = (int)(MiniToml.GetInt(root, "web_port") ?? 8655),
             WebBind = MiniToml.GetString(root, "web_bind"),
             WebUi = MiniToml.GetBool(root, "web_ui") ?? MiniToml.GetBool(root, "webui") ?? true,
         };

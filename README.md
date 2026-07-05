@@ -20,10 +20,10 @@ a multi-camera wall with live low-latency video, no plugins, no transcoding, no 
 The cameras are unmodified and no Reolink NVR is required.
 
 ```
-┌──────────┐  Baichuan (9000)  ┌─────────────────┐  RTSP (8554)   ┌──────────────────┐
+┌──────────┐  Baichuan (9000)  ┌─────────────────┐  RTSP (8654)   ┌──────────────────┐
 │ Reolink  │ ────────────────► │                 │ ─────────────► │ Frigate / VLC /  │
 │ cameras  │                   │   Neolink.NET   │                │ Blue Iris / HA   │
-└──────────┘                   │  (one process)  │  HTTP/WS (8555)┌──────────────────┐
+└──────────┘                   │  (one process)  │  HTTP/WS (8655)┌──────────────────┐
                                │                 │ ─────────────► │ Browser web UI   │
                                └─────────────────┘                └──────────────────┘
 ```
@@ -104,7 +104,7 @@ Edit it: camera names, IP addresses, and credentials (same login as the Reolink 
 
 ```bash
 docker run -d --name neolink --restart unless-stopped \
-    -p 8554:8554 -p 8555:8555 \
+    -p 8654:8654 -p 8655:8655 \
     -v "$PWD/config.json:/config/config.json:ro" \
     ghcr.io/borexola/neolink.net:latest
 ```
@@ -115,8 +115,8 @@ Then check it came up:
 docker logs -f neolink     # prints the ready-to-use RTSP and web UI URLs
 ```
 
-- **Web UI**: http://localhost:8555
-- **RTSP**: `rtsp://localhost:8554/<camera-name>`
+- **Web UI**: http://localhost:8655
+- **RTSP**: `rtsp://localhost:8654/<camera-name>`
 
 ### Or with compose
 
@@ -130,8 +130,8 @@ services:
     container_name: neolink
     restart: unless-stopped
     ports:
-      - "8554:8554"   # RTSP (TCP-interleaved works for ffmpeg/Frigate/VLC)
-      - "8555:8555"   # web UI + API; remove if webui:false and API unused
+      - "8654:8654"   # RTSP (TCP-interleaved works for ffmpeg/Frigate/VLC)
+      - "8655:8655"   # web UI + API; remove if webui:false and API unused
     volumes:
       - ./config.json:/config/config.json:ro
     # For RTSP over UDP transport, use host networking instead of port maps:
@@ -160,13 +160,13 @@ docker compose pull && docker compose up -d
 ```bash
 git clone https://github.com/borexola/neolink.net.git && cd neolink.net
 docker build -t neolink.net .
-docker run -d --name neolink -p 8554:8554 -p 8555:8555 \
+docker run -d --name neolink -p 8654:8654 -p 8655:8655 \
     -v "$PWD/config.json:/config/config.json:ro" neolink.net
 ```
 
 Then:
-- **Web UI**: http://localhost:8555
-- **RTSP**: `rtsp://localhost:8554/<camera-name>`
+- **Web UI**: http://localhost:8655
+- **RTSP**: `rtsp://localhost:8654/<camera-name>`
 
 > RTSP over **UDP** transport needs `network_mode: host` instead of port mapping.
 > TCP-interleaved transport (the default for ffmpeg/Frigate, and `--rtsp-tcp` in VLC)
@@ -193,12 +193,12 @@ dotnet publish src/Neolink.Server -c Release -r linux-x64    # or win-x64, linux
 
 | URL | Content |
 |---|---|
-| `rtsp://host:8554/driveway` | main stream (alias) |
-| `rtsp://host:8554/driveway/mainStream` | main stream (high resolution) |
-| `rtsp://host:8554/driveway/subStream` | sub stream (low resolution) |
-| `http://host:8555/` | web UI |
-| `http://host:8555/api/cameras` | JSON list of cameras and stream state |
-| `ws://host:8555/api/stream?path=/driveway/subStream` | live fMP4 (MSE-compatible) |
+| `rtsp://host:8654/driveway` | main stream (alias) |
+| `rtsp://host:8654/driveway/mainStream` | main stream (high resolution) |
+| `rtsp://host:8654/driveway/subStream` | sub stream (low resolution) |
+| `http://host:8655/` | web UI |
+| `http://host:8655/api/cameras` | JSON list of cameras and stream state |
+| `ws://host:8655/api/stream?path=/driveway/subStream` | live fMP4 (MSE-compatible) |
 
 ## Configuration
 
@@ -211,8 +211,8 @@ the original Rust neolink are also accepted.
 | Option | Default | Description |
 |---|---|---|
 | `bind` | `0.0.0.0` | Address to serve on |
-| `bind_port` | `8554` | RTSP port |
-| `web_port` | `8555` | Web UI + HTTP/WS API port; `0` disables both |
+| `bind_port` | `8654` | RTSP port |
+| `web_port` | `8655` | Web UI + HTTP/WS API port; `0` disables both |
 | `webui` | `true` | Serve the browser UI on `web_port`; `false` = API only |
 | `web_bind` | = `bind` | Separate bind address for the web port |
 | `users` | *(none)* | RTSP Basic-auth users: `{ "name", "pass" }`. Omit for open access |
@@ -235,9 +235,9 @@ cameras:
   driveway:
     ffmpeg:
       inputs:
-        - path: rtsp://<neolink-host>:8554/driveway/subStream
+        - path: rtsp://<neolink-host>:8654/driveway/subStream
           roles: [detect]
-        - path: rtsp://<neolink-host>:8554/driveway/mainStream
+        - path: rtsp://<neolink-host>:8654/driveway/mainStream
           roles: [record]
 ```
 
@@ -270,7 +270,7 @@ full pipeline without hardware:
 ```bash
 python3 tools/fake_camera.py /path/to/rust-repo/crates/core/src/bcmedia/samples 9000 &
 # point a config at address = "127.0.0.1:9000", run neolink, then:
-ffprobe -rtsp_transport tcp rtsp://127.0.0.1:8554/testcam
+ffprobe -rtsp_transport tcp rtsp://127.0.0.1:8654/testcam
 ```
 
 ### Project layout

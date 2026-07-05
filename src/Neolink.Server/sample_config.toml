@@ -3,12 +3,12 @@
 # or to this computer only: "127.0.0.1"
 bind = "0.0.0.0"
 
-# Default port is 8554; uncomment to change it
-# bind_port = 8554
+# Default port is 8654; uncomment to change it
+# bind_port = 8654
 
 # You can password protect the RTSP server by adding users.
 # If you do not add [[users]] then anyone can connect without credentials.
-# Connect with e.g. rtsp://me:mepass@192.168.1.101:8554/driveway
+# Connect with e.g. rtsp://me:mepass@192.168.1.101:8654/driveway
 #
 # [[users]]
 # name = "me"

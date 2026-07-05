@@ -6,16 +6,16 @@
   "bind": "0.0.0.0",
 
   // RTSP port (for VLC, ffmpeg, Frigate, Blue Iris, Home Assistant, ...).
-  "bind_port": 8554,
+  "bind_port": 8654,
 
   // HTTP/WebSocket port: the web UI and the JSON/fMP4 API. 0 disables both.
-  "web_port": 8555,
+  "web_port": 8655,
 
   // Serve the browser UI on web_port. Set false for API-only / headless setups.
   "webui": true,
 
   // Optional: password-protect the RTSP server. Remove entries for open access.
-  // Connect with e.g. rtsp://me:mepass@192.168.1.100:8554/driveway
+  // Connect with e.g. rtsp://me:mepass@192.168.1.100:8654/driveway
   "users": [
     // { "name": "me", "pass": "mepass" }
   ],
@@ -23,7 +23,7 @@
   // One entry per camera.
   "cameras": [
     {
-      // Name used in the RTSP URL and the web UI: rtsp://<host>:8554/driveway
+      // Name used in the RTSP URL and the web UI: rtsp://<host>:8654/driveway
       "name": "driveway",
 
       // Camera login (the same credentials as the Reolink app).

@@ -7,8 +7,8 @@ services:
     container_name: neolink
     restart: unless-stopped
     ports:
-      - "8554:8554"   # RTSP (TCP-interleaved works for ffmpeg/Frigate/VLC)
-      - "8555:8555"   # web UI + API; remove if webui:false and API unused
+      - "8654:8654"   # RTSP (TCP-interleaved works for ffmpeg/Frigate/VLC)
+      - "8655:8655"   # web UI + API; remove if webui:false and API unused
     volumes:
       - ./config.json:/config/config.json:ro
     # For RTSP over UDP transport, prefer host networking instead of port maps:

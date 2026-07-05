@@ -2,7 +2,7 @@
 #
 # Build:  docker build -t neolink-net .
 # Run:    docker run -d --name neolink \
-#             -p 8554:8554 -p 8555:8555 \
+#             -p 8654:8654 -p 8655:8655 \
 #             -v /path/to/config.json:/config/config.json:ro \
 #             neolink-net
 #
@@ -32,8 +32,8 @@ FROM mcr.microsoft.com/dotnet/aspnet:10.0
 WORKDIR /app
 COPY --from=build /app .
 
-# 8554 = RTSP, 8555 = web UI + HTTP/WebSocket API
-EXPOSE 8554 8555
+# 8654 = RTSP, 8655 = web UI + HTTP/WebSocket API
+EXPOSE 8654 8655
 VOLUME /config
 
 # Don't advertise the default ASP.NET port; the app binds from its config file.
