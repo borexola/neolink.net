@@ -125,15 +125,17 @@
                         @* Ambient "trickle" preview: the newest few cards loop their clip
                            muted, so the strip shows what happened without any clicks.
                            Capped so a big backlog doesn't decode dozens of videos. *@
-                        bool trickle = ev.HasClip && !ev.Ongoing && trickleBudget-- > 0;
+                        bool trickle = (ev.HasPreview || ev.HasClip) && !ev.Ongoing && trickleBudget-- > 0;
                         <div class="event-card @(ev.Ongoing ? "live" : "")" @key="ev.Id"
                              title="@ev.Title — click to play" @onclick="() => OpenEvent(ev)">
                             <div class="event-thumb">
                                 @if (trickle)
                                 {
+                                    @* Previews prefer the low-res sub-stream twin; the full
+                                       main-stream clip only plays in the click-through player. *@
                                     <video data-trickle="1" muted loop playsinline preload="metadata"
                                            poster="@(ev.HasThumb ? EventArtifactUrl(ev, "thumb") : null)"
-                                           src="@EventArtifactUrl(ev, "clip")"></video>
+                                           src="@EventArtifactUrl(ev, ev.HasPreview ? "preview" : "clip")"></video>
                                 }
                                 else if (ev.HasThumb)
                                 {
@@ -604,6 +606,7 @@
     private readonly List<ApiEvent> _events = new();
     private bool _eventsSupported;
     private bool _continuousSupported;
+    private double _trickleSpeed = 4;
     private bool _showEventsPanel;
     private string _eventCameraFilter = "";
     private bool _eventsUnreviewedOnly;
@@ -673,7 +676,7 @@
         // elements, which blocks autoplay — the helper mutes for real and plays.
         if (_eventsSupported && _events.Any(e => !e.Reviewed))
         {
-            await JS.InvokeVoidAsync("neolink.trickle");
+            await JS.InvokeVoidAsync("neolink.trickle", _trickleSpeed);
             _selfRef ??= DotNetObjectReference.Create(this);
             await JS.InvokeVoidAsync("neolink.stripResizeInit", "events-bar", _selfRef);
         }
@@ -1149,6 +1152,7 @@
             using var fres = await Http.SendAsync(ApiRequest(HttpMethod.Get, "/api/features"));
             var features = fres.IsSuccessStatusCode ? await fres.Content.ReadFromJsonAsync<ApiFeaturesInfo>() : null;
             _continuousSupported = features?.Continuous == true;
+            if (features != null && features.TrickleSpeed > 0) _trickleSpeed = features.TrickleSpeed;
             if (!_continuousSupported && _panelTab == "recordings") _panelTab = "events";
         }
         catch

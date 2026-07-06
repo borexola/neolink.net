@@ -43,7 +43,7 @@ public sealed record ApiEncodeProfile(string Type, uint Width, uint Height,
 public sealed record ApiStreamProfiles(List<ApiEncodeProfile> Profiles);
 
 /// <summary>Server capability flags (GET /api/features).</summary>
-public sealed record ApiFeaturesInfo(bool Events, bool Continuous);
+public sealed record ApiFeaturesInfo(bool Events, bool Continuous, double TrickleSpeed = 4);
 
 /// <summary>GET /api/auth/status — whether/how the UI must authenticate.</summary>
 public sealed record ApiAuthStatus(bool Enabled, bool SetupRequired, bool ResetAvailable,
@@ -77,7 +77,8 @@ public sealed record ApiSegment(string File, long Size)
 
 /// <summary>GET /api/events — one recorded detection event.</summary>
 public sealed record ApiEvent(string Id, string Camera, DateTime Start, DateTime End,
-    List<string> Labels, bool Reviewed, bool Ongoing, bool HasClip, bool HasThumb)
+    List<string> Labels, bool Reviewed, bool Ongoing, bool HasClip, bool HasThumb,
+    bool HasPreview = false)
 {
     private static readonly (string Label, string Icon, string Name)[] Known =
     {

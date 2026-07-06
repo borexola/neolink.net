@@ -15,8 +15,13 @@ public sealed class NeolinkConfig
     public bool WebUi { get; set; } = true;
     /// <summary>Event recording (motion/AI detections + clips); null = disabled.</summary>
     public RecordingConfig? Recording { get; set; }
-    /// <summary>Recovery switch: while true, the login screen allows setting a new admin password.</summary>
+    /// <summary>Web-UI specific settings ("ui" section).</summary>
+    public UiConfig Ui { get; set; } = new();
+    /// <summary>Recovery switch (legacy top-level spelling; "ui.reset_admin_password" preferred).</summary>
     public bool ResetAdminPassword { get; set; }
+
+    /// <summary>Either spelling of the admin-password recovery switch.</summary>
+    public bool EffectiveResetAdminPassword => ResetAdminPassword || Ui.ResetAdminPassword;
     public List<UserConfig> Users { get; } = new();
     public List<CameraConfig> Cameras { get; } = new();
 
@@ -81,6 +86,9 @@ public sealed class NeolinkConfig
                     break;
                 case "resetadminpassword":
                     config.ResetAdminPassword = prop.Value.GetBoolean();
+                    break;
+                case "ui":
+                    ParseJsonUi(prop.Value, config);
                     break;
                 case "users":
                     foreach (var u in prop.Value.EnumerateArray())
@@ -177,6 +185,27 @@ public sealed class NeolinkConfig
         return rec;
     }
 
+    private static void ParseJsonUi(JsonElement el, NeolinkConfig config)
+    {
+        foreach (var prop in el.EnumerateObject())
+        {
+            switch (Key(prop.Name))
+            {
+                // Grouped aliases of the top-level web options
+                case "enabled": config.WebUi = prop.Value.GetBoolean(); break;
+                case "port": config.WebPort = prop.Value.GetInt32(); break;
+                case "bind": config.WebBind = prop.Value.GetString(); break;
+                // UI-only settings
+                case "statedir": config.Ui.StateDir = prop.Value.GetString(); break;
+                case "resetadminpassword": config.Ui.ResetAdminPassword = prop.Value.GetBoolean(); break;
+                case "tricklespeed": config.Ui.TrickleSpeed = prop.Value.GetDouble(); break;
+                default:
+                    Log.Warn($"Config: ignoring unknown ui option '{prop.Name}'");
+                    break;
+            }
+        }
+    }
+
     /// <summary>Normalizes JSON keys: case-insensitive, tolerates snake_case and kebab-case.</summary>
     private static string Key(string name) =>
         name.Replace("_", "").Replace("-", "").ToLowerInvariant();
@@ -198,6 +227,16 @@ public sealed class NeolinkConfig
 
         if (MiniToml.GetString(root, "certificate") != null)
             WarnTls();
+
+        if (MiniToml.GetTable(root, "ui") is { } ui)
+        {
+            if (MiniToml.GetBool(ui, "enabled") is { } en) config.WebUi = en;
+            if (MiniToml.GetInt(ui, "port") is { } p) config.WebPort = (int)p;
+            config.WebBind = MiniToml.GetString(ui, "bind") ?? config.WebBind;
+            config.Ui.StateDir = MiniToml.GetString(ui, "state_dir");
+            config.Ui.ResetAdminPassword = MiniToml.GetBool(ui, "reset_admin_password") ?? false;
+            if (MiniToml.GetInt(ui, "trickle_speed") is { } ts) config.Ui.TrickleSpeed = ts;
+        }
 
         if (MiniToml.GetTable(root, "recording") is { } rec)
         {
@@ -331,6 +370,11 @@ public sealed class NeolinkConfig
             if (Recording.ContinuousRetentionDays is < 0)
                 throw new FormatException("recording.continuous_retention_days must be >= 0 (0 = keep forever)");
         }
+
+        if (Ui.TrickleSpeed is < 0.25 or > 16)
+            throw new FormatException("ui.trickle_speed must be 0.25..16");
+        if (Ui.StateDir is { Length: 0 })
+            throw new FormatException("ui.state_dir must not be empty when set");
     }
 
     private static (string host, int port) SplitHostPort(string address)
@@ -361,6 +405,25 @@ public sealed class UserConfig
 {
     public required string Name { get; init; }
     public required string Pass { get; init; }
+}
+
+/// <summary>
+/// Web-UI settings ("ui" in the config). Note: UI accounts (sign-in) are NOT
+/// configured here — they live in users.json under <see cref="StateDir"/> and
+/// are managed from the UI itself; the top-level "users" list is RTSP-only.
+/// </summary>
+public sealed class UiConfig
+{
+    /// <summary>
+    /// Where the UI's server-side state persists (users.json, settings.json).
+    /// Defaults to the config file's directory — point it at a persistent volume
+    /// if the config is mounted read-only or replaced on deployments.
+    /// </summary>
+    public string? StateDir { get; set; }
+    /// <summary>Recovery: while true, the login screen allows setting a new admin password.</summary>
+    public bool ResetAdminPassword { get; set; }
+    /// <summary>Playback rate of the review-strip's ambient clip previews.</summary>
+    public double TrickleSpeed { get; set; } = 4;
 }
 
 /// <summary>Event recording settings ("recording" in the config).</summary>

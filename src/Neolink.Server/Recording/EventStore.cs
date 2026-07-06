@@ -17,6 +17,8 @@ public sealed class EventRecord
     public bool Ongoing { get; set; }
     public bool HasClip { get; set; }
     public bool HasThumb { get; set; }
+    /// <summary>A low-res sub-stream twin of the clip exists (preview.mp4), for strip previews.</summary>
+    public bool HasPreview { get; set; }
 }
 
 /// <summary>

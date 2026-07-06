@@ -33,18 +33,23 @@ public sealed class RecordingSettings
     private readonly object _gate = new();
     private Dictionary<string, CameraRecordingSettings> _cameras = new(StringComparer.OrdinalIgnoreCase);
 
-    public RecordingSettings(string configDir, string? legacyDir = null)
+    public RecordingSettings(string stateDir, params string?[] legacyDirs)
     {
-        _file = Path.Combine(configDir, "settings.json");
+        _file = Path.Combine(stateDir, "settings.json");
         try
         {
-            // Older versions kept settings.json in the recordings root; migrate once.
+            // Older versions kept settings.json in the config dir or the recordings
+            // root; a relocated state_dir migrates from whichever exists, once.
             var source = _file;
-            if (!File.Exists(source) && legacyDir != null
-                && File.Exists(Path.Combine(legacyDir, "settings.json")))
+            foreach (var legacy in legacyDirs)
             {
-                source = Path.Combine(legacyDir, "settings.json");
-                Log.Info($"Recording settings: migrating {source} -> {_file}");
+                if (File.Exists(source) || legacy == null) break;
+                var candidate = Path.Combine(legacy, "settings.json");
+                if (File.Exists(candidate))
+                {
+                    source = candidate;
+                    Log.Info($"Recording settings: migrating {source} -> {_file}");
+                }
             }
             if (File.Exists(source))
             {
