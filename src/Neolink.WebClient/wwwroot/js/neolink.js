@@ -310,10 +310,29 @@
             });
         },
 
-        // Set a video element's playback rate (event player speed control).
-        setRate(videoId, rate) {
+        // Drives the event player: points the <video> at `url` (full clip at 1×,
+        // low-res preview when fast-forwarding), preserving the current position
+        // across a source swap, and applies the playback rate. Idempotent — a
+        // same-url call only updates the rate. Fast-forwarding the light preview
+        // avoids the decoder stall that froze 2K/4K (H.265) clips at 2×/4×.
+        eventPlayer(videoId, url, rate) {
             const v = document.getElementById(videoId);
-            if (v) { v.defaultPlaybackRate = rate; v.playbackRate = rate; }
+            if (!v || !url) return;
+            if (v.dataset.evUrl !== url) {
+                const at = (v.currentTime && isFinite(v.currentTime)) ? v.currentTime : 0;
+                v.dataset.evUrl = url;
+                v.src = url;
+                const onMeta = () => {
+                    v.removeEventListener('loadedmetadata', onMeta);
+                    try { if (at > 0 && at < v.duration) v.currentTime = at; } catch { }
+                    v.defaultPlaybackRate = v.playbackRate = rate;
+                    v.play().catch(() => { });
+                };
+                v.addEventListener('loadedmetadata', onMeta);
+                try { v.load(); } catch { }
+            } else {
+                v.defaultPlaybackRate = v.playbackRate = rate;
+            }
         },
 
         // Review-strip vertical resizing: drag the handle at the bar's bottom edge.
