@@ -36,6 +36,14 @@
             and switch cameras to Continuous (24/7) to use the timeline.
         </div>
     }
+    else if (!_continuous)
+    {
+        <div class="notice">
+            Continuous (24/7) recording is temporarily disabled in this build — the timeline
+            scrubs that footage and will return together with it. Detection events still record
+            and play from the 🕘 Events panel on the live view.
+        </div>
+    }
     else
     {
         <div class="tl-cams">
@@ -123,6 +131,7 @@
     private double _t;
     private bool _playing;
     private bool _supported = true;
+    private bool _continuous = true;
     private string? _error;
 
     private readonly List<ApiCamera> _cameras = new();
@@ -222,8 +231,21 @@
         _marks.Clear();
         _playing = false;
 
-        // Recording support is probed via the events endpoint (same feature gate),
-        // and the reply doubles as the day's colored lane marks.
+        // Feature gates first: the timeline needs recording AND continuous footage.
+        try
+        {
+            var features = await Http.GetFromJsonAsync<ApiFeaturesInfo>($"{Base}/api/features");
+            _supported = features?.Events == true;
+            _continuous = features?.Continuous == true;
+        }
+        catch
+        {
+            _supported = false;
+            return;
+        }
+        if (!_supported || !_continuous) return;
+
+        // The events reply doubles as the day's colored lane marks.
         try
         {
             using var res = await Http.GetAsync($"{Base}/api/events?limit=1000");
@@ -232,7 +254,6 @@
                 _supported = false;
                 return;
             }
-            _supported = true;
             var events = await res.Content.ReadFromJsonAsync<List<ApiEvent>>() ?? new List<ApiEvent>();
             foreach (var ev in events)
             {

@@ -42,9 +42,12 @@ public sealed record ApiEncodeProfile(string Type, uint Width, uint Height,
 /// <summary>GET /api/cameras/{name}/streaminfo — the encode profiles of each stream.</summary>
 public sealed record ApiStreamProfiles(List<ApiEncodeProfile> Profiles);
 
+/// <summary>Server capability flags (GET /api/features).</summary>
+public sealed record ApiFeaturesInfo(bool Events, bool Continuous);
+
 /// <summary>GET/POST /api/cameras/{name}/recording — runtime recording switches.</summary>
 public sealed record ApiRecordingSettings(bool Events, bool Continuous,
-    List<string>? EventTypes, List<string>? KnownTypes)
+    List<string>? EventTypes, List<string>? KnownTypes, bool ContinuousAvailable = false)
 {
     /// <summary>null EventTypes = every detection type is recorded.</summary>
     public bool TypeEnabled(string label) => EventTypes == null || EventTypes.Contains(label);

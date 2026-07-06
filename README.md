@@ -241,6 +241,11 @@ the original Rust neolink are also accepted.
 
 ### Recording (`"recording": { ... }`)
 
+> ⚠ **Continuous (24/7) recording is temporarily disabled** while its
+> file/playback issues are ironed out — the per-camera switch, the timeline and
+> the recordings browser are hidden until it returns. **Detection events are
+> unaffected** and record normally.
+
 Two recording modes, both switchable **per camera at runtime** from the web UI
 (camera ⚙ → RECORDING) — the switches persist in `settings.json` next to your
 config file (in Docker: the `/config` mount), so they survive restarts:

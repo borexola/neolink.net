@@ -14,8 +14,8 @@
   // Serve the browser UI on web_port. Set false for API-only / headless setups.
   "webui": true,
 
-  // Optional: recording to disk — motion/AI detection events (clips + thumbnails)
-  // and, when switched on per camera in the web UI, continuous 24/7 footage.
+  // Optional: recording to disk — motion/AI detection events (clips + thumbnails).
+  // (Continuous 24/7 recording is temporarily disabled in this build.)
   // Remove this section to disable. In Docker, mount a volume at "path".
   // "recording": {
   //   "path": "/recordings",           // storage directory

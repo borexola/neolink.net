@@ -180,9 +180,14 @@ foreach (var cam in config.Cameras)
             primaryService.MotionSink = recorder.OnMotion;
             tasks.Add(Task.Run(() => recorder.RunAsync(shutdown.Token)));
 
-            var continuous = new ContinuousRecorder(cam.Name, recordStream.Hub, eventStore,
-                recordingSettings, config.Recording);
-            tasks.Add(Task.Run(() => continuous.RunAsync(shutdown.Token)));
+            // Continuous (24/7) recording is temporarily disabled — see
+            // RecordingConfig.ContinuousEnabled.
+            if (RecordingConfig.ContinuousEnabled)
+            {
+                var continuous = new ContinuousRecorder(cam.Name, recordStream.Hub, eventStore,
+                    recordingSettings, config.Recording);
+                tasks.Add(Task.Run(() => continuous.RunAsync(shutdown.Token)));
+            }
         }
     }
 }

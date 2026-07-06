@@ -180,13 +180,16 @@
                         @(_recording.Events ? "on" : "off")
                     </button>
                 </div>
-                <div class="control-row">
-                    <span>Continuous (24/7)</span>
-                    <button class="chip @(_recording.Continuous ? "" : "chip-off")"
-                            @onclick="() => SetRecordingAsync(continuous: !_recording.Continuous)">
-                        @(_recording.Continuous ? "on" : "off")
-                    </button>
-                </div>
+                @if (_recording.ContinuousAvailable)
+                {
+                    <div class="control-row">
+                        <span>Continuous (24/7)</span>
+                        <button class="chip @(_recording.Continuous ? "" : "chip-off")"
+                                @onclick="() => SetRecordingAsync(continuous: !_recording.Continuous)">
+                            @(_recording.Continuous ? "on" : "off")
+                        </button>
+                    </div>
+                }
                 @if (_recording.Events)
                 {
                     <div class="control-row rec-types-row">
