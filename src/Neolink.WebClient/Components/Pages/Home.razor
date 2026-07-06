@@ -643,15 +643,21 @@
             </div>
             @if (_playEvent.HasClip)
             {
-                @* @key forces a fresh <video> when navigating between events *@
-                <video id="event-player-video" controls autoplay playsinline @key="_playEvent.Id"
-                       src="@EventArtifactUrl(_playEvent, "clip")"></video>
+                @* @key forces a fresh <video> when navigating between events.
+                   The source is chosen by speed (JS owns it, preserving position):
+                   full clip at 1×, low-res sub-stream preview when fast-forwarding
+                   so the decoder doesn't stall on 2K/4K (esp. H.265) frames. *@
+                <video id="event-player-video" controls autoplay playsinline @key="_playEvent.Id"></video>
                 <div class="player-speed">
                     <span class="tool-label">SPEED</span>
                     @foreach (var s in PlaybackSpeeds)
                     {
                         <button class="chip @(_playSpeed == s ? "chip-active" : "")"
                                 @onclick="() => SetPlaySpeedAsync(s)">@FormatSpeed(s)</button>
+                    }
+                    @if (_playSpeed > 1 && _playEvent.HasPreview)
+                    {
+                        <span class="event-sub">· preview quality while fast-forwarding</span>
                     }
                 </div>
             }
@@ -799,9 +805,10 @@
             _selfRef ??= DotNetObjectReference.Create(this);
             await JS.InvokeVoidAsync("neolink.stripResizeInit", "events-bar", _selfRef);
         }
-        // Keep a chosen playback rate across the <video>'s reloads/renders.
-        if (_playEvent is { HasClip: true } && _playSpeed != 1)
-            await JS.InvokeVoidAsync("neolink.setRate", "event-player-video", _playSpeed);
+        // Drive the event player from JS: pick the source for the current speed,
+        // preserve position across a clip↔preview swap, and apply the rate.
+        if (_playEvent is { HasClip: true })
+            await JS.InvokeVoidAsync("neolink.eventPlayer", "event-player-video", PlayerUrl, _playSpeed);
     }
 
     /// <summary>Called from JS when the strip's resize-handle drag ends.</summary>
@@ -1500,10 +1507,16 @@
 
     private static string FormatSpeed(double s) => s == 1 ? "1×" : $"{s:0}×";
 
+    /// <summary>Full clip at 1×; the light sub-stream preview when fast-forwarding (if it exists).</summary>
+    private string PlayerUrl => _playEvent == null ? "" :
+        (_playSpeed > 1 && _playEvent.HasPreview)
+            ? EventArtifactUrl(_playEvent, "preview")
+            : EventArtifactUrl(_playEvent, "clip");
+
     private async Task SetPlaySpeedAsync(double s)
     {
         _playSpeed = s;
-        await JS.InvokeVoidAsync("neolink.setRate", "event-player-video", s);
+        await JS.InvokeVoidAsync("neolink.eventPlayer", "event-player-video", PlayerUrl, s);
     }
 
     private void OpenEvent(ApiEvent ev) { _playEvent = ev; _playSpeed = 1; }
