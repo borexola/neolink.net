@@ -294,8 +294,74 @@
         });
     }
 
+    // ---------- timeline page (recorded footage scrubbing) ----------
+    const scrubs = {};
+
     window.neolink = {
         freeInit,
+
+        // Points a <video> at a recording segment and keeps it at the wanted
+        // offset. Tolerance while playing avoids constant reseeks (the video
+        // advances on its own); paused scrubbing snaps tightly.
+        tlSync(videoId, url, offset, playing) {
+            const v = document.getElementById(videoId);
+            if (!v) return;
+            v.muted = true;
+            if (!url) {
+                delete v.dataset.tlUrl;
+                if (v.getAttribute('src')) { v.removeAttribute('src'); try { v.load(); } catch { } }
+                return;
+            }
+            if (v.dataset.tlUrl !== url) {
+                v.dataset.tlUrl = url;
+                v.src = url;
+                try { v.load(); } catch { }
+                v.currentTime = offset;
+            } else {
+                const tolerance = playing ? 1.5 : 0.35;
+                if (Math.abs(v.currentTime - offset) > tolerance) v.currentTime = offset;
+            }
+            if (playing) { if (v.paused) v.play().catch(() => { }); }
+            else if (!v.paused) v.pause();
+        },
+
+        // Pointer-drag scrubbing on the timeline lanes: reports the horizontal
+        // fraction (0..1) to Blazor, throttled so dragging doesn't flood SignalR.
+        tlScrubInit(elemId, dotnetRef) {
+            this.tlScrubDispose(elemId);
+            const el = document.getElementById(elemId);
+            if (!el) return;
+            let lastSent = 0;
+            const send = (e, final) => {
+                const now = performance.now();
+                if (!final && now - lastSent < 70) return;
+                lastSent = now;
+                const r = el.getBoundingClientRect();
+                const f = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+                dotnetRef.invokeMethodAsync('OnTimelineScrub', f, final);
+            };
+            const down = (e) => {
+                if (e.button !== 0 && e.pointerType === 'mouse') return;
+                e.preventDefault();
+                try { el.setPointerCapture(e.pointerId); } catch { }
+                send(e, false);
+                const move = (ev) => send(ev, false);
+                const up = (ev) => {
+                    el.removeEventListener('pointermove', move);
+                    el.removeEventListener('pointerup', up);
+                    send(ev, true);
+                };
+                el.addEventListener('pointermove', move);
+                el.addEventListener('pointerup', up);
+            };
+            el.addEventListener('pointerdown', down);
+            scrubs[elemId] = { el, down };
+        },
+        tlScrubDispose(elemId) {
+            const s = scrubs[elemId];
+            if (s) { s.el.removeEventListener('pointerdown', s.down); delete scrubs[elemId]; }
+        },
+
         attach(videoId, wsUrl) {
             this.detach(videoId);
             const video = document.getElementById(videoId);

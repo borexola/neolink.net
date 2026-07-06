@@ -143,6 +143,7 @@
                 <span class="tool-sep"></span>
                 <button class="tool-btn @(_showEventsPanel ? "active" : "")" title="Event history"
                         @onclick="() => _showEventsPanel = !_showEventsPanel">🕘 <span class="tool-name">Events</span></button>
+                <a class="tool-btn" href="timeline" title="Scrub recorded footage across all cameras">📼 <span class="tool-name">Timeline</span></a>
             }
         </div>
 
@@ -332,7 +333,7 @@
 
     @if (_playEvent != null)
     {
-        <div class="backdrop player-backdrop" @onclick="ClosePlayer"></div>
+        <div class="backdrop player-backdrop" @onclick="ClosePlayerAsync"></div>
         <div class="event-player" role="dialog" aria-label="Event playback">
             <div class="event-player-head">
                 <div class="event-player-title">
@@ -341,7 +342,7 @@
                         @_playEvent.Camera · @_playEvent.Start.ToLocalTime().ToString("ddd d MMM HH:mm:ss") · @DurationText(_playEvent)
                     </span>
                 </div>
-                <button class="icon-btn" title="Close" @onclick="ClosePlayer">✕</button>
+                <button class="icon-btn" title="Close" @onclick="ClosePlayerAsync">✕</button>
             </div>
             @if (_playEvent.HasClip)
             {
@@ -355,17 +356,17 @@
             }
             <div class="event-player-foot">
                 <button class="chip" disabled="@(NeighborEvent(1) == null)"
-                        @onclick="() => _playEvent = NeighborEvent(1)">← Older</button>
+                        @onclick="() => NavigatePlayerAsync(1)">← Older</button>
                 <button class="chip" disabled="@(NeighborEvent(-1) == null)"
-                        @onclick="() => _playEvent = NeighborEvent(-1)">Newer →</button>
+                        @onclick="() => NavigatePlayerAsync(-1)">Newer →</button>
                 <span class="tile-spacer"></span>
-                @if (!_playEvent.Reviewed)
+                @if (_playEvent.Reviewed)
                 {
-                    <button class="chip" @onclick="() => DismissAsync(_playEvent)">✓ Mark reviewed</button>
+                    <span class="event-sub">✓ reviewed</span>
                 }
                 else
                 {
-                    <span class="event-sub">✓ reviewed</span>
+                    <span class="event-sub">will be marked reviewed on close</span>
                 }
             </div>
         </div>
@@ -584,7 +585,26 @@
     }
 
     private void OpenEvent(ApiEvent ev) => _playEvent = ev;
-    private void ClosePlayer() => _playEvent = null;
+
+    /// <summary>Closing the player counts as reviewing: the event leaves the top strip.</summary>
+    private async Task ClosePlayerAsync()
+    {
+        var ev = _playEvent;
+        _playEvent = null;
+        if (ev is { Reviewed: false })
+            await DismissAsync(ev);
+    }
+
+    /// <summary>Older/newer navigation: the event being left behind was watched too.</summary>
+    private async Task NavigatePlayerAsync(int direction)
+    {
+        var watched = _playEvent;
+        var next = NeighborEvent(direction);
+        if (next == null) return;
+        _playEvent = next;
+        if (watched is { Reviewed: false })
+            await DismissAsync(watched);
+    }
 
     /// <summary>The adjacent event in the newest-first list (+1 = older, -1 = newer).</summary>
     private ApiEvent? NeighborEvent(int direction)

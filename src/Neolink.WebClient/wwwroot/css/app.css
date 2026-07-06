@@ -659,7 +659,21 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
 .event-dismiss { flex: 0 0 auto; }
 .events-clear { flex: 0 0 auto; }
 
-/* Event history panel (reuses the campanel chrome) */
+/* Event history panel (reuses the campanel chrome).
+   Fixed height: content changes (polling, expanding days, switching tabs) must
+   scroll inside the panel, never resize the popup itself. */
+.events-panel {
+    height: min(92vh, 960px);
+}
+
+.events-panel .campanel-head {
+    position: sticky;
+    top: -16px; /* campanel padding: pin flush to the panel edge */
+    background: var(--panel);
+    z-index: 2;
+    padding: 6px 0;
+}
+
 .events-panel .event-filter {
     background: var(--bg);
     color: var(--text);
@@ -757,10 +771,177 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
 
 .event-player video {
     width: 100%;
+    aspect-ratio: 16 / 9; /* stable modal size while media loads */
     max-height: calc(100vh - 180px);
     background: #000;
     border-radius: 8px;
     outline: none;
+}
+
+/* ------------------------------------------------------------ timeline page */
+
+.tl-page {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    background: var(--bg);
+    color: var(--text);
+    overflow: hidden;
+}
+
+.tl-toolbar { flex: 0 0 auto; }
+.tl-date { font-size: 13px; font-weight: 600; min-width: 150px; text-align: center; }
+
+.tl-clock {
+    margin-left: auto;
+    font-size: 15px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--accent);
+}
+
+.tl-cams {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 8px 12px 0;
+    align-items: center;
+}
+
+.tl-board {
+    display: flex;
+    padding: 10px 12px;
+    gap: 0;
+    flex: 0 0 auto;
+}
+
+.tl-names { display: flex; flex-direction: column; width: 110px; flex: 0 0 auto; }
+
+.tl-name {
+    height: 26px;
+    display: flex;
+    align-items: center;
+    font-size: 12px;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding-right: 8px;
+}
+
+.tl-lanes {
+    position: relative;
+    flex: 1;
+    cursor: crosshair;
+    touch-action: none; /* pointer-drag scrubbing on touch too */
+    user-select: none;
+}
+
+.tl-ruler { position: relative; height: 26px; }
+
+.tl-tick {
+    position: absolute;
+    top: 8px;
+    bottom: 0;
+    border-left: 1px solid var(--line);
+    font-size: 10px;
+    color: var(--muted);
+    padding-left: 3px;
+    pointer-events: none;
+}
+
+.tl-lane {
+    position: relative;
+    height: 26px;
+    background: color-mix(in srgb, var(--panel) 70%, transparent);
+    border-radius: 4px;
+    margin-bottom: 2px;
+    overflow: hidden;
+}
+
+.tl-cov {
+    position: absolute;
+    top: 7px;
+    height: 12px;
+    background: #35507e;
+    border-radius: 2px;
+    pointer-events: none;
+}
+
+.tl-ev {
+    position: absolute;
+    top: 4px;
+    height: 18px;
+    min-width: 3px;
+    border-radius: 2px;
+    opacity: 0.95;
+}
+
+.tl-cursor {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: var(--err);
+    pointer-events: none;
+    z-index: 3;
+}
+
+.tl-cursor-time {
+    position: absolute;
+    top: 0;
+    left: 4px;
+    font-size: 10px;
+    color: var(--err);
+    background: var(--bg);
+    padding: 0 3px;
+    border-radius: 3px;
+    white-space: nowrap;
+}
+
+.tl-grid {
+    flex: 1;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 8px;
+    padding: 4px 12px 12px;
+    overflow-y: auto;
+    align-content: start;
+}
+
+.tl-tile {
+    position: relative;
+    background: #000;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.tl-tile video {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    display: block;
+    background: #000;
+}
+
+.tl-tile-name {
+    position: absolute;
+    left: 8px;
+    bottom: 6px;
+    font-size: 12px;
+    background: rgba(0, 0, 0, 0.55);
+    padding: 2px 8px;
+    border-radius: 6px;
+}
+
+.tl-nofootage {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted);
+    font-size: 13px;
 }
 
 .event-player-foot {
