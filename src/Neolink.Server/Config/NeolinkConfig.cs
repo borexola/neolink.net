@@ -13,6 +13,8 @@ public sealed class NeolinkConfig
     public string? WebBind { get; set; }
     /// <summary>Serve the browser UI on the web port (in addition to the API).</summary>
     public bool WebUi { get; set; } = true;
+    /// <summary>Event recording (motion/AI detections + clips); null = disabled.</summary>
+    public RecordingConfig? Recording { get; set; }
     public List<UserConfig> Users { get; } = new();
     public List<CameraConfig> Cameras { get; } = new();
 
@@ -72,6 +74,9 @@ public sealed class NeolinkConfig
                 case "certificate":
                     WarnTls();
                     break;
+                case "recording":
+                    config.Recording = ParseJsonRecording(prop.Value);
+                    break;
                 case "users":
                     foreach (var u in prop.Value.EnumerateArray())
                         config.Users.Add(ParseJsonUser(u));
@@ -111,6 +116,7 @@ public sealed class NeolinkConfig
         string? name = null, username = null, password = null, address = null, uid = null, httpAddress = null;
         string stream = "both";
         byte channelId = 0;
+        bool record = true;
         List<string>? permitted = null;
 
         foreach (var prop in el.EnumerateObject())
@@ -125,6 +131,7 @@ public sealed class NeolinkConfig
                 case "uid": uid = prop.Value.GetString(); break;
                 case "stream": stream = prop.Value.GetString() ?? "both"; break;
                 case "channelid": channelId = prop.Value.GetByte(); break;
+                case "record": record = prop.Value.GetBoolean(); break;
                 case "permittedusers":
                     permitted = prop.Value.EnumerateArray().Select(x => x.GetString() ?? "").ToList();
                     break;
@@ -137,7 +144,30 @@ public sealed class NeolinkConfig
             }
         }
 
-        return BuildCamera(name, username, password, address, uid, stream, channelId, permitted, httpAddress);
+        return BuildCamera(name, username, password, address, uid, stream, channelId, permitted, httpAddress, record);
+    }
+
+    private static RecordingConfig ParseJsonRecording(JsonElement el)
+    {
+        string? path = null;
+        var rec = new RecordingConfig();
+        foreach (var prop in el.EnumerateObject())
+        {
+            switch (Key(prop.Name))
+            {
+                case "path": path = prop.Value.GetString(); break;
+                case "retentiondays": rec.RetentionDays = prop.Value.GetInt32(); break;
+                case "preseconds": rec.PreSeconds = prop.Value.GetInt32(); break;
+                case "postseconds": rec.PostSeconds = prop.Value.GetInt32(); break;
+                case "maxclipseconds": rec.MaxClipSeconds = prop.Value.GetInt32(); break;
+                case "stream": rec.Stream = prop.Value.GetString() ?? "auto"; break;
+                default:
+                    Log.Warn($"Config: ignoring unknown recording option '{prop.Name}'");
+                    break;
+            }
+        }
+        rec.Path = path ?? throw new FormatException("\"recording\" needs a \"path\" (the storage directory)");
+        return rec;
     }
 
     /// <summary>Normalizes JSON keys: case-insensitive, tolerates snake_case and kebab-case.</summary>
@@ -161,6 +191,20 @@ public sealed class NeolinkConfig
         if (MiniToml.GetString(root, "certificate") != null)
             WarnTls();
 
+        if (MiniToml.GetTable(root, "recording") is { } rec)
+        {
+            config.Recording = new RecordingConfig
+            {
+                Path = MiniToml.GetString(rec, "path")
+                    ?? throw new FormatException("[recording] needs a 'path' (the storage directory)"),
+                RetentionDays = (int)(MiniToml.GetInt(rec, "retention_days") ?? 7),
+                PreSeconds = (int)(MiniToml.GetInt(rec, "pre_seconds") ?? 5),
+                PostSeconds = (int)(MiniToml.GetInt(rec, "post_seconds") ?? 8),
+                MaxClipSeconds = (int)(MiniToml.GetInt(rec, "max_clip_seconds") ?? 120),
+                Stream = MiniToml.GetString(rec, "stream") ?? "auto",
+            };
+        }
+
         foreach (var u in MiniToml.GetTables(root, "users"))
         {
             var name = MiniToml.GetString(u, "name") ?? MiniToml.GetString(u, "username")
@@ -183,7 +227,8 @@ public sealed class NeolinkConfig
                 MiniToml.GetString(c, "stream") ?? "both",
                 (byte)(MiniToml.GetInt(c, "channel_id") ?? 0),
                 MiniToml.GetStringList(c, "permitted_users"),
-                MiniToml.GetString(c, "http_address")));
+                MiniToml.GetString(c, "http_address"),
+                MiniToml.GetBool(c, "record") ?? true));
         }
         return config;
     }
@@ -196,7 +241,7 @@ public sealed class NeolinkConfig
 
     private static CameraConfig BuildCamera(string? name, string? username, string? password,
         string? address, string? uid, string stream, byte channelId, List<string>? permitted,
-        string? httpAddress = null)
+        string? httpAddress = null, bool record = true)
     {
         if (name == null) throw new FormatException("camera entry missing \"name\"");
         if (username == null) throw new FormatException($"Camera \"{name}\" missing \"username\"");
@@ -219,6 +264,7 @@ public sealed class NeolinkConfig
             ChannelId = channelId,
             PermittedUsers = permitted,
             HttpAddress = string.IsNullOrWhiteSpace(httpAddress) ? null : httpAddress.Trim(),
+            Record = record,
         };
     }
 
@@ -257,6 +303,20 @@ public sealed class NeolinkConfig
             .Distinct().ToList();
         if (missing.Count > 0)
             throw new FormatException($"permitted_users reference undefined users: {string.Join(", ", missing)}");
+
+        if (Recording != null)
+        {
+            if (Recording.RetentionDays < 0)
+                throw new FormatException("recording.retention_days must be >= 0 (0 = keep forever)");
+            if (Recording.PreSeconds is < 0 or > 30)
+                throw new FormatException("recording.pre_seconds must be 0..30");
+            if (Recording.PostSeconds is < 1 or > 120)
+                throw new FormatException("recording.post_seconds must be 1..120");
+            if (Recording.MaxClipSeconds is < 10 or > 3600)
+                throw new FormatException("recording.max_clip_seconds must be 10..3600");
+            if (Recording.Stream is not ("auto" or "mainStream" or "subStream" or "externStream"))
+                throw new FormatException("recording.stream must be auto, mainStream, subStream or externStream");
+        }
     }
 
     private static (string host, int port) SplitHostPort(string address)
@@ -289,6 +349,23 @@ public sealed class UserConfig
     public required string Pass { get; init; }
 }
 
+/// <summary>Event recording settings ("recording" in the config).</summary>
+public sealed class RecordingConfig
+{
+    /// <summary>Storage directory for clips/thumbnails/event metadata (mount a volume here in Docker).</summary>
+    public string Path { get; set; } = "";
+    /// <summary>Days to keep events; 0 keeps them forever.</summary>
+    public int RetentionDays { get; set; } = 7;
+    /// <summary>Seconds of video kept from before the detection.</summary>
+    public int PreSeconds { get; set; } = 5;
+    /// <summary>Seconds of quiet after the last detection before an event closes.</summary>
+    public int PostSeconds { get; set; } = 8;
+    /// <summary>Hard cap on one event/clip; ongoing activity beyond it starts a new event.</summary>
+    public int MaxClipSeconds { get; set; } = 120;
+    /// <summary>Stream to record: "auto" (main if served, else first), or an explicit stream name.</summary>
+    public string Stream { get; set; } = "auto";
+}
+
 public sealed class CameraConfig
 {
     public required string Name { get; init; }
@@ -304,4 +381,6 @@ public sealed class CameraConfig
     /// the settings Baichuan has no verified write path for (stream encode profiles).
     /// </summary>
     public string? HttpAddress { get; init; }
+    /// <summary>Record detection events for this camera (when recording is configured).</summary>
+    public bool Record { get; init; } = true;
 }

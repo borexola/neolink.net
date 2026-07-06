@@ -192,6 +192,10 @@ public static class MiniToml
             ? b
             : bool.TryParse(GetString(table, key), out var parsed) ? parsed : null;
 
+    /// <summary>A single [table] section, or null if absent.</summary>
+    public static Dictionary<string, object>? GetTable(Dictionary<string, object> table, string key) =>
+        table.TryGetValue(key, out var v) && v is Dictionary<string, object> d ? d : null;
+
     public static List<Dictionary<string, object>> GetTables(Dictionary<string, object> table, string key) =>
         table.TryGetValue(key, out var v) && v is List<Dictionary<string, object>> list
             ? list
