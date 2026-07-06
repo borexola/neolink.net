@@ -300,6 +300,17 @@
     window.neolink = {
         freeInit,
 
+        // Briefly flash a tile's border red — used when a camera the user picked
+        // is already on screen (so we don't duplicate or clobber another tile).
+        flashTile(id) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.classList.remove('tile-flash');
+            void el.offsetWidth; // reflow so a repeat click restarts the animation
+            el.classList.add('tile-flash');
+            setTimeout(() => el.classList.remove('tile-flash'), 950);
+        },
+
         // Ambient event previews (review strip): ensure real muting, fast-forward
         // playback rate and looped playback. Idempotent, called per render.
         trickle(speed) {

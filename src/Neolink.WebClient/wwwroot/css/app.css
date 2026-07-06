@@ -364,6 +364,40 @@ html, body {
 
 .tile:hover .tile-bar { opacity: 1; }
 
+/* Per-tile delete: a trashcan on the tile itself (top-right), subtle until hover */
+.tile-trash {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    z-index: 3;
+    border: none;
+    background: rgba(0, 0, 0, 0.5);
+    color: #fff;
+    font-size: 14px;
+    line-height: 1;
+    width: 28px;
+    height: 28px;
+    border-radius: 7px;
+    cursor: pointer;
+    opacity: 0.35;
+    transition: opacity 0.15s ease, background 0.15s ease;
+}
+
+.tile:hover .tile-trash { opacity: 0.9; }
+
+.tile-trash:hover {
+    opacity: 1;
+    background: var(--err);
+}
+
+/* Flash a tile red when its camera is picked again (already on screen) */
+.tile-flash { animation: tile-flash 0.9s ease-in-out; }
+
+@keyframes tile-flash {
+    0%, 33%, 66% { box-shadow: inset 0 0 0 3px var(--err); }
+    16%, 50%, 100% { box-shadow: inset 0 0 0 3px transparent; }
+}
+
 .tile-name {
     font-weight: 600;
     font-size: 13px;
@@ -399,9 +433,20 @@ html, body {
 .fs-toggle::before { content: "⤢"; }
 body.is-fullscreen .fs-toggle::before { content: "⇲"; }
 
-::-webkit-scrollbar { width: 10px; }
-::-webkit-scrollbar-thumb { background: var(--line); border-radius: 5px; }
-::-webkit-scrollbar-track { background: transparent; }
+/* Themed scrollbars. WebKit/Blink needs both width (vertical bars) AND height
+   (horizontal bars, e.g. the event strip) or the horizontal one falls back to
+   the chunky default. Firefox uses the inherited scrollbar-color/-width below. */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb {
+    background: var(--line);
+    border-radius: 5px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner { background: transparent; }
+:root { scrollbar-color: var(--line) transparent; scrollbar-width: thin; }
 
 /* ---------- responsive ---------- */
 .menu-btn { display: none; }
@@ -462,6 +507,7 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
     .grid.mode-free { overflow: auto; }
 
     .tile-bar { opacity: 1; } /* no hover on touch: keep controls visible */
+    .tile-trash { opacity: 0.85; }
 }
 
 /* ---------- camera settings dialog ---------- */

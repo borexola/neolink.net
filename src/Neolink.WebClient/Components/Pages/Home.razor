@@ -263,6 +263,9 @@
                         @* no autoplay: the JS player starts playback once its jitter buffer is filled *@
                         <video id="vid-@index" muted playsinline></video>
                         <div class="tile-status">connecting…</div>
+                        <button class="tile-trash" title="Remove this tile"
+                                @onclick="() => CloseSlot(index)"
+                                @onclick:stopPropagation="true" @ondblclick:stopPropagation="true">🗑</button>
                         <div class="tile-bar" @onclick:stopPropagation="true" @ondblclick:stopPropagation="true">
                             <span class="tile-name">@slot.Camera</span>
                             @if (camera != null && camera.Streams.Count > 1)
@@ -1770,7 +1773,37 @@
 
     private void AddStream(ApiCamera cam, ApiStream stream)
     {
-        var slot = _slots.FirstOrDefault(s => s.Camera == null) ?? _slots[^1];
+        // Already on screen? Don't duplicate or clobber another tile — flash the
+        // existing tile red so the user can see where the camera already is.
+        int shown = _slots.FindIndex(s => s.Camera == cam.Name);
+        if (shown >= 0)
+        {
+            _ = JS.InvokeVoidAsync("neolink.flashTile", $"tile-{shown}");
+            _sidebarOpen = false;
+            return;
+        }
+
+        var slot = _slots.FirstOrDefault(s => s.Camera == null);
+        if (slot == null)
+        {
+            // No free tile: grow the layout by one rather than replacing a tile
+            // that already has content.
+            int grown = ClampCount(_mode, _count + 1);
+            if (grown > _count)
+            {
+                _count = grown;
+                EnsureSlots();
+                slot = _slots.FirstOrDefault(s => s.Camera == null);
+            }
+            if (slot == null)
+            {
+                // At the layout's max tiles: flash the last one instead of clobbering.
+                _ = JS.InvokeVoidAsync("neolink.flashTile", $"tile-{_slots.Count - 1}");
+                _sidebarOpen = false;
+                return;
+            }
+        }
+
         slot.Camera = cam.Name;
         slot.Kind = stream.Kind;
         slot.Path = stream.Path;
