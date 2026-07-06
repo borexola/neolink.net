@@ -45,6 +45,16 @@ public sealed record ApiStreamProfiles(List<ApiEncodeProfile> Profiles);
 /// <summary>Server capability flags (GET /api/features).</summary>
 public sealed record ApiFeaturesInfo(bool Events, bool Continuous);
 
+/// <summary>GET /api/auth/status — whether/how the UI must authenticate.</summary>
+public sealed record ApiAuthStatus(bool Enabled, bool SetupRequired, bool ResetAvailable,
+    string? User, bool Admin);
+
+/// <summary>POST /api/auth/login|setup reply.</summary>
+public sealed record ApiAuthToken(string Token, string User, bool Admin);
+
+/// <summary>GET /api/users — one account row.</summary>
+public sealed record ApiUserInfo(string Name, bool Admin);
+
 /// <summary>GET/POST /api/cameras/{name}/recording — runtime recording switches.</summary>
 public sealed record ApiRecordingSettings(bool Events, bool Continuous,
     List<string>? EventTypes, List<string>? KnownTypes, bool ContinuousAvailable = false)
@@ -131,4 +141,10 @@ public sealed class PersistedView
     public List<ViewSlot> Slots { get; set; } = new();
     /// <summary>Set while a tile is maximized: the view to restore. Survives reloads.</summary>
     public ViewSnapshot? Backup { get; set; }
+    /// <summary>Review-strip filter: event types hidden from the top bar.</summary>
+    public List<string> HiddenTypes { get; set; } = new();
+    /// <summary>Review-strip filter: cameras hidden from the top bar.</summary>
+    public List<string> HiddenCams { get; set; } = new();
+    /// <summary>Height of the review strip in px (user-resizable by dragging its bottom edge).</summary>
+    public int StripHeight { get; set; } = 160;
 }

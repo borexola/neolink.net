@@ -127,6 +127,7 @@
     private const double DaySeconds = 24 * 3600;
 
     private string _server = "";
+    private string? _token; // web-UI session (shared with the live view via localStorage)
     private DateTime _date = DateTime.Today;
     private double _t;
     private bool _playing;
@@ -167,6 +168,12 @@
                 var json = await JS.InvokeAsync<string?>("neolink.lsGet", "neolink.view");
                 if (json != null)
                     _server = JsonSerializer.Deserialize<PersistedView>(json)?.Server ?? "";
+                var auth = await JS.InvokeAsync<string?>("neolink.lsGet", "neolink.auth");
+                if (!string.IsNullOrWhiteSpace(auth))
+                {
+                    var el = JsonSerializer.Deserialize<JsonElement>(auth);
+                    if (el.TryGetProperty("token", out var t)) _token = t.GetString();
+                }
             }
             catch { }
             if (string.IsNullOrWhiteSpace(_server))
@@ -210,14 +217,36 @@
 
     private string Base => _server.TrimEnd('/');
 
+    private string TokenQuery(char sep) =>
+        string.IsNullOrEmpty(_token) ? "" : $"{sep}token={Uri.EscapeDataString(_token)}";
+
+    /// <summary>Authenticated GET; null on failure (401 also sets the sign-in notice).</summary>
+    private async Task<T?> GetJsonAsync<T>(string path)
+    {
+        var req = new HttpRequestMessage(HttpMethod.Get, $"{Base}{path}");
+        if (!string.IsNullOrEmpty(_token))
+            req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _token);
+        using var res = await Http.SendAsync(req);
+        if (res.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+        {
+            _error = "Authentication required — sign in on the live view first.";
+            return default;
+        }
+        if (!res.IsSuccessStatusCode) return default;
+        return await res.Content.ReadFromJsonAsync<T>();
+    }
+
     private async Task LoadCamerasAsync()
     {
         try
         {
-            var cams = await Http.GetFromJsonAsync<List<ApiCamera>>($"{Base}/api/cameras");
+            var cams = await GetJsonAsync<List<ApiCamera>>("/api/cameras");
             _cameras.Clear();
-            if (cams != null) _cameras.AddRange(cams);
-            _error = null;
+            if (cams != null)
+            {
+                _cameras.AddRange(cams);
+                _error = null;
+            }
         }
         catch (Exception ex)
         {
@@ -234,7 +263,7 @@
         // Feature gates first: the timeline needs recording AND continuous footage.
         try
         {
-            var features = await Http.GetFromJsonAsync<ApiFeaturesInfo>($"{Base}/api/features");
+            var features = await GetJsonAsync<ApiFeaturesInfo>("/api/features");
             _supported = features?.Events == true;
             _continuous = features?.Continuous == true;
         }
@@ -248,13 +277,12 @@
         // The events reply doubles as the day's colored lane marks.
         try
         {
-            using var res = await Http.GetAsync($"{Base}/api/events?limit=1000");
-            if (!res.IsSuccessStatusCode)
+            var events = await GetJsonAsync<List<ApiEvent>>("/api/events?limit=1000");
+            if (events == null)
             {
                 _supported = false;
                 return;
             }
-            var events = await res.Content.ReadFromJsonAsync<List<ApiEvent>>() ?? new List<ApiEvent>();
             foreach (var ev in events)
             {
                 var start = ev.Start.ToLocalTime();
@@ -288,8 +316,8 @@
         var date = _date.ToString("yyyy-MM-dd");
         try
         {
-            var segs = await Http.GetFromJsonAsync<List<ApiSegment>>(
-                $"{Base}/api/recordings/{Uri.EscapeDataString(camera)}/{date}");
+            var segs = await GetJsonAsync<List<ApiSegment>>(
+                $"/api/recordings/{Uri.EscapeDataString(camera)}/{date}");
             _cov[camera] = BuildSegs(segs ?? new List<ApiSegment>(), camera, date);
         }
         catch
@@ -325,7 +353,7 @@
                 if (gap <= typical * 1.5) span = gap;
             }
             segs.Add(new Seg(start, span,
-                $"{Base}/api/recordings/{Uri.EscapeDataString(camera)}/{date}/{parsed[i].File}"));
+                $"{Base}/api/recordings/{Uri.EscapeDataString(camera)}/{date}/{parsed[i].File}{TokenQuery('?')}"));
         }
         return segs;
     }

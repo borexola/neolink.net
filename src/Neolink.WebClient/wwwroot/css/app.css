@@ -492,12 +492,19 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
     box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
 }
 
+/* Pinned header: the title/close row must stay visible while the panel body
+   scrolls (applies to the camera settings dialog and the events panel alike). */
 .campanel-head {
     display: flex;
     align-items: center;
     gap: 8px;
     font-weight: 700;
     letter-spacing: 1px;
+    position: sticky;
+    top: -16px; /* campanel padding: pin flush to the panel edge */
+    background: var(--panel);
+    z-index: 2;
+    padding: 6px 0;
 }
 
 .campanel-title {
@@ -559,16 +566,51 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
 
 /* ------------------------------------------------------------ events (NVR) */
 
-/* Frigate-style review strip across the top of the stage */
+/* Frigate-style review strip across the top of the stage.
+   Tall cards: preview on top (with ambient trickle playback), label below.
+   The height comes from an inline style (user-resizable via the bottom handle);
+   cards scale to fill it, and the stage below takes whatever remains. */
 .events-bar {
+    position: relative;
     display: flex;
-    align-items: center;
+    align-items: stretch;
     gap: 8px;
-    padding: 6px 10px;
+    padding: 8px 10px 12px;
     background: var(--panel);
     border-bottom: 1px solid var(--line);
-    min-height: 64px;
+    min-height: 96px;
+    max-height: 60vh;
+    flex: 0 0 auto;
 }
+
+.events-bar-count,
+.strip-filter-btn,
+.events-clear { align-self: center; }
+
+.strip-resize {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: -2px;
+    height: 10px;
+    cursor: ns-resize;
+    touch-action: none;
+    z-index: 5;
+}
+
+.strip-resize::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 3px;
+    width: 48px;
+    height: 4px;
+    margin-left: -24px;
+    border-radius: 2px;
+    background: var(--line);
+}
+
+.strip-resize:hover::after { background: var(--accent); }
 
 .events-bar-count {
     font-size: 12px;
@@ -579,8 +621,10 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
 
 .events-bar-scroll {
     display: flex;
+    align-items: stretch;
     gap: 8px;
     overflow-x: auto;
+    overflow-y: hidden;
     scrollbar-width: thin;
     flex: 1;
     padding: 2px 0;
@@ -588,15 +632,18 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
 
 .event-card {
     display: flex;
-    align-items: center;
-    gap: 8px;
+    flex-direction: column;
+    align-items: stretch;
     background: var(--bg);
     border: 1px solid var(--line);
     border-radius: 8px;
-    padding: 4px 6px;
+    overflow: hidden;
     cursor: pointer;
     flex: 0 0 auto;
-    max-width: 260px;
+    /* Width follows the (resizable) bar height so previews scale with it */
+    height: 100%;
+    aspect-ratio: 5 / 4;
+    min-width: 150px;
 }
 
 .event-card:hover { border-color: var(--accent); }
@@ -604,19 +651,26 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
 
 .event-thumb {
     position: relative;
-    width: 84px;
-    height: 48px;
-    border-radius: 5px;
+    width: 100%;
+    flex: 1;
+    min-height: 0;
     overflow: hidden;
     background: #000;
     display: flex;
     align-items: center;
     justify-content: center;
-    flex: 0 0 auto;
 }
 
-.event-thumb img { width: 100%; height: 100%; object-fit: cover; }
-.event-thumb-icon { font-size: 22px; opacity: 0.8; }
+.event-thumb img,
+.event-thumb video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    pointer-events: none; /* clicks land on the card (open player) */
+}
+
+.event-thumb-icon { font-size: 30px; opacity: 0.8; }
 
 .event-live {
     position: absolute;
@@ -638,6 +692,7 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
     flex-direction: column;
     gap: 2px;
     min-width: 0;
+    padding: 5px 8px 7px;
 }
 
 .event-title {
@@ -656,7 +711,17 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
     text-overflow: ellipsis;
 }
 
-.event-dismiss { flex: 0 0 auto; }
+.event-dismiss {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    background: rgba(0, 0, 0, 0.55);
+    border-radius: 6px;
+    padding: 1px 6px;
+}
+
+.event-dismiss:hover { background: rgba(0, 0, 0, 0.8); }
+
 .events-clear { flex: 0 0 auto; }
 
 /* Event history panel (reuses the campanel chrome).
@@ -664,14 +729,6 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
    scroll inside the panel, never resize the popup itself. */
 .events-panel {
     height: min(92vh, 960px);
-}
-
-.events-panel .campanel-head {
-    position: sticky;
-    top: -16px; /* campanel padding: pin flush to the panel edge */
-    background: var(--panel);
-    z-index: 2;
-    padding: 6px 0;
 }
 
 .events-panel .event-filter {
@@ -947,6 +1004,113 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
     display: flex;
     align-items: center;
     gap: 8px;
+}
+
+/* Sidebar security warning (server runs without sign-in) */
+.sec-banner {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 8px 10px 4px;
+    padding: 8px 10px;
+    border: 1px solid #ffb020;
+    border-radius: 8px;
+    background: color-mix(in srgb, #ffb020 12%, transparent);
+}
+
+.sec-banner-text {
+    font-size: 12px;
+    color: #ffcf70;
+    line-height: 1.35;
+}
+
+.sec-banner-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.sec-banner-actions .icon-btn { margin-left: auto; }
+
+/* Strip filter row (under the events bar) */
+.strip-filter {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+}
+
+.strip-filter-btn.active { color: var(--accent); }
+
+/* ------------------------------------------------------------ authentication */
+
+.auth-overlay {
+    position: fixed;
+    inset: 0;
+    background: var(--bg);
+    z-index: 300;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.auth-box {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: min(340px, 90vw);
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 24px;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+}
+
+.auth-box .brand { margin-bottom: 8px; }
+
+.auth-box label {
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+}
+
+.auth-box input {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 14px;
+    outline: none;
+}
+
+.auth-box input:focus { border-color: var(--accent); }
+.auth-btn { justify-content: center; padding: 8px; font-size: 14px; margin-top: 6px; }
+
+.auth-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 10px;
+    flex-wrap: wrap;
+}
+
+.auth-panel { width: min(460px, 94vw); }
+
+.user-row { flex-wrap: wrap; }
+
+.user-pass-input {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 12px;
+    max-width: 160px;
 }
 
 /* ------------------------------------------------------------ stream chips */

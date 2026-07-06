@@ -17,6 +17,17 @@
             <button class="icon-btn" title="Server settings" @onclick="() => _showSettings = !_showSettings">⚙</button>
         </div>
 
+        @if (_setupRequired && !_secWarnDismissed)
+        {
+            <div class="sec-banner">
+                <span class="sec-banner-text">⚠ This server has no sign-in — anyone who can reach it can watch and control your cameras.</span>
+                <div class="sec-banner-actions">
+                    <button class="chip" @onclick="() => { _loginError = null; _showSetupPrompt = true; }">Secure now</button>
+                    <button class="icon-btn" title="Dismiss this warning" @onclick="DismissSecWarnAsync">✕</button>
+                </div>
+            </div>
+        }
+
         @if (_showSettings)
         {
             <div class="settings">
@@ -26,6 +37,25 @@
                 <input @bind="_user" @bind:after="SaveAsync" placeholder="username" autocomplete="off" />
                 <label>Control password</label>
                 <input type="password" @bind="_pass" @bind:after="SaveAsync" placeholder="password" autocomplete="off" />
+
+                @if (_authUser != null)
+                {
+                    <div class="auth-row">
+                        <span class="event-sub">👤 @_authUser@(_authAdmin ? " · admin" : "")</span>
+                        @if (_authAdmin)
+                        {
+                            <button class="chip" @onclick="OpenUsersAsync">Users…</button>
+                        }
+                        <button class="chip chip-off" @onclick="LogoutAsync">Sign out</button>
+                    </div>
+                }
+                else if (_setupRequired)
+                {
+                    <div class="auth-row">
+                        <button class="chip" title="Create the admin account and require sign-in"
+                                @onclick="() => { _loginError = null; _showSetupPrompt = true; }">🔐 Enable login…</button>
+                    </div>
+                }
             </div>
         }
 
@@ -80,15 +110,32 @@
            Disappears entirely once everything is dismissed (or recording is off). *@
         @if (_eventsSupported && _events.Any(e => !e.Reviewed))
         {
-            <div class="events-bar">
-                <span class="events-bar-count" title="Unreviewed events">⚡ @_events.Count(e => !e.Reviewed)</span>
+            <div class="events-bar" id="events-bar" style="height:@(_stripHeight)px">
+                <span class="events-bar-count" title="Unreviewed events (after filters)">⚡ @StripEvents.Count()</span>
+                <button class="icon-btn strip-filter-btn @(_showStripFilter || _hiddenTypes.Count > 0 || _hiddenCams.Count > 0 ? "active" : "")"
+                        title="Filter which events appear here" @onclick="() => _showStripFilter = !_showStripFilter">⚟</button>
                 <div class="events-bar-scroll">
-                    @foreach (var ev in _events.Where(e => !e.Reviewed).Take(30))
+                    @if (!StripEvents.Any())
                     {
+                        <span class="event-sub">every unreviewed event is hidden by the filters</span>
+                    }
+                    @{ int trickleBudget = 8; }
+                    @foreach (var ev in StripEvents.Take(30))
+                    {
+                        @* Ambient "trickle" preview: the newest few cards loop their clip
+                           muted, so the strip shows what happened without any clicks.
+                           Capped so a big backlog doesn't decode dozens of videos. *@
+                        bool trickle = ev.HasClip && !ev.Ongoing && trickleBudget-- > 0;
                         <div class="event-card @(ev.Ongoing ? "live" : "")" @key="ev.Id"
                              title="@ev.Title — click to play" @onclick="() => OpenEvent(ev)">
                             <div class="event-thumb">
-                                @if (ev.HasThumb)
+                                @if (trickle)
+                                {
+                                    <video data-trickle="1" muted loop playsinline preload="metadata"
+                                           poster="@(ev.HasThumb ? EventArtifactUrl(ev, "thumb") : null)"
+                                           src="@EventArtifactUrl(ev, "clip")"></video>
+                                }
+                                else if (ev.HasThumb)
                                 {
                                     <img src="@EventArtifactUrl(ev, "thumb")" loading="lazy" alt="" />
                                 }
@@ -100,18 +147,43 @@
                                 {
                                     <span class="event-live">● REC</span>
                                 }
+                                <button class="icon-btn event-dismiss" title="Dismiss (mark reviewed)"
+                                        @onclick="() => DismissAsync(ev)" @onclick:stopPropagation="true">✕</button>
                             </div>
                             <div class="event-meta">
                                 <span class="event-title">@ev.Icon @ev.Title</span>
                                 <span class="event-sub">@ev.Camera · @Ago(ev.Start)</span>
                             </div>
-                            <button class="icon-btn event-dismiss" title="Dismiss (mark reviewed)"
-                                    @onclick="() => DismissAsync(ev)" @onclick:stopPropagation="true">✕</button>
                         </div>
                     }
                 </div>
                 <button class="chip events-clear" title="Dismiss all events" @onclick="DismissAllAsync">Clear all</button>
+                <div class="strip-resize" title="Drag to resize the event strip"></div>
             </div>
+
+            @if (_showStripFilter)
+            {
+                @* Real-time strip filters: lit chips show, dimmed chips hide.
+                   Persisted with the view settings (per account when signed in). *@
+                <div class="strip-filter">
+                    <span class="tool-label">SHOW</span>
+                    @foreach (var t in StripTypes)
+                    {
+                        <button class="chip @(_hiddenTypes.Contains(t) ? "chip-off" : "")"
+                                title="@(_hiddenTypes.Contains(t) ? "Hidden — click to show" : "Shown — click to hide")"
+                                @onclick="() => ToggleTypeFilterAsync(t)">@StripTypeIcon(t) @t</button>
+                    }
+                    <span class="tool-sep"></span>
+                    <span class="tool-label">CAMERAS</span>
+                    @foreach (var cam in _cameras)
+                    {
+                        var name = cam.Name;
+                        <button class="chip @(_hiddenCams.Contains(name) ? "chip-off" : "")"
+                                title="@(_hiddenCams.Contains(name) ? "Hidden — click to show" : "Shown — click to hide")"
+                                @onclick="() => ToggleCamFilterAsync(name)">@name</button>
+                    }
+                </div>
+            }
         }
 
         <div class="toolbar">
@@ -206,8 +278,127 @@
     {
         <CameraPanel Server="@_server" CameraName="@_panelCamera"
                      Camera="_cameras.FirstOrDefault(c => c.Name == _panelCamera)"
-                     User="@_user" Pass="@_pass"
+                     User="@_user" Pass="@_pass" Token="@_authToken"
                      OnClose="() => _panelCamera = null" />
+    }
+
+    @if (_showSetupPrompt && !_showLogin)
+    {
+        <div class="backdrop panel-backdrop"></div>
+        <aside class="campanel auth-panel" role="dialog" aria-label="Create admin account">
+            <div class="campanel-head"><span class="campanel-title">🔐 SECURE THIS SERVER</span></div>
+            <div class="notice">
+                No accounts exist yet, so the UI is open to anyone who can reach this address.
+                Create the admin account to require sign-in — you can add more users afterwards.
+                Your layout and filters will be saved per account.
+            </div>
+            <div class="settings">
+                <label>Admin username</label>
+                <input @bind="_loginUser" autocomplete="off" />
+                <label>Password (min 8 characters)</label>
+                <input type="password" @bind="_loginPass" autocomplete="new-password" />
+            </div>
+            @if (_loginError != null)
+            {
+                <div class="notice error">@_loginError</div>
+            }
+            <div class="event-player-foot">
+                <button class="chip" @onclick="SetupAdminAsync">Create admin &amp; enable login</button>
+                <span class="tile-spacer"></span>
+                <button class="chip chip-off" @onclick="DismissSetupAsync">Not now</button>
+            </div>
+        </aside>
+    }
+
+    @if (_showLogin)
+    {
+        <div class="auth-overlay">
+            <div class="auth-box">
+                <div class="brand"><span class="brand-dot"></span> NEOLINK<span class="brand-net">.NET</span></div>
+                @if (!_resetMode)
+                {
+                    <label>Username</label>
+                    <input @bind="_loginUser" autocomplete="username" />
+                    <label>Password</label>
+                    <input type="password" @bind="_loginPass" autocomplete="current-password"
+                           @onkeydown='e => { if (e.Key == "Enter") _ = LoginAsync(); }' />
+                    @if (_loginError != null)
+                    {
+                        <div class="notice error">@_loginError</div>
+                    }
+                    <button class="chip auth-btn" @onclick="LoginAsync">Sign in</button>
+                    @if (_resetAvailable)
+                    {
+                        <button class="chip chip-off" @onclick="() => { _resetMode = true; _loginError = null; }">Reset admin password…</button>
+                    }
+                }
+                else
+                {
+                    <div class="notice">
+                        reset_admin_password is enabled in config.json. Set a new admin password below,
+                        sign in with it, then turn the flag back off.
+                    </div>
+                    <label>New admin password</label>
+                    <input type="password" @bind="_resetPass" autocomplete="new-password" />
+                    @if (_loginError != null)
+                    {
+                        <div class="notice error">@_loginError</div>
+                    }
+                    <button class="chip auth-btn" @onclick="ResetAdminAsync">Set new password</button>
+                    <button class="chip chip-off" @onclick="() => { _resetMode = false; _loginError = null; }">Back to sign in</button>
+                }
+            </div>
+        </div>
+    }
+
+    @if (_showUsersPanel)
+    {
+        <div class="backdrop panel-backdrop" @onclick="() => _showUsersPanel = false"></div>
+        <aside class="campanel auth-panel" role="dialog" aria-label="User management">
+            <div class="campanel-head">
+                <span class="campanel-title">👥 USERS</span>
+                <span class="tile-spacer"></span>
+                <button class="icon-btn" title="Close" @onclick="() => _showUsersPanel = false">✕</button>
+            </div>
+            @if (_usersError != null)
+            {
+                <div class="notice error">@_usersError</div>
+            }
+            @foreach (var u in _uiUsers)
+            {
+                <div class="control-row user-row" @key="u.Name">
+                    <span>@(u.Admin ? "🛡" : "👤") @u.Name@(u.Admin ? " · admin" : "")</span>
+                    @if (_pwEditUser == u.Name)
+                    {
+                        <input class="user-pass-input" type="password" placeholder="new password (min 8)"
+                               @bind="_pwEditPass" autocomplete="new-password" />
+                        <button class="chip" @onclick="() => SetUserPasswordAsync(u.Name)">save</button>
+                        <button class="chip chip-off" @onclick="() => _pwEditUser = null">cancel</button>
+                    }
+                    else
+                    {
+                        <button class="chip" @onclick="() => { _pwEditUser = u.Name; _pwEditPass = string.Empty; }">password…</button>
+                        @if (!u.Admin)
+                        {
+                            <button class="chip chip-danger" @onclick="() => DeleteUserAsync(u.Name)">delete</button>
+                        }
+                    }
+                </div>
+            }
+            <div class="campanel-section">
+                <div class="campanel-section-title">ADD USER</div>
+                <div class="control-row user-row">
+                    <input class="user-pass-input" placeholder="username" @bind="_newUserName" autocomplete="off" />
+                    <input class="user-pass-input" type="password" placeholder="password (min 8)"
+                           @bind="_newUserPass" autocomplete="new-password" />
+                    <button class="chip" @onclick="AddUserAsync">add</button>
+                </div>
+                <div class="notice small">
+                    New accounts are normal users: they can view and control cameras and review events,
+                    but cannot manage users. Each account keeps its own layout and filters.
+                </div>
+            </div>
+        </aside>
     }
 
     @if (_showEventsPanel)
@@ -418,6 +609,40 @@
     private bool _eventsUnreviewedOnly;
     private ApiEvent? _playEvent;
 
+    // Web-UI authentication (enabled once the first account exists server-side)
+    private string? _authToken;
+    private string? _authUser;
+    private bool _authAdmin;
+    private bool _authEnabled;
+    private bool _setupRequired;
+    private bool _resetAvailable;
+    private bool _setupDismissed;
+    private bool _showLogin;
+    private bool _showSetupPrompt;
+    private bool _resetMode;
+    private string _loginUser = "";
+    private string _loginPass = "";
+    private string _resetPass = "";
+    private string? _loginError;
+
+    // Admin user management
+    private bool _showUsersPanel;
+    private readonly List<ApiUserInfo> _uiUsers = new();
+    private string _newUserName = "";
+    private string _newUserPass = "";
+    private string? _usersError;
+    private string? _pwEditUser;
+    private string _pwEditPass = "";
+
+    // Review-strip filters (persisted with the view settings, per user when logged in)
+    private static readonly string[] StripTypes = { "person", "vehicle", "animal", "package", "motion" };
+    private HashSet<string> _hiddenTypes = new(StringComparer.OrdinalIgnoreCase);
+    private HashSet<string> _hiddenCams = new(StringComparer.OrdinalIgnoreCase);
+    private bool _showStripFilter;
+    private int _stripHeight = 160;
+    private bool _secWarnDismissed;
+    private DotNetObjectReference<Home>? _selfRef;
+
     // Continuous (24/7) footage browser
     private string _panelTab = "events";
     private string _recCamera = "";
@@ -434,6 +659,7 @@
         {
             await LoadPersistedAsync();
             _loaded = true;
+            await RefreshAuthAsync();
             await RefreshCamerasAsync();
             await RefreshEventsAsync();
             StateHasChanged();
@@ -443,6 +669,26 @@
         await ReconcilePlayersAsync();
         if (_mode == "free")
             await JS.InvokeVoidAsync("neolink.freeInit", "stage-grid");
+        // Blazor's `muted` attribute only sets defaultMuted on dynamically created
+        // elements, which blocks autoplay — the helper mutes for real and plays.
+        if (_eventsSupported && _events.Any(e => !e.Reviewed))
+        {
+            await JS.InvokeVoidAsync("neolink.trickle");
+            _selfRef ??= DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("neolink.stripResizeInit", "events-bar", _selfRef);
+        }
+    }
+
+    /// <summary>Called from JS when the strip's resize-handle drag ends.</summary>
+    [JSInvokable]
+    public async Task OnStripResized(double height)
+    {
+        _stripHeight = (int)Math.Clamp(height, 96, 640);
+        await InvokeAsync(async () =>
+        {
+            await SaveAsync();
+            StateHasChanged();
+        });
     }
 
     // ------------------------------------------------------------ persistence
@@ -464,6 +710,9 @@
                     _count = v.Count;
                     _slots = v.Slots;
                     _backup = v.Backup;
+                    _hiddenTypes = new HashSet<string>(v.HiddenTypes, StringComparer.OrdinalIgnoreCase);
+                    _hiddenCams = new HashSet<string>(v.HiddenCams, StringComparer.OrdinalIgnoreCase);
+                    if (v.StripHeight > 0) _stripHeight = Math.Clamp(v.StripHeight, 96, 640);
                 }
             }
         }
@@ -482,18 +731,326 @@
 
         if (string.IsNullOrWhiteSpace(_server))
             _server = await JS.InvokeAsync<string>("neolink.defaultServer");
+
+        // Session + one-time flags
+        try
+        {
+            var auth = await JS.InvokeAsync<string?>("neolink.lsGet", "neolink.auth");
+            if (!string.IsNullOrWhiteSpace(auth))
+            {
+                var el = JsonSerializer.Deserialize<JsonElement>(auth);
+                if (el.TryGetProperty("token", out var t)) _authToken = t.GetString();
+            }
+            _setupDismissed = await JS.InvokeAsync<string?>("neolink.lsGet", "neolink.setupDismissed") == "1";
+            _secWarnDismissed = await JS.InvokeAsync<string?>("neolink.lsGet", "neolink.secWarnDismissed") == "1";
+        }
+        catch { }
     }
+
+    private async Task DismissSecWarnAsync()
+    {
+        _secWarnDismissed = true;
+        await JS.InvokeVoidAsync("neolink.lsSet", "neolink.secWarnDismissed", "1");
+    }
+
+    private PersistedView SnapshotView() => new()
+    {
+        Server = _server, User = _user, Pass = _pass,
+        Mode = _mode, Count = _count, Slots = _slots, Backup = _backup,
+        HiddenTypes = _hiddenTypes.ToList(), HiddenCams = _hiddenCams.ToList(),
+        StripHeight = _stripHeight,
+    };
 
     private async Task SaveAsync()
     {
         if (!_loaded) return;
-        var v = new PersistedView
+        var json = JsonSerializer.Serialize(SnapshotView());
+        await JS.InvokeVoidAsync("neolink.lsSet", StorageKey, json);
+        // Logged-in users own their settings server-side (per account).
+        if (_authUser != null)
         {
-            Server = _server, User = _user, Pass = _pass,
-            Mode = _mode, Count = _count, Slots = _slots, Backup = _backup,
-        };
-        await JS.InvokeVoidAsync("neolink.lsSet", StorageKey, JsonSerializer.Serialize(v));
+            try
+            {
+                var req = ApiRequest(HttpMethod.Put, "/api/me/settings");
+                req.Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
+                using var _ = await Http.SendAsync(req);
+            }
+            catch { /* transient: localStorage still has it */ }
+        }
     }
+
+    /// <summary>Applies the server-stored per-user view (everything except the server address).</summary>
+    private void ApplyView(PersistedView v)
+    {
+        _mode = Modes.Any(m => m.Mode == v.Mode) ? v.Mode : _mode;
+        if (v.Count > 0) _count = ClampCount(_mode, v.Count);
+        if (v.Slots.Count > 0) _slots = v.Slots;
+        _backup = v.Backup;
+        _user = v.User;
+        _pass = v.Pass;
+        _hiddenTypes = new HashSet<string>(v.HiddenTypes, StringComparer.OrdinalIgnoreCase);
+        _hiddenCams = new HashSet<string>(v.HiddenCams, StringComparer.OrdinalIgnoreCase);
+        if (v.StripHeight > 0) _stripHeight = Math.Clamp(v.StripHeight, 96, 640);
+        EnsureSlots();
+    }
+
+    // ------------------------------------------------------------ authentication
+
+    private HttpRequestMessage ApiRequest(HttpMethod method, string path)
+    {
+        var req = new HttpRequestMessage(method, $"{_server.TrimEnd('/')}{path}");
+        if (!string.IsNullOrEmpty(_authToken))
+            req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _authToken);
+        return req;
+    }
+
+    /// <summary>Token as a query parameter, for URLs headers can't reach (video/img/WS).</summary>
+    private string TokenQuery(char sep) =>
+        string.IsNullOrEmpty(_authToken) ? "" : $"{sep}token={Uri.EscapeDataString(_authToken)}";
+
+    private async Task RefreshAuthAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_server)) return;
+        try
+        {
+            using var res = await Http.SendAsync(ApiRequest(HttpMethod.Get, "/api/auth/status"));
+            var st = await res.Content.ReadFromJsonAsync<ApiAuthStatus>();
+            if (st == null) return;
+            _authEnabled = st.Enabled;
+            _setupRequired = st.SetupRequired;
+            _resetAvailable = st.ResetAvailable;
+            _authUser = st.User;
+            _authAdmin = st.Admin;
+            _showLogin = _authEnabled && _authUser == null;
+            if (_authUser != null)
+                await LoadUserSettingsAsync();
+            if (_setupRequired && !_setupDismissed)
+                _showSetupPrompt = true;
+        }
+        catch { /* unreachable server: the camera fetch reports it */ }
+    }
+
+    private async Task LoadUserSettingsAsync()
+    {
+        try
+        {
+            using var res = await Http.SendAsync(ApiRequest(HttpMethod.Get, "/api/me/settings"));
+            if (!res.IsSuccessStatusCode) return;
+            var json = await res.Content.ReadAsStringAsync();
+            if (string.IsNullOrWhiteSpace(json) || json.Trim() == "{}") return;
+            var v = JsonSerializer.Deserialize<PersistedView>(json);
+            if (v != null) ApplyView(v);
+        }
+        catch { }
+    }
+
+    private async Task AcceptTokenAsync(ApiAuthToken? tok)
+    {
+        if (tok == null) return;
+        _authToken = tok.Token;
+        _authUser = tok.User;
+        _authAdmin = tok.Admin;
+        _authEnabled = true;
+        _setupRequired = false;
+        _showLogin = false;
+        _showSetupPrompt = false;
+        _resetMode = false;
+        _loginPass = "";
+        _loginError = null;
+        await JS.InvokeVoidAsync("neolink.lsSet", "neolink.auth",
+            JsonSerializer.Serialize(new { token = _authToken, user = _authUser, admin = _authAdmin }));
+        await LoadUserSettingsAsync();
+        await RefreshCamerasAsync();
+        await RefreshEventsAsync();
+    }
+
+    private async Task LoginAsync()
+    {
+        _loginError = null;
+        try
+        {
+            var req = ApiRequest(HttpMethod.Post, "/api/auth/login");
+            req.Content = JsonContent.Create(new { username = _loginUser.Trim(), password = _loginPass });
+            using var res = await Http.SendAsync(req);
+            if (!res.IsSuccessStatusCode)
+            {
+                _loginError = await ApiErrorAsync(res) ?? "sign-in failed";
+                return;
+            }
+            await AcceptTokenAsync(await res.Content.ReadFromJsonAsync<ApiAuthToken>());
+        }
+        catch (Exception ex)
+        {
+            _loginError = $"Cannot reach {_server}: {ex.Message}";
+        }
+    }
+
+    private async Task SetupAdminAsync()
+    {
+        _loginError = null;
+        try
+        {
+            var req = ApiRequest(HttpMethod.Post, "/api/auth/setup");
+            req.Content = JsonContent.Create(new { username = _loginUser.Trim(), password = _loginPass });
+            using var res = await Http.SendAsync(req);
+            if (!res.IsSuccessStatusCode)
+            {
+                _loginError = await ApiErrorAsync(res) ?? "setup failed";
+                return;
+            }
+            await AcceptTokenAsync(await res.Content.ReadFromJsonAsync<ApiAuthToken>());
+        }
+        catch (Exception ex)
+        {
+            _loginError = $"Cannot reach {_server}: {ex.Message}";
+        }
+    }
+
+    private async Task ResetAdminAsync()
+    {
+        _loginError = null;
+        try
+        {
+            var req = ApiRequest(HttpMethod.Post, "/api/auth/reset-admin");
+            req.Content = JsonContent.Create(new { password = _resetPass });
+            using var res = await Http.SendAsync(req);
+            if (!res.IsSuccessStatusCode)
+            {
+                _loginError = await ApiErrorAsync(res) ?? "reset failed";
+                return;
+            }
+            _resetMode = false;
+            _resetPass = "";
+            _loginError = "Password updated — sign in with it now, then set reset_admin_password back to false.";
+        }
+        catch (Exception ex)
+        {
+            _loginError = $"Cannot reach {_server}: {ex.Message}";
+        }
+    }
+
+    private async Task LogoutAsync()
+    {
+        _authToken = null;
+        _authUser = null;
+        _authAdmin = false;
+        _showUsersPanel = false;
+        await JS.InvokeVoidAsync("neolink.lsSet", "neolink.auth", "");
+        _showLogin = _authEnabled;
+    }
+
+    private async Task DismissSetupAsync()
+    {
+        _showSetupPrompt = false;
+        _setupDismissed = true;
+        await JS.InvokeVoidAsync("neolink.lsSet", "neolink.setupDismissed", "1");
+    }
+
+    private static async Task<string?> ApiErrorAsync(HttpResponseMessage res)
+    {
+        try
+        {
+            var el = await res.Content.ReadFromJsonAsync<JsonElement>();
+            return el.TryGetProperty("error", out var err) ? err.GetString() : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    // ------------------------------------------------------------ user management (admin)
+
+    private async Task OpenUsersAsync()
+    {
+        _showUsersPanel = true;
+        await LoadUsersAsync();
+    }
+
+    private async Task LoadUsersAsync()
+    {
+        _usersError = null;
+        try
+        {
+            using var res = await Http.SendAsync(ApiRequest(HttpMethod.Get, "/api/users"));
+            var list = res.IsSuccessStatusCode ? await res.Content.ReadFromJsonAsync<List<ApiUserInfo>>() : null;
+            _uiUsers.Clear();
+            if (list != null) _uiUsers.AddRange(list);
+            if (!res.IsSuccessStatusCode) _usersError = await ApiErrorAsync(res);
+        }
+        catch (Exception ex)
+        {
+            _usersError = ex.Message;
+        }
+    }
+
+    private async Task AddUserAsync()
+    {
+        _usersError = null;
+        var req = ApiRequest(HttpMethod.Post, "/api/users");
+        req.Content = JsonContent.Create(new { username = _newUserName.Trim(), password = _newUserPass });
+        using var res = await Http.SendAsync(req);
+        if (!res.IsSuccessStatusCode)
+        {
+            _usersError = await ApiErrorAsync(res) ?? "cannot add user";
+            return;
+        }
+        _newUserName = "";
+        _newUserPass = "";
+        await LoadUsersAsync();
+    }
+
+    private async Task SetUserPasswordAsync(string name)
+    {
+        _usersError = null;
+        var req = ApiRequest(HttpMethod.Put, $"/api/users/{Uri.EscapeDataString(name)}");
+        req.Content = JsonContent.Create(new { password = _pwEditPass });
+        using var res = await Http.SendAsync(req);
+        _usersError = res.IsSuccessStatusCode ? null : await ApiErrorAsync(res) ?? "cannot change password";
+        if (res.IsSuccessStatusCode)
+        {
+            _pwEditUser = null;
+            _pwEditPass = "";
+        }
+    }
+
+    private async Task DeleteUserAsync(string name)
+    {
+        _usersError = null;
+        using var res = await Http.SendAsync(ApiRequest(HttpMethod.Delete, $"/api/users/{Uri.EscapeDataString(name)}"));
+        if (!res.IsSuccessStatusCode)
+            _usersError = await ApiErrorAsync(res) ?? "cannot delete user";
+        await LoadUsersAsync();
+    }
+
+    // ------------------------------------------------------------ review-strip filters
+
+    /// <summary>The strip after the user's real-time filters (type + camera).</summary>
+    private IEnumerable<ApiEvent> StripEvents => _events.Where(e => !e.Reviewed
+        && !_hiddenCams.Contains(e.Camera)
+        && e.Labels.Any(l => !_hiddenTypes.Contains(l)));
+
+    private Task ToggleTypeFilterAsync(string label)
+    {
+        if (!_hiddenTypes.Remove(label)) _hiddenTypes.Add(label);
+        return SaveAsync();
+    }
+
+    private Task ToggleCamFilterAsync(string camera)
+    {
+        if (!_hiddenCams.Remove(camera)) _hiddenCams.Add(camera);
+        return SaveAsync();
+    }
+
+    private static string StripTypeIcon(string label) => label switch
+    {
+        "person" => "🧍",
+        "vehicle" => "🚗",
+        "animal" => "🐾",
+        "package" => "📦",
+        "motion" => "👁",
+        _ => "•",
+    };
 
     // ------------------------------------------------------------ data
 
@@ -521,7 +1078,25 @@
         if (string.IsNullOrWhiteSpace(server)) return false;
         try
         {
-            var cams = await Http.GetFromJsonAsync<List<ApiCamera>>($"{server.TrimEnd('/')}/api/cameras");
+            var req = new HttpRequestMessage(HttpMethod.Get, $"{server.TrimEnd('/')}/api/cameras");
+            if (!string.IsNullOrEmpty(_authToken))
+                req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _authToken);
+            using var res = await Http.SendAsync(req);
+            if (res.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+            {
+                // Reachable, but a session is required (or ours expired).
+                _authEnabled = true;
+                _showLogin = true;
+                _cameras.Clear();
+                _error = null;
+                return true;
+            }
+            if (!res.IsSuccessStatusCode)
+            {
+                _error = $"Cannot reach {server}: HTTP {(int)res.StatusCode}";
+                return false;
+            }
+            var cams = await res.Content.ReadFromJsonAsync<List<ApiCamera>>();
             _cameras.Clear();
             if (cams != null) _cameras.AddRange(cams);
             _error = null;
@@ -564,14 +1139,15 @@
         .Where(e => !_eventsUnreviewedOnly || !e.Reviewed);
 
     private string EventArtifactUrl(ApiEvent ev, string kind) =>
-        $"{_server.TrimEnd('/')}/api/events/{Uri.EscapeDataString(ev.Id)}/{kind}";
+        $"{_server.TrimEnd('/')}/api/events/{Uri.EscapeDataString(ev.Id)}/{kind}{TokenQuery('?')}";
 
     private async Task RefreshEventsAsync()
     {
         if (string.IsNullOrWhiteSpace(_server)) return;
         try
         {
-            var features = await Http.GetFromJsonAsync<ApiFeaturesInfo>($"{_server.TrimEnd('/')}/api/features");
+            using var fres = await Http.SendAsync(ApiRequest(HttpMethod.Get, "/api/features"));
+            var features = fres.IsSuccessStatusCode ? await fres.Content.ReadFromJsonAsync<ApiFeaturesInfo>() : null;
             _continuousSupported = features?.Continuous == true;
             if (!_continuousSupported && _panelTab == "recordings") _panelTab = "events";
         }
@@ -581,7 +1157,13 @@
         }
         try
         {
-            using var res = await Http.GetAsync($"{_server.TrimEnd('/')}/api/events?limit=300");
+            using var res = await Http.SendAsync(ApiRequest(HttpMethod.Get, "/api/events?limit=300"));
+            if (res.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+            {
+                _authEnabled = true;
+                _showLogin = true;
+                return;
+            }
             if (!res.IsSuccessStatusCode)
             {
                 _eventsSupported = false; // recording disabled on the server: hide the UI
@@ -656,7 +1238,11 @@
         {
             var req = new HttpRequestMessage(HttpMethod.Post,
                 $"{_server.TrimEnd('/')}/api/events/{Uri.EscapeDataString(ev.Id)}/review");
-            if (!string.IsNullOrEmpty(_user))
+            if (!string.IsNullOrEmpty(_authToken))
+            {
+                req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _authToken);
+            }
+            else if (!string.IsNullOrEmpty(_user))
             {
                 var token = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"{_user}:{_pass}"));
                 req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", token);
@@ -701,7 +1287,7 @@
     // ------------------------------------------------------------ continuous footage
 
     private string SegmentUrl(string camera, string date, string file) =>
-        $"{_server.TrimEnd('/')}/api/recordings/{Uri.EscapeDataString(camera)}/{date}/{file}";
+        $"{_server.TrimEnd('/')}/api/recordings/{Uri.EscapeDataString(camera)}/{date}/{file}{TokenQuery('?')}";
 
     private static string RecDayLabel(string day) =>
         DateTime.TryParseExact(day, "yyyy-MM-dd", null, System.Globalization.DateTimeStyles.None, out var d)
@@ -730,8 +1316,9 @@
         if (_recCamera.Length == 0 || string.IsNullOrWhiteSpace(_server)) return;
         try
         {
-            var days = await Http.GetFromJsonAsync<List<string>>(
-                $"{_server.TrimEnd('/')}/api/recordings/{Uri.EscapeDataString(_recCamera)}");
+            using var res = await Http.SendAsync(ApiRequest(HttpMethod.Get,
+                $"/api/recordings/{Uri.EscapeDataString(_recCamera)}"));
+            var days = res.IsSuccessStatusCode ? await res.Content.ReadFromJsonAsync<List<string>>() : null;
             if (days != null) _recDays = days;
         }
         catch (Exception ex)
@@ -754,8 +1341,9 @@
         if (_recSegments.ContainsKey(day)) return;
         try
         {
-            var segments = await Http.GetFromJsonAsync<List<ApiSegment>>(
-                $"{_server.TrimEnd('/')}/api/recordings/{Uri.EscapeDataString(_recCamera)}/{day}");
+            using var res = await Http.SendAsync(ApiRequest(HttpMethod.Get,
+                $"/api/recordings/{Uri.EscapeDataString(_recCamera)}/{day}"));
+            var segments = res.IsSuccessStatusCode ? await res.Content.ReadFromJsonAsync<List<ApiSegment>>() : null;
             _recSegments[day] = segments ?? new List<ApiSegment>();
         }
         catch
@@ -942,7 +1530,7 @@
         baseUrl = baseUrl.StartsWith("https", StringComparison.OrdinalIgnoreCase)
             ? "wss" + baseUrl["https".Length..]
             : "ws" + baseUrl["http".Length..];
-        return $"{baseUrl}/api/stream?path={Uri.EscapeDataString(slot.Path)}";
+        return $"{baseUrl}/api/stream?path={Uri.EscapeDataString(slot.Path)}{TokenQuery('&')}";
     }
 
     private async Task ReconcilePlayersAsync()
@@ -970,6 +1558,7 @@
     public async ValueTask DisposeAsync()
     {
         _pollTimer?.Dispose();
+        _selfRef?.Dispose();
         foreach (var i in _attached.Keys.ToList())
         {
             try { await JS.InvokeVoidAsync("neolink.detach", $"vid-{i}"); }

@@ -83,6 +83,8 @@ public sealed class ContinuousRecorder
                     if (!v.Keyframe || DateTime.UtcNow < retryAfter) continue;
                     try
                     {
+                        // Never blocks on disk: the file is opened and written by the
+                        // writer's own background thread.
                         writer = ClipWriter.TryCreate(_store.NewSegmentPath(_camera, DateTime.Now), _hub);
                     }
                     catch (Exception ex)
@@ -95,13 +97,10 @@ public sealed class ContinuousRecorder
                     gap = false; // fresh file: this keyframe is a clean start
                 }
 
-                try
+                writer.Add(v, gap);
+                if (writer.Faulted)
                 {
-                    writer.Add(v, gap);
-                }
-                catch (Exception ex)
-                {
-                    Log.Warn($"{_camera}: segment write failed: {ex.Message}");
+                    // Disk full/gone — the writer already logged why.
                     writer.Dispose();
                     writer = null;
                     retryAfter = DateTime.UtcNow + WriteErrorBackoff;
@@ -111,7 +110,13 @@ public sealed class ContinuousRecorder
         catch (OperationCanceledException) { }
         finally
         {
-            writer?.Dispose();
+            if (writer != null)
+            {
+                writer.Dispose();
+                // Give the writer thread a moment to finalize the file on shutdown.
+                try { await writer.Completion.WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false); }
+                catch { }
+            }
             _hub.Unsubscribe(id);
         }
     }

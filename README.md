@@ -238,13 +238,34 @@ the original Rust neolink are also accepted.
 | `web_bind` | = `bind` | Separate bind address for the web port |
 | `users` | *(none)* | RTSP Basic-auth users: `{ "name", "pass" }`. Omit for open access |
 | `recording` | *(none)* | Event recording (see below). Omit to disable |
+| `reset_admin_password` | `false` | Web-UI recovery: while `true`, the login screen allows setting a new admin password. Turn it back off after use |
+
+### Web UI sign-in
+
+Authentication is **off by default** — no database, no config required. The
+first visitor is prompted to create the **admin** account (or dismiss and do it
+later via ⚙ → "Enable login…"); creating it turns sign-in on for the whole UI
+and API. Accounts live in `users.json` next to your config: passwords are
+stored as PBKDF2-SHA256 (210k iterations, per-user salt, constant-time
+verification — safe for an open-source, file-based setup), and sessions are
+HMAC-signed tokens that expire after 30 days and are invalidated the moment a
+password changes.
+
+The admin manages accounts from ⚙ → Users…: add normal users, change any
+password, delete users (the admin itself can't be deleted). **Every account
+keeps its own UI settings** — layout, tiles, review-strip filters — stored
+server-side, so people don't fight over one shared view. Forgot the admin
+password? Set `"reset_admin_password": true` in the config, restart, use
+"Reset admin password…" on the login screen, then set the flag back to
+`false`.
 
 ### Recording (`"recording": { ... }`)
 
-> ⚠ **Continuous (24/7) recording is temporarily disabled** while its
-> file/playback issues are ironed out — the per-camera switch, the timeline and
-> the recordings browser are hidden until it returns. **Detection events are
-> unaffected** and record normally.
+> 💾 **Slow disks are handled**: all recording I/O runs on dedicated
+> low-priority writer threads behind a bounded memory budget, so an HDD that
+> stalls (cache flushes, spin-ups, network shares) can never lag the service or
+> the live streams — if the disk falls behind, *recorded* frames are dropped
+> (with a log warning) and recording resumes at the next keyframe.
 
 Two recording modes, both switchable **per camera at runtime** from the web UI
 (camera ⚙ → RECORDING) — the switches persist in `settings.json` next to your

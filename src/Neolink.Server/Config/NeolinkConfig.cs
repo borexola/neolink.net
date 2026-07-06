@@ -15,6 +15,8 @@ public sealed class NeolinkConfig
     public bool WebUi { get; set; } = true;
     /// <summary>Event recording (motion/AI detections + clips); null = disabled.</summary>
     public RecordingConfig? Recording { get; set; }
+    /// <summary>Recovery switch: while true, the login screen allows setting a new admin password.</summary>
+    public bool ResetAdminPassword { get; set; }
     public List<UserConfig> Users { get; } = new();
     public List<CameraConfig> Cameras { get; } = new();
 
@@ -76,6 +78,9 @@ public sealed class NeolinkConfig
                     break;
                 case "recording":
                     config.Recording = ParseJsonRecording(prop.Value);
+                    break;
+                case "resetadminpassword":
+                    config.ResetAdminPassword = prop.Value.GetBoolean();
                     break;
                 case "users":
                     foreach (var u in prop.Value.EnumerateArray())
@@ -188,6 +193,7 @@ public sealed class NeolinkConfig
             WebPort = (int)(MiniToml.GetInt(root, "web_port") ?? 8655),
             WebBind = MiniToml.GetString(root, "web_bind"),
             WebUi = MiniToml.GetBool(root, "web_ui") ?? MiniToml.GetBool(root, "webui") ?? true,
+            ResetAdminPassword = MiniToml.GetBool(root, "reset_admin_password") ?? false,
         };
 
         if (MiniToml.GetString(root, "certificate") != null)
@@ -361,13 +367,12 @@ public sealed class UserConfig
 public sealed class RecordingConfig
 {
     /// <summary>
-    /// Kill switch for continuous (24/7) recording, temporarily off while its
-    /// file/playback issues are ironed out. Event recording is unaffected.
+    /// Kill switch for continuous (24/7) recording, kept for emergencies.
     /// When false: no ContinuousRecorder runs, the /api/recordings endpoints are
     /// absent, the per-camera switch is hidden, and the timeline page explains
-    /// itself. Flip to true to bring the feature back.
+    /// itself. Event recording is unaffected either way.
     /// </summary>
-    public static bool ContinuousEnabled => false;
+    public static bool ContinuousEnabled => true;
 
     /// <summary>Storage directory for clips/thumbnails/event metadata (mount a volume here in Docker).</summary>
     public string Path { get; set; } = "";

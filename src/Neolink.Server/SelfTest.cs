@@ -333,6 +333,45 @@ public static class SelfTest
             }
         });
 
+        Test("user store: hashing, tokens, accounts", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var store = new Web.UserStore(dir);
+                Assert(!store.Enabled, "auth off until the first account exists");
+
+                var admin = store.Add("admin", "correct horse", admin: true);
+                Assert(store.Enabled, "auth on once an account exists");
+                Assert(store.Verify("admin", "correct horse") != null, "right password verifies");
+                Assert(store.Verify("admin", "wrong horse") == null, "wrong password fails");
+                Assert(store.Verify("ADMIN", "correct horse") != null, "usernames are case-insensitive");
+                Assert(admin.Hash.StartsWith("pbkdf2-sha256$210000$"), "PBKDF2 format with strong iteration count");
+
+                var token = store.IssueToken(admin);
+                Assert(store.ValidateToken(token)?.Name == "admin", "token round-trips");
+                Assert(store.ValidateToken(token + "x") == null, "tampered token rejected");
+                store.SetPassword("admin", "new password!");
+                Assert(store.ValidateToken(token) == null, "password change invalidates old tokens");
+
+                store.Add("viewer", "viewerpass", admin: false);
+                Assert(!store.Delete("admin"), "the admin cannot be deleted");
+                Assert(store.Delete("viewer"), "normal users can be deleted");
+
+                store.Add("viewer2", "viewerpass", admin: false);
+                store.SetSettings("viewer2", "{\"mode\":\"grid\"}");
+                var reloaded = new Web.UserStore(dir);
+                Assert(reloaded.Enabled, "accounts persist across restart");
+                Assert(reloaded.Verify("admin", "new password!") != null, "password persists");
+                Assert(reloaded.GetSettings("viewer2").Contains("grid"), "per-user settings persist");
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+        });
+
         Test("clip writer produces a playable fmp4 structure", () =>
         {
             var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
@@ -368,27 +407,31 @@ public static class SelfTest
                     Au(sps, pps, Nal(0x65, 40))));
 
                 var path = Path.Combine(dir, "clip.mp4");
-                using (var writer = Recording.ClipWriter.TryCreate(path, hub))
+                var writer = Recording.ClipWriter.TryCreate(path, hub);
+                Assert(writer != null, "writer created once params are known");
+                // Hub indices jump by 2, as they do when audio packets are
+                // interleaved. That is NOT a drop: the writer must keep every
+                // frame (regression: index-based gap detection dropped all
+                // P-frames, producing near-zero-length clips).
+                long index = 0;
+                uint ts = 1000;
+                writer!.Add(new Streaming.HubVideo(index, Au(Nal(0x65, 40)), true, ts));
+                for (int i = 0; i < 5; i++)
                 {
-                    Assert(writer != null, "writer created once params are known");
-                    // Hub indices jump by 2, as they do when audio packets are
-                    // interleaved. That is NOT a drop: the writer must keep every
-                    // frame (regression: index-based gap detection dropped all
-                    // P-frames, producing near-zero-length clips).
-                    long index = 0;
-                    uint ts = 1000;
-                    writer!.Add(new Streaming.HubVideo(index, Au(Nal(0x65, 40)), true, ts));
-                    for (int i = 0; i < 5; i++)
-                    {
-                        index += 2;
-                        writer.Add(new Streaming.HubVideo(index, Au(Nal(0x41, 25)), false, ts += 3000));
-                    }
-                    Assert(writer.DurationSeconds > 0.15, "all frames survive audio interleave");
-
-                    // A real drop (gap flag) resumes at the next keyframe.
-                    writer.Add(new Streaming.HubVideo(index + 50, Au(Nal(0x41, 25)), false, ts += 3000), gap: true);
-                    writer.Add(new Streaming.HubVideo(index + 51, Au(Nal(0x65, 40)), true, ts += 3000));
+                    index += 2;
+                    writer.Add(new Streaming.HubVideo(index, Au(Nal(0x41, 25)), false, ts += 3000));
                 }
+                Assert(writer.DurationSeconds > 0.15, "all frames survive audio interleave");
+
+                // A real drop (gap flag) resumes at the next keyframe.
+                writer.Add(new Streaming.HubVideo(index + 50, Au(Nal(0x41, 25)), false, ts += 3000), gap: true);
+                writer.Add(new Streaming.HubVideo(index + 51, Au(Nal(0x65, 40)), true, ts += 3000));
+
+                // Disk work is asynchronous by design: the file is finalized on the
+                // writer's own thread after Dispose.
+                writer.Dispose();
+                Assert(writer.Completion.Wait(TimeSpan.FromSeconds(10)), "writer finalizes in background");
+                Assert(!writer.Faulted, "no write faults");
 
                 var bytes = File.ReadAllBytes(path);
                 Assert(bytes.Length > 200, "file has content");

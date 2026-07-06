@@ -66,12 +66,20 @@ public sealed class EventRecorder
         }
         finally
         {
+            ClipWriter? closing;
             lock (_mediaGate)
             {
-                _writer?.Dispose();
+                closing = _writer;
                 _writer = null;
             }
+            closing?.Dispose();
             try { await pump.ConfigureAwait(false); } catch { }
+            // Give the writer thread a moment to finalize the file on shutdown.
+            if (closing != null)
+            {
+                try { await closing.Completion.WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false); }
+                catch { }
+            }
         }
     }
 
@@ -97,13 +105,12 @@ public sealed class EventRecorder
                 {
                     if (_writer != null)
                     {
-                        try
+                        // Add never blocks on disk (background writer thread); a dead
+                        // disk surfaces as Faulted and the event continues clip-less.
+                        _writer.Add(v, gap);
+                        if (_writer.Faulted)
                         {
-                            _writer.Add(v, gap);
-                        }
-                        catch (Exception ex)
-                        {
-                            Log.Warn($"{_camera}: clip write failed: {ex.Message}");
+                            Log.Warn($"{_camera}: clip writer failed; event continues without further video");
                             _writer.Dispose();
                             _writer = null;
                         }

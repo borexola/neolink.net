@@ -300,6 +300,45 @@
     window.neolink = {
         freeInit,
 
+        // Ambient event previews (review strip): ensure real muting and start
+        // looped playback on every trickle video. Idempotent, called per render.
+        trickle() {
+            document.querySelectorAll('video[data-trickle]').forEach(v => {
+                v.muted = true;
+                if (v.paused) v.play().catch(() => { });
+            });
+        },
+
+        // Review-strip vertical resizing: drag the handle at the bar's bottom edge.
+        // The height is applied live in the DOM (no SignalR churn while dragging)
+        // and reported to Blazor once on release for persistence.
+        stripResizeInit(id, dotnetRef) {
+            const el = document.getElementById(id);
+            if (!el || el.dataset.resizeInit) return;
+            const handle = el.querySelector('.strip-resize');
+            if (!handle) return;
+            el.dataset.resizeInit = '1';
+            handle.addEventListener('pointerdown', (e) => {
+                if (e.button !== 0 && e.pointerType === 'mouse') return;
+                e.preventDefault();
+                e.stopPropagation();
+                try { handle.setPointerCapture(e.pointerId); } catch { }
+                const startY = e.clientY;
+                const startH = el.getBoundingClientRect().height;
+                const move = (ev) => {
+                    const h = Math.max(96, Math.min(window.innerHeight * 0.6, startH + ev.clientY - startY));
+                    el.style.height = h + 'px';
+                };
+                const up = () => {
+                    handle.removeEventListener('pointermove', move);
+                    handle.removeEventListener('pointerup', up);
+                    dotnetRef.invokeMethodAsync('OnStripResized', el.getBoundingClientRect().height);
+                };
+                handle.addEventListener('pointermove', move);
+                handle.addEventListener('pointerup', up);
+            });
+        },
+
         // Points a <video> at a recording segment and keeps it at the wanted
         // offset. Tolerance while playing avoids constant reseeks (the video
         // advances on its own); paused scrubbing snaps tightly.

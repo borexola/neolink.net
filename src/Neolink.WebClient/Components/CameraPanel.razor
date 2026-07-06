@@ -246,6 +246,8 @@
     [Parameter] public ApiCamera? Camera { get; set; }
     [Parameter] public string? User { get; set; }
     [Parameter] public string? Pass { get; set; }
+    /// <summary>Web-UI session token; when present it supersedes the Basic credentials.</summary>
+    [Parameter] public string? Token { get; set; }
     [Parameter] public EventCallback OnClose { get; set; }
 
     private ApiCapabilities? _caps;
@@ -388,7 +390,11 @@
     private HttpRequestMessage NewRequest(HttpMethod method, string path)
     {
         var req = new HttpRequestMessage(method, $"{BaseUrl}/{path}");
-        if (!string.IsNullOrEmpty(User))
+        if (!string.IsNullOrEmpty(Token))
+        {
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", Token);
+        }
+        else if (!string.IsNullOrEmpty(User))
         {
             var token = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"{User}:{Pass}"));
             req.Headers.Authorization = new AuthenticationHeaderValue("Basic", token);

@@ -195,12 +195,22 @@ foreach (var cam in config.Cameras)
 // Web API (camera list + fMP4 live streams for browsers); guarded like the cameras.
 if (config.WebPort > 0)
 {
+    // Web-UI accounts (users.json next to the config). Auth is off until the
+    // first account (the admin) is created from the UI itself.
+    var userStore = new UserStore(Path.GetDirectoryName(Path.GetFullPath(configPath))!);
+    if (!userStore.Enabled)
+        Log.Info("Web UI authentication is off — create the admin account from the UI to enable it");
+    if (config.ResetAdminPassword)
+        Log.Warn("reset_admin_password is TRUE: anyone reaching the login page can set a new admin " +
+                 "password. Set it back to false as soon as the reset is done!");
+
     tasks.Add(Task.Run(async () =>
     {
         try
         {
             await WebApi.RunAsync(config.WebBind ?? config.BindAddr, config.WebPort, config.WebUi,
-                webCameras, users, config.BindPort, eventStore, recordingSettings, shutdown.Token);
+                webCameras, users, config.BindPort, eventStore, recordingSettings,
+                userStore, config.ResetAdminPassword, shutdown.Token);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
