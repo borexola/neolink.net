@@ -42,6 +42,43 @@ public sealed record ApiEncodeProfile(string Type, uint Width, uint Height,
 /// <summary>GET /api/cameras/{name}/streaminfo — the encode profiles of each stream.</summary>
 public sealed record ApiStreamProfiles(List<ApiEncodeProfile> Profiles);
 
+// ------------------------------------------------------------ recorded events
+
+/// <summary>GET /api/events — one recorded detection event.</summary>
+public sealed record ApiEvent(string Id, string Camera, DateTime Start, DateTime End,
+    List<string> Labels, bool Reviewed, bool Ongoing, bool HasClip, bool HasThumb)
+{
+    private static readonly (string Label, string Icon, string Name)[] Known =
+    {
+        ("person", "🧍", "Human"),
+        ("vehicle", "🚗", "Vehicle"),
+        ("animal", "🐾", "Animal"),
+        ("package", "📦", "Package"),
+        ("motion", "👁", "Motion"),
+    };
+
+    /// <summary>Leading icon: the most specific detection wins over plain motion.</summary>
+    public string Icon =>
+        Known.FirstOrDefault(k => Labels.Contains(k.Label)).Icon ?? "👁";
+
+    /// <summary>"Human detected", "Human + Vehicle detected", ...</summary>
+    public string Title
+    {
+        get
+        {
+            var names = Known.Where(k => Labels.Contains(k.Label)).Select(k => k.Name)
+                .Concat(Labels.Where(l => Known.All(k => k.Label != l)).Select(Cap))
+                .Distinct().ToList();
+            if (names.Count == 0) names.Add("Motion");
+            return string.Join(" + ", names) + " detected";
+        }
+    }
+
+    public TimeSpan Duration => End > Start ? End - Start : TimeSpan.Zero;
+
+    private static string Cap(string s) => s.Length == 0 ? s : char.ToUpperInvariant(s[0]) + s[1..];
+}
+
 /// <summary>One grid slot: which camera/stream is shown there (or empty).</summary>
 public sealed class ViewSlot
 {

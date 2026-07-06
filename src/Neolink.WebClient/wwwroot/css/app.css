@@ -557,6 +557,213 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
     gap: 6px;
 }
 
+/* ------------------------------------------------------------ events (NVR) */
+
+/* Frigate-style review strip across the top of the stage */
+.events-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    min-height: 64px;
+}
+
+.events-bar-count {
+    font-size: 12px;
+    color: var(--accent);
+    white-space: nowrap;
+    font-weight: 600;
+}
+
+.events-bar-scroll {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    scrollbar-width: thin;
+    flex: 1;
+    padding: 2px 0;
+}
+
+.event-card {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 4px 6px;
+    cursor: pointer;
+    flex: 0 0 auto;
+    max-width: 260px;
+}
+
+.event-card:hover { border-color: var(--accent); }
+.event-card.live { border-color: var(--err); }
+
+.event-thumb {
+    position: relative;
+    width: 84px;
+    height: 48px;
+    border-radius: 5px;
+    overflow: hidden;
+    background: #000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+}
+
+.event-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.event-thumb-icon { font-size: 22px; opacity: 0.8; }
+
+.event-live {
+    position: absolute;
+    left: 4px;
+    top: 3px;
+    font-size: 9px;
+    font-weight: 700;
+    color: #fff;
+    background: var(--err);
+    border-radius: 3px;
+    padding: 0 4px;
+    animation: event-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes event-pulse { 50% { opacity: 0.45; } }
+
+.event-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.event-title {
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.event-sub {
+    font-size: 11px;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.event-dismiss { flex: 0 0 auto; }
+.events-clear { flex: 0 0 auto; }
+
+/* Event history panel (reuses the campanel chrome) */
+.events-panel .event-filter {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    font-size: 12px;
+    padding: 3px 6px;
+    max-width: 130px;
+}
+
+.event-day-count {
+    color: var(--muted);
+    font-weight: 400;
+    margin-left: 6px;
+}
+
+.event-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 4px;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.event-row:hover { background: var(--bg); }
+.event-row.reviewed { opacity: 0.55; }
+
+.event-row-time {
+    font-size: 11px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+    flex: 0 0 auto;
+}
+
+.event-row-icon { font-size: 16px; flex: 0 0 auto; }
+
+.event-row-main {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+    flex: 1;
+}
+
+/* Playback modal */
+.player-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.7);
+    z-index: 62;
+}
+
+.event-player {
+    position: fixed;
+    inset: 0;
+    margin: auto;
+    width: min(920px, calc(100vw - 32px));
+    height: fit-content;
+    max-height: calc(100vh - 32px);
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    z-index: 63;
+    display: flex;
+    flex-direction: column;
+    padding: 12px;
+    gap: 10px;
+    box-shadow: 0 18px 60px rgba(0, 0, 0, 0.6);
+}
+
+.event-player-head {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+}
+
+.event-player-title {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+    min-width: 0;
+}
+
+.event-player-title .event-title { font-size: 15px; }
+
+.event-player video {
+    width: 100%;
+    max-height: calc(100vh - 180px);
+    background: #000;
+    border-radius: 8px;
+    outline: none;
+}
+
+.event-player-foot {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* ------------------------------------------------------------ stream chips */
+
 .stream-chip { cursor: default; }
 .stream-chip:hover { border-color: var(--line); color: var(--text); }
 

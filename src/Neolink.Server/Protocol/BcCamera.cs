@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Channels;
+using System.Xml.Linq;
 using Neolink.Bc;
 using Neolink.Bc.Xml;
 
@@ -232,6 +233,102 @@ public sealed class BcCamera : IBcCamera
         {
             // Some cameras never acknowledge accepted set commands.
             return null;
+        }
+    }
+
+    public async Task WatchMotionAsync(Action<MotionPush> onEvent, CancellationToken ct)
+    {
+        // Subscribe BEFORE opting in so no push can slip past between the two.
+        using var sub = _conn.Subscribe(BcConstants.MsgIdMotion);
+
+        // Opt in to alarm pushes. Some cameras ack the request, some stay silent
+        // and just start pushing — tolerate both.
+        await SendCommandAsync(BcConstants.MsgIdMotionRequest,
+            extension: new ExtensionXml { ChannelId = _channelId },
+            replyTimeout: TimeSpan.FromSeconds(5), tolerateNoReply: true, ct: ct).ConfigureAwait(false);
+
+        while (!ct.IsCancellationRequested)
+        {
+            BcMessage msg;
+            try
+            {
+                // Pushes are sporadic by nature: no read timeout. A dead connection
+                // is noticed by the video stream, which tears everything down.
+                msg = await sub.Messages.ReadAsync(ct).ConfigureAwait(false);
+            }
+            catch (System.Threading.Channels.ChannelClosedException)
+            {
+                return; // connection closed
+            }
+
+            var list = msg.Xml?.RawElement("AlarmEventList");
+            if (list == null) continue;
+            foreach (var ev in list.Elements("AlarmEvent"))
+            {
+                if (uint.TryParse(ev.Element("channelId")?.Value.Trim(), out var ch) && ch != _channelId)
+                    continue;
+                var status = ev.Element("status")?.Value.Trim() ?? "";
+                // AItype variants seen in the wild: repeated elements, comma lists,
+                // "none" placeholders, and differing capitalization.
+                var aiTypes = ev.Elements()
+                    .Where(e => e.Name.LocalName.Equals("AItype", StringComparison.OrdinalIgnoreCase))
+                    .SelectMany(e => e.Value.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries))
+                    .Select(t => t.Trim().ToLowerInvariant())
+                    .Where(t => t is not ("" or "none"))
+                    .Distinct()
+                    .ToList();
+                onEvent(new MotionPush(status, aiTypes));
+            }
+        }
+    }
+
+    public async Task<byte[]?> SnapAsync(CancellationToken ct)
+    {
+        using var sub = _conn.Subscribe(BcConstants.MsgIdSnap);
+
+        var body = BcXmlBody.FromRaw(new XElement("Snap",
+            new XAttribute("version", BcXmlBody.XmlVersion),
+            new XElement("channelId", _channelId),
+            new XElement("logicChannel", _channelId),
+            new XElement("time", 0),
+            new XElement("fullFrame", 0),
+            new XElement("streamType", "subStream")));
+        var req = new BcMessage
+        {
+            Meta = new BcMeta
+            {
+                MsgId = BcConstants.MsgIdSnap,
+                ChannelId = _channelId,
+                MsgNum = NewMessageNum(),
+                StreamType = 0,
+                ResponseCode = 0,
+                Class = BcConstants.ClassModern,
+            },
+            Extension = new ExtensionXml { ChannelId = _channelId },
+            Xml = body,
+        };
+        await _conn.SendAsync(req, ct).ConfigureAwait(false);
+
+        // The JPEG may span several messages: the first reply carries a <Snap>
+        // with pictureSize, the image bytes arrive as binary payloads until
+        // that many bytes have been received.
+        int expected = -1;
+        using var jpeg = new MemoryStream();
+        var perMessageTimeout = TimeSpan.FromSeconds(8);
+        while (true)
+        {
+            var reply = await sub.ReceiveAsync(perMessageTimeout, ct).ConfigureAwait(false);
+            if (reply.Meta.ResponseCode != 200)
+                throw new CameraCommandException(BcConstants.MsgIdSnap, reply.Meta.ResponseCode);
+            if (reply.Xml?.RawElement("Snap") is { } snap
+                && int.TryParse(snap.Element("pictureSize")?.Value.Trim(), out var size) && size > 0)
+                expected = size;
+            if (reply.Binary is { Length: > 0 } bin)
+                jpeg.Write(bin, 0, bin.Length);
+            if (expected >= 0 && jpeg.Length >= expected)
+                return jpeg.ToArray();
+            if (expected < 0 && jpeg.Length > 0)
+                return jpeg.ToArray(); // no size advertised: single-message JPEG
         }
     }
 

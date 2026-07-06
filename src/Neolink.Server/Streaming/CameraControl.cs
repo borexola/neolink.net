@@ -42,6 +42,9 @@ public interface ICameraControl
         uint? framerate, uint? bitrate, CancellationToken ct);
 
     Task<XElement?> GetBatteryInfoAsync(CancellationToken ct);
+
+    /// <summary>A JPEG snapshot from the camera, or null if unsupported.</summary>
+    Task<byte[]?> SnapshotAsync(CancellationToken ct);
     Task<XElement?> GetLedStateAsync(CancellationToken ct);
     Task SetLedStateAsync(string? state, string? lightState, CancellationToken ct);
     Task<XElement?> GetPirStateAsync(CancellationToken ct);
@@ -153,6 +156,9 @@ public sealed class CameraControl : ICameraControl
 
     public Task<XElement?> GetBatteryInfoAsync(CancellationToken ct) =>
         WithCameraAsync(camera => camera.GetBatteryInfoAsync(ct: ct), ct);
+
+    public Task<byte[]?> SnapshotAsync(CancellationToken ct) =>
+        WithCameraAsync(camera => camera.SnapAsync(ct), ct);
 
     public Task<XElement?> GetLedStateAsync(CancellationToken ct) =>
         WithCameraAsync(camera => camera.GetLedStateAsync(ct: ct), ct);
