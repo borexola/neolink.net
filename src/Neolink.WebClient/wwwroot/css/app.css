@@ -901,8 +901,7 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
 
 .tl-grid {
     flex: 1;
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    display: grid; /* columns are set inline: fewer cameras = bigger tiles */
     gap: 8px;
     padding: 4px 12px 12px;
     overflow-y: auto;

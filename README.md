@@ -100,7 +100,8 @@ docker image inspect ghcr.io/borexola/neolink.net:latest --format '{{.Os}}/{{.Ar
 ### 2. Create a config
 
 ```bash
-curl -o config.json https://raw.githubusercontent.com/borexola/neolink.net/main/src/Neolink.Server/config.example.json
+mkdir -p config
+curl -o config/config.json https://raw.githubusercontent.com/borexola/neolink.net/main/src/Neolink.Server/config.example.json
 ```
 
 Edit it: camera names, IP addresses, and credentials (same login as the Reolink app).
@@ -108,9 +109,11 @@ Edit it: camera names, IP addresses, and credentials (same login as the Reolink 
 ### 3. Run
 
 ```bash
+# /config is a directory mount: config.json lives in it, and runtime settings
+# from the web UI (settings.json) are persisted next to it.
 docker run -d --name neolink --restart unless-stopped \
     -p 8654:8654 -p 8655:8655 \
-    -v "$PWD/config.json:/config/config.json:ro" \
+    -v "$PWD/config:/config" \
     ghcr.io/borexola/neolink.net:latest
 ```
 
@@ -125,7 +128,7 @@ docker logs -f neolink     # prints the ready-to-use RTSP and web UI URLs
 
 ### Or with compose
 
-Save this as `docker-compose.yml` next to your `config.json`
+Save this as `docker-compose.yml` next to your `config/` directory
 (or `curl -O https://raw.githubusercontent.com/borexola/neolink.net/main/docker-compose.yml`):
 
 ```yaml
@@ -138,7 +141,7 @@ services:
       - "8654:8654"   # RTSP (TCP-interleaved works for ffmpeg/Frigate/VLC)
       - "8655:8655"   # web UI + API; remove if webui:false and API unused
     volumes:
-      - ./config.json:/config/config.json:ro
+      - ./config:/config   # holds config.json + web-UI settings.json
     # For RTSP over UDP transport, use host networking instead of port maps:
     # network_mode: host
 ```
@@ -166,7 +169,7 @@ docker compose pull && docker compose up -d
 git clone https://github.com/borexola/neolink.net.git && cd neolink.net
 docker build -t neolink.net .
 docker run -d --name neolink -p 8654:8654 -p 8655:8655 \
-    -v "$PWD/config.json:/config/config.json:ro" neolink.net
+    -v "$PWD/config:/config" neolink.net
 ```
 
 Then:
@@ -239,9 +242,8 @@ the original Rust neolink are also accepted.
 ### Recording (`"recording": { ... }`)
 
 Two recording modes, both switchable **per camera at runtime** from the web UI
-(camera ⚙ → RECORDING) — the switches persist in `settings.json` inside the
-storage directory, so they survive restarts and live on the same Docker volume
-as the footage:
+(camera ⚙ → RECORDING) — the switches persist in `settings.json` next to your
+config file (in Docker: the `/config` mount), so they survive restarts:
 
 - **Detection events**: the camera's own motion/AI detections (person, vehicle,
   animal — pushed over the Baichuan connection, no polling and no server-side ML)
@@ -250,6 +252,10 @@ as the footage:
   Events button opens the full history grouped by day. Per camera you can also
   pick **which detection types to record** (🧍 person, 🚗 vehicle, 🐾 animal,
   📦 package, 👁 motion) — detections of disabled types are discarded entirely.
+  ⚠ The camera does the detecting: person/vehicle/animal labels only arrive when
+  the matching Smart Detection is enabled **in the Reolink app** (camera →
+  Settings → Detection). The chips are a Neolink-side filter on what arrives;
+  the camera's own settings are never changed.
 - **Continuous (24/7)**: classic NVR-style recording into rolling
   `segment_minutes`-long MP4 files, browsable under 🕘 → Recordings (grouped by
   day, click to play). Off by default; enable per camera in the UI.

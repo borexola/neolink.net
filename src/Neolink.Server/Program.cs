@@ -102,7 +102,10 @@ if (config.Recording is { } recCfg)
     {
         eventStore = new EventStore(recCfg.Path);
         eventStore.Load();
-        recordingSettings = new RecordingSettings(eventStore.Root);
+        // Runtime switches live next to the config file; the recordings root is
+        // checked once to migrate the old location.
+        recordingSettings = new RecordingSettings(
+            Path.GetDirectoryName(Path.GetFullPath(configPath))!, legacyDir: eventStore.Root);
         Log.Info($"Recording to {eventStore.Root} " +
                  $"(events: {(recCfg.RetentionDays > 0 ? $"{recCfg.RetentionDays} days" : "forever")}, " +
                  $"continuous: {(recCfg.EffectiveContinuousRetentionDays > 0 ? $"{recCfg.EffectiveContinuousRetentionDays} days" : "forever")})");
