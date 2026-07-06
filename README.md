@@ -241,10 +241,11 @@ the original Rust neolink are also accepted.
 
 ### Recording (`"recording": { ... }`)
 
-> ⚠ **Continuous (24/7) recording is temporarily disabled** while its
-> file/playback issues are ironed out — the per-camera switch, the timeline and
-> the recordings browser are hidden until it returns. **Detection events are
-> unaffected** and record normally.
+> 💾 **Slow disks are handled**: all recording I/O runs on dedicated
+> low-priority writer threads behind a bounded memory budget, so an HDD that
+> stalls (cache flushes, spin-ups, network shares) can never lag the service or
+> the live streams — if the disk falls behind, *recorded* frames are dropped
+> (with a log warning) and recording resumes at the next keyframe.
 
 Two recording modes, both switchable **per camera at runtime** from the web UI
 (camera ⚙ → RECORDING) — the switches persist in `settings.json` next to your

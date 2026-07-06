@@ -300,6 +300,15 @@
     window.neolink = {
         freeInit,
 
+        // Ambient event previews (review strip): ensure real muting and start
+        // looped playback on every trickle video. Idempotent, called per render.
+        trickle() {
+            document.querySelectorAll('video[data-trickle]').forEach(v => {
+                v.muted = true;
+                if (v.paused) v.play().catch(() => { });
+            });
+        },
+
         // Points a <video> at a recording segment and keeps it at the wanted
         // offset. Tolerance while playing avoids constant reseeks (the video
         // advances on its own); paused scrubbing snaps tightly.

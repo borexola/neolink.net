@@ -83,12 +83,23 @@
             <div class="events-bar">
                 <span class="events-bar-count" title="Unreviewed events">⚡ @_events.Count(e => !e.Reviewed)</span>
                 <div class="events-bar-scroll">
+                    @{ int trickleBudget = 8; }
                     @foreach (var ev in _events.Where(e => !e.Reviewed).Take(30))
                     {
+                        @* Ambient "trickle" preview: the newest few cards loop their clip
+                           muted, so the strip shows what happened without any clicks.
+                           Capped so a big backlog doesn't decode dozens of videos. *@
+                        bool trickle = ev.HasClip && !ev.Ongoing && trickleBudget-- > 0;
                         <div class="event-card @(ev.Ongoing ? "live" : "")" @key="ev.Id"
                              title="@ev.Title — click to play" @onclick="() => OpenEvent(ev)">
                             <div class="event-thumb">
-                                @if (ev.HasThumb)
+                                @if (trickle)
+                                {
+                                    <video data-trickle="1" muted loop playsinline preload="metadata"
+                                           poster="@(ev.HasThumb ? EventArtifactUrl(ev, "thumb") : null)"
+                                           src="@EventArtifactUrl(ev, "clip")"></video>
+                                }
+                                else if (ev.HasThumb)
                                 {
                                     <img src="@EventArtifactUrl(ev, "thumb")" loading="lazy" alt="" />
                                 }
@@ -100,13 +111,13 @@
                                 {
                                     <span class="event-live">● REC</span>
                                 }
+                                <button class="icon-btn event-dismiss" title="Dismiss (mark reviewed)"
+                                        @onclick="() => DismissAsync(ev)" @onclick:stopPropagation="true">✕</button>
                             </div>
                             <div class="event-meta">
                                 <span class="event-title">@ev.Icon @ev.Title</span>
                                 <span class="event-sub">@ev.Camera · @Ago(ev.Start)</span>
                             </div>
-                            <button class="icon-btn event-dismiss" title="Dismiss (mark reviewed)"
-                                    @onclick="() => DismissAsync(ev)" @onclick:stopPropagation="true">✕</button>
                         </div>
                     }
                 </div>
@@ -443,6 +454,10 @@
         await ReconcilePlayersAsync();
         if (_mode == "free")
             await JS.InvokeVoidAsync("neolink.freeInit", "stage-grid");
+        // Blazor's `muted` attribute only sets defaultMuted on dynamically created
+        // elements, which blocks autoplay — the helper mutes for real and plays.
+        if (_eventsSupported && _events.Any(e => !e.Reviewed))
+            await JS.InvokeVoidAsync("neolink.trickle");
     }
 
     // ------------------------------------------------------------ persistence

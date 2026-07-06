@@ -361,13 +361,12 @@ public sealed class UserConfig
 public sealed class RecordingConfig
 {
     /// <summary>
-    /// Kill switch for continuous (24/7) recording, temporarily off while its
-    /// file/playback issues are ironed out. Event recording is unaffected.
+    /// Kill switch for continuous (24/7) recording, kept for emergencies.
     /// When false: no ContinuousRecorder runs, the /api/recordings endpoints are
     /// absent, the per-camera switch is hidden, and the timeline page explains
-    /// itself. Flip to true to bring the feature back.
+    /// itself. Event recording is unaffected either way.
     /// </summary>
-    public static bool ContinuousEnabled => false;
+    public static bool ContinuousEnabled => true;
 
     /// <summary>Storage directory for clips/thumbnails/event metadata (mount a volume here in Docker).</summary>
     public string Path { get; set; } = "";

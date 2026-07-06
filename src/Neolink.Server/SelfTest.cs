@@ -368,27 +368,31 @@ public static class SelfTest
                     Au(sps, pps, Nal(0x65, 40))));
 
                 var path = Path.Combine(dir, "clip.mp4");
-                using (var writer = Recording.ClipWriter.TryCreate(path, hub))
+                var writer = Recording.ClipWriter.TryCreate(path, hub);
+                Assert(writer != null, "writer created once params are known");
+                // Hub indices jump by 2, as they do when audio packets are
+                // interleaved. That is NOT a drop: the writer must keep every
+                // frame (regression: index-based gap detection dropped all
+                // P-frames, producing near-zero-length clips).
+                long index = 0;
+                uint ts = 1000;
+                writer!.Add(new Streaming.HubVideo(index, Au(Nal(0x65, 40)), true, ts));
+                for (int i = 0; i < 5; i++)
                 {
-                    Assert(writer != null, "writer created once params are known");
-                    // Hub indices jump by 2, as they do when audio packets are
-                    // interleaved. That is NOT a drop: the writer must keep every
-                    // frame (regression: index-based gap detection dropped all
-                    // P-frames, producing near-zero-length clips).
-                    long index = 0;
-                    uint ts = 1000;
-                    writer!.Add(new Streaming.HubVideo(index, Au(Nal(0x65, 40)), true, ts));
-                    for (int i = 0; i < 5; i++)
-                    {
-                        index += 2;
-                        writer.Add(new Streaming.HubVideo(index, Au(Nal(0x41, 25)), false, ts += 3000));
-                    }
-                    Assert(writer.DurationSeconds > 0.15, "all frames survive audio interleave");
-
-                    // A real drop (gap flag) resumes at the next keyframe.
-                    writer.Add(new Streaming.HubVideo(index + 50, Au(Nal(0x41, 25)), false, ts += 3000), gap: true);
-                    writer.Add(new Streaming.HubVideo(index + 51, Au(Nal(0x65, 40)), true, ts += 3000));
+                    index += 2;
+                    writer.Add(new Streaming.HubVideo(index, Au(Nal(0x41, 25)), false, ts += 3000));
                 }
+                Assert(writer.DurationSeconds > 0.15, "all frames survive audio interleave");
+
+                // A real drop (gap flag) resumes at the next keyframe.
+                writer.Add(new Streaming.HubVideo(index + 50, Au(Nal(0x41, 25)), false, ts += 3000), gap: true);
+                writer.Add(new Streaming.HubVideo(index + 51, Au(Nal(0x65, 40)), true, ts += 3000));
+
+                // Disk work is asynchronous by design: the file is finalized on the
+                // writer's own thread after Dispose.
+                writer.Dispose();
+                Assert(writer.Completion.Wait(TimeSpan.FromSeconds(10)), "writer finalizes in background");
+                Assert(!writer.Faulted, "no write faults");
 
                 var bytes = File.ReadAllBytes(path);
                 Assert(bytes.Length > 200, "file has content");
