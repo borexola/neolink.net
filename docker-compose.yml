@@ -6,6 +6,10 @@ services:
     # build: .
     container_name: neolink
     restart: unless-stopped
+    environment:
+      # Time zone for timestamps (event folders, clip names, the UI clock).
+      # Use a tz database name; defaults to UTC when unset.
+      - TZ=Europe/London
     ports:
       - "8654:8654"   # RTSP (TCP-interleaved works for ffmpeg/Frigate/VLC)
       - "8655:8655"   # web UI + API; remove if webui:false and API unused

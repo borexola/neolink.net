@@ -72,6 +72,10 @@ catch (Exception ex)
 }
 
 Log.Info($"Neolink.NET {Version} starting");
+var tzOffset = DateTimeOffset.Now.Offset;
+Log.Info($"Local time: {DateTime.Now:yyyy-MM-dd HH:mm:ss} " +
+         $"({TimeZoneInfo.Local.Id}, UTC{(tzOffset < TimeSpan.Zero ? "-" : "+")}{tzOffset:hh\\:mm}) — " +
+         "set the TZ env var to change it");
 
 // Server-side UI state (accounts, runtime settings) lives in state_dir — the
 // config directory unless relocated (e.g. because the config mount is read-only).
@@ -222,13 +226,39 @@ if (config.WebPort > 0)
         Log.Warn("reset_admin_password is TRUE: anyone reaching the login page can set a new admin " +
                  "password. Set it back to false as soon as the reset is done!");
 
+    // Daily best-effort check for newer releases (feeds the UI's update banner).
+    var updates = new UpdateChecker(Version);
+    tasks.Add(Task.Run(() => updates.RunAsync(shutdown.Token)));
+
+    var webOptions = new WebApiOptions
+    {
+        BindAddr = config.WebBind ?? config.BindAddr,
+        Port = config.WebPort,
+        WebUi = config.WebUi,
+        Cameras = webCameras,
+        Users = users,
+        RtspPort = config.BindPort,
+        Events = eventStore,
+        RecordingSettings = recordingSettings,
+        UserStore = userStore,
+        ResetAdminPassword = config.EffectiveResetAdminPassword,
+        TrickleSpeed = config.Ui.TrickleSpeed,
+        Version = Version,
+        ConfigPath = Path.GetFullPath(configPath),
+        Updates = updates,
+        // Graceful shutdown; docker's restart policy (or systemd) starts us again.
+        RestartRequested = () =>
+        {
+            Log.Warn("Shutting down for a UI-requested restart");
+            shutdown.Cancel();
+        },
+    };
+
     tasks.Add(Task.Run(async () =>
     {
         try
         {
-            await WebApi.RunAsync(config.WebBind ?? config.BindAddr, config.WebPort, config.WebUi,
-                webCameras, users, config.BindPort, eventStore, recordingSettings,
-                userStore, config.EffectiveResetAdminPassword, config.Ui.TrickleSpeed, shutdown.Token);
+            await WebApi.RunAsync(webOptions, shutdown.Token);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)

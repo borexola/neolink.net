@@ -958,11 +958,15 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
 
 .tl-grid {
     flex: 1;
+    min-height: 0;
     display: grid; /* columns are set inline: fewer cameras = bigger tiles */
+    /* Rows share the available height so tiles fill the screen instead of a
+       single wide tile forcing its own 16:9 height (which zoomed on ultrawide). */
+    grid-auto-rows: minmax(140px, 1fr);
     gap: 8px;
     padding: 4px 12px 12px;
     overflow-y: auto;
-    align-content: start;
+    align-content: stretch;
 }
 
 .tl-tile {
@@ -971,11 +975,15 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
     border: 1px solid var(--line);
     border-radius: 8px;
     overflow: hidden;
+    min-height: 0;
 }
 
 .tl-tile video {
     width: 100%;
-    aspect-ratio: 16 / 9;
+    height: 100%;
+    /* contain, never stretch: letterbox/pillarbox the real feed (fixes the
+       zoomed, distorted look on wide screens and non-16:9 cameras). */
+    object-fit: contain;
     display: block;
     background: #000;
 }
@@ -1031,6 +1039,55 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
 }
 
 .sec-banner-actions .icon-btn { margin-left: auto; }
+
+/* New-version banner (same shape, accent colour) */
+.update-banner {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 4px 10px;
+    padding: 8px 10px;
+    border: 1px solid var(--accent);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.update-banner-text { font-size: 12px; color: var(--text); line-height: 1.35; }
+.update-banner a.chip { text-decoration: none; }
+
+/* Event player speed control */
+.player-speed {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 2px;
+}
+
+/* Admin server-settings fields */
+.admin-field {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    font-size: 13px;
+    padding: 3px 0;
+}
+
+.admin-field span { color: var(--muted); flex: 1; }
+
+.admin-field input {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 13px;
+    width: 190px;
+    max-width: 48%;
+    outline: none;
+}
+
+.admin-field input:focus { border-color: var(--accent); }
 
 /* Strip filter row (under the events bar) */
 .strip-filter {

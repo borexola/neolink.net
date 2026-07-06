@@ -372,6 +372,50 @@ public static class SelfTest
             }
         });
 
+        Test("config editor: read-modify-write with validation", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            var path = Path.Combine(dir, "config.json");
+            try
+            {
+                File.WriteAllText(path, """
+                    { "bind": "0.0.0.0", "web_port": 8655,
+                      "cameras": [ { "name": "cam", "username": "u", "address": "1.2.3.4" } ] }
+                    """);
+
+                // A valid edit persists and round-trips through the loader.
+                Config.ConfigEditor.Apply(path, root =>
+                {
+                    Config.ConfigEditor.Set(root, "web_port", 9001);
+                    var ui = Config.ConfigEditor.Section(root, "ui");
+                    Config.ConfigEditor.Set(ui, "trickle_speed", 8);
+                });
+                var reloaded = Config.NeolinkConfig.Load(path);
+                AssertEq(reloaded.WebPort, 9001);
+                Assert(Math.Abs(reloaded.Ui.TrickleSpeed - 8) < 0.001, "ui.trickle_speed written");
+                Assert(File.Exists(path + ".bak"), "previous config backed up");
+
+                // Camera list (and any unknown fields) survive an unrelated edit.
+                AssertEq(reloaded.Cameras.Count, 1);
+                AssertEq(reloaded.Cameras[0].Name, "cam");
+
+                // An invalid edit is rejected and the file is left untouched.
+                bool threw = false;
+                try
+                {
+                    Config.ConfigEditor.Apply(path, root => Config.ConfigEditor.Set(root, "web_port", 999999));
+                }
+                catch (FormatException) { threw = true; }
+                Assert(threw, "invalid port rejected");
+                AssertEq(Config.NeolinkConfig.Load(path).WebPort, 9001); // unchanged
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+        });
+
         Test("clip writer produces a playable fmp4 structure", () =>
         {
             var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");

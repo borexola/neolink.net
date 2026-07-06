@@ -28,6 +28,17 @@
             </div>
         }
 
+        @if (UpdateAvailable)
+        {
+            <div class="update-banner">
+                <span class="update-banner-text">🎉 Neolink.NET @_latestVersion is available (you have @_version).</span>
+                <div class="sec-banner-actions">
+                    <a class="chip" href="@_repoUrl" target="_blank" rel="noopener">View release</a>
+                    <button class="icon-btn" title="Dismiss" @onclick="DismissUpdateAsync">✕</button>
+                </div>
+            </div>
+        }
+
         @if (_showSettings)
         {
             <div class="settings">
@@ -45,6 +56,7 @@
                         @if (_authAdmin)
                         {
                             <button class="chip" @onclick="OpenUsersAsync">Users…</button>
+                            <button class="chip" @onclick="OpenServerSettingsAsync">Server settings…</button>
                         }
                         <button class="chip chip-off" @onclick="LogoutAsync">Sign out</button>
                     </div>
@@ -403,6 +415,92 @@
         </aside>
     }
 
+    @if (_showServerSettings)
+    {
+        <div class="backdrop panel-backdrop" @onclick="() => _showServerSettings = false"></div>
+        <aside class="campanel auth-panel" role="dialog" aria-label="Server settings">
+            <div class="campanel-head">
+                <span class="campanel-title">🛠 SERVER SETTINGS</span>
+                <span class="tile-spacer"></span>
+                <button class="icon-btn" title="Close" @onclick="() => _showServerSettings = false">✕</button>
+            </div>
+
+            @if (_adminError != null)
+            {
+                <div class="notice error">@_adminError</div>
+            }
+            else if (_adminConfig == null)
+            {
+                <div class="notice">Loading…</div>
+            }
+            else
+            {
+                <div class="notice small">
+                    Editing <code>@_adminConfigPath</code>.
+                    @if (!_adminWritable)
+                    {
+                        <b> Read-only — the file cannot be written (check the mount).</b>
+                    }
+                    Changes are saved to the file and take effect after a restart. Comments in the file are not preserved.
+                </div>
+
+                <div class="campanel-section">
+                    <div class="campanel-section-title">NETWORK</div>
+                    @AdminField("Bind address", "bind", "text")
+                    @AdminField("RTSP port", "bindPort", "number")
+                    @AdminField("Web port", "webPort", "number")
+                    @AdminField("Web bind (blank = same as bind)", "webBind", "text")
+                    @AdminToggle("Serve the web UI", "webUi")
+                </div>
+
+                <div class="campanel-section">
+                    <div class="campanel-section-title">WEB UI</div>
+                    @AdminField("Preview playback speed (×)", "ui.trickleSpeed", "number")
+                    @AdminField("State directory (accounts/settings)", "ui.stateDir", "text")
+                    @AdminToggle("Allow admin-password reset on login", "ui.resetAdminPassword")
+                </div>
+
+                @if (_adminHasRecording)
+                {
+                    <div class="campanel-section">
+                        <div class="campanel-section-title">RECORDING</div>
+                        @AdminField("Storage path", "recording.path", "text")
+                        @AdminField("Event retention (days, 0 = forever)", "recording.retentionDays", "number")
+                        @AdminField("Pre-roll (seconds)", "recording.preSeconds", "number")
+                        @AdminField("Post-roll (seconds)", "recording.postSeconds", "number")
+                        @AdminField("Max clip length (seconds)", "recording.maxClipSeconds", "number")
+                        @AdminField("Record stream (auto|mainStream|subStream)", "recording.stream", "text")
+                        @AdminField("Segment length (minutes)", "recording.segmentMinutes", "number")
+                        @AdminField("Continuous retention (days, blank = event value)", "recording.continuousRetentionDays", "number")
+                    </div>
+                }
+
+                @if (_adminStatus != null)
+                {
+                    <div class="notice">@_adminStatus</div>
+                }
+
+                <div class="event-player-foot">
+                    <button class="chip" disabled="@(!_adminWritable)" @onclick="SaveServerSettingsAsync">Save to config.json</button>
+                    <span class="tile-spacer"></span>
+                    @if (!_confirmRestart)
+                    {
+                        <button class="chip chip-danger" @onclick="() => _confirmRestart = true">Restart service…</button>
+                    }
+                    else
+                    {
+                        <button class="chip chip-danger" @onclick="RestartServiceAsync">Confirm restart</button>
+                        <button class="chip" @onclick="() => _confirmRestart = false">Cancel</button>
+                    }
+                </div>
+                <div class="notice small">
+                    Restart stops the service; your container/systemd restart policy brings it back within seconds
+                    (needed to apply saved changes). The UI reconnects automatically.
+                </div>
+            }
+        </aside>
+    }
+
     @if (_showEventsPanel)
     {
         <div class="backdrop panel-backdrop" @onclick="() => _showEventsPanel = false"></div>
@@ -546,8 +644,16 @@
             @if (_playEvent.HasClip)
             {
                 @* @key forces a fresh <video> when navigating between events *@
-                <video controls autoplay playsinline @key="_playEvent.Id"
+                <video id="event-player-video" controls autoplay playsinline @key="_playEvent.Id"
                        src="@EventArtifactUrl(_playEvent, "clip")"></video>
+                <div class="player-speed">
+                    <span class="tool-label">SPEED</span>
+                    @foreach (var s in PlaybackSpeeds)
+                    {
+                        <button class="chip @(_playSpeed == s ? "chip-active" : "")"
+                                @onclick="() => SetPlaySpeedAsync(s)">@FormatSpeed(s)</button>
+                    }
+                </div>
             }
             else
             {
@@ -607,6 +713,19 @@
     private bool _eventsSupported;
     private bool _continuousSupported;
     private double _trickleSpeed = 4;
+
+    // Update banner + admin server settings
+    private string? _version;
+    private string? _latestVersion;
+    private string _repoUrl = "https://github.com/borexola/neolink.net";
+    private bool _showServerSettings;
+    private JsonElement? _adminConfig;
+    private bool _adminWritable;
+    private string _adminConfigPath = "";
+    private string? _adminError;
+    private string? _adminStatus;
+    private bool _confirmRestart;
+    private readonly Dictionary<string, string> _adminEdits = new();
     private bool _showEventsPanel;
     private string _eventCameraFilter = "";
     private bool _eventsUnreviewedOnly;
@@ -680,6 +799,9 @@
             _selfRef ??= DotNetObjectReference.Create(this);
             await JS.InvokeVoidAsync("neolink.stripResizeInit", "events-bar", _selfRef);
         }
+        // Keep a chosen playback rate across the <video>'s reloads/renders.
+        if (_playEvent is { HasClip: true } && _playSpeed != 1)
+            await JS.InvokeVoidAsync("neolink.setRate", "event-player-video", _playSpeed);
     }
 
     /// <summary>Called from JS when the strip's resize-handle drag ends.</summary>
@@ -746,9 +868,13 @@
             }
             _setupDismissed = await JS.InvokeAsync<string?>("neolink.lsGet", "neolink.setupDismissed") == "1";
             _secWarnDismissed = await JS.InvokeAsync<string?>("neolink.lsGet", "neolink.secWarnDismissed") == "1";
+            _updateDismissedVersion = await JS.InvokeAsync<string?>("neolink.lsGet", "neolink.updateDismissed");
         }
         catch { }
     }
+
+    /// <summary>Which version's update banner the user dismissed (a newer one re-shows it).</summary>
+    private string? _updateDismissedVersion;
 
     private async Task DismissSecWarnAsync()
     {
@@ -1026,6 +1152,182 @@
         await LoadUsersAsync();
     }
 
+    // ------------------------------------------------------------ admin: server settings
+
+    private bool UpdateAvailable =>
+        !string.IsNullOrEmpty(_latestVersion) && _latestVersion != _version
+        && _latestVersion != _updateDismissedVersion;
+
+    private bool _adminHasRecording;
+
+    private async Task DismissUpdateAsync()
+    {
+        _updateDismissedVersion = _latestVersion;
+        // Keyed by version so a newer release surfaces the banner again.
+        await JS.InvokeVoidAsync("neolink.lsSet", "neolink.updateDismissed", _latestVersion ?? "");
+    }
+
+    private async Task OpenServerSettingsAsync()
+    {
+        _showServerSettings = true;
+        _adminError = _adminStatus = null;
+        _adminConfig = null;
+        _confirmRestart = false;
+        _adminEdits.Clear();
+        try
+        {
+            using var res = await Http.SendAsync(ApiRequest(HttpMethod.Get, "/api/admin/config"));
+            if (!res.IsSuccessStatusCode)
+            {
+                _adminError = await ApiErrorAsync(res) ?? $"Cannot load settings ({(int)res.StatusCode})";
+                return;
+            }
+            var cfg = await res.Content.ReadFromJsonAsync<ApiAdminConfig>();
+            if (cfg == null) { _adminError = "Empty settings response"; return; }
+            _adminConfig = cfg.Settings;
+            _adminWritable = cfg.Writable;
+            _adminConfigPath = cfg.Path;
+            _adminHasRecording = cfg.Settings.TryGetProperty("recording", out var r)
+                && r.ValueKind == JsonValueKind.Object;
+        }
+        catch (Exception ex)
+        {
+            _adminError = ex.Message;
+        }
+    }
+
+    /// <summary>Current value of a dotted config path ("ui.trickleSpeed"), edit buffer first.</summary>
+    private string AdminValue(string path)
+    {
+        if (_adminEdits.TryGetValue(path, out var edited)) return edited;
+        if (_adminConfig is not { } cfg) return "";
+        JsonElement cur = cfg;
+        foreach (var part in path.Split('.'))
+        {
+            if (cur.ValueKind != JsonValueKind.Object || !cur.TryGetProperty(part, out var next))
+                return "";
+            cur = next;
+        }
+        return cur.ValueKind switch
+        {
+            JsonValueKind.String => cur.GetString() ?? "",
+            JsonValueKind.Number => cur.GetRawText(),
+            JsonValueKind.True => "true",
+            JsonValueKind.False => "false",
+            _ => "",
+        };
+    }
+
+    private bool AdminBool(string path) =>
+        _adminEdits.TryGetValue(path, out var e) ? e == "true" : AdminValue(path) == "true";
+
+    private RenderFragment AdminField(string label, string path, string type) => builder =>
+    {
+        builder.OpenElement(0, "label");
+        builder.AddAttribute(1, "class", "admin-field");
+        builder.OpenElement(2, "span");
+        builder.AddContent(3, label);
+        builder.CloseElement();
+        builder.OpenElement(4, "input");
+        builder.AddAttribute(5, "type", type);
+        builder.AddAttribute(6, "value", AdminValue(path));
+        builder.AddAttribute(7, "onchange",
+            EventCallback.Factory.Create<ChangeEventArgs>(this, e => _adminEdits[path] = e.Value?.ToString() ?? ""));
+        builder.CloseElement();
+        builder.CloseElement();
+    };
+
+    private RenderFragment AdminToggle(string label, string path) => builder =>
+    {
+        builder.OpenElement(0, "div");
+        builder.AddAttribute(1, "class", "control-row");
+        builder.OpenElement(2, "span");
+        builder.AddContent(3, label);
+        builder.CloseElement();
+        bool on = AdminBool(path);
+        builder.OpenElement(4, "button");
+        builder.AddAttribute(5, "class", $"chip {(on ? "" : "chip-off")}");
+        builder.AddAttribute(6, "onclick",
+            EventCallback.Factory.Create(this, () => _adminEdits[path] = (!on).ToString().ToLowerInvariant()));
+        builder.AddContent(7, on ? "on" : "off");
+        builder.CloseElement();
+        builder.CloseElement();
+    };
+
+    private async Task SaveServerSettingsAsync()
+    {
+        _adminError = _adminStatus = null;
+        var payload = new Dictionary<string, object?>();
+        var ui = new Dictionary<string, object?>();
+        var rec = new Dictionary<string, object?>();
+
+        object? Num(string p) => double.TryParse(AdminValue(p), out var d) ? d : null;
+        int? Int(string p) => int.TryParse(AdminValue(p), out var i) ? i : (int?)null;
+
+        foreach (var (path, _) in _adminEdits)
+        {
+            switch (path)
+            {
+                case "bind": payload["bind"] = AdminValue(path); break;
+                case "bindPort": payload["bindPort"] = Int(path); break;
+                case "webPort": payload["webPort"] = Int(path); break;
+                case "webBind": payload["webBind"] = AdminValue(path); break;
+                case "webUi": payload["webUi"] = AdminBool(path); break;
+                case "ui.trickleSpeed": ui["trickleSpeed"] = Num(path); break;
+                case "ui.stateDir": ui["stateDir"] = AdminValue(path); break;
+                case "ui.resetAdminPassword": ui["resetAdminPassword"] = AdminBool(path); break;
+                case "recording.path": rec["path"] = AdminValue(path); break;
+                case "recording.retentionDays": rec["retentionDays"] = Int(path); break;
+                case "recording.preSeconds": rec["preSeconds"] = Int(path); break;
+                case "recording.postSeconds": rec["postSeconds"] = Int(path); break;
+                case "recording.maxClipSeconds": rec["maxClipSeconds"] = Int(path); break;
+                case "recording.stream": rec["stream"] = AdminValue(path); break;
+                case "recording.segmentMinutes": rec["segmentMinutes"] = Int(path); break;
+                case "recording.continuousRetentionDays": rec["continuousRetentionDays"] = Int(path); break;
+            }
+        }
+        if (ui.Count > 0) payload["ui"] = ui;
+        if (rec.Count > 0) payload["recording"] = rec;
+        if (payload.Count == 0) { _adminStatus = "No changes to save."; return; }
+
+        try
+        {
+            var req = ApiRequest(HttpMethod.Put, "/api/admin/config");
+            req.Content = JsonContent.Create(payload);
+            using var res = await Http.SendAsync(req);
+            if (!res.IsSuccessStatusCode)
+            {
+                _adminError = await ApiErrorAsync(res) ?? $"Save failed ({(int)res.StatusCode})";
+                return;
+            }
+            _adminEdits.Clear();
+            await OpenServerSettingsAsync(); // reload the saved state
+            _adminStatus = "Saved. Restart the service to apply the changes.";
+        }
+        catch (Exception ex)
+        {
+            _adminError = ex.Message;
+        }
+    }
+
+    private async Task RestartServiceAsync()
+    {
+        _confirmRestart = false;
+        _adminStatus = null;
+        try
+        {
+            using var res = await Http.SendAsync(ApiRequest(HttpMethod.Post, "/api/admin/restart"));
+            _adminStatus = res.IsSuccessStatusCode
+                ? "Restarting… the service will be back in a few seconds; this page reconnects on its own."
+                : await ApiErrorAsync(res) ?? "Restart request failed.";
+        }
+        catch (Exception ex)
+        {
+            // Expected: the server may drop the connection as it shuts down.
+            _adminStatus = $"Restart requested ({ex.Message}). The service will be back shortly.";
+        }
+    }
+
     // ------------------------------------------------------------ review-strip filters
 
     /// <summary>The strip after the user's real-time filters (type + camera).</summary>
@@ -1153,6 +1455,12 @@
             var features = fres.IsSuccessStatusCode ? await fres.Content.ReadFromJsonAsync<ApiFeaturesInfo>() : null;
             _continuousSupported = features?.Continuous == true;
             if (features != null && features.TrickleSpeed > 0) _trickleSpeed = features.TrickleSpeed;
+            if (features != null)
+            {
+                _version = features.Version;
+                _latestVersion = features.LatestVersion;
+                if (!string.IsNullOrEmpty(features.RepoUrl)) _repoUrl = features.RepoUrl;
+            }
             if (!_continuousSupported && _panelTab == "recordings") _panelTab = "events";
         }
         catch
@@ -1187,7 +1495,18 @@
         }
     }
 
-    private void OpenEvent(ApiEvent ev) => _playEvent = ev;
+    private static readonly double[] PlaybackSpeeds = { 1, 2, 4, 8 };
+    private double _playSpeed = 1;
+
+    private static string FormatSpeed(double s) => s == 1 ? "1×" : $"{s:0}×";
+
+    private async Task SetPlaySpeedAsync(double s)
+    {
+        _playSpeed = s;
+        await JS.InvokeVoidAsync("neolink.setRate", "event-player-video", s);
+    }
+
+    private void OpenEvent(ApiEvent ev) { _playEvent = ev; _playSpeed = 1; }
 
     /// <summary>Closing the player counts as reviewing: the event leaves the top strip.</summary>
     private async Task ClosePlayerAsync()

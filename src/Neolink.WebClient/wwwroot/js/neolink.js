@@ -310,6 +310,12 @@
             });
         },
 
+        // Set a video element's playback rate (event player speed control).
+        setRate(videoId, rate) {
+            const v = document.getElementById(videoId);
+            if (v) { v.defaultPlaybackRate = rate; v.playbackRate = rate; }
+        },
+
         // Review-strip vertical resizing: drag the handle at the bar's bottom edge.
         // The height is applied live in the DOM (no SignalR churn while dragging)
         // and reported to Blazor once on release for persistence.

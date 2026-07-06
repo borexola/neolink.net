@@ -33,15 +33,7 @@
     {
         <div class="notice">
             Recording is not enabled on this server — add a "recording" section to the config
-            and switch cameras to Continuous (24/7) to use the timeline.
-        </div>
-    }
-    else if (!_continuous)
-    {
-        <div class="notice">
-            Continuous (24/7) recording is temporarily disabled in this build — the timeline
-            scrubs that footage and will return together with it. Detection events still record
-            and play from the 🕘 Events panel on the live view.
+            to use the timeline.
         </div>
     }
     else
@@ -55,7 +47,11 @@
                         title="@(_included.Contains(name) ? "Loaded — click to remove" : "Click to load this camera's footage")"
                         @onclick="() => ToggleCameraAsync(name)">@name</button>
             }
-            <span class="event-sub">— pick the cameras to scrub; nothing loads until selected</span>
+            <span class="event-sub">
+                @(_continuous
+                    ? "— pick the cameras to scrub; colored marks are events"
+                    : "— continuous recording is off, so only detection events (colored marks) play here")
+            </span>
         </div>
 
         @if (!Included.Any())
@@ -138,6 +134,9 @@
     private readonly List<ApiCamera> _cameras = new();
     private HashSet<string> _included = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, List<Seg>> _cov = new(StringComparer.OrdinalIgnoreCase);
+    // Event clips as playable segments — the fallback when there is no continuous
+    // footage under the cursor (or when continuous recording is off entirely).
+    private readonly Dictionary<string, List<Seg>> _eventSegs = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, List<Mark>> _marks = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _noFootage = new(StringComparer.OrdinalIgnoreCase);
 
@@ -257,10 +256,12 @@
     private async Task LoadDayAsync()
     {
         _cov.Clear();
+        _eventSegs.Clear();
         _marks.Clear();
         _playing = false;
 
-        // Feature gates first: the timeline needs recording AND continuous footage.
+        // The timeline needs event recording; continuous footage is optional
+        // (event clips play as a fallback when it is off or has gaps).
         try
         {
             var features = await GetJsonAsync<ApiFeaturesInfo>("/api/features");
@@ -272,9 +273,9 @@
             _supported = false;
             return;
         }
-        if (!_supported || !_continuous) return;
+        if (!_supported) return;
 
-        // The events reply doubles as the day's colored lane marks.
+        // The events reply gives the day's colored lane marks AND playable event clips.
         try
         {
             var events = await GetJsonAsync<List<ApiEvent>>("/api/events?limit=1000");
@@ -288,10 +289,22 @@
                 var start = ev.Start.ToLocalTime();
                 if (start.Date != _date) continue;
                 double s = (start - _date).TotalSeconds;
-                double e = Math.Min(DaySeconds, s + Math.Max(ev.Duration.TotalSeconds, 1));
+                double dur = Math.Max(ev.Duration.TotalSeconds, 1);
+                double e = Math.Min(DaySeconds, s + dur);
                 if (!_marks.TryGetValue(ev.Camera, out var list))
                     _marks[ev.Camera] = list = new List<Mark>();
                 list.Add(new Mark(s, e, LabelColor(ev.Labels), $"{ev.Title} · {start:HH:mm:ss}"));
+
+                // The clip (full main-stream) is what plays; the sub-stream preview
+                // is a lighter fallback. Offset into the file = cursor − event start.
+                if (ev.HasClip || ev.HasPreview)
+                {
+                    var kind = ev.HasClip ? "clip" : "preview";
+                    if (!_eventSegs.TryGetValue(ev.Camera, out var segs))
+                        _eventSegs[ev.Camera] = segs = new List<Seg>();
+                    segs.Add(new Seg(s, dur,
+                        $"{Base}/api/events/{Uri.EscapeDataString(ev.Id)}/{kind}{TokenQuery('?')}"));
+                }
             }
         }
         catch
@@ -300,9 +313,12 @@
             return;
         }
 
-        // Coverage only for the cameras the user selected — this is the expensive part.
-        foreach (var cam in Included)
-            await LoadCoverageAsync(cam.Name);
+        // Continuous coverage only for the cameras the user selected (the expensive part).
+        if (_continuous)
+        {
+            foreach (var cam in Included)
+                await LoadCoverageAsync(cam.Name);
+        }
 
         // Land the cursor somewhere useful: near-now for today, else midday.
         _t = _date == DateTime.Today
@@ -422,14 +438,25 @@
         catch (ObjectDisposedException) { }
     }
 
+    /// <summary>The footage under the cursor for a camera: continuous first, then event clips.</summary>
+    private Seg? SegmentAt(string camera)
+    {
+        if (_cov.TryGetValue(camera, out var cont))
+        {
+            var hit = cont.FirstOrDefault(s => _t >= s.Start && _t < s.Start + s.Span);
+            if (hit != null) return hit;
+        }
+        if (_eventSegs.TryGetValue(camera, out var evs))
+            return evs.FirstOrDefault(s => _t >= s.Start && _t < s.Start + s.Span);
+        return null;
+    }
+
     /// <summary>Points every included camera's player at the footage under the cursor.</summary>
     private async Task SyncVideosAsync()
     {
         foreach (var cam in Included)
         {
-            var seg = _cov.TryGetValue(cam.Name, out var segs)
-                ? segs.FirstOrDefault(s => _t >= s.Start && _t < s.Start + s.Span)
-                : null;
+            var seg = SegmentAt(cam.Name);
             if (seg == null)
             {
                 _noFootage.Add(cam.Name);
@@ -462,7 +489,8 @@
         else
         {
             _included.Add(name);
-            await LoadCoverageAsync(name); // lazy: only now does this camera cost anything
+            if (_continuous)
+                await LoadCoverageAsync(name); // lazy: only now does this camera cost anything
         }
         await JS.InvokeVoidAsync("neolink.lsSet", PrefsKey,
             JsonSerializer.Serialize(new Prefs { Included = _included.ToList() }));

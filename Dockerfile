@@ -32,11 +32,23 @@ FROM mcr.microsoft.com/dotnet/aspnet:10.0
 WORKDIR /app
 COPY --from=build /app .
 
+# Time zone support: the base image ships no zoneinfo database, so the TZ env
+# var would otherwise be ignored and all timestamps (event folders, clip names,
+# the UI clock) would be UTC. Install tzdata so `TZ` is honoured.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tzdata \
+    && rm -rf /var/lib/apt/lists/*
+
 # 8654 = RTSP, 8655 = web UI + HTTP/WebSocket API
 EXPOSE 8654 8655
 VOLUME /config
 
 # Don't advertise the default ASP.NET port; the app binds from its config file.
 ENV ASPNETCORE_URLS=""
+
+# Set the container's time zone here or, preferably, at runtime:
+#   docker run -e TZ=Europe/London ...   (or "environment: [TZ=...]" in compose)
+# Defaults to UTC when unset.
+ENV TZ=UTC
 
 ENTRYPOINT ["dotnet", "neolink.net.dll", "--config", "/config/config.json"]
