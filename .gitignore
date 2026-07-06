@@ -13,3 +13,4 @@ src/Neolink.Server/config.json
 .claude/
 src/Neolink/
 
+/src/Neolink.Server/users.json
