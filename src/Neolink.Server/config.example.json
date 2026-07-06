@@ -14,6 +14,12 @@
   // Serve the browser UI on web_port. Set false for API-only / headless setups.
   "webui": true,
 
+  // Web-UI sign-in recovery: while true, the login screen allows setting a new
+  // admin password WITHOUT the old one. Set it back to false right after use!
+  // (Web-UI accounts live in users.json next to this file; sign-in stays off
+  // until the first account — the admin — is created from the UI itself.)
+  "reset_admin_password": false,
+
   // Optional: recording to disk — motion/AI detection events (clips + thumbnails)
   // and, when switched on per camera in the web UI, continuous 24/7 footage.
   // Remove this section to disable. In Docker, mount a volume at "path".

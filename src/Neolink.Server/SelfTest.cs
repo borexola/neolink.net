@@ -333,6 +333,45 @@ public static class SelfTest
             }
         });
 
+        Test("user store: hashing, tokens, accounts", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var store = new Web.UserStore(dir);
+                Assert(!store.Enabled, "auth off until the first account exists");
+
+                var admin = store.Add("admin", "correct horse", admin: true);
+                Assert(store.Enabled, "auth on once an account exists");
+                Assert(store.Verify("admin", "correct horse") != null, "right password verifies");
+                Assert(store.Verify("admin", "wrong horse") == null, "wrong password fails");
+                Assert(store.Verify("ADMIN", "correct horse") != null, "usernames are case-insensitive");
+                Assert(admin.Hash.StartsWith("pbkdf2-sha256$210000$"), "PBKDF2 format with strong iteration count");
+
+                var token = store.IssueToken(admin);
+                Assert(store.ValidateToken(token)?.Name == "admin", "token round-trips");
+                Assert(store.ValidateToken(token + "x") == null, "tampered token rejected");
+                store.SetPassword("admin", "new password!");
+                Assert(store.ValidateToken(token) == null, "password change invalidates old tokens");
+
+                store.Add("viewer", "viewerpass", admin: false);
+                Assert(!store.Delete("admin"), "the admin cannot be deleted");
+                Assert(store.Delete("viewer"), "normal users can be deleted");
+
+                store.Add("viewer2", "viewerpass", admin: false);
+                store.SetSettings("viewer2", "{\"mode\":\"grid\"}");
+                var reloaded = new Web.UserStore(dir);
+                Assert(reloaded.Enabled, "accounts persist across restart");
+                Assert(reloaded.Verify("admin", "new password!") != null, "password persists");
+                Assert(reloaded.GetSettings("viewer2").Contains("grid"), "per-user settings persist");
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+        });
+
         Test("clip writer produces a playable fmp4 structure", () =>
         {
             var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");

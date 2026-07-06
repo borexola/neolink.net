@@ -567,16 +567,50 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
 /* ------------------------------------------------------------ events (NVR) */
 
 /* Frigate-style review strip across the top of the stage.
-   Tall cards: preview on top (with ambient trickle playback), label below. */
+   Tall cards: preview on top (with ambient trickle playback), label below.
+   The height comes from an inline style (user-resizable via the bottom handle);
+   cards scale to fill it, and the stage below takes whatever remains. */
 .events-bar {
+    position: relative;
     display: flex;
-    align-items: center;
+    align-items: stretch;
     gap: 8px;
-    padding: 8px 10px;
+    padding: 8px 10px 12px;
     background: var(--panel);
     border-bottom: 1px solid var(--line);
-    min-height: 160px;
+    min-height: 96px;
+    max-height: 60vh;
+    flex: 0 0 auto;
 }
+
+.events-bar-count,
+.strip-filter-btn,
+.events-clear { align-self: center; }
+
+.strip-resize {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: -2px;
+    height: 10px;
+    cursor: ns-resize;
+    touch-action: none;
+    z-index: 5;
+}
+
+.strip-resize::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 3px;
+    width: 48px;
+    height: 4px;
+    margin-left: -24px;
+    border-radius: 2px;
+    background: var(--line);
+}
+
+.strip-resize:hover::after { background: var(--accent); }
 
 .events-bar-count {
     font-size: 12px;
@@ -587,8 +621,10 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
 
 .events-bar-scroll {
     display: flex;
+    align-items: stretch;
     gap: 8px;
     overflow-x: auto;
+    overflow-y: hidden;
     scrollbar-width: thin;
     flex: 1;
     padding: 2px 0;
@@ -604,7 +640,10 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
     overflow: hidden;
     cursor: pointer;
     flex: 0 0 auto;
-    width: 196px;
+    /* Width follows the (resizable) bar height so previews scale with it */
+    height: 100%;
+    aspect-ratio: 5 / 4;
+    min-width: 150px;
 }
 
 .event-card:hover { border-color: var(--accent); }
@@ -613,7 +652,8 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
 .event-thumb {
     position: relative;
     width: 100%;
-    height: 106px;
+    flex: 1;
+    min-height: 0;
     overflow: hidden;
     background: #000;
     display: flex;
@@ -964,6 +1004,113 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
     display: flex;
     align-items: center;
     gap: 8px;
+}
+
+/* Sidebar security warning (server runs without sign-in) */
+.sec-banner {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 8px 10px 4px;
+    padding: 8px 10px;
+    border: 1px solid #ffb020;
+    border-radius: 8px;
+    background: color-mix(in srgb, #ffb020 12%, transparent);
+}
+
+.sec-banner-text {
+    font-size: 12px;
+    color: #ffcf70;
+    line-height: 1.35;
+}
+
+.sec-banner-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.sec-banner-actions .icon-btn { margin-left: auto; }
+
+/* Strip filter row (under the events bar) */
+.strip-filter {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+}
+
+.strip-filter-btn.active { color: var(--accent); }
+
+/* ------------------------------------------------------------ authentication */
+
+.auth-overlay {
+    position: fixed;
+    inset: 0;
+    background: var(--bg);
+    z-index: 300;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.auth-box {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: min(340px, 90vw);
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 24px;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+}
+
+.auth-box .brand { margin-bottom: 8px; }
+
+.auth-box label {
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+}
+
+.auth-box input {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 14px;
+    outline: none;
+}
+
+.auth-box input:focus { border-color: var(--accent); }
+.auth-btn { justify-content: center; padding: 8px; font-size: 14px; margin-top: 6px; }
+
+.auth-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 10px;
+    flex-wrap: wrap;
+}
+
+.auth-panel { width: min(460px, 94vw); }
+
+.user-row { flex-wrap: wrap; }
+
+.user-pass-input {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 12px;
+    max-width: 160px;
 }
 
 /* ------------------------------------------------------------ stream chips */

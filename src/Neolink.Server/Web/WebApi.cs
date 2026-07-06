@@ -32,6 +32,10 @@ public sealed record WebCameraInfo(string Name, List<WebStreamInfo> Streams, ICa
 ///   GET /api/events/{id}/clip /thumb        — event artifacts; POST .../review to (un)dismiss
 ///   GET/POST /api/cameras/{name}/recording  — per-camera recording switches + event-type filter
 ///   GET /api/recordings/{camera}[/{date}[/{file}]] — browse/play continuous footage
+///   /api/auth/* (status/setup/login/reset-admin), /api/users (admin CRUD),
+///   GET/PUT /api/me/settings — web-UI accounts; once any account exists, every
+///   other /api route requires a Bearer session token (or ?token= where headers
+///   can't go: media elements and the stream WebSocket)
 ///   /                                       — web UI (when enabled in the config)
 /// Mutating endpoints require HTTP Basic auth when users are configured (same
 /// credentials and per-camera permissions as RTSP).
@@ -45,10 +49,13 @@ public static class WebApi
         uint? Framerate, uint? Bitrate);
     private sealed record ReviewRequest(bool? Reviewed);
     private sealed record RecordingSettingsRequest(bool? Events, bool? Continuous, List<string>? EventTypes);
+    private sealed record CredentialsRequest(string? Username, string? Password);
+    private sealed record PasswordRequest(string? Password);
 
     public static async Task RunAsync(string bindAddr, int port, bool webUi,
         IReadOnlyList<WebCameraInfo> cameras, IReadOnlyDictionary<string, string> users,
-        int rtspPort, EventStore? events, RecordingSettings? recordingSettings, CancellationToken ct)
+        int rtspPort, EventStore? events, RecordingSettings? recordingSettings,
+        UserStore userStore, bool resetAdminPassword, CancellationToken ct)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -82,6 +89,183 @@ public static class WebApi
 
         app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(20) });
 
+        // ------------------------------------------------------------ web-UI accounts
+
+        // The session token travels as a Bearer header, or as ?token= for the
+        // places headers can't go (video/img elements, the stream WebSocket).
+        UserRecord? SessionUser(HttpContext ctx)
+        {
+            string? token = null;
+            var header = ctx.Request.Headers.Authorization.ToString();
+            if (header.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+                token = header["Bearer ".Length..].Trim();
+            token ??= ctx.Request.Query["token"];
+            return string.IsNullOrEmpty(token) ? null : userStore.ValidateToken(token);
+        }
+
+        // Once any account exists, every /api call (except the auth handshake
+        // itself) requires a valid session. The Blazor UI shell stays public so
+        // the login screen can render.
+        app.Use(async (ctx, next) =>
+        {
+            if (userStore.Enabled
+                && ctx.Request.Path.StartsWithSegments("/api")
+                && !ctx.Request.Path.StartsWithSegments("/api/auth"))
+            {
+                var user = SessionUser(ctx);
+                if (user == null)
+                {
+                    ctx.Response.StatusCode = 401;
+                    await ctx.Response.WriteAsJsonAsync(new { error = "authentication required" });
+                    return;
+                }
+                ctx.Items["authUser"] = user;
+            }
+            await next();
+        });
+
+        bool IsAdmin(HttpContext ctx) => ctx.Items["authUser"] is UserRecord { Admin: true };
+        string? SessionName(HttpContext ctx) => (ctx.Items["authUser"] as UserRecord)?.Name;
+
+        app.MapGet("/api/auth/status", (HttpContext ctx) =>
+        {
+            var user = userStore.Enabled ? SessionUser(ctx) : null;
+            return Results.Json(new
+            {
+                enabled = userStore.Enabled,
+                setupRequired = !userStore.Enabled,
+                resetAvailable = resetAdminPassword && userStore.Enabled,
+                user = user?.Name,
+                admin = user?.Admin ?? false,
+            });
+        });
+
+        // First account = the admin; creating it is what turns authentication on.
+        app.MapPost("/api/auth/setup", (CredentialsRequest req) =>
+        {
+            if (userStore.Enabled)
+                return Results.Json(new { error = "already set up" }, statusCode: 409);
+            if (string.IsNullOrWhiteSpace(req.Username) || string.IsNullOrEmpty(req.Password))
+                return Results.Json(new { error = "provide username and password" }, statusCode: 400);
+            try
+            {
+                var admin = userStore.Add(req.Username.Trim(), req.Password, admin: true);
+                Log.Warn($"Web UI authentication ENABLED: admin account '{admin.Name}' created");
+                return Results.Json(new { token = userStore.IssueToken(admin), user = admin.Name, admin = true });
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: 400);
+            }
+        });
+
+        app.MapPost("/api/auth/login", async (CredentialsRequest req) =>
+        {
+            var user = req.Username == null || req.Password == null
+                ? null
+                : userStore.Verify(req.Username.Trim(), req.Password);
+            if (user == null)
+            {
+                await Task.Delay(Random.Shared.Next(250, 500)); // blunt brute-force pacing
+                return Results.Json(new { error = "wrong username or password" }, statusCode: 401);
+            }
+            return Results.Json(new { token = userStore.IssueToken(user), user = user.Name, admin = user.Admin });
+        });
+
+        // Recovery: only while reset_admin_password=true in the config.
+        app.MapPost("/api/auth/reset-admin", (PasswordRequest req) =>
+        {
+            if (!resetAdminPassword || !userStore.Enabled)
+                return Results.Json(new { error = "reset not enabled" }, statusCode: 404);
+            var admin = userStore.AdminUser();
+            if (admin == null || string.IsNullOrEmpty(req.Password))
+                return Results.Json(new { error = "provide password" }, statusCode: 400);
+            try
+            {
+                userStore.SetPassword(admin.Name, req.Password);
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: 400);
+            }
+            Log.Warn($"Admin password for '{admin.Name}' was RESET via reset_admin_password — " +
+                     "set the flag back to false now");
+            return Results.Json(new { ok = true, user = admin.Name });
+        });
+
+        // Account management (admin only). Normal users are added by the admin.
+        app.MapGet("/api/users", (HttpContext ctx) =>
+            !IsAdmin(ctx)
+                ? Results.Json(new { error = "admin only" }, statusCode: 403)
+                : Results.Json(userStore.List().Select(u => new { name = u.Name, admin = u.Admin })));
+
+        app.MapPost("/api/users", (CredentialsRequest req, HttpContext ctx) =>
+        {
+            if (!IsAdmin(ctx))
+                return Results.Json(new { error = "admin only" }, statusCode: 403);
+            if (string.IsNullOrWhiteSpace(req.Username) || string.IsNullOrEmpty(req.Password))
+                return Results.Json(new { error = "provide username and password" }, statusCode: 400);
+            try
+            {
+                userStore.Add(req.Username.Trim(), req.Password, admin: false);
+                return Results.Json(new { ok = true });
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: 400);
+            }
+        });
+
+        app.MapPut("/api/users/{name}", (string name, PasswordRequest req, HttpContext ctx) =>
+        {
+            if (!IsAdmin(ctx))
+                return Results.Json(new { error = "admin only" }, statusCode: 403);
+            if (string.IsNullOrEmpty(req.Password))
+                return Results.Json(new { error = "provide password" }, statusCode: 400);
+            try
+            {
+                return userStore.SetPassword(name, req.Password)
+                    ? Results.Json(new { ok = true })
+                    : Results.Json(new { error = "unknown user" }, statusCode: 404);
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: 400);
+            }
+        });
+
+        app.MapDelete("/api/users/{name}", (string name, HttpContext ctx) =>
+        {
+            if (!IsAdmin(ctx))
+                return Results.Json(new { error = "admin only" }, statusCode: 403);
+            return userStore.Delete(name)
+                ? Results.Json(new { ok = true })
+                : Results.Json(new { error = "unknown user (the admin cannot be deleted)" }, statusCode: 400);
+        });
+
+        // Per-user UI settings: an opaque JSON blob the client owns.
+        app.MapGet("/api/me/settings", (HttpContext ctx) =>
+            SessionName(ctx) is { } me
+                ? Results.Content(userStore.GetSettings(me), "application/json")
+                : Results.Json(new { error = "authentication disabled" }, statusCode: 404));
+
+        app.MapPut("/api/me/settings", async (HttpContext ctx) =>
+        {
+            if (SessionName(ctx) is not { } me)
+                return Results.Json(new { error = "authentication disabled" }, statusCode: 404);
+            using var reader = new StreamReader(ctx.Request.Body);
+            var json = await reader.ReadToEndAsync();
+            try
+            {
+                userStore.SetSettings(me, json);
+                return Results.Json(new { ok = true });
+            }
+            catch (Exception ex) when (ex is ArgumentException or JsonException)
+            {
+                return Results.Json(new { error = "invalid settings payload" }, statusCode: 400);
+            }
+        });
+
         // Feature discovery, so clients can hide UI for what this server won't do.
         app.MapGet("/api/features", () => Results.Json(new
         {
@@ -113,8 +297,14 @@ public static class WebApi
 
         // Denies a mutating request unless it carries valid Basic credentials of a
         // permitted user. Mirrors the RTSP rules: no configured users = open access.
+        // When web-UI accounts exist, the session (already checked by the auth
+        // middleware) supersedes the RTSP Basic mapping entirely.
         IResult? CheckAuth(HttpContext ctx, WebCameraInfo cam)
         {
+            if (userStore.Enabled)
+                return ctx.Items.ContainsKey("authUser")
+                    ? null
+                    : Results.Json(new { error = "authentication required" }, statusCode: 401);
             if (cam.PermittedUsers == null || users.Count == 0)
                 return null;
             var creds = NetUtil.DecodeBasicAuth(ctx.Request.Headers.Authorization);
@@ -346,9 +536,14 @@ public static class WebApi
                 if (rec == null)
                     return Results.Json(new { error = "unknown event" }, statusCode: 404);
                 // Same rules as camera control: reviewing an event needs control rights
-                // on its camera. Events of removed cameras fall back to any valid user.
+                // on its camera. Web-UI sessions (validated by the middleware) always
+                // qualify; events of removed cameras fall back to any valid RTSP user.
                 var cam = cameras.FirstOrDefault(c => string.Equals(c.Name, rec.Camera, StringComparison.OrdinalIgnoreCase));
-                if (cam != null)
+                if (userStore.Enabled)
+                {
+                    // authenticated by the middleware — allowed
+                }
+                else if (cam != null)
                 {
                     if (CheckAuth(ctx, cam) is { } denied) return denied;
                 }
