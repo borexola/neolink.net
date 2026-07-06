@@ -114,7 +114,23 @@
             </div>
         }
 
-        <div class="sidebar-foot">Neolink.NET web client</div>
+        <div class="sidebar-foot">
+            @if (_authUser != null)
+            {
+                <div class="sidebar-user">
+                    <span class="sidebar-user-id" title="Signed in as @_authUser">
+                        <span class="sidebar-user-icon">@(_authAdmin ? "🛡" : "👤")</span>
+                        <span class="sidebar-user-name">@_authUser</span>
+                        <span class="sidebar-user-role">@(_authAdmin ? "admin" : "user")</span>
+                    </span>
+                    <button class="chip chip-off sidebar-signout" title="Sign out" @onclick="LogoutAsync">Sign out</button>
+                </div>
+            }
+            else
+            {
+                <span>Neolink.NET web client</span>
+            }
+        </div>
     </aside>
 
     <main class="stage">
@@ -1902,12 +1918,20 @@
         return $"{baseUrl}/api/stream?path={Uri.EscapeDataString(slot.Path)}{TokenQuery('&')}";
     }
 
+    /// <summary>
+    /// Sign-in is required but not satisfied. While locked, NO stream is attached —
+    /// belt-and-braces with the server, which already rejects the stream WebSocket
+    /// (and every /api call) without a valid session token.
+    /// </summary>
+    private bool Locked => _authEnabled && _authUser == null;
+
     private async Task ReconcilePlayersAsync()
     {
         int upper = Math.Max(_slots.Count, _attached.Count == 0 ? 0 : _attached.Keys.Max() + 1);
         for (int i = 0; i < upper; i++)
         {
-            string? desired = i < _slots.Count ? WsUrl(_slots[i]) : null;
+            // Locked: force every tile to detach — a signed-out user sees no video.
+            string? desired = (!Locked && i < _slots.Count) ? WsUrl(_slots[i]) : null;
             _attached.TryGetValue(i, out var current);
             if (desired == current) continue;
 
