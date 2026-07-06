@@ -158,31 +158,101 @@ public sealed class EventStore
         }
     }
 
-    /// <summary>Deletes day directories older than the retention window.</summary>
-    public void Cleanup(int retentionDays)
-    {
-        if (retentionDays <= 0) return;
-        var cutoff = DateTime.Now.Date.AddDays(-retentionDays);
-        int removed = 0;
+    // ------------------------------------------------------------------ continuous recordings
 
+    /// <summary>Path for a new continuous-recording segment starting now (creates the day dir).</summary>
+    public string NewSegmentPath(string camera, DateTime local)
+    {
+        var dir = Path.Combine(_root, SafeName(camera), "continuous", $"{local:yyyy-MM-dd}");
+        Directory.CreateDirectory(dir);
+        return Path.Combine(dir, $"{local:HH-mm-ss}.mp4");
+    }
+
+    /// <summary>Days with continuous footage for a camera, newest first ("yyyy-MM-dd").</summary>
+    public List<string> ListContinuousDays(string camera)
+    {
+        var dir = Path.Combine(_root, SafeName(camera), "continuous");
+        if (!Directory.Exists(dir)) return new List<string>();
+        return Directory.EnumerateDirectories(dir)
+            .Select(d => Path.GetFileName(d)!)
+            .Where(IsDayName)
+            .OrderByDescending(d => d)
+            .ToList();
+    }
+
+    /// <summary>Segment files of one day, oldest first: (file name, size in bytes).</summary>
+    public List<(string File, long Size)> ListSegments(string camera, string date)
+    {
+        if (!IsDayName(date)) return new List<(string, long)>();
+        var dir = Path.Combine(_root, SafeName(camera), "continuous", date);
+        if (!Directory.Exists(dir)) return new List<(string, long)>();
+        return Directory.EnumerateFiles(dir, "*.mp4")
+            .Select(f => new FileInfo(f))
+            .Where(f => IsSegmentName(f.Name))
+            .OrderBy(f => f.Name)
+            .Select(f => (f.Name, f.Length))
+            .ToList();
+    }
+
+    /// <summary>Absolute path of one segment; strict name validation (no traversal).</summary>
+    public string? SegmentPath(string camera, string date, string file)
+    {
+        if (!IsDayName(date) || !IsSegmentName(file)) return null;
+        var path = Path.Combine(_root, SafeName(camera), "continuous", date, file);
+        return File.Exists(path) ? path : null;
+    }
+
+    private static bool IsDayName(string s) =>
+        s.Length == 10 && DateTime.TryParseExact(s, "yyyy-MM-dd",
+            null, System.Globalization.DateTimeStyles.None, out _);
+
+    private static bool IsSegmentName(string s) =>
+        s.Length == 12 && s.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase)
+        && s[..8].Replace("-", "").All(char.IsAsciiDigit) && s[2] == '-' && s[5] == '-';
+
+    // ------------------------------------------------------------------ retention
+
+    /// <summary>Deletes event and continuous day directories older than their retention windows.</summary>
+    public void Cleanup(int retentionDays, int continuousRetentionDays)
+    {
+        int events = 0, segments = 0;
         foreach (var cameraDir in Directory.EnumerateDirectories(_root))
         {
-            foreach (var dayDir in Directory.EnumerateDirectories(cameraDir))
+            if (retentionDays > 0)
+                events += CleanupDayDirs(cameraDir, DateTime.Now.Date.AddDays(-retentionDays), dropIndex: true);
+
+            var contDir = Path.Combine(cameraDir, "continuous");
+            if (continuousRetentionDays > 0 && Directory.Exists(contDir))
+                segments += CleanupDayDirs(contDir, DateTime.Now.Date.AddDays(-continuousRetentionDays), dropIndex: false);
+        }
+        if (events > 0)
+            Log.Info($"Events: retention removed {events} expired day folder(s) (older than {retentionDays}d)");
+        if (segments > 0)
+            Log.Info($"Recordings: retention removed {segments} expired day folder(s) (older than {continuousRetentionDays}d)");
+    }
+
+    private int CleanupDayDirs(string parent, DateTime cutoff, bool dropIndex)
+    {
+        int removed = 0;
+        foreach (var dayDir in Directory.EnumerateDirectories(parent))
+        {
+            // Non-date entries (e.g. the "continuous" folder itself) are skipped here.
+            if (!DateTime.TryParseExact(Path.GetFileName(dayDir), "yyyy-MM-dd",
+                    null, System.Globalization.DateTimeStyles.None, out var day)
+                || day >= cutoff)
+                continue;
+            try
             {
-                if (!DateTime.TryParseExact(Path.GetFileName(dayDir), "yyyy-MM-dd",
-                        null, System.Globalization.DateTimeStyles.None, out var day)
-                    || day >= cutoff)
-                    continue;
-                try
-                {
-                    Directory.Delete(dayDir, recursive: true);
-                    removed++;
-                }
-                catch (IOException ex)
-                {
-                    Log.Warn($"Events: cannot delete expired {dayDir}: {ex.Message}");
-                    continue;
-                }
+                Directory.Delete(dayDir, recursive: true);
+                removed++;
+            }
+            catch (IOException ex)
+            {
+                Log.Warn($"Retention: cannot delete expired {dayDir}: {ex.Message}");
+                continue;
+            }
+            if (dropIndex)
+            {
                 lock (_gate)
                 {
                     foreach (var id in _byId.Where(kv => kv.Value.Dir.StartsWith(dayDir, StringComparison.OrdinalIgnoreCase))
@@ -191,16 +261,15 @@ public sealed class EventStore
                 }
             }
         }
-        if (removed > 0)
-            Log.Info($"Events: retention removed {removed} expired day folder(s) (older than {retentionDays}d)");
+        return removed;
     }
 
     /// <summary>Runs retention cleanup once at start and then hourly.</summary>
-    public async Task RunRetentionAsync(int retentionDays, CancellationToken ct)
+    public async Task RunRetentionAsync(int retentionDays, int continuousRetentionDays, CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
         {
-            try { Cleanup(retentionDays); }
+            try { Cleanup(retentionDays, continuousRetentionDays); }
             catch (Exception ex) { Log.Warn($"Events: retention pass failed: {Log.Flatten(ex)}"); }
             try { await Task.Delay(TimeSpan.FromHours(1), ct).ConfigureAwait(false); }
             catch (OperationCanceledException) { return; }

@@ -705,6 +705,13 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
     flex: 1;
 }
 
+/* Continuous-footage browser + per-camera recording switches */
+.rec-day { cursor: pointer; user-select: none; }
+.rec-day:hover { color: var(--accent); }
+
+.rec-types-row { align-items: flex-start; }
+.rec-types-row .stream-options { justify-content: flex-end; }
+
 /* Playback modal */
 .player-backdrop {
     display: block;

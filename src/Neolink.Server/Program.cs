@@ -93,17 +93,21 @@ var server = new RtspServer(users);
 var tasks = new List<Task>();
 var webCameras = new List<WebCameraInfo>();
 
-// Event recording (motion/AI detections + clips), when a storage path is configured.
+// Recording (detection events + continuous), when a storage path is configured.
 EventStore? eventStore = null;
+RecordingSettings? recordingSettings = null;
 if (config.Recording is { } recCfg)
 {
     try
     {
         eventStore = new EventStore(recCfg.Path);
         eventStore.Load();
-        Log.Info($"Recording events to {eventStore.Root} " +
-                 $"(retention: {(recCfg.RetentionDays > 0 ? $"{recCfg.RetentionDays} days" : "forever")})");
-        tasks.Add(Task.Run(() => eventStore.RunRetentionAsync(recCfg.RetentionDays, shutdown.Token)));
+        recordingSettings = new RecordingSettings(eventStore.Root);
+        Log.Info($"Recording to {eventStore.Root} " +
+                 $"(events: {(recCfg.RetentionDays > 0 ? $"{recCfg.RetentionDays} days" : "forever")}, " +
+                 $"continuous: {(recCfg.EffectiveContinuousRetentionDays > 0 ? $"{recCfg.EffectiveContinuousRetentionDays} days" : "forever")})");
+        tasks.Add(Task.Run(() => eventStore.RunRetentionAsync(
+            recCfg.RetentionDays, recCfg.EffectiveContinuousRetentionDays, shutdown.Token)));
     }
     catch (Exception ex)
     {
@@ -150,9 +154,12 @@ foreach (var cam in config.Cameras)
         ?? throw new InvalidOperationException($"camera '{cam.Name}' has no streams"), httpApi);
     webCameras.Add(new WebCameraInfo(cam.Name, webStreams, control, permitted));
 
-    // Event recording: alarm pushes ride the primary connection; clips are cut from
-    // the configured stream's hub (auto = main when served, else the first stream).
-    if (eventStore != null && cam.Record)
+    // Recording: alarm pushes ride the primary connection; event clips and
+    // continuous segments are cut from the configured stream's hub (auto = main
+    // when served, else the first stream). The per-camera on/off switches live in
+    // RecordingSettings and are flipped from the web UI at runtime; the config's
+    // "record" flag only seeds the initial events default.
+    if (eventStore != null && recordingSettings != null)
     {
         var recordStream = config.Recording!.Stream == "auto"
             ? webStreams.FirstOrDefault(s => s.Kind == "mainStream") ?? webStreams[0]
@@ -160,13 +167,19 @@ foreach (var cam in config.Cameras)
         if (recordStream == null)
         {
             Log.Warn($"{cam.Name}: recording.stream '{config.Recording.Stream}' is not served " +
-                     $"by this camera (stream = \"{cam.Stream}\"); events disabled for it");
+                     $"by this camera (stream = \"{cam.Stream}\"); recording disabled for it");
         }
         else
         {
-            var recorder = new EventRecorder(cam.Name, recordStream.Hub, control, eventStore, config.Recording);
+            recordingSettings.Seed(cam.Name, eventsDefault: cam.Record);
+            var recorder = new EventRecorder(cam.Name, recordStream.Hub, control, eventStore,
+                config.Recording, recordingSettings);
             primaryService.MotionSink = recorder.OnMotion;
             tasks.Add(Task.Run(() => recorder.RunAsync(shutdown.Token)));
+
+            var continuous = new ContinuousRecorder(cam.Name, recordStream.Hub, eventStore,
+                recordingSettings, config.Recording);
+            tasks.Add(Task.Run(() => continuous.RunAsync(shutdown.Token)));
         }
     }
 }
@@ -179,7 +192,7 @@ if (config.WebPort > 0)
         try
         {
             await WebApi.RunAsync(config.WebBind ?? config.BindAddr, config.WebPort, config.WebUi,
-                webCameras, users, config.BindPort, eventStore, shutdown.Token);
+                webCameras, users, config.BindPort, eventStore, recordingSettings, shutdown.Token);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)

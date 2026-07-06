@@ -27,24 +27,28 @@ public sealed class EventRecorder
     private readonly ICameraControl _control;
     private readonly EventStore _store;
     private readonly RecordingConfig _cfg;
+    private readonly RecordingSettings _settings;
 
     private readonly Channel<MotionPush> _pushes = Channel.CreateUnbounded<MotionPush>(
         new UnboundedChannelOptions { SingleReader = true });
 
     // Pre-roll buffer and clip writer are handed between the pump and the event
     // loop under one gate; both touch them briefly (local file I/O only).
+    // Each buffered packet carries its drop flag so a clip started later still
+    // knows where the stream was discontinuous.
     private readonly object _mediaGate = new();
-    private readonly List<HubVideo> _preroll = new();
+    private readonly List<(HubVideo Video, bool Gap)> _preroll = new();
     private ClipWriter? _writer;
 
     public EventRecorder(string camera, IStreamHub hub, ICameraControl control,
-        EventStore store, RecordingConfig cfg)
+        EventStore store, RecordingConfig cfg, RecordingSettings settings)
     {
         _camera = camera;
         _hub = hub;
         _control = control;
         _store = store;
         _cfg = cfg;
+        _settings = settings;
     }
 
     public string Camera => _camera;
@@ -78,8 +82,16 @@ public sealed class EventRecorder
         var (id, reader) = _hub.Subscribe();
         try
         {
+            // The hub index is global across video AND audio packets, so it must be
+            // tracked for every packet — a video-only view sees non-consecutive
+            // indices whenever audio is interleaved, and treating those as drops
+            // would discard all P-frames (0-second clips).
+            long lastIndex = -1;
             await foreach (var packet in reader.ReadAllAsync(ct).ConfigureAwait(false))
             {
+                bool gap = lastIndex >= 0 && packet.Index != lastIndex + 1;
+                lastIndex = packet.Index;
+
                 if (packet is not HubVideo v) continue;
                 lock (_mediaGate)
                 {
@@ -87,7 +99,7 @@ public sealed class EventRecorder
                     {
                         try
                         {
-                            _writer.Add(v);
+                            _writer.Add(v, gap);
                         }
                         catch (Exception ex)
                         {
@@ -98,7 +110,7 @@ public sealed class EventRecorder
                     }
                     else
                     {
-                        _preroll.Add(v);
+                        _preroll.Add((v, gap));
                         TrimPreroll();
                     }
                 }
@@ -119,12 +131,12 @@ public sealed class EventRecorder
     private void TrimPreroll()
     {
         uint want = (uint)_cfg.PreSeconds * FMp4.Timescale;
-        uint last = _preroll[^1].RtpTs;
+        uint last = _preroll[^1].Video.RtpTs;
         int cut = -1;
         for (int i = _preroll.Count - 1; i >= 0; i--)
         {
-            if (!_preroll[i].Keyframe) continue;
-            if (unchecked(last - _preroll[i].RtpTs) >= want)
+            if (!_preroll[i].Video.Keyframe) continue;
+            if (unchecked(last - _preroll[i].Video.RtpTs) >= want)
             {
                 cut = i;
                 break;
@@ -154,9 +166,16 @@ public sealed class EventRecorder
             }
             if (!push.Active) continue; // stray all-clear with no open event
 
+            // Runtime switches (web UI): events off, or every label of this push
+            // filtered out by the camera's event-type selection → discard silently.
+            var settings = _settings.Get(_camera);
+            if (!settings.Events) continue;
+            var labels = LabelsOf(push).Where(settings.AllowsLabel).ToList();
+            if (labels.Count == 0) continue;
+
             try
             {
-                await RunEventAsync(push, ct).ConfigureAwait(false);
+                await RunEventAsync(labels, ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -165,10 +184,10 @@ public sealed class EventRecorder
         }
     }
 
-    private async Task RunEventAsync(MotionPush first, CancellationToken ct)
+    private async Task RunEventAsync(List<string> initialLabels, CancellationToken ct)
     {
         var rec = _store.Create(_camera,
-            DateTime.UtcNow - TimeSpan.FromSeconds(_cfg.PreSeconds), LabelsOf(first));
+            DateTime.UtcNow - TimeSpan.FromSeconds(_cfg.PreSeconds), initialLabels);
         Log.Info($"{_camera}: ⚡ event started ({string.Join("+", rec.Labels)})");
 
         StartClip(rec);
@@ -199,8 +218,12 @@ public sealed class EventRecorder
 
             if (push.Active)
             {
+                // Filtered-out detection types don't extend the event either —
+                // as far as recording is concerned, they never happened.
+                var allowed = LabelsOf(push).Where(_settings.Get(_camera).AllowsLabel).ToList();
+                if (allowed.Count == 0) continue;
                 active = true;
-                var fresh = LabelsOf(push).Where(l => !rec.Labels.Contains(l)).ToList();
+                var fresh = allowed.Where(l => !rec.Labels.Contains(l)).ToList();
                 if (fresh.Count > 0)
                 {
                     rec.Labels.AddRange(fresh);
@@ -241,8 +264,8 @@ public sealed class EventRecorder
                     Log.Warn($"{_camera}: stream not ready; event stored without a clip");
                     return;
                 }
-                foreach (var v in _preroll)
-                    _writer.Add(v);
+                foreach (var (v, gap) in _preroll)
+                    _writer.Add(v, gap);
                 _preroll.Clear();
             }
             catch (Exception ex)

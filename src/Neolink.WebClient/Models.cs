@@ -42,6 +42,24 @@ public sealed record ApiEncodeProfile(string Type, uint Width, uint Height,
 /// <summary>GET /api/cameras/{name}/streaminfo — the encode profiles of each stream.</summary>
 public sealed record ApiStreamProfiles(List<ApiEncodeProfile> Profiles);
 
+/// <summary>GET/POST /api/cameras/{name}/recording — runtime recording switches.</summary>
+public sealed record ApiRecordingSettings(bool Events, bool Continuous,
+    List<string>? EventTypes, List<string>? KnownTypes)
+{
+    /// <summary>null EventTypes = every detection type is recorded.</summary>
+    public bool TypeEnabled(string label) => EventTypes == null || EventTypes.Contains(label);
+}
+
+/// <summary>GET /api/recordings/{camera}/{date} — one continuous-recording segment.</summary>
+public sealed record ApiSegment(string File, long Size)
+{
+    /// <summary>"HH-mm-ss.mp4" → "HH:mm:ss".</summary>
+    public string TimeLabel => File.Length >= 8 ? File[..8].Replace('-', ':') : File;
+    public string SizeLabel => Size >= 1024 * 1024
+        ? $"{Size / (1024.0 * 1024):0} MB"
+        : $"{Size / 1024.0:0} KB";
+}
+
 // ------------------------------------------------------------ recorded events
 
 /// <summary>GET /api/events — one recorded detection event.</summary>

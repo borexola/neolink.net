@@ -161,6 +161,8 @@ public sealed class NeolinkConfig
                 case "postseconds": rec.PostSeconds = prop.Value.GetInt32(); break;
                 case "maxclipseconds": rec.MaxClipSeconds = prop.Value.GetInt32(); break;
                 case "stream": rec.Stream = prop.Value.GetString() ?? "auto"; break;
+                case "segmentminutes": rec.SegmentMinutes = prop.Value.GetInt32(); break;
+                case "continuousretentiondays": rec.ContinuousRetentionDays = prop.Value.GetInt32(); break;
                 default:
                     Log.Warn($"Config: ignoring unknown recording option '{prop.Name}'");
                     break;
@@ -202,6 +204,8 @@ public sealed class NeolinkConfig
                 PostSeconds = (int)(MiniToml.GetInt(rec, "post_seconds") ?? 8),
                 MaxClipSeconds = (int)(MiniToml.GetInt(rec, "max_clip_seconds") ?? 120),
                 Stream = MiniToml.GetString(rec, "stream") ?? "auto",
+                SegmentMinutes = (int)(MiniToml.GetInt(rec, "segment_minutes") ?? 10),
+                ContinuousRetentionDays = (int?)MiniToml.GetInt(rec, "continuous_retention_days"),
             };
         }
 
@@ -316,6 +320,10 @@ public sealed class NeolinkConfig
                 throw new FormatException("recording.max_clip_seconds must be 10..3600");
             if (Recording.Stream is not ("auto" or "mainStream" or "subStream" or "externStream"))
                 throw new FormatException("recording.stream must be auto, mainStream, subStream or externStream");
+            if (Recording.SegmentMinutes is < 1 or > 120)
+                throw new FormatException("recording.segment_minutes must be 1..120");
+            if (Recording.ContinuousRetentionDays is < 0)
+                throw new FormatException("recording.continuous_retention_days must be >= 0 (0 = keep forever)");
         }
     }
 
@@ -364,6 +372,12 @@ public sealed class RecordingConfig
     public int MaxClipSeconds { get; set; } = 120;
     /// <summary>Stream to record: "auto" (main if served, else first), or an explicit stream name.</summary>
     public string Stream { get; set; } = "auto";
+    /// <summary>Length of one continuous-recording segment file, in minutes.</summary>
+    public int SegmentMinutes { get; set; } = 10;
+    /// <summary>Days to keep continuous footage; null = same as RetentionDays.</summary>
+    public int? ContinuousRetentionDays { get; set; }
+
+    public int EffectiveContinuousRetentionDays => ContinuousRetentionDays ?? RetentionDays;
 }
 
 public sealed class CameraConfig
