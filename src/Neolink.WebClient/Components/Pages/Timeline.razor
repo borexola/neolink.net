@@ -1,0 +1,400 @@
+@page "/timeline"
+@using System.Text.Json
+@inject HttpClient Http
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+@* NVR-style timeline: pick a day, scrub the lanes, and every included camera
+   shows its continuous footage at that instant. Coverage is drawn per camera;
+   detection events overlay the lanes color-coded by type. *@
+
+<PageTitle>Neolink — Timeline</PageTitle>
+
+<div class="tl-page">
+    <div class="toolbar tl-toolbar">
+        <a class="tool-btn" href="" title="Back to live view">‹ Live</a>
+        <span class="tool-label">TIMELINE</span>
+        <button class="tool-btn" title="Previous day" @onclick="() => ChangeDayAsync(-1)">◀</button>
+        <span class="tl-date">@_date.ToString("ddd, d MMMM yyyy")</span>
+        <button class="tool-btn" title="Next day" disabled="@(_date >= DateTime.Today)"
+                @onclick="() => ChangeDayAsync(1)">▶</button>
+        <span class="tool-sep"></span>
+        <button class="tool-btn @(_playing ? "active" : "")" @onclick="TogglePlayAsync">
+            @(_playing ? "❚❚" : "▶") <span class="tool-name">@(_playing ? "Pause" : "Play")</span>
+        </button>
+        <span class="tl-clock">@TimeText(_t)</span>
+    </div>
+
+    @if (_error != null)
+    {
+        <div class="notice error">@_error</div>
+    }
+    else if (!_supported)
+    {
+        <div class="notice">
+            Recording is not enabled on this server — add a "recording" section to the config
+            and switch cameras to Continuous (24/7) to use the timeline.
+        </div>
+    }
+    else
+    {
+        <div class="tl-cams">
+            <span class="tool-label">CAMERAS</span>
+            @foreach (var cam in _cameras)
+            {
+                var name = cam.Name;
+                <button class="chip @(_excluded.Contains(name) ? "chip-off" : "")"
+                        title="@(_excluded.Contains(name) ? "Excluded — click to include" : "Included — click to exclude")"
+                        @onclick="() => ToggleCameraAsync(name)">@name</button>
+            }
+            <span class="event-sub">— scrub the lanes below; colored marks are events</span>
+        </div>
+
+        <div class="tl-board">
+            <div class="tl-names">
+                <div class="tl-name"></div>
+                @foreach (var cam in Included)
+                {
+                    <div class="tl-name" title="@cam.Name">@cam.Name</div>
+                }
+            </div>
+            <div class="tl-lanes" id="tl-scrub">
+                <div class="tl-ruler">
+                    @for (int h = 0; h <= 24; h += 3)
+                    {
+                        <span class="tl-tick" style="left:@Pct(h * 3600.0)">@($"{h:00}")</span>
+                    }
+                </div>
+                @foreach (var cam in Included)
+                {
+                    <div class="tl-lane">
+                        @if (_cov.TryGetValue(cam.Name, out var segs))
+                        {
+                            @foreach (var s in segs)
+                            {
+                                <div class="tl-cov" style="left:@Pct(s.Start); width:@Pct(s.Span)"></div>
+                            }
+                        }
+                        @if (_marks.TryGetValue(cam.Name, out var marks))
+                        {
+                            @foreach (var m in marks)
+                            {
+                                <div class="tl-ev" title="@m.Title"
+                                     style="left:@Pct(m.Start); width:@Pct(Math.Max(m.End - m.Start, 40)); background:@m.Color"></div>
+                            }
+                        }
+                    </div>
+                }
+                <div class="tl-cursor" style="left:@Pct(_t)">
+                    <span class="tl-cursor-time">@TimeText(_t)</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="tl-grid">
+            @foreach (var cam in Included)
+            {
+                <div class="tl-tile" @key="cam.Name">
+                    <video id="@VideoId(cam.Name)" muted playsinline preload="auto"></video>
+                    @if (_noFootage.Contains(cam.Name))
+                    {
+                        <div class="tl-nofootage">no footage at @TimeText(_t)</div>
+                    }
+                    <div class="tl-tile-name">@cam.Name</div>
+                </div>
+            }
+            @if (!Included.Any())
+            {
+                <div class="notice">All cameras are excluded — include one above.</div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private const double DaySeconds = 24 * 3600;
+
+    private string _server = "";
+    private DateTime _date = DateTime.Today;
+    private double _t;
+    private bool _playing;
+    private bool _supported = true;
+    private string? _error;
+
+    private readonly List<ApiCamera> _cameras = new();
+    private HashSet<string> _excluded = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, List<Seg>> _cov = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, List<Mark>> _marks = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _noFootage = new(StringComparer.OrdinalIgnoreCase);
+
+    private DotNetObjectReference<Timeline>? _selfRef;
+    private PeriodicTimer? _clock;
+    private DateTime _lastTick;
+
+    /// <summary>One recording segment: seconds-of-day start, span and playback URL.</summary>
+    private sealed record Seg(double Start, double Span, string Url);
+    /// <summary>One event as a colored lane mark (seconds of day).</summary>
+    private sealed record Mark(double Start, double End, string Color, string Title);
+
+    private const string PrefsKey = "neolink.timeline";
+    private sealed class Prefs { public List<string> Excluded { get; set; } = new(); }
+
+    private IEnumerable<ApiCamera> Included => _cameras.Where(c => !_excluded.Contains(c.Name));
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+
+        // Server + credentials are shared with the live view's persisted settings.
+        try
+        {
+            var json = await JS.InvokeAsync<string?>("neolink.lsGet", "neolink.view");
+            if (json != null)
+                _server = JsonSerializer.Deserialize<PersistedView>(json)?.Server ?? "";
+        }
+        catch { }
+        if (string.IsNullOrWhiteSpace(_server))
+            _server = await JS.InvokeAsync<string>("neolink.defaultServer");
+
+        try
+        {
+            var json = await JS.InvokeAsync<string?>("neolink.lsGet", PrefsKey);
+            if (json != null && JsonSerializer.Deserialize<Prefs>(json) is { } p)
+                _excluded = new HashSet<string>(p.Excluded, StringComparer.OrdinalIgnoreCase);
+        }
+        catch { }
+
+        await LoadCamerasAsync();
+        await LoadDayAsync();
+
+        _selfRef = DotNetObjectReference.Create(this);
+        await JS.InvokeVoidAsync("neolink.tlScrubInit", "tl-scrub", _selfRef);
+        _ = ClockLoopAsync();
+        StateHasChanged();
+    }
+
+    // ------------------------------------------------------------ data
+
+    private string Base => _server.TrimEnd('/');
+
+    private async Task LoadCamerasAsync()
+    {
+        try
+        {
+            var cams = await Http.GetFromJsonAsync<List<ApiCamera>>($"{Base}/api/cameras");
+            _cameras.Clear();
+            if (cams != null) _cameras.AddRange(cams);
+            _error = null;
+        }
+        catch (Exception ex)
+        {
+            _error = $"Cannot reach {_server}: {ex.Message}";
+        }
+    }
+
+    private async Task LoadDayAsync()
+    {
+        _cov.Clear();
+        _marks.Clear();
+        _playing = false;
+        var date = _date.ToString("yyyy-MM-dd");
+
+        // Coverage: the continuous segments of each camera for this day.
+        _supported = true;
+        foreach (var cam in _cameras)
+        {
+            try
+            {
+                var segs = await Http.GetFromJsonAsync<List<ApiSegment>>(
+                    $"{Base}/api/recordings/{Uri.EscapeDataString(cam.Name)}/{date}");
+                _cov[cam.Name] = BuildSegs(segs ?? new List<ApiSegment>(), cam.Name, date);
+            }
+            catch
+            {
+                _supported = false; // endpoint missing = recording disabled server-side
+                return;
+            }
+        }
+
+        // Events of the day, as colored lane marks.
+        try
+        {
+            var events = await Http.GetFromJsonAsync<List<ApiEvent>>($"{Base}/api/events?limit=1000");
+            foreach (var ev in events ?? new List<ApiEvent>())
+            {
+                var start = ev.Start.ToLocalTime();
+                if (start.Date != _date) continue;
+                double s = (start - _date).TotalSeconds;
+                double e = Math.Min(DaySeconds, s + Math.Max(ev.Duration.TotalSeconds, 1));
+                if (!_marks.TryGetValue(ev.Camera, out var list))
+                    _marks[ev.Camera] = list = new List<Mark>();
+                list.Add(new Mark(s, e, LabelColor(ev.Labels), $"{ev.Title} · {start:HH:mm:ss}"));
+            }
+        }
+        catch { /* events are decoration here; coverage already loaded */ }
+
+        // Land the cursor somewhere useful: near-now for today, else midday.
+        _t = _date == DateTime.Today
+            ? Math.Max(0, (DateTime.Now - _date).TotalSeconds - 30)
+            : DaySeconds / 2;
+        await SyncVideosAsync();
+    }
+
+    /// <summary>
+    /// Segment spans: a segment reaches to the next one when they are contiguous;
+    /// otherwise (a recording gap) the typical segment length is assumed.
+    /// </summary>
+    private List<Seg> BuildSegs(List<ApiSegment> files, string camera, string date)
+    {
+        var parsed = files
+            .Select(f => (f.File, Start: ParseStart(f.File)))
+            .Where(x => x.Start >= 0)
+            .OrderBy(x => x.Start)
+            .ToList();
+
+        var diffs = parsed.Zip(parsed.Skip(1), (a, b) => b.Start - a.Start)
+            .Where(d => d > 1).OrderBy(d => d).ToList();
+        double typical = diffs.Count > 0 ? Math.Clamp(diffs[diffs.Count / 2], 30, 1800) : 600;
+
+        var segs = new List<Seg>();
+        for (int i = 0; i < parsed.Count; i++)
+        {
+            double start = parsed[i].Start;
+            double span = typical;
+            if (i + 1 < parsed.Count)
+            {
+                double gap = parsed[i + 1].Start - start;
+                if (gap <= typical * 1.5) span = gap;
+            }
+            segs.Add(new Seg(start, span,
+                $"{Base}/api/recordings/{Uri.EscapeDataString(camera)}/{date}/{parsed[i].File}"));
+        }
+        return segs;
+    }
+
+    private static double ParseStart(string file) =>
+        file.Length >= 8
+        && int.TryParse(file.AsSpan(0, 2), out var h)
+        && int.TryParse(file.AsSpan(3, 2), out var m)
+        && int.TryParse(file.AsSpan(6, 2), out var s)
+            ? h * 3600 + m * 60 + s
+            : -1;
+
+    private static string LabelColor(List<string> labels) =>
+        labels.Contains("person") ? "#4f8cff"
+        : labels.Contains("vehicle") ? "#ffb020"
+        : labels.Contains("animal") ? "#3fd07f"
+        : labels.Contains("package") ? "#b06bff"
+        : "#8a93a5"; // motion / other
+
+    // ------------------------------------------------------------ playback
+
+    [JSInvokable]
+    public async Task OnTimelineScrub(double fraction, bool final)
+    {
+        await InvokeAsync(async () =>
+        {
+            _t = Math.Clamp(fraction, 0, 1) * DaySeconds;
+            await SyncVideosAsync();
+            StateHasChanged();
+        });
+    }
+
+    private async Task TogglePlayAsync()
+    {
+        _playing = !_playing;
+        _lastTick = DateTime.UtcNow;
+        await SyncVideosAsync();
+    }
+
+    private async Task ClockLoopAsync()
+    {
+        _clock = new PeriodicTimer(TimeSpan.FromMilliseconds(500));
+        _lastTick = DateTime.UtcNow;
+        try
+        {
+            while (await _clock.WaitForNextTickAsync())
+            {
+                var now = DateTime.UtcNow;
+                var elapsed = (now - _lastTick).TotalSeconds;
+                _lastTick = now;
+                if (!_playing) continue;
+                _t += elapsed;
+                if (_t >= DaySeconds - 1)
+                {
+                    _t = DaySeconds - 1;
+                    _playing = false;
+                }
+                await InvokeAsync(async () =>
+                {
+                    await SyncVideosAsync();
+                    StateHasChanged();
+                });
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (ObjectDisposedException) { }
+    }
+
+    /// <summary>Points every included camera's player at the footage under the cursor.</summary>
+    private async Task SyncVideosAsync()
+    {
+        foreach (var cam in Included)
+        {
+            var seg = _cov.TryGetValue(cam.Name, out var segs)
+                ? segs.FirstOrDefault(s => _t >= s.Start && _t < s.Start + s.Span)
+                : null;
+            if (seg == null)
+            {
+                _noFootage.Add(cam.Name);
+                await JS.InvokeVoidAsync("neolink.tlSync", VideoId(cam.Name), null!, 0d, false);
+            }
+            else
+            {
+                _noFootage.Remove(cam.Name);
+                await JS.InvokeVoidAsync("neolink.tlSync", VideoId(cam.Name), seg.Url, _t - seg.Start, _playing);
+            }
+        }
+    }
+
+    // ------------------------------------------------------------ actions
+
+    private async Task ChangeDayAsync(int days)
+    {
+        var next = _date.AddDays(days);
+        if (next > DateTime.Today) return;
+        _date = next;
+        await LoadDayAsync();
+    }
+
+    private async Task ToggleCameraAsync(string name)
+    {
+        if (!_excluded.Remove(name))
+            _excluded.Add(name);
+        await JS.InvokeVoidAsync("neolink.lsSet", PrefsKey,
+            JsonSerializer.Serialize(new Prefs { Excluded = _excluded.ToList() }));
+        // A camera coming back needs its coverage if the day was loaded before it existed.
+        if (!_excluded.Contains(name) && !_cov.ContainsKey(name))
+            await LoadDayAsync();
+        else
+            await SyncVideosAsync();
+    }
+
+    // ------------------------------------------------------------ helpers
+
+    private static string VideoId(string camera) => "tlv-" + Uri.EscapeDataString(camera);
+
+    private static string Pct(double seconds) =>
+        $"{seconds / DaySeconds * 100:0.###}%";
+
+    private static string TimeText(double t) =>
+        TimeSpan.FromSeconds(Math.Clamp(t, 0, DaySeconds - 1)).ToString(@"hh\:mm\:ss");
+
+    public async ValueTask DisposeAsync()
+    {
+        _clock?.Dispose();
+        try { await JS.InvokeVoidAsync("neolink.tlScrubDispose", "tl-scrub"); }
+        catch { /* circuit already gone */ }
+        _selfRef?.Dispose();
+    }
+}
