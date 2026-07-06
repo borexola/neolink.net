@@ -143,7 +143,10 @@
                 <span class="tool-sep"></span>
                 <button class="tool-btn @(_showEventsPanel ? "active" : "")" title="Event history"
                         @onclick="() => _showEventsPanel = !_showEventsPanel">🕘 <span class="tool-name">Events</span></button>
-                <a class="tool-btn" href="timeline" title="Scrub recorded footage across all cameras">📼 <span class="tool-name">Timeline</span></a>
+                @if (_continuousSupported)
+                {
+                    <a class="tool-btn" href="timeline" title="Scrub recorded footage across all cameras">📼 <span class="tool-name">Timeline</span></a>
+                }
             }
         </div>
 
@@ -214,8 +217,11 @@
             <div class="campanel-head">
                 <button class="chip @(_panelTab == "events" ? "" : "chip-off")"
                         @onclick='() => _panelTab = "events"'>🕘 Events</button>
-                <button class="chip @(_panelTab == "recordings" ? "" : "chip-off")"
-                        @onclick="OpenRecordingsTabAsync">🎞 Recordings</button>
+                @if (_continuousSupported)
+                {
+                    <button class="chip @(_panelTab == "recordings" ? "" : "chip-off")"
+                            @onclick="OpenRecordingsTabAsync">🎞 Recordings</button>
+                }
                 <span class="tile-spacer"></span>
                 @if (_panelTab == "events")
                 {
@@ -406,6 +412,7 @@
     // Recorded events (populated when the server has recording enabled)
     private readonly List<ApiEvent> _events = new();
     private bool _eventsSupported;
+    private bool _continuousSupported;
     private bool _showEventsPanel;
     private string _eventCameraFilter = "";
     private bool _eventsUnreviewedOnly;
@@ -562,6 +569,16 @@
     private async Task RefreshEventsAsync()
     {
         if (string.IsNullOrWhiteSpace(_server)) return;
+        try
+        {
+            var features = await Http.GetFromJsonAsync<ApiFeaturesInfo>($"{_server.TrimEnd('/')}/api/features");
+            _continuousSupported = features?.Continuous == true;
+            if (!_continuousSupported && _panelTab == "recordings") _panelTab = "events";
+        }
+        catch
+        {
+            _continuousSupported = false;
+        }
         try
         {
             using var res = await Http.GetAsync($"{_server.TrimEnd('/')}/api/events?limit=300");

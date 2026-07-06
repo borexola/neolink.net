@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Neolink.Config;
 using Neolink.Media;
 using Neolink.Protocol;
 using Neolink.Recording;
@@ -80,6 +81,13 @@ public static class WebApi
         });
 
         app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(20) });
+
+        // Feature discovery, so clients can hide UI for what this server won't do.
+        app.MapGet("/api/features", () => Results.Json(new
+        {
+            events = events != null,
+            continuous = events != null && RecordingConfig.ContinuousEnabled,
+        }));
 
         app.MapGet("/api/cameras", () =>
         {
@@ -365,7 +373,8 @@ public static class WebApi
             object ShapeSettings(CameraRecordingSettings s) => new
             {
                 events = s.Events,
-                continuous = s.Continuous,
+                continuous = RecordingConfig.ContinuousEnabled && s.Continuous,
+                continuousAvailable = RecordingConfig.ContinuousEnabled,
                 eventTypes = s.EventTypes,
                 knownTypes = CameraRecordingSettings.KnownLabels,
             };
@@ -392,11 +401,16 @@ public static class WebApi
                     types = req.EventTypes.Select(t => t.Trim().ToLowerInvariant())
                         .Where(t => t.Length > 0).Distinct().ToList();
                 }
-                var updated = recordingSettings.Update(cam.Name, req.Events, req.Continuous,
+                // The continuous switch is inert while the feature is disabled.
+                var continuous = RecordingConfig.ContinuousEnabled ? req.Continuous : null;
+                var updated = recordingSettings.Update(cam.Name, req.Events, continuous,
                     types, setEventTypes: req.EventTypes != null);
                 return Results.Json(ShapeSettings(updated));
             });
+        }
 
+        if (events != null && RecordingConfig.ContinuousEnabled)
+        {
             app.MapGet("/api/recordings/{camera}", (string camera) =>
             {
                 var cam = cameras.FirstOrDefault(c => string.Equals(c.Name, camera, StringComparison.OrdinalIgnoreCase));
