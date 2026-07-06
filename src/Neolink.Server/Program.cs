@@ -1,6 +1,7 @@
 using Neolink;
 using Neolink.Config;
 using Neolink.Protocol;
+using Neolink.Recording;
 using Neolink.Rtsp;
 using Neolink.Streaming;
 using Neolink.Web;
@@ -92,6 +93,25 @@ var server = new RtspServer(users);
 var tasks = new List<Task>();
 var webCameras = new List<WebCameraInfo>();
 
+// Event recording (motion/AI detections + clips), when a storage path is configured.
+EventStore? eventStore = null;
+if (config.Recording is { } recCfg)
+{
+    try
+    {
+        eventStore = new EventStore(recCfg.Path);
+        eventStore.Load();
+        Log.Info($"Recording events to {eventStore.Root} " +
+                 $"(retention: {(recCfg.RetentionDays > 0 ? $"{recCfg.RetentionDays} days" : "forever")})");
+        tasks.Add(Task.Run(() => eventStore.RunRetentionAsync(recCfg.RetentionDays, shutdown.Token)));
+    }
+    catch (Exception ex)
+    {
+        Log.Error($"Recording disabled: cannot use storage path '{recCfg.Path}': {ex.Message}");
+        eventStore = null;
+    }
+}
+
 foreach (var cam in config.Cameras)
 {
     var permitted = config.PermittedUsersFor(cam);
@@ -129,6 +149,26 @@ foreach (var cam in config.Cameras)
     ICameraControl control = new CameraControl(primaryService
         ?? throw new InvalidOperationException($"camera '{cam.Name}' has no streams"), httpApi);
     webCameras.Add(new WebCameraInfo(cam.Name, webStreams, control, permitted));
+
+    // Event recording: alarm pushes ride the primary connection; clips are cut from
+    // the configured stream's hub (auto = main when served, else the first stream).
+    if (eventStore != null && cam.Record)
+    {
+        var recordStream = config.Recording!.Stream == "auto"
+            ? webStreams.FirstOrDefault(s => s.Kind == "mainStream") ?? webStreams[0]
+            : webStreams.FirstOrDefault(s => s.Kind == config.Recording.Stream);
+        if (recordStream == null)
+        {
+            Log.Warn($"{cam.Name}: recording.stream '{config.Recording.Stream}' is not served " +
+                     $"by this camera (stream = \"{cam.Stream}\"); events disabled for it");
+        }
+        else
+        {
+            var recorder = new EventRecorder(cam.Name, recordStream.Hub, control, eventStore, config.Recording);
+            primaryService.MotionSink = recorder.OnMotion;
+            tasks.Add(Task.Run(() => recorder.RunAsync(shutdown.Token)));
+        }
+    }
 }
 
 // Web API (camera list + fMP4 live streams for browsers); guarded like the cameras.
@@ -139,7 +179,7 @@ if (config.WebPort > 0)
         try
         {
             await WebApi.RunAsync(config.WebBind ?? config.BindAddr, config.WebPort, config.WebUi,
-                webCameras, users, config.BindPort, shutdown.Token);
+                webCameras, users, config.BindPort, eventStore, shutdown.Token);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)

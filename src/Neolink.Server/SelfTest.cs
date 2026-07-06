@@ -240,6 +240,114 @@ public static class SelfTest
             Assert((packets[^1][1] & 0x80) != 0, "marker on last packet");
         });
 
+        Test("event label mapping", () =>
+        {
+            var labels = Recording.EventRecorder.LabelsOf(new MotionPush("MD",
+                new[] { "people", "dog_cat", "people" }));
+            AssertEq(string.Join(",", labels.OrderBy(x => x)), "animal,person");
+            AssertEq(string.Join(",", Recording.EventRecorder.LabelsOf(new MotionPush("MD", Array.Empty<string>()))),
+                "motion");
+            Assert(new MotionPush("MD", Array.Empty<string>()).Active, "MD is active");
+            Assert(!new MotionPush("none", Array.Empty<string>()).Active, "none is all-clear");
+            Assert(new MotionPush("none", new[] { "people" }).Active, "AI type implies activity");
+        });
+
+        Test("event store roundtrip + retention", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            try
+            {
+                var store = new Recording.EventStore(dir);
+                var rec = store.Create("cam1", DateTime.UtcNow, new[] { "person" });
+                rec.EndUtc = rec.StartUtc.AddSeconds(30);
+                rec.Ongoing = false;
+                store.Save(rec);
+
+                // A fresh store must find it again by scanning the files.
+                var store2 = new Recording.EventStore(dir);
+                store2.Load();
+                var listed = store2.List();
+                AssertEq(listed.Count, 1);
+                AssertEq(listed[0].Id, rec.Id);
+                Assert(!listed[0].Reviewed, "starts unreviewed");
+                Assert(store2.SetReviewed(rec.Id, true), "review known id");
+                Assert(store2.List(reviewed: false).Count == 0, "reviewed filter");
+
+                // An event folder older than the retention window gets deleted.
+                var oldDir = Path.Combine(dir, "cam1", "2000-01-01", "120000-dead");
+                Directory.CreateDirectory(oldDir);
+                File.WriteAllText(Path.Combine(oldDir, "event.json"), "{}");
+                store2.Cleanup(retentionDays: 7);
+                Assert(!Directory.Exists(oldDir), "expired day folder removed");
+                Assert(store2.List().Count == 1, "recent event survives retention");
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+        });
+
+        Test("clip writer produces a playable fmp4 structure", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                // Feed a synthetic H.264 stream through a hub so the writer can
+                // pick up codec parameters, then write a few frames.
+                var hub = new Streaming.StreamHub("selftest");
+                byte[] Nal(byte type, int len)
+                {
+                    // Non-zero body: NAL splitting trims trailing zeros and must not
+                    // find stray start codes. 0x80 in byte 1 = first_mb_in_slice bit.
+                    var nal = new byte[len];
+                    Array.Fill(nal, (byte)0xAA);
+                    nal[0] = type;
+                    nal[1] = 0x80;
+                    return nal;
+                }
+                byte[] Au(params byte[][] nals)
+                {
+                    var ms = new MemoryStream();
+                    foreach (var n in nals)
+                    {
+                        ms.Write(new byte[] { 0, 0, 0, 1 });
+                        ms.Write(n);
+                    }
+                    return ms.ToArray();
+                }
+                var sps = new byte[] { 0x67, 0x42, 0xE0, 0x1F, 0xA0 };
+                var pps = new byte[] { 0x68, 0xCE, 0x38, 0x80 };
+                hub.PublishVideo(new VideoFrame(VideoCodec.H264, Keyframe: true, Microseconds: 0, UnixTime: null,
+                    Au(sps, pps, Nal(0x65, 40))));
+
+                var path = Path.Combine(dir, "clip.mp4");
+                using (var writer = Recording.ClipWriter.TryCreate(path, hub))
+                {
+                    Assert(writer != null, "writer created once params are known");
+                    long index = 0;
+                    uint ts = 1000;
+                    writer!.Add(new Streaming.HubVideo(index++, Au(Nal(0x65, 40)), true, ts));
+                    for (int i = 0; i < 5; i++)
+                        writer.Add(new Streaming.HubVideo(index++, Au(Nal(0x41, 25)), false, ts += 3000));
+                    Assert(writer.DurationSeconds > 0, "duration advances");
+                }
+
+                var bytes = File.ReadAllBytes(path);
+                Assert(bytes.Length > 200, "file has content");
+                AssertEq(Encoding.ASCII.GetString(bytes, 4, 4), "ftyp");
+                Assert(bytes.Length >= 16, "has boxes");
+                // moov must follow, and at least one moof/mdat pair must exist
+                var text = Encoding.ASCII.GetString(bytes);
+                Assert(text.Contains("moov"), "init segment present");
+                Assert(text.Contains("moof") && text.Contains("mdat"), "fragments present");
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+        });
+
         if (rustRepoPath != null)
         {
             var bcSamples = Path.Combine(rustRepoPath, "crates", "core", "src", "bc", "samples");

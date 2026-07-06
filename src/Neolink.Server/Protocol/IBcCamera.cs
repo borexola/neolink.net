@@ -27,6 +27,16 @@ public interface IBcCamera : IAsyncDisposable
     Task PingAsync(CancellationToken ct);
 
     /// <summary>
+    /// Opts in to motion/AI alarm pushes (msg 31) and invokes <paramref name="onEvent"/>
+    /// for every push (msg 33) until cancelled or the connection drops. The camera sends
+    /// these on its own; there is no polling.
+    /// </summary>
+    Task WatchMotionAsync(Action<MotionPush> onEvent, CancellationToken ct);
+
+    /// <summary>Requests a JPEG snapshot from the camera (msg 109), or null if unsupported.</summary>
+    Task<byte[]?> SnapAsync(CancellationToken ct);
+
+    /// <summary>
     /// Sends one control message and awaits the camera's reply on the same message ID.
     /// Throws <see cref="CameraCommandException"/> when the camera answers with a
     /// non-200 response code. With <paramref name="tolerateNoReply"/> a missing reply
@@ -36,6 +46,17 @@ public interface IBcCamera : IAsyncDisposable
     /// </summary>
     Task<BcMessage?> SendCommandAsync(uint msgId, BcXmlBody? xml = null, ExtensionXml? extension = null,
         TimeSpan? replyTimeout = null, bool tolerateNoReply = false, CancellationToken ct = default);
+}
+
+/// <summary>
+/// One alarm push from the camera. Status is the raw detection state ("MD" while
+/// motion is seen, "none" when it stops); AiTypes carries the camera's own AI
+/// classification when it has one ("people", "vehicle", "dog_cat").
+/// </summary>
+public sealed record MotionPush(string Status, IReadOnlyList<string> AiTypes)
+{
+    /// <summary>True when this push signals active detection (as opposed to all-clear).</summary>
+    public bool Active => !string.Equals(Status, "none", StringComparison.OrdinalIgnoreCase) || AiTypes.Count > 0;
 }
 
 /// <summary>The camera answered a control command with a non-200 response code.</summary>

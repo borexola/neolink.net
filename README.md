@@ -234,6 +234,30 @@ the original Rust neolink are also accepted.
 | `webui` | `true` | Serve the browser UI on `web_port`; `false` = API only |
 | `web_bind` | = `bind` | Separate bind address for the web port |
 | `users` | *(none)* | RTSP Basic-auth users: `{ "name", "pass" }`. Omit for open access |
+| `recording` | *(none)* | Event recording (see below). Omit to disable |
+
+### Event recording (`"recording": { ... }`)
+
+Captures the camera's own motion/AI detections (person, vehicle, animal — pushed
+over the Baichuan connection, no polling and no server-side ML) as labeled events
+with video clips and thumbnails. New events appear in a review strip at the top of
+the web UI; click to play, ✕ to dismiss. The 🕘 Events button opens the full
+history grouped by day.
+
+| Option | Default | Description |
+|---|---|---|
+| `path` | *required* | Storage directory. In Docker, mount a volume here (e.g. `./recordings:/recordings`) |
+| `retention_days` | `7` | Events older than this are deleted (`0` = keep forever) |
+| `pre_seconds` | `5` | Video included from before the detection (pre-roll) |
+| `post_seconds` | `8` | Quiet time after the last detection before the event closes |
+| `max_clip_seconds` | `120` | Hard cap per event; continued activity starts a new event |
+| `stream` | `auto` | Stream to record: `auto` (main if served), `mainStream`, `subStream` |
+
+Clips are fragmented MP4 (H.264/H.265 passthrough, video-only) playable in the
+browser and by ffmpeg/VLC. Storage layout is plain files —
+`recordings/<camera>/<date>/<time>-<id>/{event.json, clip.mp4, thumb.jpg}` — so
+backups and external tooling are trivial. Set `"record": false` on a camera to
+exclude it.
 
 ### Per camera
 
@@ -246,6 +270,7 @@ the original Rust neolink are also accepted.
 | `stream` | `both` | `mainStream`, `subStream`, `externStream`, `both`, or `all` |
 | `channel_id` | `0` | Channel when connecting through a Reolink NVR (0-based) |
 | `permitted_users` | all users | Restrict this camera's mounts to specific `users` |
+| `record` | `true` | Include this camera in event recording (when `recording` is configured) |
 
 ## Using with Frigate
 

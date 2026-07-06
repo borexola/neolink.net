@@ -76,6 +76,44 @@
     </aside>
 
     <main class="stage">
+        @* Frigate-style review strip: unreviewed detection events, newest first.
+           Disappears entirely once everything is dismissed (or recording is off). *@
+        @if (_eventsSupported && _events.Any(e => !e.Reviewed))
+        {
+            <div class="events-bar">
+                <span class="events-bar-count" title="Unreviewed events">⚡ @_events.Count(e => !e.Reviewed)</span>
+                <div class="events-bar-scroll">
+                    @foreach (var ev in _events.Where(e => !e.Reviewed).Take(30))
+                    {
+                        <div class="event-card @(ev.Ongoing ? "live" : "")" @key="ev.Id"
+                             title="@ev.Title — click to play" @onclick="() => OpenEvent(ev)">
+                            <div class="event-thumb">
+                                @if (ev.HasThumb)
+                                {
+                                    <img src="@EventArtifactUrl(ev, "thumb")" loading="lazy" alt="" />
+                                }
+                                else
+                                {
+                                    <span class="event-thumb-icon">@ev.Icon</span>
+                                }
+                                @if (ev.Ongoing)
+                                {
+                                    <span class="event-live">● REC</span>
+                                }
+                            </div>
+                            <div class="event-meta">
+                                <span class="event-title">@ev.Icon @ev.Title</span>
+                                <span class="event-sub">@ev.Camera · @Ago(ev.Start)</span>
+                            </div>
+                            <button class="icon-btn event-dismiss" title="Dismiss (mark reviewed)"
+                                    @onclick="() => DismissAsync(ev)" @onclick:stopPropagation="true">✕</button>
+                        </div>
+                    }
+                </div>
+                <button class="chip events-clear" title="Dismiss all events" @onclick="DismissAllAsync">Clear all</button>
+            </div>
+        }
+
         <div class="toolbar">
             <button class="tool-btn menu-btn" title="Cameras" @onclick="() => _sidebarOpen = !_sidebarOpen">☰</button>
             <span class="tool-label">VIEW</span>
@@ -98,6 +136,13 @@
             {
                 <span class="tool-sep"></span>
                 <button class="tool-btn back" @onclick="RestoreFromBackup">⤡ Restore view</button>
+            }
+
+            @if (_eventsSupported)
+            {
+                <span class="tool-sep"></span>
+                <button class="tool-btn @(_showEventsPanel ? "active" : "")" title="Event history"
+                        @onclick="() => _showEventsPanel = !_showEventsPanel">🕘 <span class="tool-name">Events</span></button>
             }
         </div>
 
@@ -161,6 +206,97 @@
                      OnClose="() => _panelCamera = null" />
     }
 
+    @if (_showEventsPanel)
+    {
+        <div class="backdrop panel-backdrop" @onclick="() => _showEventsPanel = false"></div>
+        <aside class="campanel events-panel" role="dialog" aria-label="Event history">
+            <div class="campanel-head">
+                <span class="campanel-title">🕘 EVENTS</span>
+                <select class="event-filter" @bind="_eventCameraFilter" title="Filter by camera">
+                    <option value="">all cameras</option>
+                    @foreach (var c in _cameras)
+                    {
+                        <option value="@c.Name">@c.Name</option>
+                    }
+                </select>
+                <button class="chip @(_eventsUnreviewedOnly ? "" : "chip-off")" title="Only show unreviewed events"
+                        @onclick="() => _eventsUnreviewedOnly = !_eventsUnreviewedOnly">unreviewed</button>
+                <button class="icon-btn" title="Close" @onclick="() => _showEventsPanel = false">✕</button>
+            </div>
+
+            @if (!FilteredEvents.Any())
+            {
+                <div class="notice">
+                    @(_eventsUnreviewedOnly ? "Nothing awaiting review — all clear." : "No recorded events yet.")
+                </div>
+            }
+            @foreach (var day in FilteredEvents.GroupBy(e => e.Start.ToLocalTime().Date))
+            {
+                <div class="campanel-section">
+                    <div class="campanel-section-title">@DayLabel(day.Key) <span class="event-day-count">@day.Count()</span></div>
+                    @foreach (var ev in day)
+                    {
+                        <div class="event-row @(ev.Reviewed ? "reviewed" : "")" @key="ev.Id"
+                             title="Click to play" @onclick="() => OpenEvent(ev)">
+                            <span class="event-row-time">@ev.Start.ToLocalTime().ToString("HH:mm:ss")</span>
+                            <span class="event-row-icon">@ev.Icon</span>
+                            <div class="event-row-main">
+                                <span class="event-title">@ev.Title</span>
+                                <span class="event-sub">@ev.Camera · @DurationText(ev)</span>
+                            </div>
+                            @if (!ev.Reviewed)
+                            {
+                                <button class="icon-btn" title="Dismiss (mark reviewed)"
+                                        @onclick="() => DismissAsync(ev)" @onclick:stopPropagation="true">✕</button>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+        </aside>
+    }
+
+    @if (_playEvent != null)
+    {
+        <div class="backdrop player-backdrop" @onclick="ClosePlayer"></div>
+        <div class="event-player" role="dialog" aria-label="Event playback">
+            <div class="event-player-head">
+                <div class="event-player-title">
+                    <span class="event-title">@_playEvent.Icon @_playEvent.Title</span>
+                    <span class="event-sub">
+                        @_playEvent.Camera · @_playEvent.Start.ToLocalTime().ToString("ddd d MMM HH:mm:ss") · @DurationText(_playEvent)
+                    </span>
+                </div>
+                <button class="icon-btn" title="Close" @onclick="ClosePlayer">✕</button>
+            </div>
+            @if (_playEvent.HasClip)
+            {
+                @* @key forces a fresh <video> when navigating between events *@
+                <video controls autoplay playsinline @key="_playEvent.Id"
+                       src="@EventArtifactUrl(_playEvent, "clip")"></video>
+            }
+            else
+            {
+                <div class="notice">No clip was recorded for this event@(_playEvent.Ongoing ? " yet — it is still being captured" : "").</div>
+            }
+            <div class="event-player-foot">
+                <button class="chip" disabled="@(NeighborEvent(1) == null)"
+                        @onclick="() => _playEvent = NeighborEvent(1)">← Older</button>
+                <button class="chip" disabled="@(NeighborEvent(-1) == null)"
+                        @onclick="() => _playEvent = NeighborEvent(-1)">Newer →</button>
+                <span class="tile-spacer"></span>
+                @if (!_playEvent.Reviewed)
+                {
+                    <button class="chip" @onclick="() => DismissAsync(_playEvent)">✓ Mark reviewed</button>
+                }
+                else
+                {
+                    <span class="event-sub">✓ reviewed</span>
+                }
+            </div>
+        </div>
+    }
+
 </div>
 
 @code {
@@ -192,6 +328,14 @@
     private readonly Dictionary<int, string> _attached = new();
     private PeriodicTimer? _pollTimer;
 
+    // Recorded events (populated when the server has recording enabled)
+    private readonly List<ApiEvent> _events = new();
+    private bool _eventsSupported;
+    private bool _showEventsPanel;
+    private string _eventCameraFilter = "";
+    private bool _eventsUnreviewedOnly;
+    private ApiEvent? _playEvent;
+
     protected override void OnInitialized() => EnsureSlots();
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -201,6 +345,7 @@
             await LoadPersistedAsync();
             _loaded = true;
             await RefreshCamerasAsync();
+            await RefreshEventsAsync();
             StateHasChanged();
             _ = PollLoopAsync();
             return;
@@ -307,6 +452,7 @@
             while (await _pollTimer.WaitForNextTickAsync())
             {
                 await RefreshCamerasAsync();
+                await RefreshEventsAsync();
                 StateHasChanged();
             }
         }
@@ -317,8 +463,121 @@
     private async Task OnServerChangedAsync()
     {
         await RefreshCamerasAsync();
+        await RefreshEventsAsync();
         await SaveAsync();
     }
+
+    // ------------------------------------------------------------ recorded events
+
+    private IEnumerable<ApiEvent> FilteredEvents => _events
+        .Where(e => _eventCameraFilter.Length == 0 || e.Camera == _eventCameraFilter)
+        .Where(e => !_eventsUnreviewedOnly || !e.Reviewed);
+
+    private string EventArtifactUrl(ApiEvent ev, string kind) =>
+        $"{_server.TrimEnd('/')}/api/events/{Uri.EscapeDataString(ev.Id)}/{kind}";
+
+    private async Task RefreshEventsAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_server)) return;
+        try
+        {
+            using var res = await Http.GetAsync($"{_server.TrimEnd('/')}/api/events?limit=300");
+            if (!res.IsSuccessStatusCode)
+            {
+                _eventsSupported = false; // recording disabled on the server: hide the UI
+                return;
+            }
+            var list = await res.Content.ReadFromJsonAsync<List<ApiEvent>>();
+            _eventsSupported = true;
+            _events.Clear();
+            if (list != null) _events.AddRange(list);
+            // Keep an open player in sync (the clip appears once an ongoing event closes).
+            if (_playEvent != null)
+                _playEvent = _events.FirstOrDefault(e => e.Id == _playEvent.Id) ?? _playEvent;
+        }
+        catch
+        {
+            _eventsSupported = false;
+        }
+    }
+
+    private void OpenEvent(ApiEvent ev) => _playEvent = ev;
+    private void ClosePlayer() => _playEvent = null;
+
+    /// <summary>The adjacent event in the newest-first list (+1 = older, -1 = newer).</summary>
+    private ApiEvent? NeighborEvent(int direction)
+    {
+        if (_playEvent == null) return null;
+        int i = _events.FindIndex(e => e.Id == _playEvent.Id);
+        int target = i + direction;
+        return i < 0 || target < 0 || target >= _events.Count ? null : _events[target];
+    }
+
+    private async Task DismissAsync(ApiEvent ev)
+    {
+        if (!await PostEventReviewAsync(ev, reviewed: true)) return;
+        int i = _events.FindIndex(e => e.Id == ev.Id);
+        if (i >= 0) _events[i] = _events[i] with { Reviewed = true };
+        if (_playEvent?.Id == ev.Id) _playEvent = _playEvent with { Reviewed = true };
+    }
+
+    private async Task DismissAllAsync()
+    {
+        foreach (var ev in _events.Where(e => !e.Reviewed).ToList())
+        {
+            if (!await PostEventReviewAsync(ev, reviewed: true)) return; // e.g. auth failed: stop
+            int i = _events.FindIndex(e => e.Id == ev.Id);
+            if (i >= 0) _events[i] = _events[i] with { Reviewed = true };
+        }
+    }
+
+    private async Task<bool> PostEventReviewAsync(ApiEvent ev, bool reviewed)
+    {
+        try
+        {
+            var req = new HttpRequestMessage(HttpMethod.Post,
+                $"{_server.TrimEnd('/')}/api/events/{Uri.EscapeDataString(ev.Id)}/review");
+            if (!string.IsNullOrEmpty(_user))
+            {
+                var token = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"{_user}:{_pass}"));
+                req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", token);
+            }
+            req.Content = JsonContent.Create(new { reviewed });
+            using var res = await Http.SendAsync(req);
+            if (res.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+            {
+                _error = "Not authorized — set your credentials under server settings (⚙).";
+                return false;
+            }
+            return res.IsSuccessStatusCode;
+        }
+        catch (Exception ex)
+        {
+            _error = $"Cannot reach {_server}: {ex.Message}";
+            return false;
+        }
+    }
+
+    private static string Ago(DateTime utc)
+    {
+        var span = DateTime.UtcNow - utc.ToUniversalTime();
+        if (span < TimeSpan.Zero) span = TimeSpan.Zero;
+        return span.TotalSeconds < 60 ? "just now"
+            : span.TotalMinutes < 60 ? $"{(int)span.TotalMinutes}m ago"
+            : span.TotalHours < 24 ? $"{(int)span.TotalHours}h ago"
+            : $"{(int)span.TotalDays}d ago";
+    }
+
+    private static string DayLabel(DateTime day) =>
+        day == DateTime.Now.Date ? "TODAY"
+        : day == DateTime.Now.Date.AddDays(-1) ? "YESTERDAY"
+        : day.ToString("dddd, d MMMM").ToUpperInvariant();
+
+    private static string DurationText(ApiEvent ev) =>
+        ev.Ongoing ? "recording…"
+        : ev.Duration.TotalSeconds < 1 ? "<1s"
+        : ev.Duration.TotalSeconds < 90 ? $"{(int)Math.Ceiling(ev.Duration.TotalSeconds)}s"
+        : $"{(int)Math.Round(ev.Duration.TotalMinutes)} min";
 
     // ------------------------------------------------------------ layout
 

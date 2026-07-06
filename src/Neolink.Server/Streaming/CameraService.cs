@@ -43,6 +43,12 @@ public sealed class CameraService : ILiveCameraSource
     public string Name => _config.Name;
     public IBcCamera? LiveCamera => _live;
 
+    /// <summary>
+    /// When set (on the primary stream service), alarm pushes are requested on each
+    /// connection and forwarded here. Assigned once during startup wiring.
+    /// </summary>
+    public Action<MotionPush>? MotionSink { get; set; }
+
     private string Tag => $"{_config.Name} ({_kind})";
 
     public async Task RunAsync(CancellationToken ct)
@@ -131,6 +137,9 @@ public sealed class CameraService : ILiveCameraSource
         var reader = new MediaFrameReader(binary.Reader);
         long frames = 0;
         _live = camera;
+        Task? motionTask = MotionSink is { } sink
+            ? Task.Run(() => WatchMotionGuardedAsync(camera, sink, linked.Token), CancellationToken.None)
+            : null;
         try
         {
             while (!ct.IsCancellationRequested)
@@ -173,6 +182,32 @@ public sealed class CameraService : ILiveCameraSource
             _live = null;
             linked.Cancel();
             try { await videoTask.ConfigureAwait(false); } catch { }
+            if (motionTask != null)
+            {
+                try { await motionTask.ConfigureAwait(false); } catch { }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Alarm-push listener riding the same connection as the video stream. Failures
+    /// stay local: a camera without motion push must not disturb streaming.
+    /// </summary>
+    private async Task WatchMotionGuardedAsync(IBcCamera camera, Action<MotionPush> sink, CancellationToken ct)
+    {
+        try
+        {
+            await camera.WatchMotionAsync(sink, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) when (ex is CameraCommandException or TimeoutException)
+        {
+            Log.Warn($"{Tag}: camera declined motion pushes ({ex.Message}); no events this session");
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+        {
+            // Connection died; the video loop notices and reconnects everything.
+            Log.Debug($"{Tag}: motion watch ended: {ex.Message}");
         }
     }
 }

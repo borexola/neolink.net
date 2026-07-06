@@ -9,6 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Neolink.Media;
 using Neolink.Protocol;
+using Neolink.Recording;
 using Neolink.Streaming;
 
 namespace Neolink.Web;
@@ -26,6 +27,8 @@ public sealed record WebCameraInfo(string Name, List<WebStreamInfo> Streams, ICa
 ///   GET /api/cameras/{name}/streaminfo      — encode profiles (resolution/fps/bitrate tables)
 ///   POST/PUT .../settings/stream            — change an encode profile (needs http_address)
 ///   GET/POST .../led /pir; POST .../ptz /reboot; GET .../battery — camera control
+///   GET /api/events[?camera=&amp;reviewed=&amp;limit=] — recorded detection events (when enabled)
+///   GET /api/events/{id}/clip /thumb        — event artifacts; POST .../review to (un)dismiss
 ///   /                                       — web UI (when enabled in the config)
 /// Mutating endpoints require HTTP Basic auth when users are configured (same
 /// credentials and per-camera permissions as RTSP).
@@ -37,10 +40,11 @@ public static class WebApi
     private sealed record PtzRequest(string? Command, float? Speed);
     private sealed record StreamSettingsRequest(string? Stream, uint? Width, uint? Height,
         uint? Framerate, uint? Bitrate);
+    private sealed record ReviewRequest(bool? Reviewed);
 
     public static async Task RunAsync(string bindAddr, int port, bool webUi,
         IReadOnlyList<WebCameraInfo> cameras, IReadOnlyDictionary<string, string> users,
-        int rtspPort, CancellationToken ct)
+        int rtspPort, EventStore? events, CancellationToken ct)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -288,6 +292,68 @@ public static class WebApi
                 await control.RebootAsync(reqCt);
                 return Results.Json(new { ok = true });
             }));
+
+        // ------------------------------------------------------------ recorded events
+
+        if (events != null)
+        {
+            object Shape(EventRecord r) => new
+            {
+                id = r.Id,
+                camera = r.Camera,
+                start = r.StartUtc,
+                end = r.EndUtc,
+                labels = r.Labels,
+                reviewed = r.Reviewed,
+                ongoing = r.Ongoing,
+                hasClip = r.HasClip,
+                hasThumb = r.HasThumb,
+            };
+
+            app.MapGet("/api/events", (string? camera, bool? reviewed, int? limit) =>
+                Results.Json(events.List(camera, reviewed, limit ?? 200).Select(Shape)));
+
+            app.MapGet("/api/events/{id}/clip", (string id) =>
+            {
+                var path = events.ArtifactPath(id, "clip.mp4");
+                return path == null
+                    ? Results.Json(new { error = "no clip for this event" }, statusCode: 404)
+                    : Results.File(path, "video/mp4", enableRangeProcessing: true);
+            });
+
+            app.MapGet("/api/events/{id}/thumb", (string id) =>
+            {
+                var path = events.ArtifactPath(id, "thumb.jpg");
+                return path == null
+                    ? Results.Json(new { error = "no thumbnail for this event" }, statusCode: 404)
+                    : Results.File(path, "image/jpeg");
+            });
+
+            app.MapPost("/api/events/{id}/review", (string id, ReviewRequest req, HttpContext ctx) =>
+            {
+                var rec = events.Find(id);
+                if (rec == null)
+                    return Results.Json(new { error = "unknown event" }, statusCode: 404);
+                // Same rules as camera control: reviewing an event needs control rights
+                // on its camera. Events of removed cameras fall back to any valid user.
+                var cam = cameras.FirstOrDefault(c => string.Equals(c.Name, rec.Camera, StringComparison.OrdinalIgnoreCase));
+                if (cam != null)
+                {
+                    if (CheckAuth(ctx, cam) is { } denied) return denied;
+                }
+                else if (users.Count > 0)
+                {
+                    var creds = NetUtil.DecodeBasicAuth(ctx.Request.Headers.Authorization);
+                    if (creds == null || !users.TryGetValue(creds.Value.User, out var pw) || pw != creds.Value.Pass)
+                    {
+                        ctx.Response.Headers.WWWAuthenticate = "Basic realm=\"neolink\"";
+                        return Results.Json(new { error = "authentication required" }, statusCode: 401);
+                    }
+                }
+                events.SetReviewed(id, req.Reviewed ?? true);
+                return Results.Json(new { ok = true });
+            });
+        }
 
         app.Map("/api/stream", async ctx =>
         {

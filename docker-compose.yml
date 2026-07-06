@@ -11,5 +11,8 @@ services:
       - "8655:8655"   # web UI + API; remove if webui:false and API unused
     volumes:
       - ./config.json:/config/config.json:ro
+      # Event recording storage: uncomment and set "recording": { "path": "/recordings" }
+      # in config.json to capture detection events (clips + thumbnails) here.
+      # - ./recordings:/recordings
     # For RTSP over UDP transport, prefer host networking instead of port maps:
     # network_mode: host
