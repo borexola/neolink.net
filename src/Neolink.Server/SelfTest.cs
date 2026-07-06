@@ -318,6 +318,14 @@ public static class SelfTest
                 var reloaded = new Recording.RecordingSettings(dir);
                 Assert(reloaded.Get("cam1").Continuous, "settings persisted across restart");
                 Assert(!reloaded.Get("cam1").AllowsLabel("vehicle"), "filter persisted");
+
+                // Migration: settings.json used to live in the recordings root; a fresh
+                // config dir must pick it up from there and re-home it.
+                var newDir = Path.Combine(dir, "new-config-dir");
+                Directory.CreateDirectory(newDir);
+                var migrated = new Recording.RecordingSettings(newDir, legacyDir: dir);
+                Assert(migrated.Get("cam1").Continuous, "legacy settings migrated");
+                Assert(File.Exists(Path.Combine(newDir, "settings.json")), "settings re-homed to config dir");
             }
             finally
             {
@@ -390,6 +398,25 @@ public static class SelfTest
                 var text = Encoding.ASCII.GetString(bytes);
                 Assert(text.Contains("moov"), "init segment present");
                 Assert(text.Contains("moof") && text.Contains("mdat"), "fragments present");
+
+                // The closed file must carry a real duration: browsers trust mvhd,
+                // and duration 0 freezes the <video> on the first frame.
+                static uint DurationAfterTag(byte[] data, string tag, int offsetFromTag)
+                {
+                    int i = Encoding.ASCII.GetString(data).IndexOf(tag, StringComparison.Ordinal);
+                    Assert(i > 0, $"{tag} box present");
+                    return System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(
+                        data.AsSpan(i + offsetFromTag));
+                }
+                Assert(DurationAfterTag(bytes, "mvhd", 20) > 0, "mvhd duration patched (ms)");
+                Assert(DurationAfterTag(bytes, "tkhd", 24) > 0, "tkhd duration patched (ms)");
+                Assert(DurationAfterTag(bytes, "mdhd", 20) > 0, "mdhd duration patched (90kHz)");
+
+                // The seek index players use: mfra at the end, mfro trailer pointing at it.
+                uint mfraSize = System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(bytes.AsSpan(bytes.Length - 4));
+                Assert(mfraSize > 24 && mfraSize < bytes.Length, "mfro trailer carries mfra size");
+                AssertEq(Encoding.ASCII.GetString(bytes, bytes.Length - (int)mfraSize + 4, 4), "mfra");
+                Assert(text.Contains("tfra"), "tfra keyframe index present");
             }
             finally
             {

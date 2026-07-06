@@ -17,9 +17,9 @@ public sealed record CameraRecordingSettings(bool Events, bool Continuous, List<
 
 /// <summary>
 /// Per-camera recording switches changeable at runtime from the web UI, persisted
-/// as settings.json in the storage root — so they live on the same (Docker) volume
-/// as the footage and survive restarts. The config file only provides each
-/// camera's initial defaults; once a user flips a switch, this file wins.
+/// as settings.json NEXT TO THE CONFIG FILE (in Docker: the /config mount), so
+/// static config and runtime settings live together. The config file only provides
+/// each camera's initial defaults; once a user flips a switch, this file wins.
 /// </summary>
 public sealed class RecordingSettings
 {
@@ -33,17 +33,27 @@ public sealed class RecordingSettings
     private readonly object _gate = new();
     private Dictionary<string, CameraRecordingSettings> _cameras = new(StringComparer.OrdinalIgnoreCase);
 
-    public RecordingSettings(string root)
+    public RecordingSettings(string configDir, string? legacyDir = null)
     {
-        _file = Path.Combine(root, "settings.json");
+        _file = Path.Combine(configDir, "settings.json");
         try
         {
-            if (File.Exists(_file))
+            // Older versions kept settings.json in the recordings root; migrate once.
+            var source = _file;
+            if (!File.Exists(source) && legacyDir != null
+                && File.Exists(Path.Combine(legacyDir, "settings.json")))
+            {
+                source = Path.Combine(legacyDir, "settings.json");
+                Log.Info($"Recording settings: migrating {source} -> {_file}");
+            }
+            if (File.Exists(source))
             {
                 var loaded = JsonSerializer.Deserialize<Dictionary<string, CameraRecordingSettings>>(
-                    File.ReadAllText(_file), JsonOpts);
+                    File.ReadAllText(source), JsonOpts);
                 if (loaded != null)
                     _cameras = new Dictionary<string, CameraRecordingSettings>(loaded, StringComparer.OrdinalIgnoreCase);
+                if (!ReferenceEquals(source, _file) && source != _file)
+                    lock (_gate) { SaveLocked(); }
             }
         }
         catch (Exception ex)

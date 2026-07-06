@@ -10,7 +10,9 @@ services:
       - "8654:8654"   # RTSP (TCP-interleaved works for ffmpeg/Frigate/VLC)
       - "8655:8655"   # web UI + API; remove if webui:false and API unused
     volumes:
-      - ./config.json:/config/config.json:ro
+      # Config directory (not a single file): config.json lives here, and the web
+      # UI's runtime settings (settings.json) are persisted next to it.
+      - ./config:/config
       # Event recording storage: uncomment and set "recording": { "path": "/recordings" }
       # in config.json to capture detection events (clips + thumbnails) here.
       # - ./recordings:/recordings

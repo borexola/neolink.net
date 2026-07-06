@@ -43,13 +43,19 @@
             @foreach (var cam in _cameras)
             {
                 var name = cam.Name;
-                <button class="chip @(_excluded.Contains(name) ? "chip-off" : "")"
-                        title="@(_excluded.Contains(name) ? "Excluded — click to include" : "Included — click to exclude")"
+                <button class="chip @(_included.Contains(name) ? "" : "chip-off")"
+                        title="@(_included.Contains(name) ? "Loaded — click to remove" : "Click to load this camera's footage")"
                         @onclick="() => ToggleCameraAsync(name)">@name</button>
             }
-            <span class="event-sub">— scrub the lanes below; colored marks are events</span>
+            <span class="event-sub">— pick the cameras to scrub; nothing loads until selected</span>
         </div>
 
+        @if (!Included.Any())
+        {
+            <div class="notice">Select cameras above to load their footage — colored marks on the lanes are events.</div>
+        }
+        else
+        {
         <div class="tl-board">
             <div class="tl-names">
                 <div class="tl-name"></div>
@@ -91,7 +97,8 @@
             </div>
         </div>
 
-        <div class="tl-grid">
+        @* Tile size adapts to the selection: fewer cameras = bigger tiles. *@
+        <div class="tl-grid" style="grid-template-columns: repeat(@TileColumns(), 1fr);">
             @foreach (var cam in Included)
             {
                 <div class="tl-tile" @key="cam.Name">
@@ -103,11 +110,8 @@
                     <div class="tl-tile-name">@cam.Name</div>
                 </div>
             }
-            @if (!Included.Any())
-            {
-                <div class="notice">All cameras are excluded — include one above.</div>
-            }
         </div>
+        }
     }
 </div>
 
@@ -122,7 +126,7 @@
     private string? _error;
 
     private readonly List<ApiCamera> _cameras = new();
-    private HashSet<string> _excluded = new(StringComparer.OrdinalIgnoreCase);
+    private HashSet<string> _included = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, List<Seg>> _cov = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, List<Mark>> _marks = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _noFootage = new(StringComparer.OrdinalIgnoreCase);
@@ -130,6 +134,8 @@
     private DotNetObjectReference<Timeline>? _selfRef;
     private PeriodicTimer? _clock;
     private DateTime _lastTick;
+    private bool _scrubInit;
+    private bool _booted;
 
     /// <summary>One recording segment: seconds-of-day start, span and playback URL.</summary>
     private sealed record Seg(double Start, double Span, string Url);
@@ -137,40 +143,58 @@
     private sealed record Mark(double Start, double End, string Color, string Title);
 
     private const string PrefsKey = "neolink.timeline";
-    private sealed class Prefs { public List<string> Excluded { get; set; } = new(); }
+    private sealed class Prefs { public List<string> Included { get; set; } = new(); }
 
-    private IEnumerable<ApiCamera> Included => _cameras.Where(c => !_excluded.Contains(c.Name));
+    /// <summary>Only explicitly selected cameras load footage — scrubbing all cams at once is expensive.</summary>
+    private IEnumerable<ApiCamera> Included => _cameras.Where(c => _included.Contains(c.Name));
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (!firstRender) return;
-
-        // Server + credentials are shared with the live view's persisted settings.
-        try
+        if (firstRender)
         {
-            var json = await JS.InvokeAsync<string?>("neolink.lsGet", "neolink.view");
-            if (json != null)
-                _server = JsonSerializer.Deserialize<PersistedView>(json)?.Server ?? "";
-        }
-        catch { }
-        if (string.IsNullOrWhiteSpace(_server))
-            _server = await JS.InvokeAsync<string>("neolink.defaultServer");
+            // Server + credentials are shared with the live view's persisted settings.
+            try
+            {
+                var json = await JS.InvokeAsync<string?>("neolink.lsGet", "neolink.view");
+                if (json != null)
+                    _server = JsonSerializer.Deserialize<PersistedView>(json)?.Server ?? "";
+            }
+            catch { }
+            if (string.IsNullOrWhiteSpace(_server))
+                _server = await JS.InvokeAsync<string>("neolink.defaultServer");
 
-        try
+            try
+            {
+                var json = await JS.InvokeAsync<string?>("neolink.lsGet", PrefsKey);
+                if (json != null && JsonSerializer.Deserialize<Prefs>(json) is { } p)
+                    _included = new HashSet<string>(p.Included, StringComparer.OrdinalIgnoreCase);
+            }
+            catch { }
+
+            await LoadCamerasAsync();
+            _included.RemoveWhere(name => _cameras.All(c => !string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase)));
+            await LoadDayAsync();
+
+            _selfRef = DotNetObjectReference.Create(this);
+            _ = ClockLoopAsync();
+            _booted = true;
+            StateHasChanged();
+            return;
+        }
+
+        // The lane strip only exists while cameras are selected; (re)hook the
+        // scrub handler whenever it (re)appears.
+        if (!_booted || _selfRef == null) return;
+        if (Included.Any() && !_scrubInit)
         {
-            var json = await JS.InvokeAsync<string?>("neolink.lsGet", PrefsKey);
-            if (json != null && JsonSerializer.Deserialize<Prefs>(json) is { } p)
-                _excluded = new HashSet<string>(p.Excluded, StringComparer.OrdinalIgnoreCase);
+            _scrubInit = true;
+            await JS.InvokeVoidAsync("neolink.tlScrubInit", "tl-scrub", _selfRef);
         }
-        catch { }
-
-        await LoadCamerasAsync();
-        await LoadDayAsync();
-
-        _selfRef = DotNetObjectReference.Create(this);
-        await JS.InvokeVoidAsync("neolink.tlScrubInit", "tl-scrub", _selfRef);
-        _ = ClockLoopAsync();
-        StateHasChanged();
+        else if (!Included.Any() && _scrubInit)
+        {
+            _scrubInit = false;
+            await JS.InvokeVoidAsync("neolink.tlScrubDispose", "tl-scrub");
+        }
     }
 
     // ------------------------------------------------------------ data
@@ -197,30 +221,20 @@
         _cov.Clear();
         _marks.Clear();
         _playing = false;
-        var date = _date.ToString("yyyy-MM-dd");
 
-        // Coverage: the continuous segments of each camera for this day.
-        _supported = true;
-        foreach (var cam in _cameras)
-        {
-            try
-            {
-                var segs = await Http.GetFromJsonAsync<List<ApiSegment>>(
-                    $"{Base}/api/recordings/{Uri.EscapeDataString(cam.Name)}/{date}");
-                _cov[cam.Name] = BuildSegs(segs ?? new List<ApiSegment>(), cam.Name, date);
-            }
-            catch
-            {
-                _supported = false; // endpoint missing = recording disabled server-side
-                return;
-            }
-        }
-
-        // Events of the day, as colored lane marks.
+        // Recording support is probed via the events endpoint (same feature gate),
+        // and the reply doubles as the day's colored lane marks.
         try
         {
-            var events = await Http.GetFromJsonAsync<List<ApiEvent>>($"{Base}/api/events?limit=1000");
-            foreach (var ev in events ?? new List<ApiEvent>())
+            using var res = await Http.GetAsync($"{Base}/api/events?limit=1000");
+            if (!res.IsSuccessStatusCode)
+            {
+                _supported = false;
+                return;
+            }
+            _supported = true;
+            var events = await res.Content.ReadFromJsonAsync<List<ApiEvent>>() ?? new List<ApiEvent>();
+            foreach (var ev in events)
             {
                 var start = ev.Start.ToLocalTime();
                 if (start.Date != _date) continue;
@@ -231,13 +245,36 @@
                 list.Add(new Mark(s, e, LabelColor(ev.Labels), $"{ev.Title} · {start:HH:mm:ss}"));
             }
         }
-        catch { /* events are decoration here; coverage already loaded */ }
+        catch
+        {
+            _supported = false;
+            return;
+        }
+
+        // Coverage only for the cameras the user selected — this is the expensive part.
+        foreach (var cam in Included)
+            await LoadCoverageAsync(cam.Name);
 
         // Land the cursor somewhere useful: near-now for today, else midday.
         _t = _date == DateTime.Today
             ? Math.Max(0, (DateTime.Now - _date).TotalSeconds - 30)
             : DaySeconds / 2;
         await SyncVideosAsync();
+    }
+
+    private async Task LoadCoverageAsync(string camera)
+    {
+        var date = _date.ToString("yyyy-MM-dd");
+        try
+        {
+            var segs = await Http.GetFromJsonAsync<List<ApiSegment>>(
+                $"{Base}/api/recordings/{Uri.EscapeDataString(camera)}/{date}");
+            _cov[camera] = BuildSegs(segs ?? new List<ApiSegment>(), camera, date);
+        }
+        catch
+        {
+            _cov[camera] = new List<Seg>();
+        }
     }
 
     /// <summary>
@@ -369,20 +406,30 @@
 
     private async Task ToggleCameraAsync(string name)
     {
-        if (!_excluded.Remove(name))
-            _excluded.Add(name);
-        await JS.InvokeVoidAsync("neolink.lsSet", PrefsKey,
-            JsonSerializer.Serialize(new Prefs { Excluded = _excluded.ToList() }));
-        // A camera coming back needs its coverage if the day was loaded before it existed.
-        if (!_excluded.Contains(name) && !_cov.ContainsKey(name))
-            await LoadDayAsync();
+        if (_included.Remove(name))
+        {
+            _cov.Remove(name); // free it; reselecting fetches fresh coverage
+        }
         else
-            await SyncVideosAsync();
+        {
+            _included.Add(name);
+            await LoadCoverageAsync(name); // lazy: only now does this camera cost anything
+        }
+        await JS.InvokeVoidAsync("neolink.lsSet", PrefsKey,
+            JsonSerializer.Serialize(new Prefs { Included = _included.ToList() }));
+        await SyncVideosAsync();
     }
 
     // ------------------------------------------------------------ helpers
 
     private static string VideoId(string camera) => "tlv-" + Uri.EscapeDataString(camera);
+
+    /// <summary>Square-ish grid: 1 cam fills the stage, 2 side by side, 3-4 in a 2x2, ...</summary>
+    private int TileColumns()
+    {
+        int n = Included.Count();
+        return n <= 1 ? 1 : (int)Math.Ceiling(Math.Sqrt(n));
+    }
 
     private static string Pct(double seconds) =>
         $"{seconds / DaySeconds * 100:0.###}%";
