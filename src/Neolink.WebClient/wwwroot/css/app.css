@@ -184,6 +184,48 @@ html, body {
     padding-top: 10px;
 }
 
+/* Signed-in user + sign-out, pinned at the sidebar bottom */
+.sidebar-user {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border-top: 1px solid var(--line);
+    padding-top: 10px;
+    text-align: left;
+}
+
+.sidebar-user-id {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    flex: 1;
+}
+
+.sidebar-user-icon { font-size: 14px; flex: 0 0 auto; }
+
+.sidebar-user-name {
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.sidebar-user-role {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--muted);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 1px 7px;
+    flex: 0 0 auto;
+}
+
+.sidebar-signout { flex: 0 0 auto; }
+
 /* ---------- stage ---------- */
 .stage {
     flex: 1;
