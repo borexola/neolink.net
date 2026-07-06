@@ -236,9 +236,27 @@ the original Rust neolink are also accepted.
 | `web_port` | `8655` | Web UI + HTTP/WS API port; `0` disables both |
 | `webui` | `true` | Serve the browser UI on `web_port`; `false` = API only |
 | `web_bind` | = `bind` | Separate bind address for the web port |
-| `users` | *(none)* | RTSP Basic-auth users: `{ "name", "pass" }`. Omit for open access |
+| `users` | *(none)* | **RTSP** Basic-auth users: `{ "name", "pass" }`. Omit for open access. Separate from web-UI accounts! |
 | `recording` | *(none)* | Event recording (see below). Omit to disable |
-| `reset_admin_password` | `false` | Web-UI recovery: while `true`, the login screen allows setting a new admin password. Turn it back off after use |
+| `ui` | *(defaults)* | Web-UI specific settings (see below) |
+
+### Web-UI settings (`"ui": { ... }`)
+
+| Option | Default | Description |
+|---|---|---|
+| `enabled` / `port` / `bind` | = `webui` / `web_port` / `web_bind` | Grouped aliases of the top-level web options |
+| `state_dir` | config dir | Where the UI's server-side state persists: `users.json` (sign-in accounts) and `settings.json` (per-user layouts/filters/recording switches) |
+| `reset_admin_password` | `false` | Recovery: while `true`, the login screen allows setting a new admin password. Turn it back off after use |
+| `trickle_speed` | `4` | Playback speed of the review strip's ambient clip previews |
+
+> **Persistence across deployments** — three locations must live on volumes or
+> your state resets every deploy: **(1)** the config directory (or `ui.state_dir`)
+> holding `users.json` + `settings.json` — lose it and accounts, layouts and
+> filters reset; **(2)** the `recording.path` directory — lose it and footage
+> *and the reviewed/dismissed state* (stored in each event's `event.json`) reset,
+> so previously dismissed events reappear; **(3)** `config.json` itself. The
+> docker-compose example mounts (1)+(3) via `./config:/config` and (2) via
+> `./recordings:/recordings`.
 
 ### Web UI sign-in
 

@@ -24,6 +24,7 @@ public sealed class EventRecorder
 {
     private readonly string _camera;
     private readonly IStreamHub _hub;
+    private readonly IStreamHub? _previewHub;
     private readonly ICameraControl _control;
     private readonly EventStore _store;
     private readonly RecordingConfig _cfg;
@@ -32,19 +33,25 @@ public sealed class EventRecorder
     private readonly Channel<MotionPush> _pushes = Channel.CreateUnbounded<MotionPush>(
         new UnboundedChannelOptions { SingleReader = true });
 
-    // Pre-roll buffer and clip writer are handed between the pump and the event
-    // loop under one gate; both touch them briefly (local file I/O only).
+    // Pre-roll buffers and clip writers are handed between the pumps and the event
+    // loop under one gate; all touch them briefly (never blocking on disk).
     // Each buffered packet carries its drop flag so a clip started later still
-    // knows where the stream was discontinuous.
+    // knows where the stream was discontinuous. The optional preview capture
+    // records the sub stream into preview.mp4 alongside the full clip — that's
+    // what the review strip's ambient players use, keeping client decode cheap.
     private readonly object _mediaGate = new();
     private readonly List<(HubVideo Video, bool Gap)> _preroll = new();
+    private readonly List<(HubVideo Video, bool Gap)> _previewPreroll = new();
     private ClipWriter? _writer;
+    private ClipWriter? _previewWriter;
 
     public EventRecorder(string camera, IStreamHub hub, ICameraControl control,
-        EventStore store, RecordingConfig cfg, RecordingSettings settings)
+        EventStore store, RecordingConfig cfg, RecordingSettings settings,
+        IStreamHub? previewHub = null)
     {
         _camera = camera;
         _hub = hub;
+        _previewHub = previewHub;
         _control = control;
         _store = store;
         _cfg = cfg;
@@ -58,26 +65,35 @@ public sealed class EventRecorder
 
     public async Task RunAsync(CancellationToken ct)
     {
-        Log.Info($"{_camera}: event recording enabled ({_hub.Name}, pre={_cfg.PreSeconds}s, post={_cfg.PostSeconds}s)");
-        var pump = Task.Run(() => PumpPacketsAsync(ct), CancellationToken.None);
+        Log.Info($"{_camera}: event recording enabled ({_hub.Name}, pre={_cfg.PreSeconds}s, post={_cfg.PostSeconds}s" +
+                 $"{(_previewHub != null ? $", previews from {_previewHub.Name}" : "")})");
+        var pump = Task.Run(() => PumpPacketsAsync(_hub, preview: false, ct), CancellationToken.None);
+        var previewPump = _previewHub == null
+            ? Task.CompletedTask
+            : Task.Run(() => PumpPacketsAsync(_previewHub, preview: true, ct), CancellationToken.None);
         try
         {
             await EventLoopAsync(ct).ConfigureAwait(false);
         }
         finally
         {
-            ClipWriter? closing;
+            ClipWriter? closing, closingPreview;
             lock (_mediaGate)
             {
                 closing = _writer;
+                closingPreview = _previewWriter;
                 _writer = null;
+                _previewWriter = null;
             }
             closing?.Dispose();
+            closingPreview?.Dispose();
             try { await pump.ConfigureAwait(false); } catch { }
-            // Give the writer thread a moment to finalize the file on shutdown.
-            if (closing != null)
+            try { await previewPump.ConfigureAwait(false); } catch { }
+            // Give the writer threads a moment to finalize files on shutdown.
+            foreach (var w in new[] { closing, closingPreview })
             {
-                try { await closing.Completion.WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false); }
+                if (w == null) continue;
+                try { await w.Completion.WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false); }
                 catch { }
             }
         }
@@ -85,9 +101,9 @@ public sealed class EventRecorder
 
     // ------------------------------------------------------------------ packet pump
 
-    private async Task PumpPacketsAsync(CancellationToken ct)
+    private async Task PumpPacketsAsync(IStreamHub hub, bool preview, CancellationToken ct)
     {
-        var (id, reader) = _hub.Subscribe();
+        var (id, reader) = hub.Subscribe();
         try
         {
             // The hub index is global across video AND audio packets, so it must be
@@ -103,22 +119,26 @@ public sealed class EventRecorder
                 if (packet is not HubVideo v) continue;
                 lock (_mediaGate)
                 {
-                    if (_writer != null)
+                    var writer = preview ? _previewWriter : _writer;
+                    if (writer != null)
                     {
                         // Add never blocks on disk (background writer thread); a dead
                         // disk surfaces as Faulted and the event continues clip-less.
-                        _writer.Add(v, gap);
-                        if (_writer.Faulted)
+                        writer.Add(v, gap);
+                        if (writer.Faulted)
                         {
-                            Log.Warn($"{_camera}: clip writer failed; event continues without further video");
-                            _writer.Dispose();
-                            _writer = null;
+                            Log.Warn($"{_camera}: {(preview ? "preview" : "clip")} writer failed; " +
+                                     "event continues without further video");
+                            writer.Dispose();
+                            if (preview) _previewWriter = null;
+                            else _writer = null;
                         }
                     }
                     else
                     {
-                        _preroll.Add((v, gap));
-                        TrimPreroll();
+                        var buffer = preview ? _previewPreroll : _preroll;
+                        buffer.Add((v, gap));
+                        TrimPreroll(buffer);
                     }
                 }
             }
@@ -126,34 +146,34 @@ public sealed class EventRecorder
         catch (OperationCanceledException) { }
         finally
         {
-            _hub.Unsubscribe(id);
+            hub.Unsubscribe(id);
         }
     }
 
     /// <summary>
-    /// Keeps the pre-roll spanning at least PreSeconds while starting on a keyframe
+    /// Keeps a pre-roll spanning at least PreSeconds while starting on a keyframe
     /// (a clip must begin decodable): drop everything before the latest keyframe
     /// that still preserves the wanted span.
     /// </summary>
-    private void TrimPreroll()
+    private void TrimPreroll(List<(HubVideo Video, bool Gap)> buffer)
     {
         uint want = (uint)_cfg.PreSeconds * FMp4.Timescale;
-        uint last = _preroll[^1].Video.RtpTs;
+        uint last = buffer[^1].Video.RtpTs;
         int cut = -1;
-        for (int i = _preroll.Count - 1; i >= 0; i--)
+        for (int i = buffer.Count - 1; i >= 0; i--)
         {
-            if (!_preroll[i].Video.Keyframe) continue;
-            if (unchecked(last - _preroll[i].Video.RtpTs) >= want)
+            if (!buffer[i].Video.Keyframe) continue;
+            if (unchecked(last - buffer[i].Video.RtpTs) >= want)
             {
                 cut = i;
                 break;
             }
         }
         if (cut > 0)
-            _preroll.RemoveRange(0, cut);
+            buffer.RemoveRange(0, cut);
         // Safety valve for streams with pathological keyframe intervals.
-        if (_preroll.Count > 4096)
-            _preroll.RemoveRange(0, _preroll.Count - 4096);
+        if (buffer.Count > 4096)
+            buffer.RemoveRange(0, buffer.Count - 4096);
     }
 
     // ------------------------------------------------------------------ event lifecycle
@@ -250,6 +270,8 @@ public sealed class EventRecorder
         {
             _writer?.Dispose();
             _writer = null;
+            _previewWriter?.Dispose();
+            _previewWriter = null;
         }
         rec.EndUtc = DateTime.UtcNow;
         rec.Ongoing = false;
@@ -269,11 +291,13 @@ public sealed class EventRecorder
                 if (_writer == null)
                 {
                     Log.Warn($"{_camera}: stream not ready; event stored without a clip");
-                    return;
                 }
-                foreach (var (v, gap) in _preroll)
-                    _writer.Add(v, gap);
-                _preroll.Clear();
+                else
+                {
+                    foreach (var (v, gap) in _preroll)
+                        _writer.Add(v, gap);
+                    _preroll.Clear();
+                }
             }
             catch (Exception ex)
             {
@@ -281,12 +305,32 @@ public sealed class EventRecorder
                 _writer?.Dispose();
                 _writer = null;
             }
+
+            // The low-res twin from the sub stream, for the review strip's previews.
+            if (_previewHub != null)
+            {
+                try
+                {
+                    _previewWriter = ClipWriter.TryCreate(Path.Combine(_store.EventDir(rec), "preview.mp4"), _previewHub);
+                    if (_previewWriter != null)
+                    {
+                        foreach (var (v, gap) in _previewPreroll)
+                            _previewWriter.Add(v, gap);
+                        _previewPreroll.Clear();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn($"{_camera}: cannot start preview clip: {ex.Message}");
+                    _previewWriter?.Dispose();
+                    _previewWriter = null;
+                }
+            }
         }
-        if (_writer != null)
-        {
-            rec.HasClip = true;
+        rec.HasClip = _writer != null;
+        rec.HasPreview = _previewWriter != null;
+        if (rec.HasClip || rec.HasPreview)
             _store.Save(rec);
-        }
     }
 
     /// <summary>Best-effort thumbnail via the camera's own JPEG snapshot command.</summary>

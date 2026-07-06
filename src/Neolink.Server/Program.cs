@@ -73,6 +73,21 @@ catch (Exception ex)
 
 Log.Info($"Neolink.NET {Version} starting");
 
+// Server-side UI state (accounts, runtime settings) lives in state_dir — the
+// config directory unless relocated (e.g. because the config mount is read-only).
+var configDir = Path.GetDirectoryName(Path.GetFullPath(configPath))!;
+var stateDir = config.Ui.StateDir ?? configDir;
+try
+{
+    Directory.CreateDirectory(stateDir);
+}
+catch (Exception ex)
+{
+    return Fail($"ui.state_dir '{stateDir}' is unusable: {ex.Message}");
+}
+if (stateDir != configDir)
+    Log.Info($"UI state directory: {stateDir}");
+
 using var shutdown = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) =>
 {
@@ -102,10 +117,9 @@ if (config.Recording is { } recCfg)
     {
         eventStore = new EventStore(recCfg.Path);
         eventStore.Load();
-        // Runtime switches live next to the config file; the recordings root is
-        // checked once to migrate the old location.
-        recordingSettings = new RecordingSettings(
-            Path.GetDirectoryName(Path.GetFullPath(configPath))!, legacyDir: eventStore.Root);
+        // Runtime switches live in the state dir; older locations (config dir,
+        // recordings root) are checked once for migration.
+        recordingSettings = new RecordingSettings(stateDir, configDir, eventStore.Root);
         Log.Info($"Recording to {eventStore.Root} " +
                  $"(events: {(recCfg.RetentionDays > 0 ? $"{recCfg.RetentionDays} days" : "forever")}, " +
                  $"continuous: {(recCfg.EffectiveContinuousRetentionDays > 0 ? $"{recCfg.EffectiveContinuousRetentionDays} days" : "forever")})");
@@ -175,8 +189,12 @@ foreach (var cam in config.Cameras)
         else
         {
             recordingSettings.Seed(cam.Name, eventsDefault: cam.Record);
+            // Strip previews are cut from the sub stream when it is served and
+            // differs from the recording stream (no point recording twice).
+            var previewStream = webStreams.FirstOrDefault(s => s.Kind == "subStream");
+            if (previewStream == recordStream) previewStream = null;
             var recorder = new EventRecorder(cam.Name, recordStream.Hub, control, eventStore,
-                config.Recording, recordingSettings);
+                config.Recording, recordingSettings, previewStream?.Hub);
             primaryService.MotionSink = recorder.OnMotion;
             tasks.Add(Task.Run(() => recorder.RunAsync(shutdown.Token)));
 
@@ -195,12 +213,12 @@ foreach (var cam in config.Cameras)
 // Web API (camera list + fMP4 live streams for browsers); guarded like the cameras.
 if (config.WebPort > 0)
 {
-    // Web-UI accounts (users.json next to the config). Auth is off until the
+    // Web-UI accounts (users.json in the state dir). Auth is off until the
     // first account (the admin) is created from the UI itself.
-    var userStore = new UserStore(Path.GetDirectoryName(Path.GetFullPath(configPath))!);
+    var userStore = new UserStore(stateDir, legacyDir: configDir);
     if (!userStore.Enabled)
         Log.Info("Web UI authentication is off — create the admin account from the UI to enable it");
-    if (config.ResetAdminPassword)
+    if (config.EffectiveResetAdminPassword)
         Log.Warn("reset_admin_password is TRUE: anyone reaching the login page can set a new admin " +
                  "password. Set it back to false as soon as the reset is done!");
 
@@ -210,7 +228,7 @@ if (config.WebPort > 0)
         {
             await WebApi.RunAsync(config.WebBind ?? config.BindAddr, config.WebPort, config.WebUi,
                 webCameras, users, config.BindPort, eventStore, recordingSettings,
-                userStore, config.ResetAdminPassword, shutdown.Token);
+                userStore, config.EffectiveResetAdminPassword, config.Ui.TrickleSpeed, shutdown.Token);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)

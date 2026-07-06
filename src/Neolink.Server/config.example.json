@@ -14,11 +14,24 @@
   // Serve the browser UI on web_port. Set false for API-only / headless setups.
   "webui": true,
 
-  // Web-UI sign-in recovery: while true, the login screen allows setting a new
-  // admin password WITHOUT the old one. Set it back to false right after use!
-  // (Web-UI accounts live in users.json next to this file; sign-in stays off
-  // until the first account — the admin — is created from the UI itself.)
-  "reset_admin_password": false,
+  // Web-UI specific settings. NOTE: UI sign-in accounts are NOT configured here —
+  // they live in users.json (created from the UI itself) and are entirely separate
+  // from the RTSP "users" list below.
+  "ui": {
+    // Where the UI's server-side state persists: users.json (accounts) and
+    // settings.json (per-user layouts, filters, recording switches).
+    // Defaults to this config file's directory — point it at a persistent volume
+    // if your config is mounted read-only or replaced on deployments, otherwise
+    // accounts and layouts are lost every deploy.
+    // "state_dir": "/config",
+
+    // Sign-in recovery: while true, the login screen allows setting a new admin
+    // password WITHOUT the old one. Set it back to false right after use!
+    "reset_admin_password": false,
+
+    // Playback speed of the ambient clip previews in the review strip.
+    "trickle_speed": 4
+  },
 
   // Optional: recording to disk — motion/AI detection events (clips + thumbnails)
   // and, when switched on per camera in the web UI, continuous 24/7 footage.

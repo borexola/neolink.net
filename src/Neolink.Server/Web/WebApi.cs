@@ -55,7 +55,7 @@ public static class WebApi
     public static async Task RunAsync(string bindAddr, int port, bool webUi,
         IReadOnlyList<WebCameraInfo> cameras, IReadOnlyDictionary<string, string> users,
         int rtspPort, EventStore? events, RecordingSettings? recordingSettings,
-        UserStore userStore, bool resetAdminPassword, CancellationToken ct)
+        UserStore userStore, bool resetAdminPassword, double trickleSpeed, CancellationToken ct)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -271,6 +271,7 @@ public static class WebApi
         {
             events = events != null,
             continuous = events != null && RecordingConfig.ContinuousEnabled,
+            trickleSpeed,
         }));
 
         app.MapGet("/api/cameras", () =>
@@ -509,6 +510,7 @@ public static class WebApi
                 ongoing = r.Ongoing,
                 hasClip = r.HasClip,
                 hasThumb = r.HasThumb,
+                hasPreview = r.HasPreview,
             };
 
             app.MapGet("/api/events", (string? camera, bool? reviewed, int? limit) =>
@@ -528,6 +530,15 @@ public static class WebApi
                 return path == null
                     ? Results.Json(new { error = "no thumbnail for this event" }, statusCode: 404)
                     : Results.File(path, "image/jpeg");
+            });
+
+            // The clip's low-res sub-stream twin, used by the strip's ambient previews.
+            app.MapGet("/api/events/{id}/preview", (string id) =>
+            {
+                var path = events.ArtifactPath(id, "preview.mp4");
+                return path == null
+                    ? Results.Json(new { error = "no preview for this event" }, statusCode: 404)
+                    : Results.File(path, "video/mp4", enableRangeProcessing: true);
             });
 
             app.MapPost("/api/events/{id}/review", (string id, ReviewRequest req, HttpContext ctx) =>

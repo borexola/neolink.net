@@ -300,11 +300,12 @@
     window.neolink = {
         freeInit,
 
-        // Ambient event previews (review strip): ensure real muting and start
-        // looped playback on every trickle video. Idempotent, called per render.
-        trickle() {
+        // Ambient event previews (review strip): ensure real muting, fast-forward
+        // playback rate and looped playback. Idempotent, called per render.
+        trickle(speed) {
             document.querySelectorAll('video[data-trickle]').forEach(v => {
                 v.muted = true;
+                v.defaultPlaybackRate = v.playbackRate = speed || 4;
                 if (v.paused) v.play().catch(() => { });
             });
         },

@@ -323,7 +323,7 @@ public static class SelfTest
                 // config dir must pick it up from there and re-home it.
                 var newDir = Path.Combine(dir, "new-config-dir");
                 Directory.CreateDirectory(newDir);
-                var migrated = new Recording.RecordingSettings(newDir, legacyDir: dir);
+                var migrated = new Recording.RecordingSettings(newDir, dir);
                 Assert(migrated.Get("cam1").Continuous, "legacy settings migrated");
                 Assert(File.Exists(Path.Combine(newDir, "settings.json")), "settings re-homed to config dir");
             }

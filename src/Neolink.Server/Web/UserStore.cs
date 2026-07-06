@@ -49,19 +49,29 @@ public sealed class UserStore
         public List<UserRecord> Users { get; set; } = new();
     }
 
-    public UserStore(string configDir)
+    public UserStore(string stateDir, string? legacyDir = null)
     {
-        _file = Path.Combine(configDir, "users.json");
+        _file = Path.Combine(stateDir, "users.json");
         try
         {
-            if (File.Exists(_file))
+            // A relocated state_dir picks the accounts up from the old location once.
+            var source = _file;
+            if (!File.Exists(source) && legacyDir != null
+                && File.Exists(Path.Combine(legacyDir, "users.json")))
             {
-                var model = JsonSerializer.Deserialize<FileModel>(File.ReadAllText(_file), JsonOpts);
+                source = Path.Combine(legacyDir, "users.json");
+                Log.Info($"UI accounts: migrating {source} -> {_file}");
+            }
+            if (File.Exists(source))
+            {
+                var model = JsonSerializer.Deserialize<FileModel>(File.ReadAllText(source), JsonOpts);
                 if (model != null)
                 {
                     if (model.Secret.Length > 0) _secret = Convert.FromBase64String(model.Secret);
                     _users = model.Users;
                 }
+                if (source != _file)
+                    lock (_gate) { SaveLocked(); }
             }
         }
         catch (Exception ex)
