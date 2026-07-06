@@ -180,6 +180,17 @@
                         @(_recording.Events ? "on" : "off")
                     </button>
                 </div>
+                @if (_recording.Events)
+                {
+                    <div class="control-row">
+                        <span>Keep event clips (days)</span>
+                        <input class="ret-input" type="number" min="0" step="1"
+                               placeholder="@RetentionLabel(_recording.DefaultEventRetentionDays)"
+                               title="How long this camera's event clips are kept. Blank = server default, 0 = keep forever."
+                               value="@(_recording.EventRetentionDays?.ToString() ?? "")"
+                               @onchange="e => SetRetentionAsync(forEvents: true, (string?)e.Value)" />
+                    </div>
+                }
                 @if (_recording.ContinuousAvailable)
                 {
                     <div class="control-row">
@@ -188,6 +199,24 @@
                                 @onclick="() => SetRecordingAsync(continuous: !_recording.Continuous)">
                             @(_recording.Continuous ? "on" : "off")
                         </button>
+                    </div>
+                    @if (_recording.Continuous)
+                    {
+                        <div class="control-row">
+                            <span>Keep continuous footage (days)</span>
+                            <input class="ret-input" type="number" min="0" step="1"
+                                   placeholder="@RetentionLabel(_recording.DefaultContinuousRetentionDays)"
+                                   title="How long this camera's 24/7 footage is kept. Blank = server default, 0 = keep forever."
+                                   value="@(_recording.ContinuousRetentionDays?.ToString() ?? "")"
+                                   @onchange="e => SetRetentionAsync(forEvents: false, (string?)e.Value)" />
+                        </div>
+                    }
+                }
+                @if (_recording.Events || _recording.Continuous)
+                {
+                    <div class="notice small">
+                        Retention is per camera and per recording type: blank uses the server default,
+                        0 keeps footage forever. Expired days are removed by the hourly cleanup.
                     </div>
                 }
                 @if (_recording.Events)
@@ -360,11 +389,24 @@
         _ => "•",
     };
 
-    private async Task SetRecordingAsync(bool? events = null, bool? continuous = null, List<string>? eventTypes = null)
+    private async Task SetRecordingAsync(bool? events = null, bool? continuous = null, List<string>? eventTypes = null,
+        int? eventRetentionDays = null, int? continuousRetentionDays = null)
     {
-        object body = new { events, continuous, eventTypes };
+        object body = new { events, continuous, eventTypes, eventRetentionDays, continuousRetentionDays };
         if (await PostAsync("recording", body))
             _recording = await GetAsync<ApiRecordingSettings>("recording");
+    }
+
+    private static string RetentionLabel(int days) =>
+        days > 0 ? $"default ({days}d)" : "default (forever)";
+
+    /// <summary>Blank/invalid input resets to the server default (the API takes negative = clear).</summary>
+    private Task SetRetentionAsync(bool forEvents, string? raw)
+    {
+        int days = int.TryParse(raw?.Trim(), out var d) && d >= 0 ? d : -1;
+        return forEvents
+            ? SetRecordingAsync(eventRetentionDays: days)
+            : SetRecordingAsync(continuousRetentionDays: days);
     }
 
     private Task ToggleEventTypeAsync(string label)

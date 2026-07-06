@@ -53,7 +53,7 @@ public sealed class RtspServer
         var (user, pass) = creds.Value;
 
         return _users.TryGetValue(user, out var expected)
-            && expected == pass
+            && NetUtil.FixedTimeEquals(expected, pass)
             && mount.PermittedUsers.Contains(user);
     }
 

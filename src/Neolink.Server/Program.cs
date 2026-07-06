@@ -130,10 +130,24 @@ if (config.Recording is { } recCfg)
         // recordings root) are checked once for migration.
         recordingSettings = new RecordingSettings(stateDir, configDir, eventStore.Root);
         Log.Info($"Recording to {eventStore.Root} " +
-                 $"(events: {(recCfg.RetentionDays > 0 ? $"{recCfg.RetentionDays} days" : "forever")}, " +
-                 $"continuous: {(recCfg.EffectiveContinuousRetentionDays > 0 ? $"{recCfg.EffectiveContinuousRetentionDays} days" : "forever")})");
-        tasks.Add(Task.Run(() => eventStore.RunRetentionAsync(
-            recCfg.RetentionDays, recCfg.EffectiveContinuousRetentionDays, shutdown.Token)));
+                 $"(default retention — events: {(recCfg.RetentionDays > 0 ? $"{recCfg.RetentionDays} days" : "forever")}, " +
+                 $"continuous: {(recCfg.EffectiveContinuousRetentionDays > 0 ? $"{recCfg.EffectiveContinuousRetentionDays} days" : "forever")}; " +
+                 "per-camera overrides apply)");
+        // Per-camera retention: the cleanup pass sees storage-directory names, so map
+        // them back to camera names to look up each camera's override (null = default).
+        var store = eventStore;
+        var settings = recordingSettings;
+        var camerasByDir = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var c in config.Cameras)
+            camerasByDir.TryAdd(EventStore.SafeName(c.Name), c.Name);
+        (int, int) RetentionFor(string dirName)
+        {
+            var name = camerasByDir.TryGetValue(dirName, out var n) ? n : dirName;
+            var s = settings.Get(name);
+            return (s.EventRetentionDays ?? recCfg.RetentionDays,
+                    s.ContinuousRetentionDays ?? recCfg.EffectiveContinuousRetentionDays);
+        }
+        tasks.Add(Task.Run(() => store.RunRetentionAsync(RetentionFor, shutdown.Token)));
     }
     catch (Exception ex)
     {
@@ -273,6 +287,7 @@ if (config.WebPort > 0)
         RtspPort = config.BindPort,
         Events = eventStore,
         RecordingSettings = recordingSettings,
+        Recording = config.Recording,
         UserStore = userStore,
         ResetAdminPassword = config.EffectiveResetAdminPassword,
         TrickleSpeed = config.Ui.TrickleSpeed,

@@ -286,6 +286,9 @@ public sealed class UserStore
         var model = new FileModel { Secret = Convert.ToBase64String(_secret), Users = _users };
         var tmp = _file + ".tmp";
         File.WriteAllText(tmp, JsonSerializer.Serialize(model, JsonOpts));
+        // The file holds the token-signing secret: owner-only where the OS supports it.
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(tmp, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         File.Move(tmp, _file, overwrite: true);
     }
 }

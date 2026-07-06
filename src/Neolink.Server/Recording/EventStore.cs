@@ -214,12 +214,25 @@ public sealed class EventStore
 
     // ------------------------------------------------------------------ retention
 
-    /// <summary>Deletes event and continuous day directories older than their retention windows.</summary>
-    public void Cleanup(int retentionDays, int continuousRetentionDays)
+    /// <summary>Same retention window for every camera (used by tests and simple hosts).</summary>
+    public void Cleanup(int retentionDays, int continuousRetentionDays) =>
+        Cleanup(_ => (retentionDays, continuousRetentionDays));
+
+    /// <summary>
+    /// Deletes event and continuous day directories older than their retention windows.
+    /// <paramref name="retentionFor"/> maps a camera storage-directory name to its
+    /// (event days, continuous days) — 0 in either slot means keep forever.
+    /// </summary>
+    public void Cleanup(Func<string, (int EventDays, int ContinuousDays)> retentionFor)
     {
         int events = 0, segments = 0;
         foreach (var cameraDir in Directory.EnumerateDirectories(_root))
         {
+            var (retentionDays, continuousRetentionDays) = retentionFor(Path.GetFileName(cameraDir)!);
+            // Clamp to 100 years: an absurd day count (hand-edited settings/config)
+            // would overflow AddDays and abort the whole pass for every camera.
+            retentionDays = Math.Min(retentionDays, 36500);
+            continuousRetentionDays = Math.Min(continuousRetentionDays, 36500);
             if (retentionDays > 0)
                 events += CleanupDayDirs(cameraDir, DateTime.Now.Date.AddDays(-retentionDays), dropIndex: true);
 
@@ -228,9 +241,9 @@ public sealed class EventStore
                 segments += CleanupDayDirs(contDir, DateTime.Now.Date.AddDays(-continuousRetentionDays), dropIndex: false);
         }
         if (events > 0)
-            Log.Info($"Events: retention removed {events} expired day folder(s) (older than {retentionDays}d)");
+            Log.Info($"Events: retention removed {events} expired day folder(s)");
         if (segments > 0)
-            Log.Info($"Recordings: retention removed {segments} expired day folder(s) (older than {continuousRetentionDays}d)");
+            Log.Info($"Recordings: retention removed {segments} expired day folder(s)");
     }
 
     private int CleanupDayDirs(string parent, DateTime cutoff, bool dropIndex)
@@ -267,18 +280,20 @@ public sealed class EventStore
     }
 
     /// <summary>Runs retention cleanup once at start and then hourly.</summary>
-    public async Task RunRetentionAsync(int retentionDays, int continuousRetentionDays, CancellationToken ct)
+    public async Task RunRetentionAsync(Func<string, (int EventDays, int ContinuousDays)> retentionFor,
+        CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
         {
-            try { Cleanup(retentionDays, continuousRetentionDays); }
+            try { Cleanup(retentionFor); }
             catch (Exception ex) { Log.Warn($"Events: retention pass failed: {Log.Flatten(ex)}"); }
             try { await Task.Delay(TimeSpan.FromHours(1), ct).ConfigureAwait(false); }
             catch (OperationCanceledException) { return; }
         }
     }
 
-    private static string SafeName(string name)
+    /// <summary>Camera name → its storage-directory name (invalid filename chars replaced).</summary>
+    public static string SafeName(string name)
     {
         var invalid = Path.GetInvalidFileNameChars();
         return new string(name.Select(c => invalid.Contains(c) ? '_' : c).ToArray());

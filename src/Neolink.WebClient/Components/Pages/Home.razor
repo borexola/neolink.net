@@ -87,15 +87,22 @@
 
         @foreach (var cam in _cameras)
         {
-            <div class="cam">
-                <div class="cam-head" title="Add to view" @onclick="() => AddCamera(cam)">
-                    <span class="dot @(cam.Online || cam.Streams.Any(s => s.Ready) ? "on" : "off")"></span>
+            <div class="cam @(cam.Online ? "" : "cam-offline")">
+                @* Stream readiness latches once video has flowed, so only the live
+                   control connection (Online) is a truthful liveness signal. *@
+                <div class="cam-head" title="@(cam.Online ? "Add to view" : "Camera unreachable — reconnecting")"
+                     @onclick="() => AddCamera(cam)">
+                    <span class="dot @(cam.Online ? "on" : "off")"></span>
                     <span class="cam-name">@cam.Name</span>
+                    @if (!cam.Online)
+                    {
+                        <span class="cam-offline-badge">offline</span>
+                    }
                     @* solo-btn (margin-left:auto) only on the FIRST button so the pair sits together at the right *@
                     <button class="icon-btn solo-btn" title="Camera settings & controls"
                             @onclick="() => _panelCamera = cam.Name" @onclick:stopPropagation="true">⚙</button>
-                    <button class="icon-btn" title="Theater view"
-                            @onclick="() => MaximizeCamera(cam)" @onclick:stopPropagation="true">⛶</button>
+                    <button class="icon-btn" title="Quick view (pop-up, keeps your layout)"
+                            @onclick="() => OpenQuickView(cam)" @onclick:stopPropagation="true">⛶</button>
                 </div>
                 <div class="cam-streams">
                     @foreach (var s in cam.Streams)
@@ -139,9 +146,29 @@
         @if (_eventsSupported && _events.Any(e => !e.Reviewed))
         {
             <div class="events-bar" id="events-bar" style="height:@(_stripHeight)px">
-                <span class="events-bar-count" title="Unreviewed events (after filters)">⚡ @StripEvents.Count()</span>
-                <button class="icon-btn strip-filter-btn @(_showStripFilter || _hiddenTypes.Count > 0 || _hiddenCams.Count > 0 ? "active" : "")"
-                        title="Filter which events appear here" @onclick="() => _showStripFilter = !_showStripFilter">⚟</button>
+                <div class="events-rail">
+                    <span class="events-rail-label">Detected</span>
+                    <span class="events-rail-count" title="Unreviewed events (after filters)">@StripEvents.Count()</span>
+                    <div class="events-rail-actions">
+                        <button class="rail-btn @(_showStripFilter ? "open" : "")"
+                                title="Filter which events appear here" @onclick="() => _showStripFilter = !_showStripFilter">
+                            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+                                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <polygon points="22 3 2 3 10 12.5 10 19 14 21 14 12.5 22 3"/>
+                            </svg>
+                            @if (HasStripFilters)
+                            {
+                                <span class="rail-btn-dot" title="Filters active"></span>
+                            }
+                        </button>
+                        <button class="rail-btn" title="Dismiss all events (mark everything reviewed)" @onclick="DismissAllAsync">
+                            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+                                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M18 6 7 17l-5-5"/><path d="m22 10-7.5 7.5L13 16"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
                 <div class="events-bar-scroll">
                     @if (!StripEvents.Any())
                     {
@@ -187,7 +214,6 @@
                         </div>
                     }
                 </div>
-                <button class="chip events-clear" title="Dismiss all events" @onclick="DismissAllAsync">Clear all</button>
                 <div class="strip-resize" title="Drag to resize the event strip"></div>
             </div>
 
@@ -199,7 +225,7 @@
                     <span class="tool-label">SHOW</span>
                     @foreach (var t in StripTypes)
                     {
-                        <button class="chip @(_hiddenTypes.Contains(t) ? "chip-off" : "")"
+                        <button class="chip @(_hiddenTypes.Contains(t) ? "chip-off" : "chip-active")"
                                 title="@(_hiddenTypes.Contains(t) ? "Hidden — click to show" : "Shown — click to hide")"
                                 @onclick="() => ToggleTypeFilterAsync(t)">@StripTypeIcon(t) @t</button>
                     }
@@ -208,9 +234,15 @@
                     @foreach (var cam in _cameras)
                     {
                         var name = cam.Name;
-                        <button class="chip @(_hiddenCams.Contains(name) ? "chip-off" : "")"
+                        <button class="chip @(_hiddenCams.Contains(name) ? "chip-off" : "chip-active")"
                                 title="@(_hiddenCams.Contains(name) ? "Hidden — click to show" : "Shown — click to hide")"
                                 @onclick="() => ToggleCamFilterAsync(name)">@name</button>
+                    }
+                    @if (HasStripFilters)
+                    {
+                        <span class="tile-spacer"></span>
+                        <button class="chip" title="Show every event type and camera again"
+                                @onclick="ResetStripFiltersAsync">↺ Reset filters</button>
                     }
                 </div>
             }
@@ -240,6 +272,17 @@
                 <button class="tool-btn back" @onclick="RestoreFromBackup">⤡ Restore view</button>
             }
 
+            <span class="tool-sep"></span>
+            <button class="tool-btn layouts-btn @(_showLayouts ? "active" : "")"
+                    title="@(_activeLayout != null ? $"Saved layouts (current: {_activeLayout})" : "Saved layouts")"
+                    @onclick="() => _showLayouts = !_showLayouts">
+                ▤ <span class="tool-name">@(_activeLayout ?? "Layouts")</span>
+                @if (LayoutDirty)
+                {
+                    <span class="layout-dirty-dot" title="This layout has unsaved changes"></span>
+                }
+            </button>
+
             @if (_eventsSupported)
             {
                 <span class="tool-sep"></span>
@@ -251,6 +294,42 @@
                 }
             }
         </div>
+
+        @if (_showLayouts)
+        {
+            @* Saved layouts drawer: click a name to load it exactly as saved;
+               "Update" writes the current arrangement into the loaded layout,
+               the name box saves it as a new one. *@
+            <div class="layouts-bar">
+                <span class="tool-label">SAVED LAYOUTS</span>
+                @if (_layouts.Count == 0)
+                {
+                    <span class="event-sub">nothing saved yet — arrange your cameras, type a name and save</span>
+                }
+                @foreach (var l in _layouts)
+                {
+                    var layout = l;
+                    bool active = string.Equals(layout.Name, _activeLayout, StringComparison.OrdinalIgnoreCase);
+                    <span class="layout-chip @(active ? "layout-chip-active" : "")">
+                        <button class="layout-chip-load" title="Load “@(layout.Name)” (@(layout.Mode), @(layout.Count) tiles)"
+                                @onclick="() => LoadLayoutAsync(layout)">@(layout.Name)</button>
+                        <button class="icon-btn layout-chip-del" title="Delete “@(layout.Name)”"
+                                @onclick="() => DeleteLayoutAsync(layout)">✕</button>
+                    </span>
+                }
+                <span class="tile-spacer"></span>
+                @if (LayoutDirty)
+                {
+                    <button class="chip chip-active" title="Save the current arrangement into “@_activeLayout”"
+                            @onclick="UpdateActiveLayoutAsync">Update “@_activeLayout”</button>
+                }
+                <input class="layout-name-input" placeholder="new layout name…" maxlength="40"
+                       @bind="_layoutName" @bind:event="oninput"
+                       @onkeydown='e => { if (e.Key == "Enter") _ = SaveLayoutAsAsync(); }' />
+                <button class="chip" disabled="@(string.IsNullOrWhiteSpace(_layoutName))"
+                        @onclick="SaveLayoutAsAsync">＋ Save as new</button>
+            </div>
+        }
 
         <div id="stage-grid" class="grid mode-@_mode" style="@ContainerStyle()">
             @for (int i = 0; i < _slots.Count; i++)
@@ -313,6 +392,37 @@
                      Camera="_cameras.FirstOrDefault(c => c.Name == _panelCamera)"
                      User="@_user" Pass="@_pass" Token="@_authToken"
                      OnClose="() => _panelCamera = null" />
+    }
+
+    @if (_quickView is { Camera: not null } qv)
+    {
+        var qvCam = _cameras.FirstOrDefault(c => c.Name == qv.Camera);
+        <div class="backdrop player-backdrop" @onclick="CloseQuickView"></div>
+        <div class="quick-view" role="dialog" aria-label="Camera quick view">
+            <div class="event-player-head">
+                <div class="event-player-title">
+                    <span class="event-title">@qv.Camera</span>
+                    <span class="event-sub">quick view — your layout stays as it is</span>
+                </div>
+                @if (qvCam != null && qvCam.Streams.Count > 1)
+                {
+                    <select class="event-filter" value="@qv.Path" title="Stream"
+                            @onchange="e => ChangeQuickStream(qvCam, (string?)e.Value)">
+                        @foreach (var s in qvCam.Streams)
+                        {
+                            <option value="@s.Path">@s.Label</option>
+                        }
+                    </select>
+                }
+                <button class="icon-btn fs-toggle" title="Browser fullscreen (click again to exit)"
+                        @onclick="QuickFullscreenAsync"></button>
+                <button class="icon-btn" title="Close" @onclick="CloseQuickView">✕</button>
+            </div>
+            <div class="quick-view-media" id="quick-view-media">
+                <video id="vid-quick" muted playsinline></video>
+                <div class="tile-status">connecting…</div>
+            </div>
+        </div>
     }
 
     @if (_showSetupPrompt && !_showLogin)
@@ -730,6 +840,17 @@
     private bool _sidebarOpen;
     private string? _panelCamera;
 
+    // Quick view: temporary pop-up player opened from the sidebar (⛶)
+    private ViewSlot? _quickView;
+    private string? _quickAttached;
+    private const string QuickVideoId = "vid-quick";
+
+    // Named layouts: save/reload exact camera arrangements
+    private List<SavedLayout> _layouts = new();
+    private string? _activeLayout;
+    private string _layoutName = "";
+    private bool _showLayouts;
+
     private readonly Dictionary<int, string> _attached = new();
     private PeriodicTimer? _pollTimer;
 
@@ -864,6 +985,8 @@
                     _hiddenTypes = new HashSet<string>(v.HiddenTypes, StringComparer.OrdinalIgnoreCase);
                     _hiddenCams = new HashSet<string>(v.HiddenCams, StringComparer.OrdinalIgnoreCase);
                     if (v.StripHeight > 0) _stripHeight = Math.Clamp(v.StripHeight, 96, 640);
+                    _layouts = v.Layouts;
+                    _activeLayout = v.ActiveLayout;
                 }
             }
         }
@@ -914,6 +1037,7 @@
         Mode = _mode, Count = _count, Slots = _slots, Backup = _backup,
         HiddenTypes = _hiddenTypes.ToList(), HiddenCams = _hiddenCams.ToList(),
         StripHeight = _stripHeight,
+        Layouts = _layouts, ActiveLayout = _activeLayout,
     };
 
     private async Task SaveAsync()
@@ -946,6 +1070,9 @@
         _hiddenTypes = new HashSet<string>(v.HiddenTypes, StringComparer.OrdinalIgnoreCase);
         _hiddenCams = new HashSet<string>(v.HiddenCams, StringComparer.OrdinalIgnoreCase);
         if (v.StripHeight > 0) _stripHeight = Math.Clamp(v.StripHeight, 96, 640);
+        // Account settings that predate saved layouts keep whatever localStorage had.
+        if (v.Layouts.Count > 0) _layouts = v.Layouts;
+        if (v.ActiveLayout != null) _activeLayout = v.ActiveLayout;
         EnsureSlots();
     }
 
@@ -1360,6 +1487,15 @@
     private IEnumerable<ApiEvent> StripEvents => _events.Where(e => !e.Reviewed
         && !_hiddenCams.Contains(e.Camera)
         && e.Labels.Any(l => !_hiddenTypes.Contains(l)));
+
+    private bool HasStripFilters => _hiddenTypes.Count > 0 || _hiddenCams.Count > 0;
+
+    private Task ResetStripFiltersAsync()
+    {
+        _hiddenTypes.Clear();
+        _hiddenCams.Clear();
+        return SaveAsync();
+    }
 
     private Task ToggleTypeFilterAsync(string label)
     {
@@ -1853,6 +1989,83 @@
         }
     }
 
+    // ------------------------------------------------------------ named layouts
+
+    private SavedLayout? ActiveLayoutDef =>
+        _layouts.FirstOrDefault(l => string.Equals(l.Name, _activeLayout, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>The loaded layout no longer matches the screen — offer "update or save as new".</summary>
+    private bool LayoutDirty
+    {
+        get
+        {
+            // A maximized tile is a temporary detour, not an edit of the layout.
+            if (_backup != null) return false;
+            var l = ActiveLayoutDef;
+            if (l == null) return false;
+            if (l.Mode != _mode || l.Count != _count || l.Slots.Count != _slots.Count) return true;
+            for (int i = 0; i < _slots.Count; i++)
+            {
+                if (l.Slots[i].Camera != _slots[i].Camera || l.Slots[i].Path != _slots[i].Path)
+                    return true;
+            }
+            return false;
+        }
+    }
+
+    private async Task<SavedLayout> CaptureLayoutAsync(string name) => new()
+    {
+        Name = name,
+        Mode = _mode,
+        Count = _count,
+        Slots = _slots.Select(s => s.Clone()).ToList(),
+        // Freeform tiles keep their exact pixel geometry (owned by JS in localStorage).
+        FreeGeometry = _mode == "free"
+            ? await JS.InvokeAsync<string?>("neolink.lsGet", "neolink.freegeo")
+            : null,
+    };
+
+    /// <summary>Saves the current view under the typed name (same name = overwrite).</summary>
+    private async Task SaveLayoutAsAsync()
+    {
+        var name = _layoutName.Trim();
+        if (name.Length == 0) return;
+        _layouts.RemoveAll(l => string.Equals(l.Name, name, StringComparison.OrdinalIgnoreCase));
+        _layouts.Add(await CaptureLayoutAsync(name));
+        _activeLayout = name;
+        _layoutName = "";
+        await SaveAsync();
+    }
+
+    private async Task UpdateActiveLayoutAsync()
+    {
+        var l = ActiveLayoutDef;
+        if (l == null) return;
+        _layouts[_layouts.IndexOf(l)] = await CaptureLayoutAsync(l.Name);
+        await SaveAsync();
+    }
+
+    private async Task LoadLayoutAsync(SavedLayout l)
+    {
+        if (l.FreeGeometry != null)
+            await JS.InvokeVoidAsync("neolink.lsSet", "neolink.freegeo", l.FreeGeometry);
+        _mode = Modes.Any(m => m.Mode == l.Mode) ? l.Mode : "grid";
+        _count = ClampCount(_mode, l.Count);
+        _slots = l.Slots.Select(s => s.Clone()).ToList();
+        EnsureSlots();
+        _backup = null; // loading a layout replaces any maximize detour
+        _activeLayout = l.Name;
+        await SaveAsync();
+    }
+
+    private Task DeleteLayoutAsync(SavedLayout l)
+    {
+        _layouts.Remove(l);
+        if (string.Equals(_activeLayout, l.Name, StringComparison.OrdinalIgnoreCase))
+            _activeLayout = null;
+        return SaveAsync();
+    }
+
     // ------------------------------------------------------------ maximize / restore
 
     private ViewSnapshot Snapshot() => new()
@@ -1881,16 +2094,33 @@
         _ = SaveAsync();
     }
 
-    private void MaximizeCamera(ApiCamera cam)
+    // ------------------------------------------------------------ quick view (pop-up)
+
+    /// <summary>Temporary pop-up player for one camera — the layout underneath is untouched.</summary>
+    private void OpenQuickView(ApiCamera cam)
     {
         var s = cam.Streams.FirstOrDefault(x => x.Kind == "mainStream") ?? DefaultStream(cam);
         if (s == null) return;
-        _backup ??= Snapshot();
-        _mode = "theater";
-        _count = 1;
-        _slots = new List<ViewSlot> { new() { Camera = cam.Name, Kind = s.Kind, Path = s.Path } };
-        _ = SaveAsync();
+        _quickView = new ViewSlot { Camera = cam.Name, Kind = s.Kind, Path = s.Path };
+        _sidebarOpen = false;
     }
+
+    private void CloseQuickView()
+    {
+        _ = JS.InvokeVoidAsync("neolink.exitFullscreen");
+        _quickView = null;
+    }
+
+    private void ChangeQuickStream(ApiCamera camera, string? path)
+    {
+        var stream = camera.Streams.FirstOrDefault(s => s.Path == path);
+        if (stream == null || _quickView == null) return;
+        _quickView.Kind = stream.Kind;
+        _quickView.Path = stream.Path;
+    }
+
+    private async Task QuickFullscreenAsync() =>
+        await JS.InvokeVoidAsync("neolink.fullscreen", "quick-view-media");
 
     private void RestoreFromBackup()
     {
@@ -1946,6 +2176,22 @@
                 _attached[i] = desired;
             }
         }
+
+        // The quick-view pop-up has its own player, independent of the grid slots.
+        string? quick = (!Locked && _quickView != null) ? WsUrl(_quickView) : null;
+        if (quick != _quickAttached)
+        {
+            if (_quickAttached != null)
+            {
+                await JS.InvokeVoidAsync("neolink.detach", QuickVideoId);
+                _quickAttached = null;
+            }
+            if (quick != null)
+            {
+                await JS.InvokeVoidAsync("neolink.attach", QuickVideoId, quick);
+                _quickAttached = quick;
+            }
+        }
     }
 
     public async ValueTask DisposeAsync()
@@ -1958,5 +2204,11 @@
             catch { /* circuit already gone */ }
         }
         _attached.Clear();
+        if (_quickAttached != null)
+        {
+            try { await JS.InvokeVoidAsync("neolink.detach", QuickVideoId); }
+            catch { /* circuit already gone */ }
+            _quickAttached = null;
+        }
     }
 }

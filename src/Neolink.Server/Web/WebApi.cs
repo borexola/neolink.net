@@ -31,6 +31,8 @@ public sealed class WebApiOptions
     public required int RtspPort { get; init; }
     public EventStore? Events { get; init; }
     public RecordingSettings? RecordingSettings { get; init; }
+    /// <summary>Recording defaults (retention etc.) reported to the UI; null when recording is off.</summary>
+    public RecordingConfig? Recording { get; init; }
     public required UserStore UserStore { get; init; }
     public bool ResetAdminPassword { get; init; }
     public double TrickleSpeed { get; init; } = 4;
@@ -69,7 +71,9 @@ public static class WebApi
     private sealed record StreamSettingsRequest(string? Stream, uint? Width, uint? Height,
         uint? Framerate, uint? Bitrate);
     private sealed record ReviewRequest(bool? Reviewed);
-    private sealed record RecordingSettingsRequest(bool? Events, bool? Continuous, List<string>? EventTypes);
+    /// <summary>Retention fields: null = unchanged, negative = back to the server default, 0 = keep forever.</summary>
+    private sealed record RecordingSettingsRequest(bool? Events, bool? Continuous, List<string>? EventTypes,
+        int? EventRetentionDays = null, int? ContinuousRetentionDays = null);
     private sealed record CredentialsRequest(string? Username, string? Password);
     private sealed record PasswordRequest(string? Password);
     private sealed record AdminUiSettings(double? TrickleSpeed, string? StateDir, bool? ResetAdminPassword);
@@ -445,7 +449,7 @@ public static class WebApi
             var creds = NetUtil.DecodeBasicAuth(ctx.Request.Headers.Authorization);
             if (creds != null
                 && users.TryGetValue(creds.Value.User, out var expected)
-                && expected == creds.Value.Pass
+                && NetUtil.FixedTimeEquals(expected, creds.Value.Pass)
                 && cam.PermittedUsers.Contains(creds.Value.User))
                 return null;
             ctx.Response.Headers.WWWAuthenticate = "Basic realm=\"neolink\"";
@@ -695,7 +699,8 @@ public static class WebApi
                 else if (users.Count > 0)
                 {
                     var creds = NetUtil.DecodeBasicAuth(ctx.Request.Headers.Authorization);
-                    if (creds == null || !users.TryGetValue(creds.Value.User, out var pw) || pw != creds.Value.Pass)
+                    if (creds == null || !users.TryGetValue(creds.Value.User, out var pw)
+                        || !NetUtil.FixedTimeEquals(pw, creds.Value.Pass))
                     {
                         ctx.Response.Headers.WWWAuthenticate = "Basic realm=\"neolink\"";
                         return Results.Json(new { error = "authentication required" }, statusCode: 401);
@@ -717,6 +722,12 @@ public static class WebApi
                 continuousAvailable = RecordingConfig.ContinuousEnabled,
                 eventTypes = s.EventTypes,
                 knownTypes = CameraRecordingSettings.KnownLabels,
+                // Per-camera retention overrides (null = default) + the server defaults
+                // so the UI can label what "default" currently means.
+                eventRetentionDays = s.EventRetentionDays,
+                continuousRetentionDays = s.ContinuousRetentionDays,
+                defaultEventRetentionDays = o.Recording?.RetentionDays ?? 7,
+                defaultContinuousRetentionDays = o.Recording?.EffectiveContinuousRetentionDays ?? 7,
             };
 
             app.MapGet("/api/cameras/{name}/recording", (string name, HttpContext ctx) =>
@@ -743,8 +754,21 @@ public static class WebApi
                 }
                 // The continuous switch is inert while the feature is disabled.
                 var continuous = RecordingConfig.ContinuousEnabled ? req.Continuous : null;
+                // Retention: negative = clear the override (use the server default).
+                // Capped at 100 years — beyond that is "forever", and unbounded values
+                // would overflow the cleanup pass's date arithmetic.
+                static int? Retention(int? v) => v switch
+                {
+                    null or < 0 => null,
+                    > 36500 => 36500,
+                    _ => v,
+                };
                 var updated = recordingSettings.Update(cam.Name, req.Events, continuous,
-                    types, setEventTypes: req.EventTypes != null);
+                    types, setEventTypes: req.EventTypes != null,
+                    eventRetentionDays: Retention(req.EventRetentionDays),
+                    setEventRetention: req.EventRetentionDays != null,
+                    continuousRetentionDays: Retention(req.ContinuousRetentionDays),
+                    setContinuousRetention: req.ContinuousRetentionDays != null);
                 return Results.Json(ShapeSettings(updated));
             });
         }
@@ -949,7 +973,10 @@ public static class WebApi
                     decodeTime += per;
                 }
                 pending = null;
-                await ws.SendAsync(batch.ToArray(), WebSocketMessageType.Binary, true, ct).ConfigureAwait(false);
+                // Send straight from the stream's buffer — copying it per batch would
+                // double the allocation on the per-frame hot path, per viewer.
+                var payload = new ArraySegment<byte>(batch.GetBuffer(), 0, (int)batch.Length);
+                await ws.SendAsync(payload, WebSocketMessageType.Binary, true, ct).ConfigureAwait(false);
             }
 
             await foreach (var packet in reader.ReadAllAsync(ct).ConfigureAwait(false))

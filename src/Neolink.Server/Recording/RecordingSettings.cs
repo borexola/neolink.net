@@ -4,9 +4,11 @@ namespace Neolink.Recording;
 
 /// <summary>
 /// One camera's runtime recording switches. Immutable — readers always see a
-/// consistent snapshot.
+/// consistent snapshot. Retention overrides are per recording type: null = use
+/// the server-wide default, 0 = keep forever, otherwise days.
 /// </summary>
-public sealed record CameraRecordingSettings(bool Events, bool Continuous, List<string>? EventTypes)
+public sealed record CameraRecordingSettings(bool Events, bool Continuous, List<string>? EventTypes,
+    int? EventRetentionDays = null, int? ContinuousRetentionDays = null)
 {
     /// <summary>Known detection labels (what the UI offers as event-type filters).</summary>
     public static readonly string[] KnownLabels = { "person", "vehicle", "animal", "package", "motion" };
@@ -88,12 +90,15 @@ public sealed class RecordingSettings
     }
 
     /// <summary>
-    /// Applies a partial update (null = leave unchanged; for the type filter,
-    /// <paramref name="setEventTypes"/> distinguishes "set" from "unchanged")
-    /// and persists the result.
+    /// Applies a partial update (null = leave unchanged; for the type filter and
+    /// the retention overrides, the matching set* flag distinguishes "set" — even
+    /// to null, meaning back to the server default — from "unchanged") and
+    /// persists the result.
     /// </summary>
     public CameraRecordingSettings Update(string camera, bool? events, bool? continuous,
-        List<string>? eventTypes, bool setEventTypes)
+        List<string>? eventTypes, bool setEventTypes,
+        int? eventRetentionDays = null, bool setEventRetention = false,
+        int? continuousRetentionDays = null, bool setContinuousRetention = false)
     {
         lock (_gate)
         {
@@ -103,7 +108,9 @@ public sealed class RecordingSettings
             var next = new CameraRecordingSettings(
                 events ?? cur.Events,
                 continuous ?? cur.Continuous,
-                setEventTypes ? eventTypes : cur.EventTypes);
+                setEventTypes ? eventTypes : cur.EventTypes,
+                setEventRetention ? eventRetentionDays : cur.EventRetentionDays,
+                setContinuousRetention ? continuousRetentionDays : cur.ContinuousRetentionDays);
             _cameras[camera] = next;
             SaveLocked();
             return next;

@@ -61,7 +61,9 @@ public sealed record ApiUserInfo(string Name, bool Admin);
 
 /// <summary>GET/POST /api/cameras/{name}/recording — runtime recording switches.</summary>
 public sealed record ApiRecordingSettings(bool Events, bool Continuous,
-    List<string>? EventTypes, List<string>? KnownTypes, bool ContinuousAvailable = false)
+    List<string>? EventTypes, List<string>? KnownTypes, bool ContinuousAvailable = false,
+    int? EventRetentionDays = null, int? ContinuousRetentionDays = null,
+    int DefaultEventRetentionDays = 7, int DefaultContinuousRetentionDays = 7)
 {
     /// <summary>null EventTypes = every detection type is recorded.</summary>
     public bool TypeEnabled(string label) => EventTypes == null || EventTypes.Contains(label);
@@ -134,6 +136,21 @@ public sealed class ViewSnapshot
     public List<ViewSlot> Slots { get; set; } = new();
 }
 
+/// <summary>
+/// A named, user-saved layout: which cameras sit in which tiles (and, for the
+/// freeform mode, the exact tile geometry). Loading one restores the view
+/// exactly as it was saved.
+/// </summary>
+public sealed class SavedLayout
+{
+    public string Name { get; set; } = "";
+    public string Mode { get; set; } = "grid";
+    public int Count { get; set; } = 4;
+    public List<ViewSlot> Slots { get; set; } = new();
+    /// <summary>Freeform tile positions/sizes (the JS "neolink.freegeo" JSON), when saved from free mode.</summary>
+    public string? FreeGeometry { get; set; }
+}
+
 /// <summary>Everything persisted to localStorage.</summary>
 public sealed class PersistedView
 {
@@ -152,4 +169,8 @@ public sealed class PersistedView
     public List<string> HiddenCams { get; set; } = new();
     /// <summary>Height of the review strip in px (user-resizable by dragging its bottom edge).</summary>
     public int StripHeight { get; set; } = 160;
+    /// <summary>Named layouts the user saved (per account when signed in).</summary>
+    public List<SavedLayout> Layouts { get; set; } = new();
+    /// <summary>Name of the layout currently loaded, if any — drives the "update or save as new" choice.</summary>
+    public string? ActiveLayout { get; set; }
 }

@@ -143,7 +143,24 @@ html, body {
 }
 
 .dot.on { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
-.dot.off { background: var(--muted); }
+.dot.off { background: var(--err); box-shadow: 0 0 6px var(--err); }
+
+/* Offline camera: unmistakable badge + a dimmed card (streams can't start) */
+.cam-offline { border-color: color-mix(in srgb, var(--err) 35%, var(--line)); }
+.cam-offline .cam-streams { opacity: 0.4; }
+
+.cam-offline-badge {
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--err);
+    border: 1px solid color-mix(in srgb, var(--err) 55%, transparent);
+    background: color-mix(in srgb, var(--err) 12%, transparent);
+    border-radius: 999px;
+    padding: 1px 7px;
+    flex: 0 0 auto;
+}
 
 .cam-streams {
     display: flex;
@@ -163,6 +180,7 @@ html, body {
     display: inline-flex;
     align-items: center;
     gap: 6px;
+    transition: border-color 0.12s ease, color 0.12s ease, opacity 0.12s ease;
 }
 
 .chip:hover { border-color: var(--accent); color: var(--accent); }
@@ -388,7 +406,8 @@ html, body {
     background: rgba(0, 0, 0, 0.25);
 }
 
-.tile video[data-live="1"] ~ .tile-status { display: none; }
+/* Applies wherever a live player renders a status overlay (grid tiles, quick view) */
+video[data-live="1"] ~ .tile-status { display: none; }
 
 .tile-bar {
     position: absolute;
@@ -432,8 +451,18 @@ html, body {
     background: var(--err);
 }
 
-/* Flash a tile red when its camera is picked again (already on screen) */
-.tile-flash { animation: tile-flash 0.9s ease-in-out; }
+/* Flash a tile red when its camera is picked again (already on screen).
+   The flash is an overlay ON TOP of the video — an inset shadow on the tile
+   itself paints underneath the <video> child and was invisible while playing. */
+.tile-flash::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    z-index: 6;
+    animation: tile-flash 0.9s ease-in-out;
+}
 
 @keyframes tile-flash {
     0%, 33%, 66% { box-shadow: inset 0 0 0 3px var(--err); }
@@ -470,6 +499,12 @@ html, body {
 }
 
 .icon-btn:hover { color: var(--accent); background: rgba(79, 140, 255, 0.12); }
+
+/* Keyboard navigation: a visible ring on any focused control, mouse clicks unaffected */
+:is(button, a, select, input):focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
 
 /* Browser-fullscreen toggle: glyph follows the JS-maintained body class */
 .fs-toggle::before { content: "⤢"; }
@@ -537,10 +572,12 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
         grid-area: auto !important;
     }
 
+    /* The hero spans real grid rows; a min-height taller than the row made it
+       overflow its cell and the next row's tiles rendered on top of it. */
     .grid.mode-focus .tile.hero,
     .grid.mode-mosaic .tile.hero {
         grid-column: span 2 !important;
-        min-height: 34vh;
+        grid-row: span 2 !important;
     }
 
     .grid.mode-theater { padding: 8px; }
@@ -671,9 +708,78 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
     flex: 0 0 auto;
 }
 
-.events-bar-count,
-.strip-filter-btn,
-.events-clear { align-self: center; }
+/* Compact header rail at the strip's left edge: what was detected, how many,
+   and the strip's own actions (filter / dismiss-all) as clear, bordered buttons. */
+.events-rail {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    flex: 0 0 auto;
+    min-width: 68px;
+    padding-right: 10px;
+    border-right: 1px solid var(--line);
+}
+
+.events-rail-label {
+    font-size: 9px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+
+.events-rail-count {
+    font-size: 22px;
+    font-weight: 700;
+    line-height: 1.1;
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+}
+
+.events-rail-actions {
+    display: flex;
+    gap: 5px;
+    margin-top: 3px;
+}
+
+.rail-btn {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 7px;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    color: var(--muted);
+    cursor: pointer;
+    transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+
+.rail-btn:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+}
+
+.rail-btn.open {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: rgba(79, 140, 255, 0.14);
+}
+
+/* "Filters are active" indicator, visible even when the drawer is closed */
+.rail-btn-dot {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--accent);
+    border: 2px solid var(--panel);
+}
 
 .strip-resize {
     position: absolute;
@@ -700,13 +806,6 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
 
 .strip-resize:hover::after { background: var(--accent); }
 
-.events-bar-count {
-    font-size: 12px;
-    color: var(--accent);
-    white-space: nowrap;
-    font-weight: 600;
-}
-
 .events-bar-scroll {
     display: flex;
     align-items: stretch;
@@ -732,9 +831,15 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
     height: 100%;
     aspect-ratio: 5 / 4;
     min-width: 150px;
+    transition: transform 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
 }
 
-.event-card:hover { border-color: var(--accent); }
+.event-card:hover {
+    border-color: var(--accent);
+    transform: translateY(-1px);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+}
+
 .event-card.live { border-color: var(--err); }
 
 .event-thumb {
@@ -810,8 +915,6 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
 
 .event-dismiss:hover { background: rgba(0, 0, 0, 0.8); }
 
-.events-clear { flex: 0 0 auto; }
-
 /* Event history panel (reuses the campanel chrome).
    Fixed height: content changes (polling, expanding days, switching tabs) must
    scroll inside the panel, never resize the popup itself. */
@@ -819,7 +922,7 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
     height: min(92vh, 960px);
 }
 
-.events-panel .event-filter {
+.event-filter {
     background: var(--bg);
     color: var(--text);
     border: 1px solid var(--line);
@@ -921,6 +1024,43 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
     background: #000;
     border-radius: 8px;
     outline: none;
+}
+
+/* Quick view: temporary pop-up live player (sidebar ⛶) — the layout underneath
+   is untouched; closing it simply returns to whatever was on screen. */
+.quick-view {
+    position: fixed;
+    inset: 0;
+    margin: auto;
+    width: min(1280px, calc(100vw - 32px));
+    height: fit-content;
+    max-height: calc(100vh - 32px);
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    z-index: 63;
+    display: flex;
+    flex-direction: column;
+    padding: 12px;
+    gap: 10px;
+    box-shadow: 0 18px 60px rgba(0, 0, 0, 0.6);
+}
+
+.quick-view-media {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 16 / 9; /* stable pop-up size while the stream connects */
+    max-height: calc(100vh - 140px);
+    background: #000;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.quick-view-media video {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background: #000;
 }
 
 /* ------------------------------------------------------------ timeline page */
@@ -1177,18 +1317,84 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
 
 .admin-field input:focus { border-color: var(--accent); }
 
-/* Strip filter row (under the events bar) */
+/* Strip filter drawer (under the events bar): lit chips show, dimmed chips hide */
 .strip-filter {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     gap: 6px;
-    padding: 6px 10px;
-    background: var(--panel);
+    padding: 8px 12px;
+    background: var(--panel-2);
     border-bottom: 1px solid var(--line);
+    box-shadow: inset 0 6px 8px -8px rgba(0, 0, 0, 0.5);
 }
 
-.strip-filter-btn.active { color: var(--accent); }
+/* ------------------------------------------------------------ saved layouts */
+
+/* Toolbar button badge: the loaded layout drifted from what was saved */
+.layouts-btn { position: relative; }
+
+.layout-dirty-dot {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: #ffb020;
+    border: 2px solid var(--panel);
+}
+
+/* Drawer under the toolbar (same chrome as the event-strip filter) */
+.layouts-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    background: var(--panel-2);
+    border-bottom: 1px solid var(--line);
+    box-shadow: inset 0 6px 8px -8px rgba(0, 0, 0, 0.5);
+}
+
+/* One saved layout: a pill with a load area and a delete ✕ */
+.layout-chip {
+    display: inline-flex;
+    align-items: center;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    overflow: hidden;
+}
+
+.layout-chip-active { border-color: var(--accent); }
+.layout-chip-active .layout-chip-load { color: var(--accent); font-weight: 600; }
+
+.layout-chip-load {
+    background: none;
+    border: none;
+    color: var(--text);
+    font-size: 12px;
+    padding: 3px 4px 3px 10px;
+    cursor: pointer;
+}
+
+.layout-chip-load:hover { color: var(--accent); }
+.layout-chip-del { font-size: 11px; padding: 2px 8px 2px 4px; }
+
+.layout-name-input {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 4px 12px;
+    font-size: 12px;
+    width: 150px;
+    outline: none;
+}
+
+.layout-name-input:focus { border-color: var(--accent); }
+.layout-name-input::placeholder { color: var(--muted); }
 
 /* ------------------------------------------------------------ authentication */
 
@@ -1285,6 +1491,21 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
     padding: 4px 0;
     font-size: 13px;
 }
+
+/* Per-camera retention inputs (camera panel → RECORDING) */
+.ret-input {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 12px;
+    width: 110px;
+    outline: none;
+}
+
+.ret-input:focus { border-color: var(--accent); }
+.ret-input::placeholder { color: var(--muted); }
 
 .control-row select {
     background: var(--bg);

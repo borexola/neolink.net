@@ -28,6 +28,11 @@ internal static class NetUtil
         return (decoded[..colon], decoded[(colon + 1)..]);
     }
 
+    /// <summary>Constant-time string equality for credential checks (only length can leak).</summary>
+    public static bool FixedTimeEquals(string a, string b) =>
+        System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(
+            Encoding.UTF8.GetBytes(a), Encoding.UTF8.GetBytes(b));
+
     /// <summary>
     /// Turns a bind address into something a user can actually click: for wildcard
     /// binds (0.0.0.0 / ::) returns this machine's primary LAN IPv4, else localhost.
