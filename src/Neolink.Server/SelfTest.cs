@@ -273,13 +273,51 @@ public static class SelfTest
                 Assert(store2.SetReviewed(rec.Id, true), "review known id");
                 Assert(store2.List(reviewed: false).Count == 0, "reviewed filter");
 
-                // An event folder older than the retention window gets deleted.
+                // Folders older than the retention window get deleted — events and
+                // continuous footage each against their own window.
                 var oldDir = Path.Combine(dir, "cam1", "2000-01-01", "120000-dead");
                 Directory.CreateDirectory(oldDir);
                 File.WriteAllText(Path.Combine(oldDir, "event.json"), "{}");
-                store2.Cleanup(retentionDays: 7);
-                Assert(!Directory.Exists(oldDir), "expired day folder removed");
+                var oldSeg = Path.Combine(dir, "cam1", "continuous", "2000-01-01");
+                Directory.CreateDirectory(oldSeg);
+                var newSeg = store2.NewSegmentPath("cam1", DateTime.Now);
+                File.WriteAllText(newSeg, "x");
+                store2.Cleanup(retentionDays: 7, continuousRetentionDays: 7);
+                Assert(!Directory.Exists(oldDir), "expired event day folder removed");
+                Assert(!Directory.Exists(oldSeg), "expired continuous day folder removed");
+                Assert(File.Exists(newSeg), "recent segment survives retention");
                 Assert(store2.List().Count == 1, "recent event survives retention");
+                Assert(store2.ListContinuousDays("cam1").Count == 1, "recent day listed");
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+        });
+
+        Test("recording settings roundtrip + type filter", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var settings = new Recording.RecordingSettings(dir);
+                settings.Seed("cam1", eventsDefault: false);
+                Assert(!settings.Get("cam1").Events, "seeded default respected");
+                Assert(settings.Get("cam1").AllowsLabel("person"), "null filter allows everything");
+
+                settings.Update("cam1", events: true, continuous: true,
+                    new List<string> { "person" }, setEventTypes: true);
+                var s = settings.Get("cam1");
+                Assert(s.Events && s.Continuous, "switches updated");
+                Assert(s.AllowsLabel("person") && !s.AllowsLabel("vehicle"), "type filter applied");
+
+                // Seeding again must NOT clobber the user's choices; neither may a reload.
+                settings.Seed("cam1", eventsDefault: false);
+                Assert(settings.Get("cam1").Events, "seed does not overwrite user choice");
+                var reloaded = new Recording.RecordingSettings(dir);
+                Assert(reloaded.Get("cam1").Continuous, "settings persisted across restart");
+                Assert(!reloaded.Get("cam1").AllowsLabel("vehicle"), "filter persisted");
             }
             finally
             {
@@ -325,12 +363,23 @@ public static class SelfTest
                 using (var writer = Recording.ClipWriter.TryCreate(path, hub))
                 {
                     Assert(writer != null, "writer created once params are known");
+                    // Hub indices jump by 2, as they do when audio packets are
+                    // interleaved. That is NOT a drop: the writer must keep every
+                    // frame (regression: index-based gap detection dropped all
+                    // P-frames, producing near-zero-length clips).
                     long index = 0;
                     uint ts = 1000;
-                    writer!.Add(new Streaming.HubVideo(index++, Au(Nal(0x65, 40)), true, ts));
+                    writer!.Add(new Streaming.HubVideo(index, Au(Nal(0x65, 40)), true, ts));
                     for (int i = 0; i < 5; i++)
-                        writer.Add(new Streaming.HubVideo(index++, Au(Nal(0x41, 25)), false, ts += 3000));
-                    Assert(writer.DurationSeconds > 0, "duration advances");
+                    {
+                        index += 2;
+                        writer.Add(new Streaming.HubVideo(index, Au(Nal(0x41, 25)), false, ts += 3000));
+                    }
+                    Assert(writer.DurationSeconds > 0.15, "all frames survive audio interleave");
+
+                    // A real drop (gap flag) resumes at the next keyframe.
+                    writer.Add(new Streaming.HubVideo(index + 50, Au(Nal(0x41, 25)), false, ts += 3000), gap: true);
+                    writer.Add(new Streaming.HubVideo(index + 51, Au(Nal(0x65, 40)), true, ts += 3000));
                 }
 
                 var bytes = File.ReadAllBytes(path);

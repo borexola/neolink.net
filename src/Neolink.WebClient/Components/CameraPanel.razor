@@ -169,6 +169,46 @@
             </div>
         }
 
+        @if (_recording != null)
+        {
+            <div class="campanel-section">
+                <div class="campanel-section-title">RECORDING</div>
+                <div class="control-row">
+                    <span>Detection events</span>
+                    <button class="chip @(_recording.Events ? "" : "chip-off")"
+                            @onclick="() => SetRecordingAsync(events: !_recording.Events)">
+                        @(_recording.Events ? "on" : "off")
+                    </button>
+                </div>
+                <div class="control-row">
+                    <span>Continuous (24/7)</span>
+                    <button class="chip @(_recording.Continuous ? "" : "chip-off")"
+                            @onclick="() => SetRecordingAsync(continuous: !_recording.Continuous)">
+                        @(_recording.Continuous ? "on" : "off")
+                    </button>
+                </div>
+                @if (_recording.Events)
+                {
+                    <div class="control-row rec-types-row">
+                        <span>Event types</span>
+                        <div class="stream-options">
+                            @foreach (var t in _recording.KnownTypes ?? new List<string>())
+                            {
+                                <button class="chip @(_recording.TypeEnabled(t) ? "" : "chip-off")"
+                                        title="@(_recording.TypeEnabled(t) ? "Recording" : "Discarded")"
+                                        @onclick="() => ToggleEventTypeAsync(t)">
+                                    @TypeIcon(t) @t
+                                </button>
+                            }
+                        </div>
+                    </div>
+                    <div class="notice small">
+                        Detections of disabled types are discarded — they neither start nor extend events.
+                    </div>
+                }
+            </div>
+        }
+
         <div class="campanel-section">
             <div class="campanel-section-title">MAINTENANCE</div>
             <div class="control-row">
@@ -202,6 +242,7 @@
     [Parameter] public EventCallback OnClose { get; set; }
 
     private ApiCapabilities? _caps;
+    private ApiRecordingSettings? _recording;
     private List<ApiEncodeProfile>? _profiles;
     private JsonElement? _battery;
     private JsonElement? _led;
@@ -228,6 +269,7 @@
         _loading = true;
         _error = _status = null;
         _caps = null;
+        _recording = null;
         _profiles = null;
         _battery = _led = _pir = null;
         _confirmReboot = false;
@@ -238,6 +280,7 @@
         _caps = await GetAsync<ApiCapabilities>("capabilities");
         if (_caps is { Online: true })
         {
+            _recording = await GetAsync<ApiRecordingSettings>("recording"); // null when the server records nothing
             _profiles = (await GetAsync<ApiStreamProfiles>("streaminfo"))?.Profiles;
             if (_caps.Features?.Battery == true) _battery = await GetAsync<JsonElement?>("battery");
             if (_caps.Features?.Led == true) _led = await GetAsync<JsonElement?>("led");
@@ -296,6 +339,32 @@
     {
         if (await PostAsync("pir", new { enabled = !PirEnabled }))
             _pir = await GetAsync<JsonElement?>("pir");
+    }
+
+    private static string TypeIcon(string label) => label switch
+    {
+        "person" => "🧍",
+        "vehicle" => "🚗",
+        "animal" => "🐾",
+        "package" => "📦",
+        "motion" => "👁",
+        _ => "•",
+    };
+
+    private async Task SetRecordingAsync(bool? events = null, bool? continuous = null, List<string>? eventTypes = null)
+    {
+        object body = new { events, continuous, eventTypes };
+        if (await PostAsync("recording", body))
+            _recording = await GetAsync<ApiRecordingSettings>("recording");
+    }
+
+    private Task ToggleEventTypeAsync(string label)
+    {
+        if (_recording == null) return Task.CompletedTask;
+        // null filter = all types; materialize it before toggling one off.
+        var types = (_recording.EventTypes ?? _recording.KnownTypes ?? new List<string>()).ToList();
+        if (!types.Remove(label)) types.Add(label);
+        return SetRecordingAsync(eventTypes: types);
     }
 
     private async Task RebootAsync()

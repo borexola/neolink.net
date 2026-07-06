@@ -21,8 +21,7 @@ public sealed class ClipWriter : IDisposable
     private ulong _decodeTime;
     private bool _haveTs;
     private uint _prevTs;
-    private long _lastIndex = -1;
-    private bool _waitKeyframe;
+    private bool _waitKeyframe = true; // clips must start decodable
     private List<(byte[] Sample, bool Keyframe)>? _pending;
 
     private ClipWriter(FileStream file, VideoCodec codec)
@@ -58,13 +57,15 @@ public sealed class ClipWriter : IDisposable
     }
 
     /// <summary>
-    /// Feeds the next video packet. Must be called with packets in hub order;
-    /// drops (index gaps) are handled by resuming at the next keyframe.
+    /// Feeds the next video packet, in hub order. <paramref name="gap"/> signals that
+    /// packets were dropped since the previous one — the caller must derive it from
+    /// the hub index of EVERY packet (audio included): hub indices are global, so a
+    /// video-only view sees non-consecutive indices whenever audio is interleaved,
+    /// and treating those as drops would silently discard all P-frames.
+    /// After a real drop, writing resumes at the next keyframe.
     /// </summary>
-    public void Add(HubVideo v)
+    public void Add(HubVideo v, bool gap = false)
     {
-        bool gap = _lastIndex >= 0 && v.Index != _lastIndex + 1;
-        _lastIndex = v.Index;
         if (gap)
         {
             FlushPending((uint)(NominalFrame * (_pending?.Count ?? 1)));

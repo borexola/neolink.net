@@ -236,13 +236,23 @@ the original Rust neolink are also accepted.
 | `users` | *(none)* | RTSP Basic-auth users: `{ "name", "pass" }`. Omit for open access |
 | `recording` | *(none)* | Event recording (see below). Omit to disable |
 
-### Event recording (`"recording": { ... }`)
+### Recording (`"recording": { ... }`)
 
-Captures the camera's own motion/AI detections (person, vehicle, animal — pushed
-over the Baichuan connection, no polling and no server-side ML) as labeled events
-with video clips and thumbnails. New events appear in a review strip at the top of
-the web UI; click to play, ✕ to dismiss. The 🕘 Events button opens the full
-history grouped by day.
+Two recording modes, both switchable **per camera at runtime** from the web UI
+(camera ⚙ → RECORDING) — the switches persist in `settings.json` inside the
+storage directory, so they survive restarts and live on the same Docker volume
+as the footage:
+
+- **Detection events**: the camera's own motion/AI detections (person, vehicle,
+  animal — pushed over the Baichuan connection, no polling and no server-side ML)
+  become labeled events with video clips and thumbnails. New events appear in a
+  review strip at the top of the web UI; click to play, ✕ to dismiss. The 🕘
+  Events button opens the full history grouped by day. Per camera you can also
+  pick **which detection types to record** (🧍 person, 🚗 vehicle, 🐾 animal,
+  📦 package, 👁 motion) — detections of disabled types are discarded entirely.
+- **Continuous (24/7)**: classic NVR-style recording into rolling
+  `segment_minutes`-long MP4 files, browsable under 🕘 → Recordings (grouped by
+  day, click to play). Off by default; enable per camera in the UI.
 
 | Option | Default | Description |
 |---|---|---|
@@ -252,12 +262,15 @@ history grouped by day.
 | `post_seconds` | `8` | Quiet time after the last detection before the event closes |
 | `max_clip_seconds` | `120` | Hard cap per event; continued activity starts a new event |
 | `stream` | `auto` | Stream to record: `auto` (main if served), `mainStream`, `subStream` |
+| `segment_minutes` | `10` | Continuous recording: length of one segment file |
+| `continuous_retention_days` | = `retention_days` | Days to keep continuous footage (`0` = forever) |
 
-Clips are fragmented MP4 (H.264/H.265 passthrough, video-only) playable in the
-browser and by ffmpeg/VLC. Storage layout is plain files —
-`recordings/<camera>/<date>/<time>-<id>/{event.json, clip.mp4, thumb.jpg}` — so
-backups and external tooling are trivial. Set `"record": false` on a camera to
-exclude it.
+Everything is fragmented MP4 (H.264/H.265 passthrough, video-only) playable in
+the browser and by ffmpeg/VLC. Storage layout is plain files —
+`recordings/<camera>/<date>/<time>-<id>/{event.json, clip.mp4, thumb.jpg}` for
+events, `recordings/<camera>/continuous/<date>/<HH-mm-ss>.mp4` for 24/7 footage —
+so backups and external tooling are trivial. Set `"record": false` on a camera
+to start with events off (the UI switch can re-enable it).
 
 ### Per camera
 
@@ -270,7 +283,7 @@ exclude it.
 | `stream` | `both` | `mainStream`, `subStream`, `externStream`, `both`, or `all` |
 | `channel_id` | `0` | Channel when connecting through a Reolink NVR (0-based) |
 | `permitted_users` | all users | Restrict this camera's mounts to specific `users` |
-| `record` | `true` | Include this camera in event recording (when `recording` is configured) |
+| `record` | `true` | Initial default for this camera's "Detection events" switch (changeable in the web UI) |
 
 ## Using with Frigate
 

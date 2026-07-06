@@ -29,6 +29,8 @@ public sealed record WebCameraInfo(string Name, List<WebStreamInfo> Streams, ICa
 ///   GET/POST .../led /pir; POST .../ptz /reboot; GET .../battery — camera control
 ///   GET /api/events[?camera=&amp;reviewed=&amp;limit=] — recorded detection events (when enabled)
 ///   GET /api/events/{id}/clip /thumb        — event artifacts; POST .../review to (un)dismiss
+///   GET/POST /api/cameras/{name}/recording  — per-camera recording switches + event-type filter
+///   GET /api/recordings/{camera}[/{date}[/{file}]] — browse/play continuous footage
 ///   /                                       — web UI (when enabled in the config)
 /// Mutating endpoints require HTTP Basic auth when users are configured (same
 /// credentials and per-camera permissions as RTSP).
@@ -41,10 +43,11 @@ public static class WebApi
     private sealed record StreamSettingsRequest(string? Stream, uint? Width, uint? Height,
         uint? Framerate, uint? Bitrate);
     private sealed record ReviewRequest(bool? Reviewed);
+    private sealed record RecordingSettingsRequest(bool? Events, bool? Continuous, List<string>? EventTypes);
 
     public static async Task RunAsync(string bindAddr, int port, bool webUi,
         IReadOnlyList<WebCameraInfo> cameras, IReadOnlyDictionary<string, string> users,
-        int rtspPort, EventStore? events, CancellationToken ct)
+        int rtspPort, EventStore? events, RecordingSettings? recordingSettings, CancellationToken ct)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -352,6 +355,73 @@ public static class WebApi
                 }
                 events.SetReviewed(id, req.Reviewed ?? true);
                 return Results.Json(new { ok = true });
+            });
+        }
+
+        // ------------------------------------------------------------ recording switches + footage
+
+        if (events != null && recordingSettings != null)
+        {
+            object ShapeSettings(CameraRecordingSettings s) => new
+            {
+                events = s.Events,
+                continuous = s.Continuous,
+                eventTypes = s.EventTypes,
+                knownTypes = CameraRecordingSettings.KnownLabels,
+            };
+
+            app.MapGet("/api/cameras/{name}/recording", (string name, HttpContext ctx) =>
+            {
+                var cam = cameras.FirstOrDefault(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase));
+                return cam == null
+                    ? Results.Json(new { error = $"unknown camera '{name}'" }, statusCode: 404)
+                    : Results.Json(ShapeSettings(recordingSettings.Get(cam.Name)));
+            });
+
+            app.MapPost("/api/cameras/{name}/recording", (string name, RecordingSettingsRequest req, HttpContext ctx) =>
+            {
+                var cam = cameras.FirstOrDefault(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase));
+                if (cam == null)
+                    return Results.Json(new { error = $"unknown camera '{name}'" }, statusCode: 404);
+                if (CheckAuth(ctx, cam) is { } denied)
+                    return denied;
+
+                List<string>? types = null;
+                if (req.EventTypes != null)
+                {
+                    types = req.EventTypes.Select(t => t.Trim().ToLowerInvariant())
+                        .Where(t => t.Length > 0).Distinct().ToList();
+                }
+                var updated = recordingSettings.Update(cam.Name, req.Events, req.Continuous,
+                    types, setEventTypes: req.EventTypes != null);
+                return Results.Json(ShapeSettings(updated));
+            });
+
+            app.MapGet("/api/recordings/{camera}", (string camera) =>
+            {
+                var cam = cameras.FirstOrDefault(c => string.Equals(c.Name, camera, StringComparison.OrdinalIgnoreCase));
+                return cam == null
+                    ? Results.Json(new { error = $"unknown camera '{camera}'" }, statusCode: 404)
+                    : Results.Json(events.ListContinuousDays(cam.Name));
+            });
+
+            app.MapGet("/api/recordings/{camera}/{date}", (string camera, string date) =>
+            {
+                var cam = cameras.FirstOrDefault(c => string.Equals(c.Name, camera, StringComparison.OrdinalIgnoreCase));
+                if (cam == null)
+                    return Results.Json(new { error = $"unknown camera '{camera}'" }, statusCode: 404);
+                var segments = events.ListSegments(cam.Name, date)
+                    .Select(s => new { file = s.File, size = s.Size });
+                return Results.Json(segments);
+            });
+
+            app.MapGet("/api/recordings/{camera}/{date}/{file}", (string camera, string date, string file) =>
+            {
+                var cam = cameras.FirstOrDefault(c => string.Equals(c.Name, camera, StringComparison.OrdinalIgnoreCase));
+                var path = cam == null ? null : events.SegmentPath(cam.Name, date, file);
+                return path == null
+                    ? Results.Json(new { error = "no such recording" }, statusCode: 404)
+                    : Results.File(path, "video/mp4", enableRangeProcessing: true);
             });
         }
 

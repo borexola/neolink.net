@@ -14,15 +14,18 @@
   // Serve the browser UI on web_port. Set false for API-only / headless setups.
   "webui": true,
 
-  // Optional: record motion/AI detection events (clips + thumbnails) to disk.
+  // Optional: recording to disk — motion/AI detection events (clips + thumbnails)
+  // and, when switched on per camera in the web UI, continuous 24/7 footage.
   // Remove this section to disable. In Docker, mount a volume at "path".
   // "recording": {
-  //   "path": "/recordings",     // storage directory
-  //   "retention_days": 7,       // delete events older than this (0 = keep forever)
-  //   "pre_seconds": 5,          // video kept from before the detection
-  //   "post_seconds": 8,         // quiet time before an event closes
-  //   "max_clip_seconds": 120,   // hard cap per event/clip
-  //   "stream": "auto"           // which stream to record: auto|mainStream|subStream
+  //   "path": "/recordings",           // storage directory
+  //   "retention_days": 7,             // delete events older than this (0 = keep forever)
+  //   "pre_seconds": 5,                // video kept from before the detection
+  //   "post_seconds": 8,               // quiet time before an event closes
+  //   "max_clip_seconds": 120,         // hard cap per event/clip
+  //   "stream": "auto",                // which stream to record: auto|mainStream|subStream
+  //   "segment_minutes": 10,           // continuous recording: length of one file
+  //   "continuous_retention_days": 7   // continuous footage retention (default = retention_days)
   // },
 
   // Optional: password-protect the RTSP server. Remove entries for open access.
