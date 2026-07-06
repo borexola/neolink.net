@@ -17,6 +17,8 @@ public sealed class NeolinkConfig
     public RecordingConfig? Recording { get; set; }
     /// <summary>Web-UI specific settings ("ui" section).</summary>
     public UiConfig Ui { get; set; } = new();
+    /// <summary>MQTT / Home Assistant integration ("mqtt" section); null = disabled.</summary>
+    public MqttConfig? Mqtt { get; set; }
     /// <summary>Recovery switch (legacy top-level spelling; "ui.reset_admin_password" preferred).</summary>
     public bool ResetAdminPassword { get; set; }
 
@@ -89,6 +91,9 @@ public sealed class NeolinkConfig
                     break;
                 case "ui":
                     ParseJsonUi(prop.Value, config);
+                    break;
+                case "mqtt":
+                    config.Mqtt = ParseJsonMqtt(prop.Value);
                     break;
                 case "users":
                     foreach (var u in prop.Value.EnumerateArray())
@@ -175,6 +180,7 @@ public sealed class NeolinkConfig
                 case "maxclipseconds": rec.MaxClipSeconds = prop.Value.GetInt32(); break;
                 case "stream": rec.Stream = prop.Value.GetString() ?? "auto"; break;
                 case "segmentminutes": rec.SegmentMinutes = prop.Value.GetInt32(); break;
+                case "maxsegmentsizemb": rec.MaxSegmentSizeMb = prop.Value.GetInt32(); break;
                 case "continuousretentiondays": rec.ContinuousRetentionDays = prop.Value.GetInt32(); break;
                 default:
                     Log.Warn($"Config: ignoring unknown recording option '{prop.Name}'");
@@ -183,6 +189,33 @@ public sealed class NeolinkConfig
         }
         rec.Path = path ?? throw new FormatException("\"recording\" needs a \"path\" (the storage directory)");
         return rec;
+    }
+
+    private static MqttConfig ParseJsonMqtt(JsonElement el)
+    {
+        var mqtt = new MqttConfig();
+        string? host = null;
+        foreach (var prop in el.EnumerateObject())
+        {
+            switch (Key(prop.Name))
+            {
+                case "broker" or "host" or "server": host = prop.Value.GetString(); break;
+                case "port": mqtt.Port = prop.Value.GetInt32(); break;
+                case "username" or "user": mqtt.Username = prop.Value.GetString(); break;
+                case "password" or "pass": mqtt.Password = prop.Value.GetString(); break;
+                case "clientid": mqtt.ClientId = prop.Value.GetString() ?? mqtt.ClientId; break;
+                case "basetopic" or "topic": mqtt.BaseTopic = prop.Value.GetString() ?? mqtt.BaseTopic; break;
+                case "discovery": mqtt.Discovery = prop.Value.GetBoolean(); break;
+                case "discoveryprefix": mqtt.DiscoveryPrefix = prop.Value.GetString() ?? mqtt.DiscoveryPrefix; break;
+                case "keepalive": mqtt.KeepAliveSeconds = prop.Value.GetInt32(); break;
+                case "tls" or "ssl": mqtt.Tls = prop.Value.GetBoolean(); break;
+                default:
+                    Log.Warn($"Config: ignoring unknown mqtt option '{prop.Name}'");
+                    break;
+            }
+        }
+        mqtt.Broker = host ?? throw new FormatException("\"mqtt\" needs a \"broker\" (the MQTT server host)");
+        return mqtt;
     }
 
     private static void ParseJsonUi(JsonElement el, NeolinkConfig config)
@@ -228,6 +261,24 @@ public sealed class NeolinkConfig
         if (MiniToml.GetString(root, "certificate") != null)
             WarnTls();
 
+        if (MiniToml.GetTable(root, "mqtt") is { } mqtt)
+        {
+            config.Mqtt = new MqttConfig
+            {
+                Broker = MiniToml.GetString(mqtt, "broker") ?? MiniToml.GetString(mqtt, "host")
+                    ?? throw new FormatException("[mqtt] needs a 'broker' (the MQTT server host)"),
+                Port = (int)(MiniToml.GetInt(mqtt, "port") ?? 1883),
+                Username = MiniToml.GetString(mqtt, "username"),
+                Password = MiniToml.GetString(mqtt, "password"),
+                ClientId = MiniToml.GetString(mqtt, "client_id") ?? "neolink",
+                BaseTopic = MiniToml.GetString(mqtt, "base_topic") ?? "neolink",
+                Discovery = MiniToml.GetBool(mqtt, "discovery") ?? true,
+                DiscoveryPrefix = MiniToml.GetString(mqtt, "discovery_prefix") ?? "homeassistant",
+                KeepAliveSeconds = (int)(MiniToml.GetInt(mqtt, "keepalive") ?? 30),
+                Tls = MiniToml.GetBool(mqtt, "tls") ?? false,
+            };
+        }
+
         if (MiniToml.GetTable(root, "ui") is { } ui)
         {
             if (MiniToml.GetBool(ui, "enabled") is { } en) config.WebUi = en;
@@ -250,6 +301,7 @@ public sealed class NeolinkConfig
                 MaxClipSeconds = (int)(MiniToml.GetInt(rec, "max_clip_seconds") ?? 120),
                 Stream = MiniToml.GetString(rec, "stream") ?? "auto",
                 SegmentMinutes = (int)(MiniToml.GetInt(rec, "segment_minutes") ?? 10),
+                MaxSegmentSizeMb = (int)(MiniToml.GetInt(rec, "max_segment_size_mb") ?? 256),
                 ContinuousRetentionDays = (int?)MiniToml.GetInt(rec, "continuous_retention_days"),
             };
         }
@@ -367,6 +419,8 @@ public sealed class NeolinkConfig
                 throw new FormatException("recording.stream must be auto, mainStream, subStream or externStream");
             if (Recording.SegmentMinutes is < 1 or > 120)
                 throw new FormatException("recording.segment_minutes must be 1..120");
+            if (Recording.MaxSegmentSizeMb is < 8 or > 8192)
+                throw new FormatException("recording.max_segment_size_mb must be 8..8192");
             if (Recording.ContinuousRetentionDays is < 0)
                 throw new FormatException("recording.continuous_retention_days must be >= 0 (0 = keep forever)");
         }
@@ -375,6 +429,18 @@ public sealed class NeolinkConfig
             throw new FormatException("ui.trickle_speed must be 0.25..16");
         if (Ui.StateDir is { Length: 0 })
             throw new FormatException("ui.state_dir must not be empty when set");
+
+        if (Mqtt != null)
+        {
+            if (string.IsNullOrWhiteSpace(Mqtt.Broker))
+                throw new FormatException("mqtt.broker must not be empty");
+            if (Mqtt.Port is < 1 or > 65535)
+                throw new FormatException($"Invalid mqtt.port {Mqtt.Port}");
+            if (Mqtt.KeepAliveSeconds is < 5 or > 3600)
+                throw new FormatException("mqtt.keepalive must be 5..3600");
+            if (string.IsNullOrWhiteSpace(Mqtt.BaseTopic))
+                throw new FormatException("mqtt.base_topic must not be empty");
+        }
     }
 
     private static (string host, int port) SplitHostPort(string address)
@@ -426,6 +492,27 @@ public sealed class UiConfig
     public double TrickleSpeed { get; set; } = 4;
 }
 
+/// <summary>MQTT / Home Assistant integration settings ("mqtt" in the config).</summary>
+public sealed class MqttConfig
+{
+    /// <summary>MQTT broker host (e.g. the Home Assistant / Mosquitto address).</summary>
+    public string Broker { get; set; } = "";
+    public int Port { get; set; } = 1883;
+    public string? Username { get; set; }
+    public string? Password { get; set; }
+    /// <summary>Client id presented to the broker (must be unique per connection).</summary>
+    public string ClientId { get; set; } = "neolink";
+    /// <summary>Root of all state/command topics.</summary>
+    public string BaseTopic { get; set; } = "neolink";
+    /// <summary>Publish Home Assistant MQTT-discovery config so entities appear automatically.</summary>
+    public bool Discovery { get; set; } = true;
+    /// <summary>Home Assistant's discovery prefix (matches its MQTT integration setting).</summary>
+    public string DiscoveryPrefix { get; set; } = "homeassistant";
+    public int KeepAliveSeconds { get; set; } = 30;
+    /// <summary>Connect with TLS (broker port is usually 8883). Certificates are not validated.</summary>
+    public bool Tls { get; set; }
+}
+
 /// <summary>Event recording settings ("recording" in the config).</summary>
 public sealed class RecordingConfig
 {
@@ -449,8 +536,10 @@ public sealed class RecordingConfig
     public int MaxClipSeconds { get; set; } = 120;
     /// <summary>Stream to record: "auto" (main if served, else first), or an explicit stream name.</summary>
     public string Stream { get; set; } = "auto";
-    /// <summary>Length of one continuous-recording segment file, in minutes.</summary>
+    /// <summary>Time limit for one continuous-recording segment file, in minutes.</summary>
     public int SegmentMinutes { get; set; } = 10;
+    /// <summary>Size cap for one continuous-recording segment file, in MB (rolls whichever limit hits first).</summary>
+    public int MaxSegmentSizeMb { get; set; } = 256;
     /// <summary>Days to keep continuous footage; null = same as RetentionDays.</summary>
     public int? ContinuousRetentionDays { get; set; }
 

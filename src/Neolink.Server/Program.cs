@@ -1,5 +1,6 @@
 using Neolink;
 using Neolink.Config;
+using Neolink.Mqtt;
 using Neolink.Protocol;
 using Neolink.Recording;
 using Neolink.Rtsp;
@@ -112,6 +113,10 @@ var server = new RtspServer(users);
 var tasks = new List<Task>();
 var webCameras = new List<WebCameraInfo>();
 
+// MQTT / Home Assistant bridge is created after the cameras are built (below) so
+// it can reference their controls; declared here so motion wiring can reach it.
+HomeAssistantMqtt? mqtt = null;
+
 // Recording (detection events + continuous), when a storage path is configured.
 EventStore? eventStore = null;
 RecordingSettings? recordingSettings = null;
@@ -136,6 +141,10 @@ if (config.Recording is { } recCfg)
         eventStore = null;
     }
 }
+
+// Motion pushes fan out to the recorder and/or the MQTT bridge; wired after both
+// exist (the bridge needs the camera list, built below).
+var motionTargets = new List<(CameraService Primary, string Name, Action<MotionPush>? RecorderSink)>();
 
 foreach (var cam in config.Cameras)
 {
@@ -171,9 +180,11 @@ foreach (var cam in config.Cameras)
     // Stream encode settings are written via the camera's HTTP API when configured.
     var httpApi = cam.HttpAddress == null ? null
         : new ReolinkHttpApi(cam.HttpAddress, cam.Username, cam.Password, cam.ChannelId);
-    ICameraControl control = new CameraControl(primaryService
-        ?? throw new InvalidOperationException($"camera '{cam.Name}' has no streams"), httpApi);
+    var primary = primaryService
+        ?? throw new InvalidOperationException($"camera '{cam.Name}' has no streams");
+    ICameraControl control = new CameraControl(primary, httpApi);
     webCameras.Add(new WebCameraInfo(cam.Name, webStreams, control, permitted));
+    Action<MotionPush>? recorderSink = null;
 
     // Recording: alarm pushes ride the primary connection; event clips and
     // continuous segments are cut from the configured stream's hub (auto = main
@@ -199,7 +210,7 @@ foreach (var cam in config.Cameras)
             if (previewStream == recordStream) previewStream = null;
             var recorder = new EventRecorder(cam.Name, recordStream.Hub, control, eventStore,
                 config.Recording, recordingSettings, previewStream?.Hub);
-            primaryService.MotionSink = recorder.OnMotion;
+            recorderSink = recorder.OnMotion;
             tasks.Add(Task.Run(() => recorder.RunAsync(shutdown.Token)));
 
             // Continuous (24/7) recording is temporarily disabled — see
@@ -212,6 +223,28 @@ foreach (var cam in config.Cameras)
             }
         }
     }
+
+    motionTargets.Add((primary, cam.Name, recorderSink));
+}
+
+// MQTT / Home Assistant bridge (single connection for all cameras), then wire
+// motion: the camera's alarm push goes to the recorder and/or the bridge. The
+// alarm-push listener only runs when a MotionSink is set, so this also enables
+// motion for MQTT-only setups (recording off).
+if (config.Mqtt is { } mqttCfg)
+{
+    mqtt = new HomeAssistantMqtt(mqttCfg, webCameras, Version);
+    tasks.Add(Task.Run(() => mqtt.RunAsync(shutdown.Token)));
+}
+foreach (var (primary, name, recorderSink) in motionTargets)
+{
+    var bridge = mqtt;
+    if (recorderSink == null && bridge == null) continue;
+    primary.MotionSink = push =>
+    {
+        recorderSink?.Invoke(push);
+        bridge?.OnMotion(name, push);
+    };
 }
 
 // Web API (camera list + fMP4 live streams for browsers); guarded like the cameras.

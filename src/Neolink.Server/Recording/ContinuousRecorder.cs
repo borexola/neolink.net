@@ -9,9 +9,11 @@ namespace Neolink.Recording;
 ///
 /// Toggleable at runtime (web UI → RecordingSettings): the hub subscription stays
 /// open either way, packets are simply discarded while the switch is off, so a
-/// toggle takes effect on the next frame. Segments roll at the first keyframe
-/// after SegmentMinutes, keeping every file independently playable. Day folders
-/// are pruned by the same retention task that expires events.
+/// toggle takes effect on the next frame. Segments roll at the first keyframe once
+/// they reach the time (SegmentMinutes) OR size (MaxSegmentSizeMb) limit, whichever
+/// comes first — the size cap keeps high-bitrate streams from producing enormous
+/// files. Every file is independently playable. Day folders are pruned by the same
+/// retention task that expires events.
 /// </summary>
 public sealed class ContinuousRecorder
 {
@@ -23,6 +25,7 @@ public sealed class ContinuousRecorder
     private readonly EventStore _store;
     private readonly RecordingSettings _settings;
     private readonly double _segmentSeconds;
+    private readonly long _maxSegmentBytes;
 
     public ContinuousRecorder(string camera, IStreamHub hub, EventStore store,
         RecordingSettings settings, RecordingConfig cfg)
@@ -32,6 +35,7 @@ public sealed class ContinuousRecorder
         _store = store;
         _settings = settings;
         _segmentSeconds = cfg.SegmentMinutes * 60.0;
+        _maxSegmentBytes = (long)cfg.MaxSegmentSizeMb * 1024 * 1024;
     }
 
     public async Task RunAsync(CancellationToken ct)
@@ -66,12 +70,15 @@ public sealed class ContinuousRecorder
                 if (!wasOn)
                 {
                     Log.Info($"{_camera}: continuous recording started " +
-                             $"({_segmentSeconds / 60:0}-minute segments)");
+                             $"(segments roll at {_segmentSeconds / 60:0} min or {_maxSegmentBytes / (1024 * 1024)} MB)");
                     wasOn = true;
                 }
 
-                // Roll to a new file at the first keyframe past the segment length.
-                if (writer != null && v.Keyframe && writer.DurationSeconds >= _segmentSeconds)
+                // Roll to a new file at the first keyframe once the segment reaches
+                // either limit — time OR size, whichever comes first (a size cap keeps
+                // high-bitrate main streams from producing enormous files).
+                if (writer != null && v.Keyframe
+                    && (writer.DurationSeconds >= _segmentSeconds || writer.ApproxBytes >= _maxSegmentBytes))
                 {
                     writer.Dispose();
                     writer = null;

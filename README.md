@@ -242,6 +242,7 @@ the original Rust neolink are also accepted.
 | `web_bind` | = `bind` | Separate bind address for the web port |
 | `users` | *(none)* | **RTSP** Basic-auth users: `{ "name", "pass" }`. Omit for open access. Separate from web-UI accounts! |
 | `recording` | *(none)* | Event recording (see below). Omit to disable |
+| `mqtt` | *(none)* | MQTT / Home Assistant integration (see below). Omit to disable |
 | `ui` | *(defaults)* | Web-UI specific settings (see below) |
 
 ### Web-UI settings (`"ui": { ... }`)
@@ -325,7 +326,8 @@ config file (in Docker: the `/config` mount), so they survive restarts:
 | `post_seconds` | `8` | Quiet time after the last detection before the event closes |
 | `max_clip_seconds` | `120` | Hard cap per event; continued activity starts a new event |
 | `stream` | `auto` | Stream to record: `auto` (main if served), `mainStream`, `subStream` |
-| `segment_minutes` | `10` | Continuous recording: length of one segment file |
+| `segment_minutes` | `10` | Continuous recording: time limit for one segment file |
+| `max_segment_size_mb` | `256` | Continuous recording: size limit for one segment file — a new file starts at the next keyframe once the segment reaches this size *or* `segment_minutes`, whichever comes first (keeps high-bitrate streams from producing huge files) |
 | `continuous_retention_days` | = `retention_days` | Days to keep continuous footage (`0` = forever) |
 
 Everything is fragmented MP4 (H.264/H.265 passthrough, video-only) playable in
@@ -347,6 +349,75 @@ to start with events off (the UI switch can re-enable it).
 | `channel_id` | `0` | Channel when connecting through a Reolink NVR (0-based) |
 | `permitted_users` | all users | Restrict this camera's mounts to specific `users` |
 | `record` | `true` | Initial default for this camera's "Detection events" switch (changeable in the web UI) |
+
+## Home Assistant (MQTT)
+
+Add an `mqtt` section and Neolink connects to your broker and publishes
+[Home Assistant MQTT Discovery](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery)
+config, so a **device per camera** appears automatically — no YAML in HA.
+
+**Lightweight by design — the camera does the heavy lifting.** Neolink runs no
+object detection of its own: it never decodes, transcodes, or analyses a single
+video frame for motion or AI. All of that already happens *on the camera*, whose
+dedicated silicon detects motion and classifies people, vehicles and animals in
+real time. Neolink simply **listens for the alarm messages the camera pushes**
+over the Baichuan connection (the same events that drive Reolink's own app) and
+relays them to Home Assistant as MQTT sensors. That means:
+
+- **No GPU, no Coral, no CPU-hungry inference** — unlike setups where a server
+  re-analyses every stream, Neolink adds essentially zero processing load. It
+  runs comfortably on a Raspberry Pi or a small NAS container.
+- **Event-driven, not polled** — sensors fire the instant the camera sees
+  something, with no scan interval and no per-frame work.
+- **AI is only as good as the camera** — person/vehicle/animal labels come from
+  the camera's firmware, so enable the detection types you want in the Reolink
+  app and Neolink surfaces exactly those.
+
+The trade-off is that detection quality and available classes are whatever your
+camera model provides (rather than a tunable server-side model like Frigate's);
+in exchange you get an integration light enough to leave running forever.
+
+```json
+"mqtt": {
+  "broker": "192.168.1.10",
+  "username": "neolink",
+  "password": "secret"
+}
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `broker` | *required* | MQTT broker host (usually the Home Assistant / Mosquitto box) |
+| `port` | `1883` | Broker port (`8883` with `tls: true`) |
+| `username` / `password` | *(none)* | Broker credentials |
+| `client_id` | `neolink` | Client id (must be unique on the broker) |
+| `base_topic` | `neolink` | Root of the state/command topics |
+| `discovery` | `true` | Publish HA discovery config so entities appear automatically |
+| `discovery_prefix` | `homeassistant` | Must match HA's MQTT integration setting |
+| `keepalive` | `30` | Keep-alive interval (seconds) |
+| `tls` | `false` | Connect with TLS (certificates are not validated) |
+
+**Entities** created per camera, according to what it supports:
+
+| Entity | Type | Notes |
+|---|---|---|
+| Motion / Person / Vehicle / Animal | `binary_sensor` | From the camera's alarm pushes (AI labels need Smart Detection enabled in the Reolink app) |
+| Battery | `sensor` | Battery cameras; charge status + temperature as attributes |
+| Night vision | `select` | `auto` / `on` / `off` |
+| Floodlight | `light` | Cameras with a spotlight |
+| PIR sensor | `switch` | Enable/disable the PIR |
+| Reboot, Pan up/down/left/right | `button` | PTZ buttons on pan-tilt cameras |
+| Snapshot | `camera` | Latest JPEG, refreshed periodically (when the camera supports snapshots) |
+
+Availability is two-level: entities show **unavailable** when either the Neolink
+service (a Last-Will topic) or the individual camera goes offline. State and
+discovery messages are retained, so Home Assistant repopulates after a restart.
+Commands from HA (toggle the floodlight, reboot, nudge PTZ…) are executed on the
+camera over the same Baichuan connection. No external MQTT library is used —
+Neolink speaks MQTT 3.1.1 directly, keeping the zero-dependency build.
+
+> Plain MQTT (port 1883) is unencrypted. For a LAN broker that's typical; enable
+> `tls` (port 8883) if the broker is remote.
 
 ## Using with Frigate
 
