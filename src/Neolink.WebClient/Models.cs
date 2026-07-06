@@ -43,7 +43,11 @@ public sealed record ApiEncodeProfile(string Type, uint Width, uint Height,
 public sealed record ApiStreamProfiles(List<ApiEncodeProfile> Profiles);
 
 /// <summary>Server capability flags (GET /api/features).</summary>
-public sealed record ApiFeaturesInfo(bool Events, bool Continuous, double TrickleSpeed = 4);
+public sealed record ApiFeaturesInfo(bool Events, bool Continuous, double TrickleSpeed = 4,
+    string? Version = null, string? LatestVersion = null, string? RepoUrl = null);
+
+/// <summary>GET /api/admin/config — the editable server settings.</summary>
+public sealed record ApiAdminConfig(string Path, bool Writable, JsonElement Settings);
 
 /// <summary>GET /api/auth/status — whether/how the UI must authenticate.</summary>
 public sealed record ApiAuthStatus(bool Enabled, bool SetupRequired, bool ResetAvailable,

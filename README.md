@@ -111,8 +111,10 @@ Edit it: camera names, IP addresses, and credentials (same login as the Reolink 
 ```bash
 # /config is a directory mount: config.json lives in it, and runtime settings
 # from the web UI (settings.json) are persisted next to it.
+# TZ sets the time zone for timestamps and the UI clock (defaults to UTC).
 docker run -d --name neolink --restart unless-stopped \
     -p 8654:8654 -p 8655:8655 \
+    -e TZ=Europe/London \
     -v "$PWD/config:/config" \
     ghcr.io/borexola/neolink.net:latest
 ```
@@ -137,6 +139,8 @@ services:
     image: ghcr.io/borexola/neolink.net:latest
     container_name: neolink
     restart: unless-stopped
+    environment:
+      - TZ=Europe/London   # time zone for timestamps + the UI clock (defaults to UTC)
     ports:
       - "8654:8654"   # RTSP (TCP-interleaved works for ffmpeg/Frigate/VLC)
       - "8655:8655"   # web UI + API; remove if webui:false and API unused
@@ -276,6 +280,15 @@ server-side, so people don't fight over one shared view. Forgot the admin
 password? Set `"reset_admin_password": true` in the config, restart, use
 "Reset admin password…" on the login screen, then set the flag back to
 `false`.
+
+The admin also gets ⚙ → **Server settings…**: a form that edits most of
+`config.json` (network ports, web UI, recording) and writes it back to the file
+(atomically, keeping a `.bak`; comments are not preserved, and cameras/RTSP
+users still need a text editor). Saved changes apply on the next restart, which
+the admin can trigger with **Restart service…** — the process exits and your
+container/systemd restart policy brings it back within seconds while the UI
+reconnects on its own. When a newer release exists on GitHub, a dismissable
+banner links to it.
 
 ### Recording (`"recording": { ... }`)
 

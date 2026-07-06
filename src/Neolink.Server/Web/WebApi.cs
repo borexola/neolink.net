@@ -20,6 +20,27 @@ public sealed record WebStreamInfo(string Kind, string Path, IStreamHub Hub);
 public sealed record WebCameraInfo(string Name, List<WebStreamInfo> Streams, ICameraControl Control,
     HashSet<string>? PermittedUsers);
 
+/// <summary>Everything the web API needs from the host.</summary>
+public sealed class WebApiOptions
+{
+    public required string BindAddr { get; init; }
+    public required int Port { get; init; }
+    public required bool WebUi { get; init; }
+    public required IReadOnlyList<WebCameraInfo> Cameras { get; init; }
+    public required IReadOnlyDictionary<string, string> Users { get; init; }
+    public required int RtspPort { get; init; }
+    public EventStore? Events { get; init; }
+    public RecordingSettings? RecordingSettings { get; init; }
+    public required UserStore UserStore { get; init; }
+    public bool ResetAdminPassword { get; init; }
+    public double TrickleSpeed { get; init; } = 4;
+    public required string Version { get; init; }
+    public required string ConfigPath { get; init; }
+    public UpdateChecker? Updates { get; init; }
+    /// <summary>Gracefully stops the process; the supervisor (docker/systemd) restarts it.</summary>
+    public required Action RestartRequested { get; init; }
+}
+
 /// <summary>
 /// HTTP/WebSocket API for web clients, optionally serving the Blazor web UI:
 ///   GET /api/cameras                        — JSON list of cameras and their streams
@@ -51,12 +72,26 @@ public static class WebApi
     private sealed record RecordingSettingsRequest(bool? Events, bool? Continuous, List<string>? EventTypes);
     private sealed record CredentialsRequest(string? Username, string? Password);
     private sealed record PasswordRequest(string? Password);
+    private sealed record AdminUiSettings(double? TrickleSpeed, string? StateDir, bool? ResetAdminPassword);
+    private sealed record AdminRecordingSettings(string? Path, int? RetentionDays, int? PreSeconds,
+        int? PostSeconds, int? MaxClipSeconds, string? Stream, int? SegmentMinutes, int? ContinuousRetentionDays);
+    private sealed record AdminConfigRequest(string? Bind, int? BindPort, int? WebPort, string? WebBind,
+        bool? WebUi, AdminUiSettings? Ui, AdminRecordingSettings? Recording, bool? RemoveRecording);
 
-    public static async Task RunAsync(string bindAddr, int port, bool webUi,
-        IReadOnlyList<WebCameraInfo> cameras, IReadOnlyDictionary<string, string> users,
-        int rtspPort, EventStore? events, RecordingSettings? recordingSettings,
-        UserStore userStore, bool resetAdminPassword, double trickleSpeed, CancellationToken ct)
+    public static async Task RunAsync(WebApiOptions o, CancellationToken ct)
     {
+        var bindAddr = o.BindAddr;
+        var port = o.Port;
+        var webUi = o.WebUi;
+        var cameras = o.Cameras;
+        var users = o.Users;
+        var rtspPort = o.RtspPort;
+        var events = o.Events;
+        var recordingSettings = o.RecordingSettings;
+        var userStore = o.UserStore;
+        var resetAdminPassword = o.ResetAdminPassword;
+        var trickleSpeed = o.TrickleSpeed;
+
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
             ContentRootPath = AppContext.BaseDirectory,
@@ -243,6 +278,102 @@ public static class WebApi
                 : Results.Json(new { error = "unknown user (the admin cannot be deleted)" }, statusCode: 400);
         });
 
+        // ------------------------------------------------------------ admin: server settings + restart
+
+        IResult? AdminOnly(HttpContext ctx) => IsAdmin(ctx)
+            ? null
+            : Results.Json(new
+            {
+                error = userStore.Enabled ? "admin only" : "create the admin account first (server settings need one)",
+            }, statusCode: 403);
+
+        app.MapGet("/api/admin/config", (HttpContext ctx) =>
+        {
+            if (AdminOnly(ctx) is { } denied) return denied;
+            try
+            {
+                return Results.Json(ConfigEditor.Describe(o.ConfigPath));
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: 500);
+            }
+        });
+
+        app.MapPut("/api/admin/config", (AdminConfigRequest req, HttpContext ctx) =>
+        {
+            if (AdminOnly(ctx) is { } denied) return denied;
+            try
+            {
+                ConfigEditor.Apply(o.ConfigPath, root =>
+                {
+                    if (req.Bind != null) ConfigEditor.Set(root, "bind", req.Bind);
+                    if (req.BindPort != null) ConfigEditor.Set(root, "bind_port", req.BindPort);
+                    if (req.WebPort != null) ConfigEditor.Set(root, "web_port", req.WebPort);
+                    if (req.WebBind != null)
+                        ConfigEditor.Set(root, "web_bind", req.WebBind.Length == 0 ? null : req.WebBind);
+                    if (req.WebUi != null) ConfigEditor.Set(root, "webui", req.WebUi);
+
+                    if (req.Ui is { } u)
+                    {
+                        var ui = ConfigEditor.Section(root, "ui");
+                        if (u.TrickleSpeed != null) ConfigEditor.Set(ui, "trickle_speed", u.TrickleSpeed);
+                        if (u.StateDir != null)
+                            ConfigEditor.Set(ui, "state_dir", u.StateDir.Length == 0 ? null : u.StateDir);
+                        if (u.ResetAdminPassword != null)
+                        {
+                            ConfigEditor.Set(ui, "reset_admin_password", u.ResetAdminPassword);
+                            ConfigEditor.Set(root, "reset_admin_password", null); // retire the legacy spelling
+                        }
+                    }
+
+                    if (req.RemoveRecording == true)
+                    {
+                        ConfigEditor.Set(root, "recording", null);
+                    }
+                    else if (req.Recording is { } r)
+                    {
+                        var rec = ConfigEditor.Section(root, "recording");
+                        if (r.Path != null) ConfigEditor.Set(rec, "path", r.Path);
+                        if (r.RetentionDays != null) ConfigEditor.Set(rec, "retention_days", r.RetentionDays);
+                        if (r.PreSeconds != null) ConfigEditor.Set(rec, "pre_seconds", r.PreSeconds);
+                        if (r.PostSeconds != null) ConfigEditor.Set(rec, "post_seconds", r.PostSeconds);
+                        if (r.MaxClipSeconds != null) ConfigEditor.Set(rec, "max_clip_seconds", r.MaxClipSeconds);
+                        if (r.Stream != null) ConfigEditor.Set(rec, "stream", r.Stream);
+                        if (r.SegmentMinutes != null) ConfigEditor.Set(rec, "segment_minutes", r.SegmentMinutes);
+                        if (r.ContinuousRetentionDays != null)
+                            ConfigEditor.Set(rec, "continuous_retention_days", r.ContinuousRetentionDays);
+                    }
+                });
+                Log.Warn($"config.json updated via the web UI by '{SessionName(ctx)}' — restart to apply");
+                return Results.Json(new { ok = true, requiresRestart = true });
+            }
+            catch (FormatException ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: 400);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return Results.Json(new { error = $"config.json is not writable: {ex.Message}" }, statusCode: 409);
+            }
+        });
+
+        app.MapPost("/api/admin/restart", (HttpContext ctx) =>
+        {
+            if (AdminOnly(ctx) is { } denied) return denied;
+            Log.Warn($"Restart requested via the web UI by '{SessionName(ctx)}'");
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(700); // let this response reach the browser first
+                o.RestartRequested();
+            });
+            return Results.Json(new
+            {
+                ok = true,
+                note = "shutting down — the restart policy (docker / systemd) brings the service back",
+            });
+        });
+
         // Per-user UI settings: an opaque JSON blob the client owns.
         app.MapGet("/api/me/settings", (HttpContext ctx) =>
             SessionName(ctx) is { } me
@@ -272,6 +403,9 @@ public static class WebApi
             events = events != null,
             continuous = events != null && RecordingConfig.ContinuousEnabled,
             trickleSpeed,
+            version = o.Version,
+            latestVersion = o.Updates?.Latest,
+            repoUrl = UpdateChecker.RepoUrl,
         }));
 
         app.MapGet("/api/cameras", () =>
