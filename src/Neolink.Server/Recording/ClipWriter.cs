@@ -53,6 +53,7 @@ public sealed class ClipWriter : IDisposable
 
     // Shared with the writer thread.
     private long _queuedBytes;
+    private long _approxBytes; // cumulative bytes destined for the file (size-cap roll)
     private volatile bool _faulted;
 
     private readonly record struct QueueItem(byte[] Data, bool Keyframe, ulong DecodeTime);
@@ -61,6 +62,7 @@ public sealed class ClipWriter : IDisposable
     {
         _path = path;
         _codec = codec;
+        _approxBytes = init.Length; // the init segment is already on its way to disk
         var boxes = FindHeaderBoxes(init);
         new Thread(() => WriteLoop(init, boxes))
         {
@@ -79,6 +81,9 @@ public sealed class ClipWriter : IDisposable
     /// <summary>Seconds of video muxed so far (upper bound; pending frames included at nominal rate).</summary>
     public double DurationSeconds =>
         ((ulong)_decodeTime + (ulong)(_pending?.Count ?? 0) * NominalFrame) / (double)FMp4.Timescale;
+
+    /// <summary>Approximate size of the file so far in bytes (used to cap segment size).</summary>
+    public long ApproxBytes => Volatile.Read(ref _approxBytes);
 
     /// <summary>Prepares a clip file; null when codec params are not known yet. Never blocks on disk.</summary>
     public static ClipWriter? TryCreate(string path, IStreamHub hub)
@@ -171,6 +176,7 @@ public sealed class ClipWriter : IDisposable
         }
 
         Interlocked.Add(ref _queuedBytes, fragment.Length);
+        Interlocked.Add(ref _approxBytes, fragment.Length);
         try
         {
             _queue.Add(new QueueItem(fragment, keyframe, decodeTime));

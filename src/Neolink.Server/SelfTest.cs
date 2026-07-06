@@ -372,6 +372,43 @@ public static class SelfTest
             }
         });
 
+        Test("mqtt packet codec", () =>
+        {
+            // CONNECT: fixed header, remaining length, protocol name, level, flags.
+            var connect = Mqtt.MqttPacket.BuildConnect("neolink", "user", "pw", 30,
+                willTopic: "neolink/bridge/state", willPayload: "offline", willRetain: true);
+            AssertEq(connect[0], (byte)0x10); // CONNECT
+            // variable header protocol name "MQTT"
+            AssertEq(Encoding.ASCII.GetString(connect, 4, 4), "MQTT");
+            AssertEq(connect[8], (byte)4); // protocol level 3.1.1
+            byte flags = connect[9];
+            Assert((flags & 0x02) != 0, "clean session");
+            Assert((flags & 0x80) != 0, "username flag");
+            Assert((flags & 0x40) != 0, "password flag");
+            Assert((flags & 0x04) != 0, "will flag");
+            Assert((flags & 0x20) != 0, "will retain");
+
+            // PUBLISH round-trips through the incoming parser (topic + payload, QoS 0).
+            var pub = Mqtt.MqttPacket.BuildPublish("neolink/cam/motion", Encoding.UTF8.GetBytes("ON"), retain: true);
+            AssertEq(pub[0], (byte)0x31); // PUBLISH | retain
+            // Strip the fixed header + remaining-length byte to get the body the reader passes on.
+            var body = pub.AsSpan(2).ToArray();
+            var parsed = Mqtt.MqttPacket.ParsePublish(pub[0], body);
+            AssertEq(parsed.Topic, "neolink/cam/motion");
+            AssertEq(Encoding.UTF8.GetString(parsed.Payload), "ON");
+
+            // SUBSCRIBE has the reserved 0b0010 low bits and carries the packet id.
+            var sub = Mqtt.MqttPacket.BuildSubscribe(7, new[] { "neolink/cam/+/set" });
+            AssertEq(sub[0], (byte)0x82);
+
+            // Remaining-length varint encodes multi-byte lengths correctly (321 → 0xC1 0x02).
+            var rl = new List<byte>();
+            Mqtt.MqttPacket.WriteRemainingLength(rl, 321);
+            AssertEq(rl.Count, 2);
+            AssertEq(rl[0], (byte)0xC1);
+            AssertEq(rl[1], (byte)0x02);
+        });
+
         Test("config editor: read-modify-write with validation", () =>
         {
             var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
@@ -466,6 +503,7 @@ public static class SelfTest
                     writer.Add(new Streaming.HubVideo(index, Au(Nal(0x41, 25)), false, ts += 3000));
                 }
                 Assert(writer.DurationSeconds > 0.15, "all frames survive audio interleave");
+                Assert(writer.ApproxBytes > 0, "byte counter advances (drives the segment size cap)");
 
                 // A real drop (gap flag) resumes at the next keyframe.
                 writer.Add(new Streaming.HubVideo(index + 50, Au(Nal(0x41, 25)), false, ts += 3000), gap: true);

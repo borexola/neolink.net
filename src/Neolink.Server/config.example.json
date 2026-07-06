@@ -43,8 +43,26 @@
   //   "post_seconds": 8,               // quiet time before an event closes
   //   "max_clip_seconds": 120,         // hard cap per event/clip
   //   "stream": "auto",                // which stream to record: auto|mainStream|subStream
-  //   "segment_minutes": 10,           // continuous recording: length of one file
+  //   "segment_minutes": 10,           // continuous recording: max length of one file
+  //   "max_segment_size_mb": 256,      // continuous recording: max size of one file (rolls at whichever hits first)
   //   "continuous_retention_days": 7   // continuous footage retention (default = retention_days)
+  // },
+
+  // Optional: publish to MQTT for Home Assistant (auto-discovery). Remove to disable.
+  // HA creates a device per camera with motion/person/vehicle/animal sensors,
+  // battery, night-vision, floodlight, PIR, reboot + PTZ buttons and a snapshot,
+  // depending on what each camera supports.
+  // "mqtt": {
+  //   "broker": "192.168.1.10",        // MQTT broker host (often the HA / Mosquitto box)
+  //   "port": 1883,                    // 8883 with "tls": true
+  //   "username": "neolink",
+  //   "password": "CHANGE-ME",
+  //   "client_id": "neolink",          // must be unique on the broker
+  //   "base_topic": "neolink",         // root of the state/command topics
+  //   "discovery": true,               // publish HA discovery config
+  //   "discovery_prefix": "homeassistant",  // must match HA's MQTT integration
+  //   "keepalive": 30,
+  //   "tls": false
   // },
 
   // Optional: password-protect the RTSP server. Remove entries for open access.
