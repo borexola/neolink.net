@@ -486,6 +486,10 @@ video[data-live="1"] ~ .tile-status { display: none; }
     inset: 0 !important;
     width: auto !important;
     height: auto !important;
+    /* An abspos GRID CHILD with a grid placement uses its grid AREA as the
+       containing block — a focus/mosaic hero would only fill its own cell.
+       Clearing the placement makes inset:0 span the whole grid container. */
+    grid-area: auto !important;
     z-index: 5;
 }
 
