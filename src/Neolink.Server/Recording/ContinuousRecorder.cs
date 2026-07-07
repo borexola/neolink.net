@@ -26,6 +26,10 @@ public sealed class ContinuousRecorder
     private readonly RecordingSettings _settings;
     private readonly double _segmentSeconds;
     private readonly long _maxSegmentBytes;
+    private volatile bool _writing;
+
+    /// <summary>True while 24/7 footage is actually being written to disk (feeds the UI's REC badge).</summary>
+    public bool IsWriting => _writing;
 
     public ContinuousRecorder(string camera, IStreamHub hub, EventStore store,
         RecordingSettings settings, RecordingConfig cfg)
@@ -64,6 +68,7 @@ public sealed class ContinuousRecorder
                         writer = null;
                         Log.Info($"{_camera}: continuous recording stopped");
                     }
+                    _writing = false;
                     wasOn = false;
                     continue;
                 }
@@ -112,11 +117,13 @@ public sealed class ContinuousRecorder
                     writer = null;
                     retryAfter = DateTime.UtcNow + WriteErrorBackoff;
                 }
+                _writing = writer != null;
             }
         }
         catch (OperationCanceledException) { }
         finally
         {
+            _writing = false;
             if (writer != null)
             {
                 writer.Dispose();

@@ -162,6 +162,26 @@ html, body {
     flex: 0 0 auto;
 }
 
+/* 24/7 footage is actively being written for this camera (sidebar + tile bar) */
+.cam-rec-badge {
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    color: var(--err);
+    border: 1px solid color-mix(in srgb, var(--err) 45%, transparent);
+    background: rgba(0, 0, 0, 0.35);
+    border-radius: 999px;
+    padding: 1px 7px;
+    flex: 0 0 auto;
+    white-space: nowrap;
+    animation: rec-pulse 2.2s ease-in-out infinite;
+}
+
+@keyframes rec-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.55; }
+}
+
 .cam-streams {
     display: flex;
     flex-wrap: wrap;
@@ -806,6 +826,14 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
 
 .strip-resize:hover::after { background: var(--accent); }
 
+/* Hosts the scroll area and its edge arrows (position anchor for both) */
+.events-scroll-wrap {
+    position: relative;
+    display: flex;
+    flex: 1;
+    min-width: 0;
+}
+
 .events-bar-scroll {
     display: flex;
     align-items: stretch;
@@ -814,7 +842,51 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
     overflow-y: hidden;
     scrollbar-width: thin;
     flex: 1;
+    min-width: 0;
     padding: 2px 0;
+}
+
+/* Edge scroll arrows: near full height of the strip, gradient fade into the
+   cards, only visible while that side has more to scroll (JS sets can-*). */
+.strip-nav {
+    position: absolute;
+    top: 2px;
+    bottom: 2px;
+    width: 56px;
+    display: flex;
+    align-items: center;
+    border: none;
+    padding: 0;
+    background: none;
+    color: var(--text);
+    cursor: pointer;
+    z-index: 5;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.18s ease, color 0.12s ease;
+}
+
+.strip-nav svg { filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.9)); }
+.strip-nav:hover { color: var(--accent); }
+
+.strip-nav-left {
+    left: 0;
+    justify-content: flex-start;
+    padding-left: 2px;
+    background: linear-gradient(to right, var(--panel) 25%, transparent);
+}
+
+.strip-nav-right {
+    right: 0;
+    justify-content: flex-end;
+    padding-right: 2px;
+    background: linear-gradient(to left, var(--panel) 25%, transparent);
+}
+
+.events-scroll-wrap.can-left .strip-nav-left,
+.events-scroll-wrap.can-right .strip-nav-right {
+    opacity: 1;
+    pointer-events: auto;
 }
 
 .event-card {

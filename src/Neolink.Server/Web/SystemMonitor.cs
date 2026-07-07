@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Neolink.Recording;
 
 namespace Neolink.Web;
 
@@ -14,7 +15,10 @@ public readonly record struct SystemSample(
     long DiskTotalBytes,     // volume holding the recordings (or state dir)
     long DiskFreeBytes,
     long RecordingsBytes,    // total size of the recordings tree; -1 = recording off
-    int Viewers);            // live RTSP + web stream subscribers
+    int Viewers,             // external watchers only (RTSP sessions + web players)
+    int RecordingCameras,    // cameras writing 24/7 footage right now
+    double StorageMbPerSec,  // recorder bytes handed to disk (clips+previews+segments)
+    long StorageFiles);      // recording files completed since the server started
 
 /// <summary>
 /// Samples the server's resource usage every 2 seconds into a fixed ring buffer
@@ -31,6 +35,7 @@ public sealed class SystemMonitor
     private readonly string _diskProbePath;
     private readonly string? _recordingsRoot;
     private readonly Func<int> _viewerCount;
+    private readonly Func<int> _recordingCameras;
     private readonly object _gate = new();
     private readonly SystemSample[] _ring = new SystemSample[Capacity];
     private int _count;
@@ -39,6 +44,7 @@ public sealed class SystemMonitor
     private TimeSpan _prevCpu;
     private DateTime _prevWall;
     private long _prevAlloc;
+    private long _prevStorageBytes;
     private long _recordingsBytes = -1;
     private int _tick;
 
@@ -46,12 +52,15 @@ public sealed class SystemMonitor
 
     /// <param name="diskProbePath">Directory whose volume is reported (recordings root, else state dir).</param>
     /// <param name="recordingsRoot">Recordings tree to size, or null when recording is off.</param>
-    /// <param name="viewerCount">Live subscriber total across all stream hubs.</param>
-    public SystemMonitor(string diskProbePath, string? recordingsRoot, Func<int> viewerCount)
+    /// <param name="viewerCount">External watchers across all stream hubs (recorders excluded).</param>
+    /// <param name="recordingCameras">Cameras actively writing 24/7 footage.</param>
+    public SystemMonitor(string diskProbePath, string? recordingsRoot,
+        Func<int> viewerCount, Func<int>? recordingCameras = null)
     {
         _diskProbePath = diskProbePath;
         _recordingsRoot = recordingsRoot;
         _viewerCount = viewerCount;
+        _recordingCameras = recordingCameras ?? (() => 0);
     }
 
     /// <summary>Static facts for the monitor page header (measured once).</summary>
@@ -89,6 +98,7 @@ public sealed class SystemMonitor
         _prevCpu = proc.TotalProcessorTime;
         _prevWall = DateTime.UtcNow;
         _prevAlloc = GC.GetTotalAllocatedBytes();
+        _prevStorageBytes = StorageMetrics.BytesWritten;
 
         while (!ct.IsCancellationRequested)
         {
@@ -113,6 +123,11 @@ public sealed class SystemMonitor
         long alloc = GC.GetTotalAllocatedBytes();
         double allocRate = elapsed <= 0 ? 0 : Math.Max(0, alloc - _prevAlloc) / elapsed / (1024.0 * 1024.0);
         _prevAlloc = alloc;
+
+        long storageBytes = StorageMetrics.BytesWritten;
+        double storageRate = elapsed <= 0 ? 0
+            : Math.Max(0, storageBytes - _prevStorageBytes) / elapsed / (1024.0 * 1024.0);
+        _prevStorageBytes = storageBytes;
 
         long diskTotal = 0, diskFree = 0;
         try
@@ -142,6 +157,8 @@ public sealed class SystemMonitor
         try { handles = proc.HandleCount; } catch { }
         int viewers = 0;
         try { viewers = _viewerCount(); } catch { }
+        int recCams = 0;
+        try { recCams = _recordingCameras(); } catch { }
 
         var sample = new SystemSample(
             DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
@@ -154,7 +171,10 @@ public sealed class SystemMonitor
             diskTotal,
             diskFree,
             _recordingsBytes,
-            viewers);
+            viewers,
+            recCams,
+            Math.Round(storageRate, 2),
+            StorageMetrics.FilesCompleted);
 
         lock (_gate)
         {

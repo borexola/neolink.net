@@ -71,7 +71,17 @@
                 <div class="mon-card">
                     <span class="mon-card-label">VIEWERS</span>
                     <span class="mon-card-value">@(Last?.View.ToString() ?? "—")</span>
-                    <span class="mon-card-sub">live stream subscribers</span>
+                    <span class="mon-card-sub">watching live (RTSP + web) — recorders not counted</span>
+                </div>
+                <div class="mon-card">
+                    <span class="mon-card-label">RECORDING</span>
+                    <span class="mon-card-value" style="@(Last is { RecCams: > 0 } ? "color: var(--err)" : "")">@(Last?.RecCams.ToString() ?? "—")</span>
+                    <span class="mon-card-sub">cameras taping 24/7 right now</span>
+                </div>
+                <div class="mon-card">
+                    <span class="mon-card-label">STORAGE WRITES</span>
+                    <span class="mon-card-value">@(Last is { } sw ? $"{sw.WMb:0.#} MB/s" : "—")</span>
+                    <span class="mon-card-sub">@(Last is { } sf ? $"{sf.WFiles:n0} files completed since start" : "clips + previews + segments")</span>
                 </div>
                 <div class="mon-card">
                     <span class="mon-card-label">UPTIME</span>
@@ -100,8 +110,14 @@
                 <MonChart Title="Disk used" Unit="%" FixedMax="100" WindowSec="_windowSec"
                           Series="@(new() { new(_info?.Disk ?? "volume", Amber,
                                       Pts(s => s.DTot > 0 ? (s.DTot - s.DFree) * 100.0 / s.DTot : 0)) })" />
-                <MonChart Title="Stream viewers" WindowSec="_windowSec"
-                          Series="@(new() { new("subscribers", Green, Pts(s => s.View)) })" />
+                <MonChart Title="Viewers & recording" WindowSec="_windowSec"
+                          Series="@(new()
+                                  {
+                                      new("viewers", Green, Pts(s => s.View)),
+                                      new("rec cameras", Red, Pts(s => s.RecCams)),
+                                  })" />
+                <MonChart Title="Storage writes" Unit=" MB/s" WindowSec="_windowSec"
+                          Series="@(new() { new("to disk", Amber, Pts(s => s.WMb)) })" />
             </div>
 
             @* ---------------- frontend ---------------- *@
@@ -159,6 +175,7 @@
     private const string Green = "#3fd07f";
     private const string Amber = "#ffb020";
     private const string Purple = "#b06bff";
+    private const string Red = "#ff5f6b";
     private const double Mb = 1024.0 * 1024.0;
 
     private static readonly (string Label, int Sec)[] Windows = { ("5m", 300), ("15m", 900), ("1h", 3600) };

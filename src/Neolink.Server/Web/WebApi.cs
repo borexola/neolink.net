@@ -17,8 +17,9 @@ namespace Neolink.Web;
 
 /// <summary>One camera stream as exposed over the web API.</summary>
 public sealed record WebStreamInfo(string Kind, string Path, IStreamHub Hub);
+/// <param name="ContinuousActive">Probe: is 24/7 footage being written right now? Null when the camera has no continuous recorder.</param>
 public sealed record WebCameraInfo(string Name, List<WebStreamInfo> Streams, ICameraControl Control,
-    HashSet<string>? PermittedUsers);
+    HashSet<string>? PermittedUsers, Func<bool>? ContinuousActive = null);
 
 /// <summary>Everything the web API needs from the host.</summary>
 public sealed class WebApiOptions
@@ -422,6 +423,8 @@ public static class WebApi
             {
                 name = c.Name,
                 online = c.Control.Online,
+                // 24/7 footage being written right now (drives the UI's REC badge)
+                recording = c.ContinuousActive?.Invoke() ?? false,
                 streams = c.Streams.Select(s => new
                 {
                     kind = s.Kind,
@@ -829,6 +832,9 @@ public static class WebApi
                     dFree = s.DiskFreeBytes,
                     rec = s.RecordingsBytes,
                     view = s.Viewers,
+                    recCams = s.RecordingCameras,
+                    wMb = s.StorageMbPerSec,
+                    wFiles = s.StorageFiles,
                 }),
             }));
         }
@@ -1060,7 +1066,7 @@ public static class WebApi
         var init = FMp4.BuildInit(codec, sps, pps, hub.Vps, hub.Width, hub.Height);
         await ws.SendAsync(init, WebSocketMessageType.Binary, true, ct).ConfigureAwait(false);
 
-        var (subId, reader) = hub.Subscribe();
+        var (subId, reader) = hub.Subscribe(viewer: true);
         try
         {
             // Cameras deliver video in buffers that may hold anything from a single frame

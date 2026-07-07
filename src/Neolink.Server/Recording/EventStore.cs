@@ -23,10 +23,15 @@ public sealed class EventRecord
 
 /// <summary>
 /// File-based event storage — deliberately no database, keeping the zero-dependency
-/// rule. Layout: {root}/{camera}/{yyyy-MM-dd}/{HHmmss}-{suffix}/ holding event.json,
-/// clip.mp4 and thumb.jpg. The day directory is the retention unit: expiring events
-/// means deleting old day directories. An in-memory index (loaded by scanning at
-/// startup) serves queries; JSON files are the source of truth across restarts.
+/// rule. Layout: everything for one camera-day lives under one date folder:
+///   {root}/{camera}/{yyyy-MM-dd}/detections/{HHmmss}-{suffix}/   event.json, clip.mp4, thumb.jpg, preview.mp4
+///   {root}/{camera}/{yyyy-MM-dd}/continuous/{HH-mm-ss}.mp4       24/7 segment files
+/// Retention works per day AND per type: an expired day loses its detections or
+/// its continuous footage independently, and the date folder disappears once both
+/// are gone. An in-memory index (loaded by scanning at startup) serves queries;
+/// JSON files are the source of truth across restarts. Pre-existing storage in the
+/// old layout ({camera}/{date}/{event} and {camera}/continuous/{date}) is migrated
+/// by rename on load — instant even for terabytes, and idempotent.
 /// </summary>
 public sealed class EventStore
 {
@@ -51,6 +56,8 @@ public sealed class EventStore
     /// <summary>Scans the storage directory and rebuilds the in-memory index.</summary>
     public void Load()
     {
+        try { MigrateLegacyLayout(); }
+        catch (Exception ex) { Log.Warn($"Recordings: layout migration pass failed: {ex.Message}"); }
         int loaded = 0;
         foreach (var file in Directory.EnumerateFiles(_root, "event.json", SearchOption.AllDirectories))
         {
@@ -78,7 +85,7 @@ public sealed class EventStore
         var suffix = Convert.ToHexString(Guid.NewGuid().ToByteArray()[..2]).ToLowerInvariant();
         var folder = $"{local:HHmmss}-{suffix}";
         var id = $"{camera}~{local:yyyy-MM-dd}~{folder}";
-        var dir = Path.Combine(_root, SafeName(camera), $"{local:yyyy-MM-dd}", folder);
+        var dir = Path.Combine(_root, SafeName(camera), $"{local:yyyy-MM-dd}", "detections", folder);
         Directory.CreateDirectory(dir);
 
         var rec = new EventRecord
@@ -165,7 +172,7 @@ public sealed class EventStore
     /// <summary>Path for a new continuous-recording segment starting now (creates the day dir).</summary>
     public string NewSegmentPath(string camera, DateTime local)
     {
-        var dir = Path.Combine(_root, SafeName(camera), "continuous", $"{local:yyyy-MM-dd}");
+        var dir = Path.Combine(_root, SafeName(camera), $"{local:yyyy-MM-dd}", "continuous");
         Directory.CreateDirectory(dir);
         return Path.Combine(dir, $"{local:HH-mm-ss}.mp4");
     }
@@ -173,11 +180,11 @@ public sealed class EventStore
     /// <summary>Days with continuous footage for a camera, newest first ("yyyy-MM-dd").</summary>
     public List<string> ListContinuousDays(string camera)
     {
-        var dir = Path.Combine(_root, SafeName(camera), "continuous");
-        if (!Directory.Exists(dir)) return new List<string>();
-        return Directory.EnumerateDirectories(dir)
+        var camDir = Path.Combine(_root, SafeName(camera));
+        if (!Directory.Exists(camDir)) return new List<string>();
+        return Directory.EnumerateDirectories(camDir)
             .Select(d => Path.GetFileName(d)!)
-            .Where(IsDayName)
+            .Where(d => IsDayName(d) && Directory.Exists(Path.Combine(camDir, d, "continuous")))
             .OrderByDescending(d => d)
             .ToList();
     }
@@ -186,7 +193,7 @@ public sealed class EventStore
     public List<(string File, long Size)> ListSegments(string camera, string date)
     {
         if (!IsDayName(date)) return new List<(string, long)>();
-        var dir = Path.Combine(_root, SafeName(camera), "continuous", date);
+        var dir = Path.Combine(_root, SafeName(camera), date, "continuous");
         if (!Directory.Exists(dir)) return new List<(string, long)>();
         return Directory.EnumerateFiles(dir, "*.mp4")
             .Select(f => new FileInfo(f))
@@ -200,7 +207,7 @@ public sealed class EventStore
     public string? SegmentPath(string camera, string date, string file)
     {
         if (!IsDayName(date) || !IsSegmentName(file)) return null;
-        var path = Path.Combine(_root, SafeName(camera), "continuous", date, file);
+        var path = Path.Combine(_root, SafeName(camera), date, "continuous", file);
         return File.Exists(path) ? path : null;
     }
 
@@ -219,7 +226,9 @@ public sealed class EventStore
         Cleanup(_ => (retentionDays, continuousRetentionDays));
 
     /// <summary>
-    /// Deletes event and continuous day directories older than their retention windows.
+    /// Deletes detections and continuous footage older than their retention windows.
+    /// The two live side by side in each date folder, so expiry is per type; the
+    /// date folder itself goes once both halves are gone.
     /// <paramref name="retentionFor"/> maps a camera storage-directory name to its
     /// (event days, continuous days) — 0 in either slot means keep forever.
     /// </summary>
@@ -233,50 +242,175 @@ public sealed class EventStore
             // would overflow AddDays and abort the whole pass for every camera.
             retentionDays = Math.Min(retentionDays, 36500);
             continuousRetentionDays = Math.Min(continuousRetentionDays, 36500);
-            if (retentionDays > 0)
-                events += CleanupDayDirs(cameraDir, DateTime.Now.Date.AddDays(-retentionDays), dropIndex: true);
+            var eventCutoff = DateTime.Now.Date.AddDays(-retentionDays);
+            var contCutoff = DateTime.Now.Date.AddDays(-continuousRetentionDays);
 
-            var contDir = Path.Combine(cameraDir, "continuous");
-            if (continuousRetentionDays > 0 && Directory.Exists(contDir))
-                segments += CleanupDayDirs(contDir, DateTime.Now.Date.AddDays(-continuousRetentionDays), dropIndex: false);
+            foreach (var dayDir in Directory.EnumerateDirectories(cameraDir))
+            {
+                if (!DateTime.TryParseExact(Path.GetFileName(dayDir), "yyyy-MM-dd",
+                        null, System.Globalization.DateTimeStyles.None, out var day))
+                    continue; // e.g. a pre-migration "continuous" tree, swept below
+                if (retentionDays > 0 && day < eventCutoff)
+                    events += DeleteEventEntries(dayDir);
+                if (continuousRetentionDays > 0 && day < contCutoff
+                    && DeleteTree(Path.Combine(dayDir, "continuous")))
+                    segments++;
+                TryDeleteIfEmpty(dayDir); // both halves expired: the day is gone
+            }
+
+            // Pre-migration leftovers ({camera}/continuous/{date}) — only present
+            // when a migration pass could not complete; expire them all the same.
+            var legacyCont = Path.Combine(cameraDir, "continuous");
+            if (continuousRetentionDays > 0 && Directory.Exists(legacyCont))
+            {
+                foreach (var dateDir in Directory.EnumerateDirectories(legacyCont))
+                {
+                    if (DateTime.TryParseExact(Path.GetFileName(dateDir), "yyyy-MM-dd",
+                            null, System.Globalization.DateTimeStyles.None, out var day)
+                        && day < contCutoff && DeleteTree(dateDir))
+                        segments++;
+                }
+                TryDeleteIfEmpty(legacyCont);
+            }
         }
         if (events > 0)
-            Log.Info($"Events: retention removed {events} expired day folder(s)");
+            Log.Info($"Events: retention removed {events} expired detection folder(s)");
         if (segments > 0)
-            Log.Info($"Recordings: retention removed {segments} expired day folder(s)");
+            Log.Info($"Recordings: retention removed {segments} expired continuous day folder(s)");
     }
 
-    private int CleanupDayDirs(string parent, DateTime cutoff, bool dropIndex)
+    /// <summary>
+    /// Deletes a day's event storage — the detections tree plus any pre-migration
+    /// event folders (everything except "continuous") — dropping the index entries
+    /// that pointed inside each successfully removed tree.
+    /// </summary>
+    private int DeleteEventEntries(string dayDir)
     {
         int removed = 0;
-        foreach (var dayDir in Directory.EnumerateDirectories(parent))
+        foreach (var entry in Directory.EnumerateDirectories(dayDir))
         {
-            // Non-date entries (e.g. the "continuous" folder itself) are skipped here.
-            if (!DateTime.TryParseExact(Path.GetFileName(dayDir), "yyyy-MM-dd",
-                    null, System.Globalization.DateTimeStyles.None, out var day)
-                || day >= cutoff)
+            if (Path.GetFileName(entry)!.Equals("continuous", StringComparison.OrdinalIgnoreCase))
                 continue;
-            try
+            if (!DeleteTree(entry)) continue;
+            removed++;
+            lock (_gate)
             {
-                Directory.Delete(dayDir, recursive: true);
-                removed++;
-            }
-            catch (IOException ex)
-            {
-                Log.Warn($"Retention: cannot delete expired {dayDir}: {ex.Message}");
-                continue;
-            }
-            if (dropIndex)
-            {
-                lock (_gate)
-                {
-                    foreach (var id in _byId.Where(kv => kv.Value.Dir.StartsWith(dayDir, StringComparison.OrdinalIgnoreCase))
-                                 .Select(kv => kv.Key).ToList())
-                        _byId.Remove(id);
-                }
+                var prefix = entry + Path.DirectorySeparatorChar;
+                foreach (var id in _byId
+                             .Where(kv => kv.Value.Dir.Equals(entry, StringComparison.OrdinalIgnoreCase)
+                                       || kv.Value.Dir.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                             .Select(kv => kv.Key).ToList())
+                    _byId.Remove(id);
             }
         }
         return removed;
+    }
+
+    /// <summary>Recursively deletes a directory; true only when it is actually gone.</summary>
+    private static bool DeleteTree(string dir)
+    {
+        if (!Directory.Exists(dir)) return false;
+        try
+        {
+            Directory.Delete(dir, recursive: true);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Log.Warn($"Retention: cannot delete expired {dir}: {ex.Message}");
+            return false;
+        }
+    }
+
+    private static void TryDeleteIfEmpty(string dir)
+    {
+        try
+        {
+            if (Directory.Exists(dir) && !Directory.EnumerateFileSystemEntries(dir).Any())
+                Directory.Delete(dir);
+        }
+        catch { /* somebody is writing into it — fine, it is not empty then */ }
+    }
+
+    // ------------------------------------------------------------------ layout migration
+
+    /// <summary>
+    /// One-time move from the old layout to {camera}/{date}/{detections|continuous}:
+    ///   {camera}/{date}/{HHmmss-x}/       → {camera}/{date}/detections/{HHmmss-x}/
+    ///   {camera}/continuous/{date}/*.mp4  → {camera}/{date}/continuous/
+    /// Directory renames on the same volume — instant regardless of footage size.
+    /// Idempotent: runs at every load, retrying anything a previous pass missed.
+    /// </summary>
+    private void MigrateLegacyLayout()
+    {
+        int moved = 0;
+        foreach (var cameraDir in Directory.EnumerateDirectories(_root))
+        {
+            // Continuous first, so its date folders exist before the event pass.
+            var legacyCont = Path.Combine(cameraDir, "continuous");
+            if (Directory.Exists(legacyCont))
+            {
+                foreach (var dateDir in Directory.EnumerateDirectories(legacyCont))
+                {
+                    var date = Path.GetFileName(dateDir)!;
+                    if (!IsDayName(date)) continue;
+                    var target = Path.Combine(cameraDir, date, "continuous");
+                    try
+                    {
+                        if (!Directory.Exists(target))
+                        {
+                            Directory.CreateDirectory(Path.Combine(cameraDir, date));
+                            Directory.Move(dateDir, target);
+                            moved++;
+                        }
+                        else
+                        {
+                            // Both layouts hold footage for this day: merge file by file.
+                            foreach (var file in Directory.EnumerateFiles(dateDir))
+                            {
+                                var dst = Path.Combine(target, Path.GetFileName(file));
+                                if (!File.Exists(dst)) { File.Move(file, dst); moved++; }
+                            }
+                            TryDeleteIfEmpty(dateDir);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warn($"Recordings: cannot migrate {dateDir}: {ex.Message}");
+                    }
+                }
+                TryDeleteIfEmpty(legacyCont);
+            }
+
+            foreach (var dayDir in Directory.EnumerateDirectories(cameraDir))
+            {
+                if (!IsDayName(Path.GetFileName(dayDir)!)) continue;
+                foreach (var entry in Directory.EnumerateDirectories(dayDir))
+                {
+                    var name = Path.GetFileName(entry)!;
+                    if (name is "detections" or "continuous") continue;
+                    // Only recognizable event folders are touched; anything else stays put.
+                    if (!File.Exists(Path.Combine(entry, "event.json"))) continue;
+                    var target = Path.Combine(dayDir, "detections", name);
+                    try
+                    {
+                        Directory.CreateDirectory(Path.Combine(dayDir, "detections"));
+                        if (!Directory.Exists(target))
+                        {
+                            Directory.Move(entry, target);
+                            moved++;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warn($"Events: cannot migrate {entry}: {ex.Message}");
+                    }
+                }
+            }
+        }
+        if (moved > 0)
+            Log.Info($"Recordings: migrated {moved} folder(s)/file(s) to the " +
+                     "{camera}/{date}/{detections|continuous} layout");
     }
 
     /// <summary>Runs retention cleanup once at start and then hourly.</summary>

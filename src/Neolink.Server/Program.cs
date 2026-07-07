@@ -202,8 +202,8 @@ foreach (var cam in config.Cameras)
     var primary = primaryService
         ?? throw new InvalidOperationException($"camera '{cam.Name}' has no streams");
     ICameraControl control = new CameraControl(primary, httpApi);
-    webCameras.Add(new WebCameraInfo(cam.Name, webStreams, control, permitted));
     Action<MotionPush>? recorderSink = null;
+    ContinuousRecorder? continuousRecorder = null;
 
     // Recording: alarm pushes ride the primary connection; event clips and
     // continuous segments are cut from the configured stream's hub (auto = main
@@ -238,11 +238,15 @@ foreach (var cam in config.Cameras)
             {
                 var continuous = new ContinuousRecorder(cam.Name, recordStream.Hub, eventStore,
                     recordingSettings, config.Recording);
+                continuousRecorder = continuous;
                 tasks.Add(Task.Run(() => continuous.RunAsync(shutdown.Token)));
             }
         }
     }
 
+    // Registered after the recorders so the web API can report live REC state.
+    webCameras.Add(new WebCameraInfo(cam.Name, webStreams, control, permitted,
+        ContinuousActive: continuousRecorder == null ? null : () => continuousRecorder.IsWriting));
     motionTargets.Add((primary, cam.Name, recorderSink));
 }
 
@@ -283,10 +287,13 @@ if (config.WebPort > 0)
     tasks.Add(Task.Run(() => updates.RunAsync(shutdown.Token)));
 
     // Resource sampler for the UI's monitor page (CPU/RAM/disk/viewers over time).
+    // ViewerCount deliberately excludes the server's own recorder subscriptions —
+    // "viewers" means humans/externals watching, not us taping.
     var monitor = new SystemMonitor(
         diskProbePath: eventStore?.Root ?? stateDir,
         recordingsRoot: eventStore?.Root,
-        viewerCount: () => webCameras.Sum(c => c.Streams.Sum(s => s.Hub.SubscriberCount)));
+        viewerCount: () => webCameras.Sum(c => c.Streams.Sum(s => s.Hub.ViewerCount)),
+        recordingCameras: () => webCameras.Count(c => c.ContinuousActive?.Invoke() == true));
     tasks.Add(Task.Run(() => monitor.RunAsync(shutdown.Token)));
 
     var webOptions = new WebApiOptions

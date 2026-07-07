@@ -98,6 +98,10 @@
                     {
                         <span class="cam-offline-badge">offline</span>
                     }
+                    else if (cam.Recording)
+                    {
+                        <span class="cam-rec-badge" title="Recording 24/7 to disk">● REC</span>
+                    }
                     @* solo-btn (margin-left:auto) only on the FIRST button so the pair sits together at the right *@
                     <button class="icon-btn solo-btn" title="Camera settings & controls"
                             @onclick="() => _panelCamera = cam.Name" @onclick:stopPropagation="true">⚙</button>
@@ -169,6 +173,9 @@
                         </button>
                     </div>
                 </div>
+                @* Wrapper anchors the edge scroll arrows; JS (stripNavInit) toggles
+                   can-left/can-right on it from the real scroll state. *@
+                <div class="events-scroll-wrap" id="events-scroll-wrap">
                 <div class="events-bar-scroll">
                     @if (!StripEvents.Any())
                     {
@@ -213,6 +220,19 @@
                             </div>
                         </div>
                     }
+                </div>
+                <button type="button" class="strip-nav strip-nav-left" title="Scroll back">
+                    <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor"
+                         stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <polyline points="15 18 9 12 15 6"/>
+                    </svg>
+                </button>
+                <button type="button" class="strip-nav strip-nav-right" title="Scroll for more">
+                    <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor"
+                         stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <polyline points="9 18 15 12 9 6"/>
+                    </svg>
+                </button>
                 </div>
                 <div class="strip-resize" title="Drag to resize the event strip"></div>
             </div>
@@ -366,6 +386,10 @@
                                 @onclick:stopPropagation="true" @ondblclick:stopPropagation="true">🗑</button>
                         <div class="tile-bar" @onclick:stopPropagation="true" @ondblclick:stopPropagation="true">
                             <span class="tile-name">@slot.Camera</span>
+                            @if (camera is { Recording: true })
+                            {
+                                <span class="cam-rec-badge" title="Recording 24/7 to disk">● REC</span>
+                            }
                             @if (camera != null && camera.Streams.Count > 1)
                             {
                                 <select value="@slot.Path" @onchange="e => ChangeStream(index, camera, (string?)e.Value)">
@@ -947,6 +971,7 @@
             await JS.InvokeVoidAsync("neolink.trickle", _trickleSpeed);
             _selfRef ??= DotNetObjectReference.Create(this);
             await JS.InvokeVoidAsync("neolink.stripResizeInit", "events-bar", _selfRef);
+            await JS.InvokeVoidAsync("neolink.stripNavInit", "events-scroll-wrap");
         }
         // Drive the event player from JS: pick the source for the current speed,
         // preserve position across a clip↔preview swap, and apply the rate.

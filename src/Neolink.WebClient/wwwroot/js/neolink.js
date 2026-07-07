@@ -352,6 +352,29 @@
             }
         },
 
+        // Event-strip edge arrows: shown only while that side actually has more
+        // to scroll, clicking pages the strip by most of a viewport. All state
+        // lives here (classes on the wrapper) — no circuit traffic per scroll.
+        stripNavInit(wrapId) {
+            const wrap = document.getElementById(wrapId);
+            if (!wrap || wrap.dataset.navInit) return;
+            wrap.dataset.navInit = '1';
+            const scroll = wrap.querySelector('.events-bar-scroll');
+            if (!scroll) return;
+            const update = () => {
+                wrap.classList.toggle('can-left', scroll.scrollLeft > 2);
+                wrap.classList.toggle('can-right',
+                    scroll.scrollLeft + scroll.clientWidth < scroll.scrollWidth - 2);
+            };
+            scroll.addEventListener('scroll', update, { passive: true });
+            new ResizeObserver(update).observe(scroll);            // strip/window resized
+            new MutationObserver(update).observe(scroll, { childList: true }); // cards came/went
+            const page = (dir) => scroll.scrollBy({ left: dir * scroll.clientWidth * 0.8, behavior: 'smooth' });
+            wrap.querySelector('.strip-nav-left')?.addEventListener('click', () => page(-1));
+            wrap.querySelector('.strip-nav-right')?.addEventListener('click', () => page(1));
+            update();
+        },
+
         // Review-strip vertical resizing: drag the handle at the bar's bottom edge.
         // The height is applied live in the DOM (no SignalR churn while dragging)
         // and reported to Blazor once on release for persistence.

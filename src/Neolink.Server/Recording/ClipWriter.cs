@@ -213,6 +213,7 @@ public sealed class ClipWriter : IDisposable
             // Large buffer: fewer, bigger writes are what HDDs want.
             file = new FileStream(_path, FileMode.Create, FileAccess.ReadWrite, FileShare.Read, 1 << 20);
             file.Write(init);
+            StorageMetrics.AddBytes(init.Length);
         }
         catch (Exception ex)
         {
@@ -232,6 +233,7 @@ public sealed class ClipWriter : IDisposable
                 if (item.Keyframe)
                     syncPoints.Add((item.DecodeTime, file!.Position));
                 file!.Write(item.Data);
+                StorageMetrics.AddBytes(item.Data.Length);
             }
             catch (Exception ex)
             {
@@ -248,6 +250,7 @@ public sealed class ClipWriter : IDisposable
                 WriteMfra(file!, syncPoints);
                 PatchDurations(file!, boxes);
                 file!.Flush();
+                StorageMetrics.FileCompleted();
             }
             catch (Exception ex)
             {

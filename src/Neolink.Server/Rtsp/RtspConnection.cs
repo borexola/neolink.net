@@ -543,7 +543,7 @@ internal sealed class RtspSession
     private async Task PumpAsync(CancellationToken ct)
     {
         var hub = _mount.Hub;
-        var (subId, reader) = hub.Subscribe();
+        var (subId, reader) = hub.Subscribe(viewer: true);
         long lastIndex = -1;
         bool waitKeyframe = true; // always start on a keyframe
 

@@ -273,21 +273,47 @@ public static class SelfTest
                 Assert(store2.SetReviewed(rec.Id, true), "review known id");
                 Assert(store2.List(reviewed: false).Count == 0, "reviewed filter");
 
-                // Folders older than the retention window get deleted — events and
-                // continuous footage each against their own window.
-                var oldDir = Path.Combine(dir, "cam1", "2000-01-01", "120000-dead");
+                // Layout: everything for a camera-day under one date folder.
+                var recDir = store2.EventDir(store2.List()[0]);
+                Assert(recDir.Contains(Path.Combine("cam1", rec.Id.Split('~')[1], "detections")),
+                    "events live under {camera}/{date}/detections");
+
+                // Folders older than the retention window get deleted — detections and
+                // continuous footage each against their own window; an empty date
+                // folder disappears once both halves are gone.
+                var oldDay = Path.Combine(dir, "cam1", "2000-01-01");
+                var oldDir = Path.Combine(oldDay, "detections", "120000-dead");
                 Directory.CreateDirectory(oldDir);
                 File.WriteAllText(Path.Combine(oldDir, "event.json"), "{}");
-                var oldSeg = Path.Combine(dir, "cam1", "continuous", "2000-01-01");
+                var oldSeg = Path.Combine(oldDay, "continuous");
                 Directory.CreateDirectory(oldSeg);
                 var newSeg = store2.NewSegmentPath("cam1", DateTime.Now);
                 File.WriteAllText(newSeg, "x");
                 store2.Cleanup(retentionDays: 7, continuousRetentionDays: 7);
-                Assert(!Directory.Exists(oldDir), "expired event day folder removed");
-                Assert(!Directory.Exists(oldSeg), "expired continuous day folder removed");
+                Assert(!Directory.Exists(oldDay), "expired day folder removed entirely");
                 Assert(File.Exists(newSeg), "recent segment survives retention");
                 Assert(store2.List().Count == 1, "recent event survives retention");
                 Assert(store2.ListContinuousDays("cam1").Count == 1, "recent day listed");
+
+                // The old layout ({cam}/{date}/{event}, {cam}/continuous/{date})
+                // migrates by rename when a store loads.
+                var legacyEvent = Path.Combine(dir, "cam2", "2001-02-03", "090000-beef");
+                Directory.CreateDirectory(legacyEvent);
+                File.WriteAllText(Path.Combine(legacyEvent, "event.json"),
+                    "{\"id\":\"cam2~2001-02-03~090000-beef\",\"camera\":\"cam2\"}");
+                var legacySeg = Path.Combine(dir, "cam2", "continuous", "2001-02-03");
+                Directory.CreateDirectory(legacySeg);
+                File.WriteAllText(Path.Combine(legacySeg, "08-00-00.mp4"), "x");
+                var store3 = new Recording.EventStore(dir);
+                store3.Load();
+                Assert(Directory.Exists(Path.Combine(dir, "cam2", "2001-02-03", "detections", "090000-beef")),
+                    "legacy event folder migrated");
+                Assert(File.Exists(Path.Combine(dir, "cam2", "2001-02-03", "continuous", "08-00-00.mp4")),
+                    "legacy segment migrated");
+                Assert(!Directory.Exists(Path.Combine(dir, "cam2", "continuous")),
+                    "legacy continuous tree removed");
+                AssertEq(store3.ListSegments("cam2", "2001-02-03").Count, 1);
+                Assert(store3.Find("cam2~2001-02-03~090000-beef") != null, "migrated event indexed");
             }
             finally
             {

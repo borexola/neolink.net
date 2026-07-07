@@ -23,7 +23,8 @@ public sealed class StreamHub : IStreamHub, IMediaSink
     public string Name { get; }
 
     private readonly object _gate = new();
-    private readonly ConcurrentDictionary<Guid, Channel<HubPacket>> _subscribers = new();
+    private readonly ConcurrentDictionary<Guid, (Channel<HubPacket> Ch, bool Viewer)> _subscribers = new();
+    private int _viewerCount;
     private long _index;
 
     // --- Video track info ---
@@ -54,6 +55,9 @@ public sealed class StreamHub : IStreamHub, IMediaSink
     public StreamHub(string name) => Name = name;
 
     public int SubscriberCount => _subscribers.Count;
+
+    /// <summary>External watchers only — recorders and other internal taps excluded.</summary>
+    public int ViewerCount => Volatile.Read(ref _viewerCount);
 
     /// <summary>True once codec parameters have been learned (DESCRIBE/init can be answered).</summary>
     public bool VideoReady => _videoReady.Task.IsCompletedSuccessfully;
@@ -167,13 +171,13 @@ public sealed class StreamHub : IStreamHub, IMediaSink
 
     private void Broadcast(HubPacket packet)
     {
-        foreach (var (_, ch) in _subscribers)
-            ch.Writer.TryWrite(packet); // bounded DropOldest: never blocks
+        foreach (var (_, sub) in _subscribers)
+            sub.Ch.Writer.TryWrite(packet); // bounded DropOldest: never blocks
     }
 
     // ------------------------------------------------------------------ subscribe
 
-    public (Guid id, ChannelReader<HubPacket> reader) Subscribe()
+    public (Guid id, ChannelReader<HubPacket> reader) Subscribe(bool viewer = false)
     {
         var ch = Channel.CreateBounded<HubPacket>(new BoundedChannelOptions(1024)
         {
@@ -182,14 +186,18 @@ public sealed class StreamHub : IStreamHub, IMediaSink
             SingleWriter = false,
         });
         var id = Guid.NewGuid();
-        _subscribers[id] = ch;
+        _subscribers[id] = (ch, viewer);
+        if (viewer) Interlocked.Increment(ref _viewerCount);
         return (id, ch.Reader);
     }
 
     public void Unsubscribe(Guid id)
     {
-        if (_subscribers.TryRemove(id, out var ch))
-            ch.Writer.TryComplete();
+        if (_subscribers.TryRemove(id, out var sub))
+        {
+            if (sub.Viewer) Interlocked.Decrement(ref _viewerCount);
+            sub.Ch.Writer.TryComplete();
+        }
     }
 
     /// <summary>

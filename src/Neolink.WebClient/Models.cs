@@ -14,7 +14,8 @@ public sealed record ApiStream(string Kind, string Path, bool Ready, string? Cod
     };
 }
 
-public sealed record ApiCamera(string Name, bool Online, List<ApiStream> Streams);
+/// <param name="Recording">24/7 footage is being written for this camera right now.</param>
+public sealed record ApiCamera(string Name, bool Online, List<ApiStream> Streams, bool Recording = false);
 
 // ------------------------------------------------------------ camera control API
 
@@ -75,7 +76,8 @@ public sealed record ApiSystemInfo(string? Os, string? Arch, string? Runtime, in
 
 /// <summary>GET /api/system/stats — one resource sample (compact keys keep the 2s poll light).</summary>
 public sealed record ApiSystemSample(long T, double Cpu, long Ws, long Heap, double Alloc,
-    int Thr, int Fd, long DTot, long DFree, long Rec, int View);
+    int Thr, int Fd, long DTot, long DFree, long Rec, int View,
+    int RecCams = 0, double WMb = 0, long WFiles = 0);
 
 public sealed record ApiSystemStats(ApiSystemInfo? Info, List<ApiSystemSample> Samples);
 

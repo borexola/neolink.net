@@ -19,7 +19,10 @@ public interface IMediaSink
 public interface IStreamHub
 {
     string Name { get; }
+    /// <summary>Every attached consumer, including the server's own recorders.</summary>
     int SubscriberCount { get; }
+    /// <summary>External watchers only (RTSP sessions + web players) — what "viewers" means to a human.</summary>
+    int ViewerCount { get; }
 
     /// <summary>True once codec parameters have been learned (DESCRIBE/init can be answered).</summary>
     bool VideoReady { get; }
@@ -31,7 +34,9 @@ public interface IStreamHub
     uint Height { get; }
     AudioTrackInfo? Audio { get; }
 
-    (Guid id, ChannelReader<HubPacket> reader) Subscribe();
+    /// <param name="viewer">True for external watchers (RTSP/web); false for
+    /// internal consumers like the recorders, which don't count as viewers.</param>
+    (Guid id, ChannelReader<HubPacket> reader) Subscribe(bool viewer = false);
     void Unsubscribe(Guid id);
 
     /// <summary>
