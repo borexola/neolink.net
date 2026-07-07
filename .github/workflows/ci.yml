@@ -1,0 +1,29 @@
+name: ci
+
+# Merge gate: every pull request (and every push to main) must build cleanly
+# and pass the built-in self-test suite (`neolink.net selftest` — protocol
+# codecs, config, recording, auth, MQTT, and the live web-API contract test).
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build (warnings are errors)
+        run: dotnet build src/Neolink.Server/Neolink.Server.csproj -c Release -warnaserror -nologo
+
+      - name: Self-tests
+        run: dotnet src/Neolink.Server/bin/Release/net10.0/neolink.net.dll selftest

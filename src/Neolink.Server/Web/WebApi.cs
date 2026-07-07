@@ -122,8 +122,7 @@ public static class WebApi
             builder.Services.AddSingleton(_ => new HttpClient { Timeout = TimeSpan.FromSeconds(5) });
             // Circuits must talk to THIS server via loopback, never back out through
             // a reverse proxy's public URL (TLS/hairpin failures behind HAProxy etc.).
-            var loopbackHost = bindAddr is "0.0.0.0" or "::" or "[::]" or "*" ? "127.0.0.1" : bindAddr;
-            builder.Services.AddSingleton(new Neolink.WebClient.LocalApiInfo($"http://{loopbackHost}:{port}"));
+            builder.Services.AddSingleton(new Neolink.WebClient.LocalApiInfo(LoopbackBase(bindAddr, port)));
         }
         var app = builder.Build();
 
@@ -962,6 +961,14 @@ public static class WebApi
         Log.Info($"  API:    http://{displayHost}:{port}/api/cameras" + (webUi ? "" : " (web UI disabled)"));
         await using var reg = ct.Register(() => app.Lifetime.StopApplication());
         await app.RunAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>The base URL the server's own Blazor circuits use to reach the API:
+    /// wildcard binds map to plain loopback, a concrete bind address is used as-is.</summary>
+    internal static string LoopbackBase(string bindAddr, int port)
+    {
+        var host = bindAddr is "0.0.0.0" or "::" or "[::]" or "*" ? "127.0.0.1" : bindAddr;
+        return $"http://{host}:{port}";
     }
 
     private static IStreamHub? FindHub(IReadOnlyList<WebCameraInfo> cameras, string? path)

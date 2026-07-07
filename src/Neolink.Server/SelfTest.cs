@@ -578,6 +578,148 @@ public static class SelfTest
             }
         });
 
+        Test("loopback base for blazor circuits (reverse-proxy fix)", () =>
+        {
+            // Wildcard binds are not dialable — the circuit's own-server calls
+            // must go to plain loopback; a concrete bind address is used as-is.
+            AssertEq(Web.WebApi.LoopbackBase("0.0.0.0", 8655), "http://127.0.0.1:8655");
+            AssertEq(Web.WebApi.LoopbackBase("::", 8655), "http://127.0.0.1:8655");
+            AssertEq(Web.WebApi.LoopbackBase("[::]", 8655), "http://127.0.0.1:8655");
+            AssertEq(Web.WebApi.LoopbackBase("*", 8655), "http://127.0.0.1:8655");
+            AssertEq(Web.WebApi.LoopbackBase("192.168.1.10", 9000), "http://192.168.1.10:9000");
+        });
+
+        Test("update checker: release tag comparison", () =>
+        {
+            var chk = new Web.UpdateChecker("0.6.0");
+            Assert(chk.IsNewer("v0.7.0"), "newer tag detected");
+            Assert(chk.IsNewer("V1.0"), "capital V and two-part version accepted");
+            Assert(!chk.IsNewer("v0.6.0"), "same version is not an update");
+            Assert(!chk.IsNewer("0.5.9"), "older version is not an update");
+            Assert(!chk.IsNewer("not-a-version"), "junk tag ignored");
+        });
+
+        Test("web api: auth gate, token transports, endpoint contracts", () =>
+        {
+            // Boots the real HTTP API on an ephemeral loopback port (UI disabled)
+            // and exercises the contracts the web client binds to. This is the
+            // seam merges keep touching: the auth middleware and the JSON shapes.
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            using var cts = new CancellationTokenSource();
+            Task? server = null;
+            try
+            {
+                int port = FreeTcpPort();
+                var hub = new Streaming.StreamHub("apicam");
+                var cam = new Web.WebCameraInfo("apicam",
+                    new List<Web.WebStreamInfo> { new("mainStream", "/apicam/mainStream", hub) },
+                    new StubCameraControl("apicam"), PermittedUsers: null);
+                server = Web.WebApi.RunAsync(new Web.WebApiOptions
+                {
+                    BindAddr = "127.0.0.1",
+                    Port = port,
+                    WebUi = false,
+                    Cameras = new[] { cam },
+                    Users = new Dictionary<string, string>(),
+                    RtspPort = 8654,
+                    Events = new Recording.EventStore(Path.Combine(dir, "recordings")),
+                    RecordingSettings = new Recording.RecordingSettings(dir),
+                    UserStore = new Web.UserStore(dir),
+                    Version = "0.0.0-selftest",
+                    ConfigPath = Path.Combine(dir, "config.json"),
+                    RestartRequested = () => { },
+                }, cts.Token);
+
+                using var http = new HttpClient
+                {
+                    BaseAddress = new Uri($"http://127.0.0.1:{port}"),
+                    Timeout = TimeSpan.FromSeconds(10),
+                };
+
+                // Wait for Kestrel to accept; surface a startup crash immediately.
+                System.Text.Json.JsonElement features = default;
+                var deadline = DateTime.UtcNow.AddSeconds(15);
+                while (true)
+                {
+                    if (server.IsCompleted) server.GetAwaiter().GetResult();
+                    try { features = GetJson(http, "/api/features"); break; }
+                    catch when (DateTime.UtcNow < deadline) { Thread.Sleep(100); }
+                }
+
+                // Feature discovery — what ApiFeaturesInfo binds to.
+                Assert(features.GetProperty("events").GetBoolean(), "events feature on (store wired)");
+                AssertEq(features.GetProperty("version").GetString()!, "0.0.0-selftest");
+                Assert(features.TryGetProperty("trickleSpeed", out _), "trickleSpeed exposed");
+                AssertEq(features.GetProperty("repoUrl").GetString()!, Web.UpdateChecker.RepoUrl);
+
+                // Camera list — what ApiCamera/ApiStream bind to; open while no accounts exist.
+                var cams = GetJson(http, "/api/cameras");
+                AssertEq(cams.GetArrayLength(), 1);
+                AssertEq(cams[0].GetProperty("name").GetString()!, "apicam");
+                var stream = cams[0].GetProperty("streams")[0];
+                AssertEq(stream.GetProperty("kind").GetString()!, "mainStream");
+                AssertEq(stream.GetProperty("path").GetString()!, "/apicam/mainStream");
+                AssertEq(stream.GetProperty("rtspPort").GetInt32(), 8654);
+
+                // CORS preflight short-circuits (the web client may be served from anywhere).
+                using (var preflight = http.Send(new HttpRequestMessage(HttpMethod.Options, "/api/cameras")))
+                {
+                    AssertEq((int)preflight.StatusCode, 204);
+                    AssertEq(preflight.Headers.GetValues("Access-Control-Allow-Origin").First(), "*");
+                }
+
+                // First account = the admin; creating it turns authentication ON.
+                var setup = PostJson(http, "/api/auth/setup",
+                    """{"username":"admin","password":"correct horse"}""");
+                var token = setup.GetProperty("token").GetString()!;
+                Assert(setup.GetProperty("admin").GetBoolean(), "first account is the admin");
+                using (var again = PostRaw(http, "/api/auth/setup", """{"username":"x","password":"yyyyyyyy"}"""))
+                    AssertEq((int)again.StatusCode, 409); // setup is one-shot
+
+                // The gate: every /api route except the auth handshake now needs a session.
+                AssertEq((int)http.GetAsync("/api/cameras").Result.StatusCode, 401);
+                AssertEq((int)http.GetAsync("/api/features").Result.StatusCode, 401);
+                AssertEq((int)http.GetAsync("/api/auth/status").Result.StatusCode, 200);
+
+                // Both token transports authenticate: Bearer header (component fetches)
+                // and ?token= (media elements + the stream WebSocket, where headers can't go).
+                using (var req = new HttpRequestMessage(HttpMethod.Get, "/api/cameras"))
+                {
+                    req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+                    using var res = http.Send(req);
+                    AssertEq((int)res.StatusCode, 200);
+                }
+                var tokenQ = $"?token={Uri.EscapeDataString(token)}";
+                AssertEq((int)http.GetAsync($"/api/cameras{tokenQ}").Result.StatusCode, 200);
+                AssertEq((int)http.GetAsync($"/api/cameras{tokenQ}x").Result.StatusCode, 401); // tampered
+
+                // Login: wrong password rejected (401), right one issues a token.
+                using (var bad = PostRaw(http, "/api/auth/login", """{"username":"admin","password":"wrong horse"}"""))
+                    AssertEq((int)bad.StatusCode, 401);
+                var login = PostJson(http, "/api/auth/login", """{"username":"admin","password":"correct horse"}""");
+                Assert(login.GetProperty("token").GetString()!.Length > 20, "login issues a token");
+
+                // Per-camera recording switches round-trip through the API.
+                using (var req = new HttpRequestMessage(HttpMethod.Post, $"/api/cameras/apicam/recording{tokenQ}")
+                       { Content = new StringContent("""{"events":true}""", Encoding.UTF8, "application/json") })
+                using (var res = http.Send(req))
+                    AssertEq((int)res.StatusCode, 200);
+                var rec = GetJson(http, $"/api/cameras/apicam/recording{tokenQ}");
+                Assert(rec.GetProperty("events").GetBoolean(), "recording switch persisted via API");
+                Assert(rec.TryGetProperty("continuous", out _), "continuous switch exposed");
+
+                // Recorded-events listing responds (empty store).
+                AssertEq(GetJson(http, $"/api/events{tokenQ}").GetArrayLength(), 0);
+            }
+            finally
+            {
+                cts.Cancel();
+                try { server?.Wait(TimeSpan.FromSeconds(15)); } catch { }
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+        });
+
         if (rustRepoPath != null)
         {
             var bcSamples = Path.Combine(rustRepoPath, "crates", "core", "src", "bc", "samples");
@@ -727,6 +869,61 @@ public static class SelfTest
     }
 
     // ------------------------------------------------------------- helpers
+
+    private static int FreeTcpPort()
+    {
+        var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        listener.Start();
+        int port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+        listener.Stop();
+        return port;
+    }
+
+    private static System.Text.Json.JsonElement GetJson(HttpClient http, string path)
+    {
+        using var res = http.GetAsync(path).GetAwaiter().GetResult();
+        res.EnsureSuccessStatusCode();
+        return System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(
+            res.Content.ReadAsStringAsync().GetAwaiter().GetResult());
+    }
+
+    private static HttpResponseMessage PostRaw(HttpClient http, string path, string json) =>
+        http.PostAsync(path, new StringContent(json, Encoding.UTF8, "application/json"))
+            .GetAwaiter().GetResult();
+
+    private static System.Text.Json.JsonElement PostJson(HttpClient http, string path, string json)
+    {
+        using var res = PostRaw(http, path, json);
+        res.EnsureSuccessStatusCode();
+        return System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(
+            res.Content.ReadAsStringAsync().GetAwaiter().GetResult());
+    }
+
+    /// <summary>An always-online camera that supports nothing — the API test only
+    /// needs a control surface to exist, not to do anything.</summary>
+    private sealed class StubCameraControl(string name) : Streaming.ICameraControl
+    {
+        public string CameraName => name;
+        public bool Online => true;
+        public bool CanSetStreamSettings => false;
+        public Task<Streaming.CameraCapabilities> GetCapabilitiesAsync(CancellationToken ct) =>
+            throw new NotSupportedException();
+        public Task<Bc.Xml.StreamInfoListXml?> GetStreamInfoAsync(CancellationToken ct) =>
+            Task.FromResult<Bc.Xml.StreamInfoListXml?>(null);
+        public Task SetStreamSettingsAsync(string stream, uint? width, uint? height,
+            uint? framerate, uint? bitrate, CancellationToken ct) => throw new NotSupportedException();
+        public Task<System.Xml.Linq.XElement?> GetBatteryInfoAsync(CancellationToken ct) =>
+            Task.FromResult<System.Xml.Linq.XElement?>(null);
+        public Task<byte[]?> SnapshotAsync(CancellationToken ct) => Task.FromResult<byte[]?>(null);
+        public Task<System.Xml.Linq.XElement?> GetLedStateAsync(CancellationToken ct) =>
+            Task.FromResult<System.Xml.Linq.XElement?>(null);
+        public Task SetLedStateAsync(string? state, string? lightState, CancellationToken ct) => Task.CompletedTask;
+        public Task<System.Xml.Linq.XElement?> GetPirStateAsync(CancellationToken ct) =>
+            Task.FromResult<System.Xml.Linq.XElement?>(null);
+        public Task SetPirEnabledAsync(bool enabled, CancellationToken ct) => Task.CompletedTask;
+        public Task PtzAsync(string command, float speed, CancellationToken ct) => Task.CompletedTask;
+        public Task RebootAsync(CancellationToken ct) => Task.CompletedTask;
+    }
 
     private static BcContext NewContext()
     {

@@ -55,13 +55,17 @@ public sealed class UpdateChecker
         var tag = await FetchTagAsync(http, ct).ConfigureAwait(false);
         if (tag == null) return;
 
-        if (System.Version.TryParse(tag.TrimStart('v', 'V'), out var latest) && latest > _current)
+        if (IsNewer(tag))
         {
             if (_latest != tag)
                 Log.Info($"Update available: {tag} (running {_current}) — {RepoUrl}");
             _latest = tag;
         }
     }
+
+    /// <summary>True when the tag (with or without a leading v) parses and is strictly newer than the running version.</summary>
+    internal bool IsNewer(string tag) =>
+        System.Version.TryParse(tag.TrimStart('v', 'V'), out var latest) && latest > _current;
 
     private static async Task<string?> FetchTagAsync(HttpClient http, CancellationToken ct)
     {
