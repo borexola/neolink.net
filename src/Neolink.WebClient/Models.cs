@@ -187,8 +187,15 @@ public sealed class PersistedView
     public string Mode { get; set; } = "grid";   // grid | focus | mosaic | theater | free
     public int Count { get; set; } = 4;
     public List<ViewSlot> Slots { get; set; } = new();
-    /// <summary>Set while a tile is maximized: the view to restore. Survives reloads.</summary>
+    /// <summary>Set while a tile is maximized: the view to restore. Survives reloads.
+    /// Legacy (pre in-place maximize); still honored when loading old state.</summary>
     public ViewSnapshot? Backup { get; set; }
+    /// <summary>Tile maximized in place, if any — the others stay live but hidden.</summary>
+    public int? MaxIndex { get; set; }
+    /// <summary>Stream the card showed before maximize auto-switched it to main.</summary>
+    public string? MaxPrevKind { get; set; }
+    public string? MaxPrevPath { get; set; }
+    public string? MaxPrevCamera { get; set; }
     /// <summary>Review-strip filter: event types hidden from the top bar.</summary>
     public List<string> HiddenTypes { get; set; } = new();
     /// <summary>Review-strip filter: cameras hidden from the top bar.</summary>

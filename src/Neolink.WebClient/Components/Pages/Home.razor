@@ -287,10 +287,10 @@
                 <button class="tool-btn" @onclick="() => SetCount(_count + 1)">+</button>
             }
 
-            @if (_backup != null)
+            @if (_backup != null || _maxIndex != null)
             {
                 <span class="tool-sep"></span>
-                <button class="tool-btn back" @onclick="RestoreFromBackup">⤡ Restore view</button>
+                <button class="tool-btn back" @onclick="RestoreView">⤡ Restore view</button>
             }
 
             <span class="tool-sep"></span>
@@ -355,16 +355,28 @@
             </div>
         }
 
-        <div id="stage-grid" class="grid mode-@_mode" style="@ContainerStyle()">
+        @if (_showMainWarn)
+        {
+            <div class="perf-toast" role="status">
+                <span>⚡ More than 4 <b>main</b> streams on screen — decoding several
+                    high-res feeds can strain this device. Sub streams keep the wall
+                    smooth; a maximized tile switches itself to main quality.</span>
+                <button class="chip" @onclick="() => _showMainWarn = false">Got it</button>
+            </div>
+        }
+
+        <div id="stage-grid" class="grid mode-@_mode @(_maxIndex != null ? "has-max" : "")" style="@ContainerStyle()">
             @for (int i = 0; i < _slots.Count; i++)
             {
                 var index = i;
                 var slot = _slots[index];
                 var camera = slot.Camera == null ? null : _cameras.FirstOrDefault(c => c.Name == slot.Camera);
 
-                @* theater = the maximized/solo view: digital zoom is available there
-                   (and in browser fullscreen, where JS checks the fullscreen element) *@
-                <div class="tile @(index == 0 && (_mode is "focus" or "mosaic") ? "hero" : "") @(_mode == "theater" ? "zoom-on" : "")"
+                @* Maximizing hides the other tiles (CSS display) instead of unmounting
+                   them, so their players keep running and restore is instant.
+                   zoom-on marks the surfaces where digital zoom is available
+                   (theater layout / maximized tile; JS checks fullscreen itself). *@
+                <div class="tile @(index == 0 && (_mode is "focus" or "mosaic") ? "hero" : "") @(_mode == "theater" || _maxIndex == index ? "zoom-on" : "") @(_maxIndex == index ? "maxed" : "")"
                      id="tile-@index" data-slot="@index" style="@TileStyle(index)" @key="index"
                      @ondblclick="() => ToggleMaximize(index)"
                      @onclick="() => OnTileClick(index)">
@@ -384,9 +396,6 @@
                         @* no autoplay: the JS player starts playback once its jitter buffer is filled *@
                         <video id="vid-@index" muted playsinline></video>
                         <div class="tile-status">connecting…</div>
-                        <button class="tile-trash" title="Remove this tile"
-                                @onclick="() => CloseSlot(index)"
-                                @onclick:stopPropagation="true" @ondblclick:stopPropagation="true">🗑</button>
                         <div class="tile-bar" @onclick:stopPropagation="true" @ondblclick:stopPropagation="true">
                             <span class="tile-name">@slot.Camera</span>
                             @if (camera is { Recording: true })
@@ -405,8 +414,8 @@
                             <span class="tile-spacer"></span>
                             @* JS-owned (neolink.audioInit): shown only when the stream has audio *@
                             <button type="button" class="icon-btn" data-audio-toggle style="display:none">🔇</button>
-                            <button class="icon-btn" title="@(_backup != null && _mode == "theater" ? "Restore view" : "Maximize")"
-                                    @onclick="() => ToggleMaximize(index)">@(_backup != null && _mode == "theater" ? "❐" : "⛶")</button>
+                            <button class="icon-btn" title="@(_maxIndex == index || (_backup != null && _mode == "theater") ? "Restore view" : "Maximize")"
+                                    @onclick="() => ToggleMaximize(index)">@(_maxIndex == index || (_backup != null && _mode == "theater") ? "❐" : "⛶")</button>
                             @* glyph comes from CSS so it can follow browser fullscreen state *@
                             <button class="icon-btn fs-toggle" title="Browser fullscreen (click again to exit)"
                                     @onclick="() => FullscreenAsync(index)"></button>
@@ -826,7 +835,16 @@
     private List<ViewSlot> _slots = new();
     private string _mode = "grid";
     private int _count = 4;
-    private ViewSnapshot? _backup;
+    private ViewSnapshot? _backup; // legacy theater-detour maximize (old persisted states)
+
+    // In-place maximize: the tile at _maxIndex fills the stage while the OTHER
+    // tiles stay mounted (CSS-hidden) so their players keep running — restoring
+    // never reconnects the background feeds. _maxPrev* remembers the stream the
+    // card showed before the automatic sub→main switch.
+    private int? _maxIndex;
+    private string? _maxPrevKind;
+    private string? _maxPrevPath;
+    private string? _maxPrevCamera;
     private string _server = "";
     private string? _user;
     private string? _pass;
@@ -983,6 +1001,7 @@
                     _count = v.Count;
                     _slots = v.Slots;
                     _backup = v.Backup;
+                    ApplyMaxState(v);
                     _hiddenTypes = new HashSet<string>(v.HiddenTypes, StringComparer.OrdinalIgnoreCase);
                     _hiddenCams = new HashSet<string>(v.HiddenCams, StringComparer.OrdinalIgnoreCase);
                     if (v.StripHeight > 0) _stripHeight = Math.Clamp(v.StripHeight, 96, 640);
@@ -1022,6 +1041,7 @@
             // session — an unsecured server re-warns on every fresh visit.
             _setupDismissed = await JS.InvokeAsync<string?>("neolink.lsGet", SetupDismissKey) == "1";
             _secWarnDismissed = await JS.InvokeAsync<string?>("neolink.ssGet", SecWarnDismissKey) == "1";
+            _mainWarned = await JS.InvokeAsync<string?>("neolink.lsGet", MainWarnKey) == "1";
             _updateDismissedVersion = await JS.InvokeAsync<string?>("neolink.lsGet", "neolink.updateDismissed");
         }
         catch { }
@@ -1041,10 +1061,36 @@
         await JS.InvokeVoidAsync("neolink.ssSet", SecWarnDismissKey, "1");
     }
 
+    // One-time performance nudge, shown the first time the wall holds more than
+    // four MAIN streams (each is a full-resolution decode). Once ever per browser.
+    private const string MainWarnKey = "neolink.mainStreamWarned";
+    private bool _showMainWarn;
+    private bool _mainWarned;
+
+    /// <summary>Call after anything that can put another main stream on the wall.</summary>
+    private void MaybeWarnMainStreams()
+    {
+        if (_mainWarned || _slots.Count(s => s.Kind == "mainStream") <= 4) return;
+        _mainWarned = true;
+        _showMainWarn = true;
+        _ = JS.InvokeVoidAsync("neolink.lsSet", MainWarnKey, "1");
+        _ = AutoHideMainWarnAsync();
+    }
+
+    private async Task AutoHideMainWarnAsync()
+    {
+        await Task.Delay(TimeSpan.FromSeconds(15)); // brief: it fades on its own
+        if (!_showMainWarn) return;
+        _showMainWarn = false;
+        await InvokeAsync(StateHasChanged);
+    }
+
     private PersistedView SnapshotView() => new()
     {
         Server = _server, User = _user, Pass = _pass,
         Mode = _mode, Count = _count, Slots = _slots, Backup = _backup,
+        MaxIndex = _maxIndex, MaxPrevKind = _maxPrevKind, MaxPrevPath = _maxPrevPath,
+        MaxPrevCamera = _maxPrevCamera,
         HiddenTypes = _hiddenTypes.ToList(), HiddenCams = _hiddenCams.ToList(),
         StripHeight = _stripHeight,
         Layouts = _layouts, ActiveLayout = _activeLayout,
@@ -1068,6 +1114,15 @@
         }
     }
 
+    /// <summary>Restores the in-place maximize state, ignoring an index the current slots can't satisfy.</summary>
+    private void ApplyMaxState(PersistedView v)
+    {
+        _maxIndex = v.MaxIndex is int i && i >= 0 && i < _slots.Count && _slots[i].Camera != null ? i : null;
+        _maxPrevKind = _maxIndex != null ? v.MaxPrevKind : null;
+        _maxPrevPath = _maxIndex != null ? v.MaxPrevPath : null;
+        _maxPrevCamera = _maxIndex != null ? v.MaxPrevCamera : null;
+    }
+
     /// <summary>Applies the server-stored per-user view (everything except the server address).</summary>
     private void ApplyView(PersistedView v)
     {
@@ -1075,6 +1130,7 @@
         if (v.Count > 0) _count = ClampCount(_mode, v.Count);
         if (v.Slots.Count > 0) _slots = v.Slots;
         _backup = v.Backup;
+        ApplyMaxState(v);
         _user = v.User;
         _pass = v.Pass;
         _hiddenTypes = new HashSet<string>(v.HiddenTypes, StringComparer.OrdinalIgnoreCase);
@@ -1894,6 +1950,7 @@
 
     private void SetMode(string mode)
     {
+        ExitMaximize();
         _mode = mode;
         _count = ClampCount(mode, _count);
         EnsureSlots();
@@ -1902,9 +1959,26 @@
 
     private void SetCount(int n)
     {
-        _count = ClampCount(_mode, n);
+        ExitMaximize();
+        int target = ClampCount(_mode, n);
+        // Shrinking drops EMPTY tiles first (newest empty first): a running feed
+        // only disappears when every remaining tile is occupied.
+        while (_slots.Count > target)
+        {
+            int drop = _slots.FindLastIndex(s => s.Camera == null);
+            _slots.RemoveAt(drop >= 0 ? drop : _slots.Count - 1);
+        }
+        _count = target;
         EnsureSlots();
         _ = SaveAsync();
+    }
+
+    /// <summary>Layout/count changes end the maximized detour (stream reverted).</summary>
+    private void ExitMaximize()
+    {
+        if (_maxIndex == null) return;
+        RevertAutoMainSwitch();
+        _maxIndex = null;
     }
 
     private static int GridColumns(int n) => (int)Math.Ceiling(Math.Sqrt(n));
@@ -1958,13 +2032,60 @@
 
     private void AddStream(ApiCamera cam, ApiStream stream)
     {
+        int shown = _slots.FindIndex(s => s.Camera == cam.Name);
+
+        // While a tile is maximized, picking a camera means "show me THAT one big".
+        // If its tile already runs in the hidden background, maximize that tile
+        // (player already live); otherwise swap the maximized card's content.
+        // Either way the outgoing card first gets its auto-switched stream back.
+        if (_maxIndex is int maxed)
+        {
+            if (shown == maxed)
+            {
+                _ = JS.InvokeVoidAsync("neolink.flashTile", $"tile-{maxed}");
+                _sidebarOpen = false;
+                return;
+            }
+            RevertAutoMainSwitch();
+            if (shown >= 0)
+            {
+                _maxIndex = shown;
+            }
+            else
+            {
+                var maxSlot = _slots[maxed];
+                maxSlot.Camera = cam.Name;
+                maxSlot.Kind = stream.Kind;
+                maxSlot.Path = stream.Path;
+            }
+            AutoMainStream(_maxIndex!.Value);
+            MaybeWarnMainStreams();
+            _sidebarOpen = false;
+            _ = SaveAsync();
+            return;
+        }
+
         // Already on screen? Don't duplicate or clobber another tile — flash the
         // existing tile red so the user can see where the camera already is.
-        int shown = _slots.FindIndex(s => s.Camera == cam.Name);
         if (shown >= 0)
         {
             _ = JS.InvokeVoidAsync("neolink.flashTile", $"tile-{shown}");
             _sidebarOpen = false;
+            return;
+        }
+
+        // Theater shows exactly ONE card: picking another camera means "show me
+        // that one here" — swap the card's content. There is no other tile to
+        // protect and nowhere to grow, so the usual don't-clobber rule doesn't apply.
+        if (_mode == "theater")
+        {
+            var shownSlot = _slots[0];
+            shownSlot.Camera = cam.Name;
+            shownSlot.Kind = stream.Kind;
+            shownSlot.Path = stream.Path;
+            MaybeWarnMainStreams();
+            _sidebarOpen = false;
+            _ = SaveAsync();
             return;
         }
 
@@ -1992,6 +2113,7 @@
         slot.Camera = cam.Name;
         slot.Kind = stream.Kind;
         slot.Path = stream.Path;
+        MaybeWarnMainStreams();
         _sidebarOpen = false; // mobile drawer: close after picking
         _ = SaveAsync();
     }
@@ -2002,12 +2124,20 @@
         if (stream == null) return;
         _slots[index].Kind = stream.Kind;
         _slots[index].Path = stream.Path;
+        MaybeWarnMainStreams();
         _ = SaveAsync();
     }
 
     private void CloseSlot(int index)
     {
         _ = JS.InvokeVoidAsync("neolink.exitFullscreen");
+        if (_maxIndex == index)
+        {
+            // Closing the maximized feed also leaves the maximized view — an
+            // empty full-screen card helps nobody.
+            _maxIndex = null;
+            _maxPrevKind = _maxPrevPath = _maxPrevCamera = null;
+        }
         _slots[index].Clear();
         _ = SaveAsync();
     }
@@ -2042,7 +2172,7 @@
         get
         {
             // A maximized tile is a temporary detour, not an edit of the layout.
-            if (_backup != null) return false;
+            if (_backup != null || _maxIndex != null) return false;
             var l = ActiveLayoutDef;
             if (l == null) return false;
             if (l.Mode != _mode || l.Count != _count || l.Slots.Count != _slots.Count) return true;
@@ -2124,16 +2254,68 @@
         _ = JS.InvokeVoidAsync("neolink.exitFullscreen");
         if (_backup != null && _mode == "theater")
         {
-            RestoreFromBackup();
+            RestoreFromBackup(); // legacy persisted maximize from older versions
+            return;
+        }
+        if (_maxIndex != null)
+        {
+            RestoreMaximized();
             return;
         }
         if (_slots[index].Camera == null) return;
-        _backup = Snapshot();
-        var keep = _slots[index].Clone();
-        _mode = "theater";
-        _count = 1;
-        _slots = new List<ViewSlot> { keep };
+        _maxIndex = index;
+        AutoMainStream(index);
         _ = SaveAsync();
+    }
+
+    /// <summary>
+    /// A maximized card deserves the pixels: a sub-stream card switches to the
+    /// camera's main stream when it serves one. The previous choice is remembered
+    /// so restoring the view puts the sub stream back.
+    /// </summary>
+    private void AutoMainStream(int index)
+    {
+        _maxPrevKind = _maxPrevPath = _maxPrevCamera = null;
+        var slot = _slots[index];
+        var cam = _cameras.FirstOrDefault(c => c.Name == slot.Camera);
+        var main = cam?.Streams.FirstOrDefault(s => s.Kind == "mainStream");
+        if (main == null || slot.Kind == main.Kind) return;
+        _maxPrevKind = slot.Kind;
+        _maxPrevPath = slot.Path;
+        _maxPrevCamera = slot.Camera;
+        slot.Kind = main.Kind;
+        slot.Path = main.Path;
+    }
+
+    /// <summary>Undoes the automatic main-stream switch — but only while the card
+    /// still shows the same camera on the auto-chosen main stream. A camera or
+    /// stream the user picked by hand while maximized is respected.</summary>
+    private void RevertAutoMainSwitch()
+    {
+        if (_maxIndex is int i && _maxPrevKind != null)
+        {
+            var slot = _slots.ElementAtOrDefault(i);
+            if (slot != null && slot.Camera == _maxPrevCamera && slot.Kind == "mainStream")
+            {
+                slot.Kind = _maxPrevKind;
+                slot.Path = _maxPrevPath;
+            }
+        }
+        _maxPrevKind = _maxPrevPath = _maxPrevCamera = null;
+    }
+
+    private void RestoreMaximized()
+    {
+        RevertAutoMainSwitch();
+        _maxIndex = null;
+        _ = SaveAsync();
+    }
+
+    /// <summary>Toolbar "Restore view": whichever maximize flavor is active.</summary>
+    private void RestoreView()
+    {
+        if (_maxIndex != null) RestoreMaximized();
+        else RestoreFromBackup();
     }
 
     // ------------------------------------------------------------ quick view (pop-up)
