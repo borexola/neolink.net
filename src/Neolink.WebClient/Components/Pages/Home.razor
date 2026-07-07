@@ -2357,8 +2357,61 @@
         _ = SaveAsync();
     }
 
-    private async Task FullscreenAsync(int index) =>
+    // Browser fullscreen gets the same treatment as maximize: a sub-stream card
+    // switches to the camera's main stream while fullscreen, reverted on exit.
+    // Exit can happen without us (Esc, browser UI), so JS watches fullscreenchange
+    // and calls OnFullscreenExit.
+    private int? _fsIndex;
+    private string? _fsPrevKind;
+    private string? _fsPrevPath;
+    private string? _fsPrevCamera;
+
+    private async Task FullscreenAsync(int index)
+    {
+        // Entering only — the same button while fullscreen exits (JS toggles), and
+        // a maximized tile already runs its main stream.
+        if (_fsIndex == null && _maxIndex != index)
+        {
+            var slot = _slots[index];
+            var cam = _cameras.FirstOrDefault(c => c.Name == slot.Camera);
+            var main = cam?.Streams.FirstOrDefault(s => s.Kind == "mainStream");
+            if (main != null && slot.Kind != main.Kind)
+            {
+                _fsIndex = index;
+                _fsPrevKind = slot.Kind;
+                _fsPrevPath = slot.Path;
+                _fsPrevCamera = slot.Camera;
+                slot.Kind = main.Kind;
+                slot.Path = main.Path;
+                _ = SaveAsync();
+            }
+        }
+        _selfRef ??= DotNetObjectReference.Create(this);
+        await JS.InvokeVoidAsync("neolink.fsWatch", _selfRef);
         await JS.InvokeVoidAsync("neolink.fullscreen", $"tile-{index}");
+    }
+
+    /// <summary>Called from JS whenever browser fullscreen ends, however it ends.</summary>
+    [JSInvokable]
+    public async Task OnFullscreenExit()
+    {
+        if (_fsIndex is not int i) return;
+        var slot = _slots.ElementAtOrDefault(i);
+        // Same rule as maximize: only the automatic switch is undone; a stream or
+        // camera the user picked by hand while fullscreen is respected.
+        if (slot != null && slot.Camera == _fsPrevCamera && slot.Kind == "mainStream")
+        {
+            slot.Kind = _fsPrevKind;
+            slot.Path = _fsPrevPath;
+        }
+        _fsIndex = null;
+        _fsPrevKind = _fsPrevPath = _fsPrevCamera = null;
+        await InvokeAsync(async () =>
+        {
+            await SaveAsync();
+            StateHasChanged();
+        });
+    }
 
     // ------------------------------------------------------------ player reconciliation
 

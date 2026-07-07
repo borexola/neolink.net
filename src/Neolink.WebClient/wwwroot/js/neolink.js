@@ -697,6 +697,18 @@
             const p = players[videoId];
             if (p) { p.destroy(); delete players[videoId]; }
         },
+        // Tells Blazor when browser fullscreen ends — Esc, the toggle button or
+        // the browser's own UI all land here — so the fullscreen sub→main
+        // stream switch can be reverted. Idempotent.
+        fsWatch(dotnetRef) {
+            if (document.body.dataset.fsWatch) return;
+            document.body.dataset.fsWatch = '1';
+            document.addEventListener('fullscreenchange', () => {
+                if (!document.fullscreenElement)
+                    dotnetRef.invokeMethodAsync('OnFullscreenExit').catch(() => { });
+            });
+        },
+
         // Toggle: the same tile button enters and leaves browser fullscreen.
         fullscreen(elementId) {
             if (document.fullscreenElement) {
