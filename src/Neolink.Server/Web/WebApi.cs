@@ -18,8 +18,9 @@ namespace Neolink.Web;
 /// <summary>One camera stream as exposed over the web API.</summary>
 public sealed record WebStreamInfo(string Kind, string Path, IStreamHub Hub);
 /// <param name="ContinuousActive">Probe: is 24/7 footage being written right now? Null when the camera has no continuous recorder.</param>
+/// <param name="SupportsEvents">False for generic RTSP cameras: no detection pushes, so event recording can't trigger.</param>
 public sealed record WebCameraInfo(string Name, List<WebStreamInfo> Streams, ICameraControl Control,
-    HashSet<string>? PermittedUsers, Func<bool>? ContinuousActive = null);
+    HashSet<string>? PermittedUsers, Func<bool>? ContinuousActive = null, bool SupportsEvents = true);
 
 /// <summary>Everything the web API needs from the host.</summary>
 public sealed class WebApiOptions
@@ -76,9 +77,10 @@ public static class WebApi
     private sealed record StreamSettingsRequest(string? Stream, uint? Width, uint? Height,
         uint? Framerate, uint? Bitrate);
     private sealed record ReviewRequest(bool? Reviewed);
-    /// <summary>Retention fields: null = unchanged, negative = back to the server default, 0 = keep forever.</summary>
+    /// <summary>Retention fields: null = unchanged, negative = back to the server default, 0 = keep forever.
+    /// RecordStream: null = unchanged, "" = back to the server default, else a served stream kind.</summary>
     private sealed record RecordingSettingsRequest(bool? Events, bool? Continuous, List<string>? EventTypes,
-        int? EventRetentionDays = null, int? ContinuousRetentionDays = null);
+        int? EventRetentionDays = null, int? ContinuousRetentionDays = null, string? RecordStream = null);
     private sealed record CredentialsRequest(string? Username, string? Password);
     private sealed record PasswordRequest(string? Password);
     private sealed record AdminUiSettings(double? TrickleSpeed, string? StateDir, bool? ResetAdminPassword);
@@ -530,6 +532,8 @@ public static class WebApi
                         pir = caps.Features.Pir,
                         battery = caps.Features.Battery,
                         streamSettings = control.CanSetStreamSettings,
+                        // Baichuan-only: a generic RTSP camera can't be told to reboot
+                        reboot = control is not GenericCameraControl,
                     },
                     support = caps.Support == null ? null : XmlToJson(caps.Support),
                 });
@@ -658,8 +662,18 @@ public static class WebApi
                 hasPreview = r.HasPreview,
             };
 
-            app.MapGet("/api/events", (string? camera, bool? reviewed, int? limit) =>
-                Results.Json(events.List(camera, reviewed, limit ?? 200).Select(Shape)));
+            app.MapGet("/api/events", (string? camera, bool? reviewed, int? limit, string? date) =>
+            {
+                DateTime? day = null;
+                if (date != null)
+                {
+                    if (!DateTime.TryParseExact(date, "yyyy-MM-dd", null,
+                            System.Globalization.DateTimeStyles.None, out var d))
+                        return Results.Json(new { error = "date must be yyyy-MM-dd" }, statusCode: 400);
+                    day = d;
+                }
+                return Results.Json(events.List(camera, reviewed, limit ?? 200, day).Select(Shape));
+            });
 
             app.MapGet("/api/events/{id}/clip", (string id) =>
             {
@@ -722,9 +736,20 @@ public static class WebApi
 
         if (events != null && recordingSettings != null)
         {
-            object ShapeSettings(CameraRecordingSettings s) => new
+            // The stream recording falls back to when no per-camera override is set:
+            // the config's recording.stream if this camera serves it, else main/first.
+            string DefaultRecordKind(WebCameraInfo cam)
+            {
+                var cfg = o.Recording?.Stream ?? "auto";
+                if (cfg != "auto" && cam.Streams.Any(s => s.Kind == cfg)) return cfg;
+                return (cam.Streams.FirstOrDefault(s => s.Kind == "mainStream")
+                        ?? cam.Streams.FirstOrDefault())?.Kind ?? "mainStream";
+            }
+
+            object ShapeSettings(WebCameraInfo cam, CameraRecordingSettings s) => new
             {
                 events = s.Events,
+                eventsAvailable = cam.SupportsEvents,
                 continuous = RecordingConfig.ContinuousEnabled && s.Continuous,
                 continuousAvailable = RecordingConfig.ContinuousEnabled,
                 eventTypes = s.EventTypes,
@@ -735,6 +760,11 @@ public static class WebApi
                 continuousRetentionDays = s.ContinuousRetentionDays,
                 defaultEventRetentionDays = o.Recording?.RetentionDays ?? 7,
                 defaultContinuousRetentionDays = o.Recording?.EffectiveContinuousRetentionDays ?? 7,
+                // Which stream gets taped: the override, the resolved default, and
+                // what this camera actually serves (the UI's dropdown options).
+                recordStream = s.RecordStream,
+                defaultRecordStream = DefaultRecordKind(cam),
+                availableStreams = cam.Streams.Select(x => x.Kind).ToList(),
             };
 
             app.MapGet("/api/cameras/{name}/recording", (string name, HttpContext ctx) =>
@@ -742,7 +772,7 @@ public static class WebApi
                 var cam = cameras.FirstOrDefault(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase));
                 return cam == null
                     ? Results.Json(new { error = $"unknown camera '{name}'" }, statusCode: 404)
-                    : Results.Json(ShapeSettings(recordingSettings.Get(cam.Name)));
+                    : Results.Json(ShapeSettings(cam, recordingSettings.Get(cam.Name)));
             });
 
             app.MapPost("/api/cameras/{name}/recording", (string name, RecordingSettingsRequest req, HttpContext ctx) =>
@@ -770,13 +800,21 @@ public static class WebApi
                     > 36500 => 36500,
                     _ => v,
                 };
+                // Record stream: "" clears the override; a value must be served.
+                if (req.RecordStream is { Length: > 0 } rs && cam.Streams.All(s => s.Kind != rs))
+                    return Results.Json(new
+                    {
+                        error = $"recordStream must be one of: {string.Join(", ", cam.Streams.Select(s => s.Kind))}",
+                    }, statusCode: 400);
                 var updated = recordingSettings.Update(cam.Name, req.Events, continuous,
                     types, setEventTypes: req.EventTypes != null,
                     eventRetentionDays: Retention(req.EventRetentionDays),
                     setEventRetention: req.EventRetentionDays != null,
                     continuousRetentionDays: Retention(req.ContinuousRetentionDays),
-                    setContinuousRetention: req.ContinuousRetentionDays != null);
-                return Results.Json(ShapeSettings(updated));
+                    setContinuousRetention: req.ContinuousRetentionDays != null,
+                    recordStream: req.RecordStream is { Length: > 0 } v ? v : null,
+                    setRecordStream: req.RecordStream != null);
+                return Results.Json(ShapeSettings(cam, updated));
             });
         }
 

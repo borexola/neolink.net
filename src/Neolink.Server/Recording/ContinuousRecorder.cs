@@ -22,6 +22,7 @@ public sealed class ContinuousRecorder
 
     private readonly string _camera;
     private readonly IStreamHub _hub;
+    private readonly IReadOnlyDictionary<string, IStreamHub>? _hubsByKind;
     private readonly EventStore _store;
     private readonly RecordingSettings _settings;
     private readonly double _segmentSeconds;
@@ -31,20 +32,50 @@ public sealed class ContinuousRecorder
     /// <summary>True while 24/7 footage is actually being written to disk (feeds the UI's REC badge).</summary>
     public bool IsWriting => _writing;
 
+    /// <param name="hubsByKind">The camera's streams by kind, enabling the per-camera
+    /// "record from main/sub" runtime choice; null pins recording to <paramref name="hub"/>.</param>
     public ContinuousRecorder(string camera, IStreamHub hub, EventStore store,
-        RecordingSettings settings, RecordingConfig cfg)
+        RecordingSettings settings, RecordingConfig cfg,
+        IReadOnlyDictionary<string, IStreamHub>? hubsByKind = null)
     {
         _camera = camera;
         _hub = hub;
+        _hubsByKind = hubsByKind;
         _store = store;
         _settings = settings;
         _segmentSeconds = cfg.SegmentMinutes * 60.0;
         _maxSegmentBytes = (long)cfg.MaxSegmentSizeMb * 1024 * 1024;
     }
 
+    /// <summary>The stream taped right now: the user's per-camera choice when set (and served).</summary>
+    private IStreamHub RecordHub()
+    {
+        var kind = _settings.Get(_camera).RecordStream;
+        return kind != null && _hubsByKind != null && _hubsByKind.TryGetValue(kind, out var hub)
+            ? hub
+            : _hub;
+    }
+
     public async Task RunAsync(CancellationToken ct)
     {
-        var (id, reader) = _hub.Subscribe();
+        try
+        {
+            // Outer loop: one pass per stream selection; a runtime change of the
+            // record stream ends the current segment and resubscribes.
+            while (!ct.IsCancellationRequested)
+                await PumpAsync(ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            _writing = false;
+        }
+    }
+
+    private async Task PumpAsync(CancellationToken ct)
+    {
+        var hub = RecordHub();
+        var (id, reader) = hub.Subscribe();
         ClipWriter? writer = null;
         bool wasOn = false;
         long lastIndex = -1;
@@ -54,6 +85,12 @@ public sealed class ContinuousRecorder
         {
             await foreach (var packet in reader.ReadAllAsync(ct).ConfigureAwait(false))
             {
+                if (!ReferenceEquals(RecordHub(), hub))
+                {
+                    // Stream selection changed: close this segment, resubscribe.
+                    Log.Info($"{_camera}: continuous recording source {hub.Name} → {RecordHub().Name}");
+                    return;
+                }
                 // Hub indices are global across video and audio — see EventRecorder.
                 bool gap = lastIndex >= 0 && packet.Index != lastIndex + 1;
                 lastIndex = packet.Index;
@@ -97,7 +134,7 @@ public sealed class ContinuousRecorder
                     {
                         // Never blocks on disk: the file is opened and written by the
                         // writer's own background thread.
-                        writer = ClipWriter.TryCreate(_store.NewSegmentPath(_camera, DateTime.Now), _hub);
+                        writer = ClipWriter.TryCreate(_store.NewSegmentPath(_camera, DateTime.Now), hub);
                     }
                     catch (Exception ex)
                     {
@@ -120,18 +157,18 @@ public sealed class ContinuousRecorder
                 _writing = writer != null;
             }
         }
-        catch (OperationCanceledException) { }
         finally
         {
             _writing = false;
             if (writer != null)
             {
                 writer.Dispose();
-                // Give the writer thread a moment to finalize the file on shutdown.
+                // Give the writer thread a moment to finalize the file (segment
+                // roll on a stream switch, or shutdown).
                 try { await writer.Completion.WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false); }
                 catch { }
             }
-            _hub.Unsubscribe(id);
+            hub.Unsubscribe(id);
         }
     }
 }

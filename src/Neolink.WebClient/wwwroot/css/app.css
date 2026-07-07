@@ -1013,8 +1013,30 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
 /* Event history panel (reuses the campanel chrome).
    Fixed height: content changes (polling, expanding days, switching tabs) must
    scroll inside the panel, never resize the popup itself. */
+/* Events history panel: wider than the settings dialog — the rows carry thumbnails */
 .events-panel {
-    height: min(92vh, 960px);
+    height: min(92vh, 1020px);
+    width: min(780px, 96vw);
+}
+
+.events-head-title {
+    font-size: 15px;
+    white-space: nowrap;
+}
+
+/* "last 24 hours" / the picked date, right under the title */
+.events-head-sub {
+    font-size: 11px;
+    font-weight: 400;
+    letter-spacing: 0;
+    color: var(--muted);
+    white-space: nowrap;
+}
+
+.events-panel-scroll {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
 }
 
 .event-filter {
@@ -1027,44 +1049,98 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
     max-width: 130px;
 }
 
+/* Native date picker, matched to the dark chrome */
+.event-date-input {
+    color-scheme: dark;
+    max-width: 150px;
+}
+
 .event-day-count {
     color: var(--muted);
     font-weight: 400;
     margin-left: 6px;
 }
 
+/* Day header stays visible while its rows scroll under the pinned panel head */
+.events-day { padding-top: 0; }
+
+.events-day-head {
+    position: sticky;
+    top: 26px;
+    z-index: 1;
+    background: var(--panel-2);
+    padding: 10px 12px 6px;
+    margin: 0 -12px 6px;
+    border-radius: 10px 10px 0 0;
+}
+
 .event-row {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 6px 4px;
-    border-radius: 6px;
+    gap: 12px;
+    padding: 6px;
+    border-radius: 10px;
     cursor: pointer;
+    transition: background 0.12s ease;
 }
 
 .event-row:hover { background: var(--bg); }
 .event-row.reviewed { opacity: 0.55; }
+.event-row.reviewed:hover { opacity: 0.85; }
 
-.event-row-time {
-    font-size: 11px;
-    color: var(--muted);
-    font-variant-numeric: tabular-nums;
+/* Thumbnail tile: fixed 16:9 box, contain-fit so ultrawide frames never crop */
+.event-row-thumb {
+    position: relative;
+    width: 150px;
+    aspect-ratio: 16 / 9;
     flex: 0 0 auto;
+    border-radius: 8px;
+    overflow: hidden;
+    background: #000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
-.event-row-icon { font-size: 16px; flex: 0 0 auto; }
+.event-row-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+}
+
+.event-row-dur {
+    position: absolute;
+    right: 4px;
+    bottom: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    color: #fff;
+    background: rgba(0, 0, 0, 0.7);
+    border-radius: 4px;
+    padding: 0 5px;
+    font-variant-numeric: tabular-nums;
+}
 
 .event-row-main {
     display: flex;
     flex-direction: column;
-    gap: 1px;
+    gap: 2px;
     min-width: 0;
     flex: 1;
 }
 
-/* Continuous-footage browser + per-camera recording switches */
-.rec-day { cursor: pointer; user-select: none; }
-.rec-day:hover { color: var(--accent); }
+.event-row-main .event-title { font-size: 13px; }
+
+/* Unreviewed marker, same language as the strip's filter dot */
+.event-new-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 6px var(--accent);
+    flex: 0 0 auto;
+}
 
 .rec-types-row { align-items: flex-start; }
 .rec-types-row .stream-options { justify-content: flex-end; }

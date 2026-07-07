@@ -123,8 +123,15 @@ public sealed class StreamHub : IStreamHub, IMediaSink
         {
             Codec = frame.Codec;
             if (_firstVideoAt == DateTime.MaxValue) _firstVideoAt = DateTime.UtcNow;
+            // Sources without a resolution side channel (generic RTSP pulls) get
+            // their dimensions from the SPS itself — MSE rejects a 0×0 init.
+            if (Width == 0 && paramsUpdated && Sps != null
+                && H26x.TryGetDimensions(frame.Codec, Sps, out var w, out var h))
+            {
+                Width = w;
+                Height = h;
+            }
         }
-        _ = paramsUpdated;
 
         bool ready = Codec == VideoCodec.H264 ? (Sps != null && Pps != null) : (Sps != null && Pps != null);
         if (ready)

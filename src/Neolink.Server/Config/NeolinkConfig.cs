@@ -132,6 +132,7 @@ public sealed class NeolinkConfig
     private static CameraConfig ParseJsonCamera(JsonElement el)
     {
         string? name = null, username = null, password = null, address = null, uid = null, httpAddress = null;
+        string? rtspMain = null, rtspSub = null;
         string stream = "both";
         byte channelId = 0;
         bool record = true;
@@ -150,6 +151,9 @@ public sealed class NeolinkConfig
                 case "stream": stream = prop.Value.GetString() ?? "both"; break;
                 case "channelid": channelId = prop.Value.GetByte(); break;
                 case "record": record = prop.Value.GetBoolean(); break;
+                // Generic (non-Reolink) camera: pull these RTSP URLs directly.
+                case "rtsp" or "rtspmain": rtspMain = prop.Value.GetString(); break;
+                case "rtspsub": rtspSub = prop.Value.GetString(); break;
                 case "permittedusers":
                     permitted = prop.Value.EnumerateArray().Select(x => x.GetString() ?? "").ToList();
                     break;
@@ -162,7 +166,8 @@ public sealed class NeolinkConfig
             }
         }
 
-        return BuildCamera(name, username, password, address, uid, stream, channelId, permitted, httpAddress, record);
+        return BuildCamera(name, username, password, address, uid, stream, channelId, permitted, httpAddress,
+            record, rtspMain, rtspSub);
     }
 
     private static RecordingConfig ParseJsonRecording(JsonElement el)
@@ -329,7 +334,9 @@ public sealed class NeolinkConfig
                 (byte)(MiniToml.GetInt(c, "channel_id") ?? 0),
                 MiniToml.GetStringList(c, "permitted_users"),
                 MiniToml.GetString(c, "http_address"),
-                MiniToml.GetBool(c, "record") ?? true));
+                MiniToml.GetBool(c, "record") ?? true,
+                MiniToml.GetString(c, "rtsp_main") ?? MiniToml.GetString(c, "rtsp"),
+                MiniToml.GetString(c, "rtsp_sub")));
         }
         return config;
     }
@@ -342,9 +349,34 @@ public sealed class NeolinkConfig
 
     private static CameraConfig BuildCamera(string? name, string? username, string? password,
         string? address, string? uid, string stream, byte channelId, List<string>? permitted,
-        string? httpAddress = null, bool record = true)
+        string? httpAddress = null, bool record = true, string? rtspMain = null, string? rtspSub = null)
     {
         if (name == null) throw new FormatException("camera entry missing \"name\"");
+
+        // Generic (non-Reolink) camera: RTSP URLs stand in for address/credentials
+        // (put the login inside the URL: rtsp://user:pass@host/path).
+        if (rtspMain != null || rtspSub != null)
+        {
+            foreach (var url in new[] { rtspMain, rtspSub })
+            {
+                if (url != null && !url.StartsWith("rtsp://", StringComparison.OrdinalIgnoreCase))
+                    throw new FormatException($"Camera \"{name}\": RTSP URLs must start with rtsp:// (got \"{url}\")");
+            }
+            if (address != null || username != null)
+                throw new FormatException(
+                    $"Camera \"{name}\": use EITHER address/username (Reolink) OR rtsp_main/rtsp_sub (generic), not both");
+            return new CameraConfig
+            {
+                Name = name,
+                Username = "",
+                RtspMain = rtspMain,
+                RtspSub = rtspSub,
+                Stream = stream,
+                PermittedUsers = permitted,
+                Record = record,
+            };
+        }
+
         if (username == null) throw new FormatException($"Camera \"{name}\" missing \"username\"");
         if (uid != null && address == null)
             throw new FormatException(
@@ -554,6 +586,12 @@ public sealed class CameraConfig
     public required string Username { get; init; }
     public string? Password { get; init; }
     public string Stream { get; init; } = "both";
+    /// <summary>Generic (non-Reolink) camera: pull this RTSP URL as the main stream.</summary>
+    public string? RtspMain { get; init; }
+    /// <summary>Generic (non-Reolink) camera: pull this RTSP URL as the sub stream.</summary>
+    public string? RtspSub { get; init; }
+    /// <summary>True when this entry is a plain RTSP camera instead of a Baichuan (Reolink) one.</summary>
+    public bool IsGenericRtsp => RtspMain != null || RtspSub != null;
     public byte ChannelId { get; init; }
     public List<string>? PermittedUsers { get; init; }
     /// <summary>

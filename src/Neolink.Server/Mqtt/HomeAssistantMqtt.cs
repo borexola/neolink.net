@@ -188,7 +188,17 @@ internal sealed class CameraBridge
     {
         await PublishAvailabilityAsync(ct).ConfigureAwait(false);
 
-        // Detection sensors and reboot exist on every camera — announce immediately.
+        if (!_cam.SupportsEvents)
+        {
+            // Generic RTSP camera: no detection pushes and no Baichuan commands —
+            // motion sensors and a reboot button would be dead weight in HA. A
+            // connectivity sensor is the honest surface (and gives the device an
+            // entity, so it actually shows up).
+            await AnnounceEntityAsync("binary_sensor", "status", ConnectivityConfig(), ct).ConfigureAwait(false);
+            return;
+        }
+
+        // Detection sensors and reboot exist on every Baichuan camera — announce immediately.
         foreach (var label in HomeAssistantMqtt.DetectionLabels)
             await AnnounceEntityAsync("binary_sensor", label, BinarySensorConfig(label), ct).ConfigureAwait(false);
         await AnnounceEntityAsync("button", "reboot", ButtonConfig("Reboot", "reboot", "restart"), ct).ConfigureAwait(false);
@@ -200,6 +210,22 @@ internal sealed class CameraBridge
         if (_featuresAnnounced)
             await AnnounceFeaturesAsync(ct).ConfigureAwait(false);
     }
+
+    /// <summary>Generic cameras: online/offline as a diagnostic connectivity sensor.</summary>
+    private object ConnectivityConfig() => new
+    {
+        name = "Online",
+        unique_id = $"neolink_{Id}_status",
+        state_topic = AvailabilityTopic,
+        payload_on = "online",
+        payload_off = "offline",
+        device_class = "connectivity",
+        entity_category = "diagnostic",
+        device = Device(),
+        // Only the bridge's own liveness gates this one — the sensor itself IS the camera state.
+        availability = new object[] { new { topic = _hub.AvailabilityTopic } },
+        availability_mode = "all",
+    };
 
     private async Task AnnounceFeaturesAsync(CancellationToken ct)
     {
@@ -234,8 +260,9 @@ internal sealed class CameraBridge
     {
         identifiers = new[] { $"neolink_{Id}" },
         name = _cam.Name,
-        manufacturer = "Reolink (via Neolink.NET)",
-        model = string.IsNullOrEmpty(_model) ? "Baichuan camera" : _model,
+        manufacturer = _cam.SupportsEvents ? "Reolink (via Neolink.NET)" : "Neolink.NET",
+        model = !_cam.SupportsEvents ? "Generic RTSP camera"
+            : string.IsNullOrEmpty(_model) ? "Baichuan camera" : _model,
         sw_version = _hub.Version,
     };
 

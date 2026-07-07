@@ -168,40 +168,68 @@ var motionTargets = new List<(CameraService Primary, string Name, Action<MotionP
 foreach (var cam in config.Cameras)
 {
     var permitted = config.PermittedUsersFor(cam);
-    bool main = cam.Stream is "both" or "all" or "mainStream";
-    bool sub = cam.Stream is "both" or "all" or "subStream";
-    bool ext = cam.Stream is "all" or "externStream";
-
     var webStreams = new List<WebStreamInfo>();
-
-    // Stagger the streams of one camera by 2s each so their logins don't collide.
-    int streamIndex = 0;
+    ICameraControl control;
     CameraService? primaryService = null;
-    void AddStream(StreamKind kind, string suffix, bool alsoRoot)
+
+    if (cam.IsGenericRtsp)
     {
-        var hub = new StreamHub($"{cam.Name} {suffix}");
-        server.AddMount(new RtspMount { Path = $"/{cam.Name}/{suffix}", Hub = hub, PermittedUsers = permitted });
-        if (alsoRoot)
-            server.AddMount(new RtspMount { Path = $"/{cam.Name}", Hub = hub, PermittedUsers = permitted });
-        webStreams.Add(new WebStreamInfo(suffix, $"/{cam.Name}/{suffix}", hub));
-        var service = new CameraService(cam, kind, hub, TimeSpan.FromSeconds(2 * streamIndex++));
-        primaryService ??= service;
-        tasks.Add(Task.Run(() => RunCameraGuardedAsync(service, $"{cam.Name} ({kind})", shutdown.Token)));
+        // Generic (non-Reolink) camera: pull its RTSP URL(s) into hubs. It streams
+        // and records, but has no Baichuan control surface and no motion pushes.
+        var pullServices = new List<RtspCameraService>();
+        int rtspIndex = 0;
+        void AddRtsp(string url, string suffix, bool alsoRoot)
+        {
+            var hub = new StreamHub($"{cam.Name} {suffix}");
+            server.AddMount(new RtspMount { Path = $"/{cam.Name}/{suffix}", Hub = hub, PermittedUsers = permitted });
+            if (alsoRoot)
+                server.AddMount(new RtspMount { Path = $"/{cam.Name}", Hub = hub, PermittedUsers = permitted });
+            webStreams.Add(new WebStreamInfo(suffix, $"/{cam.Name}/{suffix}", hub));
+            var service = new RtspCameraService($"{cam.Name} {suffix}", url, hub,
+                TimeSpan.FromSeconds(2 * rtspIndex++));
+            pullServices.Add(service);
+            tasks.Add(Task.Run(() => RunRtspGuardedAsync(service, $"{cam.Name} ({suffix})", shutdown.Token)));
+        }
+        if (cam.RtspMain != null) AddRtsp(cam.RtspMain, "mainStream", alsoRoot: true);
+        if (cam.RtspSub != null) AddRtsp(cam.RtspSub, "subStream", alsoRoot: cam.RtspMain == null);
+        control = new GenericCameraControl(cam.Name, pullServices);
     }
+    else
+    {
+        bool main = cam.Stream is "both" or "all" or "mainStream";
+        bool sub = cam.Stream is "both" or "all" or "subStream";
+        bool ext = cam.Stream is "all" or "externStream";
 
-    // The bare /name mount points at the "best" configured stream
-    if (main) AddStream(StreamKind.Main, "mainStream", alsoRoot: true);
-    if (sub) AddStream(StreamKind.Sub, "subStream", alsoRoot: !main);
-    if (ext) AddStream(StreamKind.Extern, "externStream", alsoRoot: !main && !sub);
+        // Stagger the streams of one camera by 2s each so their logins don't collide.
+        int streamIndex = 0;
+        void AddStream(StreamKind kind, string suffix, bool alsoRoot)
+        {
+            var hub = new StreamHub($"{cam.Name} {suffix}");
+            server.AddMount(new RtspMount { Path = $"/{cam.Name}/{suffix}", Hub = hub, PermittedUsers = permitted });
+            if (alsoRoot)
+                server.AddMount(new RtspMount { Path = $"/{cam.Name}", Hub = hub, PermittedUsers = permitted });
+            webStreams.Add(new WebStreamInfo(suffix, $"/{cam.Name}/{suffix}", hub));
+            var service = new CameraService(cam, kind, hub, TimeSpan.FromSeconds(2 * streamIndex++));
+            primaryService ??= service;
+            tasks.Add(Task.Run(() => RunCameraGuardedAsync(service, $"{cam.Name} ({kind})", shutdown.Token)));
+        }
 
-    // Control commands (capabilities, PTZ, LED, ...) ride the primary stream's
-    // connection — cameras have session limits, so no extra login is spent.
-    // Stream encode settings are written via the camera's HTTP API when configured.
-    var httpApi = cam.HttpAddress == null ? null
-        : new ReolinkHttpApi(cam.HttpAddress, cam.Username, cam.Password, cam.ChannelId);
-    var primary = primaryService
-        ?? throw new InvalidOperationException($"camera '{cam.Name}' has no streams");
-    ICameraControl control = new CameraControl(primary, httpApi);
+        // The bare /name mount points at the "best" configured stream
+        if (main) AddStream(StreamKind.Main, "mainStream", alsoRoot: true);
+        if (sub) AddStream(StreamKind.Sub, "subStream", alsoRoot: !main);
+        if (ext) AddStream(StreamKind.Extern, "externStream", alsoRoot: !main && !sub);
+
+        // Control commands (capabilities, PTZ, LED, ...) ride the primary stream's
+        // connection — cameras have session limits, so no extra login is spent.
+        // Stream encode settings are written via the camera's HTTP API when configured.
+        var httpApi = cam.HttpAddress == null ? null
+            : new ReolinkHttpApi(cam.HttpAddress, cam.Username, cam.Password, cam.ChannelId);
+        var primary = primaryService
+            ?? throw new InvalidOperationException($"camera '{cam.Name}' has no streams");
+        control = new CameraControl(primary, httpApi);
+    }
+    if (webStreams.Count == 0)
+        throw new InvalidOperationException($"camera '{cam.Name}' has no streams");
     Action<MotionPush>? recorderSink = null;
     ContinuousRecorder? continuousRecorder = null;
 
@@ -222,22 +250,30 @@ foreach (var cam in config.Cameras)
         }
         else
         {
-            recordingSettings.Seed(cam.Name, eventsDefault: cam.Record);
-            // Strip previews are cut from the sub stream when it is served and
-            // differs from the recording stream (no point recording twice).
-            var previewStream = webStreams.FirstOrDefault(s => s.Kind == "subStream");
-            if (previewStream == recordStream) previewStream = null;
-            var recorder = new EventRecorder(cam.Name, recordStream.Hub, control, eventStore,
-                config.Recording, recordingSettings, previewStream?.Hub);
-            recorderSink = recorder.OnMotion;
-            tasks.Add(Task.Run(() => recorder.RunAsync(shutdown.Token)));
+            // Generic RTSP cameras have no detection pushes, so event recording can
+            // never trigger — only continuous (24/7) applies to them.
+            recordingSettings.Seed(cam.Name, eventsDefault: cam.Record && !cam.IsGenericRtsp);
+            // The user can retarget recording to another served stream at runtime
+            // (per camera, from the web UI); the config stream stays the default.
+            var hubsByKind = webStreams.ToDictionary(s => s.Kind, s => s.Hub, StringComparer.Ordinal);
+            if (!cam.IsGenericRtsp)
+            {
+                // Strip previews are cut from the sub stream when it is served and
+                // differs from the recording stream (no point recording twice).
+                var previewStream = webStreams.FirstOrDefault(s => s.Kind == "subStream");
+                if (previewStream == recordStream) previewStream = null;
+                var recorder = new EventRecorder(cam.Name, recordStream.Hub, control, eventStore,
+                    config.Recording, recordingSettings, previewStream?.Hub, hubsByKind);
+                recorderSink = recorder.OnMotion;
+                tasks.Add(Task.Run(() => recorder.RunAsync(shutdown.Token)));
+            }
 
             // Continuous (24/7) recording is temporarily disabled — see
             // RecordingConfig.ContinuousEnabled.
             if (RecordingConfig.ContinuousEnabled)
             {
                 var continuous = new ContinuousRecorder(cam.Name, recordStream.Hub, eventStore,
-                    recordingSettings, config.Recording);
+                    recordingSettings, config.Recording, hubsByKind);
                 continuousRecorder = continuous;
                 tasks.Add(Task.Run(() => continuous.RunAsync(shutdown.Token)));
             }
@@ -246,8 +282,10 @@ foreach (var cam in config.Cameras)
 
     // Registered after the recorders so the web API can report live REC state.
     webCameras.Add(new WebCameraInfo(cam.Name, webStreams, control, permitted,
-        ContinuousActive: continuousRecorder == null ? null : () => continuousRecorder.IsWriting));
-    motionTargets.Add((primary, cam.Name, recorderSink));
+        ContinuousActive: continuousRecorder == null ? null : () => continuousRecorder.IsWriting,
+        SupportsEvents: !cam.IsGenericRtsp));
+    if (primaryService != null)
+        motionTargets.Add((primaryService, cam.Name, recorderSink));
 }
 
 // MQTT / Home Assistant bridge (single connection for all cameras), then wire
@@ -381,6 +419,36 @@ static async Task RunCameraGuardedAsync(CameraService service, string tag, Cance
         catch (Exception ex)
         {
             Log.Error($"{tag}: camera task crashed unexpectedly: {Log.Flatten(ex)}; restarting in 15s");
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(15), ct);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+        }
+    }
+}
+
+// Same safety net for generic RTSP pulls (their own loop already retries; this
+// catches anything unexpected escaping it).
+static async Task RunRtspGuardedAsync(RtspCameraService service, string tag, CancellationToken ct)
+{
+    while (!ct.IsCancellationRequested)
+    {
+        try
+        {
+            await service.RunAsync(ct);
+            return; // clean exit (shutdown requested)
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"{tag}: RTSP pull task crashed unexpectedly: {Log.Flatten(ex)}; restarting in 15s");
             try
             {
                 await Task.Delay(TimeSpan.FromSeconds(15), ct);

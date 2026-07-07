@@ -5,10 +5,13 @@ namespace Neolink.Recording;
 /// <summary>
 /// One camera's runtime recording switches. Immutable — readers always see a
 /// consistent snapshot. Retention overrides are per recording type: null = use
-/// the server-wide default, 0 = keep forever, otherwise days.
+/// the server-wide default, 0 = keep forever, otherwise days. RecordStream picks
+/// which stream is taped ("mainStream"/"subStream"/"externStream"; null = the
+/// server default from the recording config).
 /// </summary>
 public sealed record CameraRecordingSettings(bool Events, bool Continuous, List<string>? EventTypes,
-    int? EventRetentionDays = null, int? ContinuousRetentionDays = null)
+    int? EventRetentionDays = null, int? ContinuousRetentionDays = null,
+    string? RecordStream = null)
 {
     /// <summary>Known detection labels (what the UI offers as event-type filters).</summary>
     public static readonly string[] KnownLabels = { "person", "vehicle", "animal", "package", "motion" };
@@ -98,7 +101,8 @@ public sealed class RecordingSettings
     public CameraRecordingSettings Update(string camera, bool? events, bool? continuous,
         List<string>? eventTypes, bool setEventTypes,
         int? eventRetentionDays = null, bool setEventRetention = false,
-        int? continuousRetentionDays = null, bool setContinuousRetention = false)
+        int? continuousRetentionDays = null, bool setContinuousRetention = false,
+        string? recordStream = null, bool setRecordStream = false)
     {
         lock (_gate)
         {
@@ -110,7 +114,8 @@ public sealed class RecordingSettings
                 continuous ?? cur.Continuous,
                 setEventTypes ? eventTypes : cur.EventTypes,
                 setEventRetention ? eventRetentionDays : cur.EventRetentionDays,
-                setContinuousRetention ? continuousRetentionDays : cur.ContinuousRetentionDays);
+                setContinuousRetention ? continuousRetentionDays : cur.ContinuousRetentionDays,
+                setRecordStream ? recordStream : cur.RecordStream);
             _cameras[camera] = next;
             SaveLocked();
             return next;

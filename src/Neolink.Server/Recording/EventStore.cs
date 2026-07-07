@@ -153,14 +153,16 @@ public sealed class EventStore
         return true;
     }
 
-    /// <summary>Newest-first event listing with optional filters.</summary>
-    public List<EventRecord> List(string? camera = null, bool? reviewed = null, int limit = 200)
+    /// <summary>Newest-first event listing with optional filters. <paramref name="localDate"/> matches the server-local calendar day.</summary>
+    public List<EventRecord> List(string? camera = null, bool? reviewed = null, int limit = 200,
+        DateTime? localDate = null)
     {
         lock (_gate)
         {
             return _byId.Values.Select(e => e.Record)
                 .Where(r => camera == null || string.Equals(r.Camera, camera, StringComparison.OrdinalIgnoreCase))
                 .Where(r => reviewed == null || r.Reviewed == reviewed)
+                .Where(r => localDate == null || r.StartUtc.ToLocalTime().Date == localDate.Value.Date)
                 .OrderByDescending(r => r.StartUtc)
                 .Take(Math.Clamp(limit, 1, 1000))
                 .ToList();

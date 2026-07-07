@@ -25,6 +25,7 @@ public sealed class EventRecorder
     private readonly string _camera;
     private readonly IStreamHub _hub;
     private readonly IStreamHub? _previewHub;
+    private readonly IReadOnlyDictionary<string, IStreamHub>? _hubsByKind;
     private readonly ICameraControl _control;
     private readonly EventStore _store;
     private readonly RecordingConfig _cfg;
@@ -44,18 +45,34 @@ public sealed class EventRecorder
     private readonly List<(HubVideo Video, bool Gap)> _previewPreroll = new();
     private ClipWriter? _writer;
     private ClipWriter? _previewWriter;
+    /// <summary>The hub the record pump is subscribed to RIGHT NOW — clips must
+    /// take their codec parameters from here, never from a just-changed selection.</summary>
+    private volatile IStreamHub? _activeRecordHub;
 
+    /// <param name="hubsByKind">The camera's streams by kind, enabling the per-camera
+    /// "record from main/sub" runtime choice; null pins recording to <paramref name="hub"/>.</param>
     public EventRecorder(string camera, IStreamHub hub, ICameraControl control,
         EventStore store, RecordingConfig cfg, RecordingSettings settings,
-        IStreamHub? previewHub = null)
+        IStreamHub? previewHub = null, IReadOnlyDictionary<string, IStreamHub>? hubsByKind = null)
     {
         _camera = camera;
         _hub = hub;
         _previewHub = previewHub;
+        _hubsByKind = hubsByKind;
         _control = control;
         _store = store;
         _cfg = cfg;
         _settings = settings;
+    }
+
+    /// <summary>The hub clips are cut from right now: the user's per-camera stream
+    /// choice when set (and served), otherwise the configured default.</summary>
+    private IStreamHub RecordHub()
+    {
+        var kind = _settings.Get(_camera).RecordStream;
+        return kind != null && _hubsByKind != null && _hubsByKind.TryGetValue(kind, out var hub)
+            ? hub
+            : _hub;
     }
 
     public string Camera => _camera;
@@ -67,7 +84,7 @@ public sealed class EventRecorder
     {
         Log.Info($"{_camera}: event recording enabled ({_hub.Name}, pre={_cfg.PreSeconds}s, post={_cfg.PostSeconds}s" +
                  $"{(_previewHub != null ? $", previews from {_previewHub.Name}" : "")})");
-        var pump = Task.Run(() => PumpPacketsAsync(_hub, preview: false, ct), CancellationToken.None);
+        var pump = Task.Run(() => PumpRecordAsync(ct), CancellationToken.None);
         var previewPump = _previewHub == null
             ? Task.CompletedTask
             : Task.Run(() => PumpPacketsAsync(_previewHub, preview: true, ct), CancellationToken.None);
@@ -100,6 +117,72 @@ public sealed class EventRecorder
     }
 
     // ------------------------------------------------------------------ packet pump
+
+    /// <summary>
+    /// The record pump follows the user's stream choice: it resubscribes when the
+    /// selection changes, but only while no clip is being written — one clip must
+    /// stay a single codec/resolution end to end.
+    /// </summary>
+    private async Task PumpRecordAsync(CancellationToken ct)
+    {
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                var hub = RecordHub();
+                var (id, reader) = hub.Subscribe();
+                _activeRecordHub = hub;
+                try
+                {
+                    long lastIndex = -1;
+                    await foreach (var packet in reader.ReadAllAsync(ct).ConfigureAwait(false))
+                    {
+                        if (!ReferenceEquals(RecordHub(), hub) && TrySwitchWhileIdle(hub))
+                            break; // resubscribe to the newly selected stream
+
+                        bool gap = lastIndex >= 0 && packet.Index != lastIndex + 1;
+                        lastIndex = packet.Index;
+                        if (packet is not HubVideo v) continue;
+                        lock (_mediaGate)
+                        {
+                            if (_writer != null)
+                            {
+                                _writer.Add(v, gap);
+                                if (_writer.Faulted)
+                                {
+                                    Log.Warn($"{_camera}: clip writer failed; event continues without further video");
+                                    _writer.Dispose();
+                                    _writer = null;
+                                }
+                            }
+                            else
+                            {
+                                _preroll.Add((v, gap));
+                                TrimPreroll(_preroll);
+                            }
+                        }
+                    }
+                }
+                finally
+                {
+                    hub.Unsubscribe(id);
+                }
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    /// <summary>Pre-roll of the old stream can't seed a clip of the new one — drop it on switch.</summary>
+    private bool TrySwitchWhileIdle(IStreamHub from)
+    {
+        lock (_mediaGate)
+        {
+            if (_writer != null) return false; // mid-event: finish the clip first
+            _preroll.Clear();
+        }
+        Log.Info($"{_camera}: event recording source {from.Name} → {RecordHub().Name}");
+        return true;
+    }
 
     private async Task PumpPacketsAsync(IStreamHub hub, bool preview, CancellationToken ct)
     {
@@ -287,7 +370,8 @@ public sealed class EventRecorder
         {
             try
             {
-                _writer = ClipWriter.TryCreate(Path.Combine(_store.EventDir(rec), "clip.mp4"), _hub);
+                _writer = ClipWriter.TryCreate(Path.Combine(_store.EventDir(rec), "clip.mp4"),
+                    _activeRecordHub ?? _hub);
                 if (_writer == null)
                 {
                     Log.Warn($"{_camera}: stream not ready; event stored without a clip");

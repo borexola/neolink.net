@@ -1,0 +1,60 @@
+using System.Xml.Linq;
+using Neolink.Bc.Xml;
+
+namespace Neolink.Streaming;
+
+/// <summary>
+/// The control surface of a generic RTSP camera: it streams, and that is all.
+/// Capabilities report no features (so the UI hides PTZ/LED/PIR/battery and the
+/// stream-settings editor), snapshots return null (events store without a thumb),
+/// and everything imperative is NotSupported — the web API maps that to 404.
+/// </summary>
+public sealed class GenericCameraControl : ICameraControl
+{
+    private readonly IReadOnlyList<RtspCameraService> _services;
+
+    public GenericCameraControl(string cameraName, IReadOnlyList<RtspCameraService> services)
+    {
+        CameraName = cameraName;
+        _services = services;
+    }
+
+    public string CameraName { get; }
+
+    public bool Online => _services.Any(s => s.Online);
+
+    public Task<CameraCapabilities> GetCapabilitiesAsync(CancellationToken ct) =>
+        Task.FromResult(new CameraCapabilities(
+            Version: null,
+            Support: null,
+            Features: new CameraFeatures(Ptz: false, Led: false, Pir: false, Battery: false)));
+
+    public Task<StreamInfoListXml?> GetStreamInfoAsync(CancellationToken ct) =>
+        Task.FromResult<StreamInfoListXml?>(null);
+
+    public bool CanSetStreamSettings => false;
+
+    public Task SetStreamSettingsAsync(string stream, uint? width, uint? height,
+        uint? framerate, uint? bitrate, CancellationToken ct) =>
+        throw new NotSupportedException("stream settings are not available for generic RTSP cameras");
+
+    public Task<XElement?> GetBatteryInfoAsync(CancellationToken ct) => Task.FromResult<XElement?>(null);
+
+    public Task<byte[]?> SnapshotAsync(CancellationToken ct) => Task.FromResult<byte[]?>(null);
+
+    public Task<XElement?> GetLedStateAsync(CancellationToken ct) => Task.FromResult<XElement?>(null);
+
+    public Task SetLedStateAsync(string? state, string? lightState, CancellationToken ct) =>
+        throw new NotSupportedException("LED control is not available for generic RTSP cameras");
+
+    public Task<XElement?> GetPirStateAsync(CancellationToken ct) => Task.FromResult<XElement?>(null);
+
+    public Task SetPirEnabledAsync(bool enabled, CancellationToken ct) =>
+        throw new NotSupportedException("PIR control is not available for generic RTSP cameras");
+
+    public Task PtzAsync(string command, float speed, CancellationToken ct) =>
+        throw new NotSupportedException("PTZ is not available for generic RTSP cameras");
+
+    public Task RebootAsync(CancellationToken ct) =>
+        throw new NotSupportedException("reboot is not available for generic RTSP cameras");
+}

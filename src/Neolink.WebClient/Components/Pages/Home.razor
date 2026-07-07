@@ -661,64 +661,78 @@
     {
         <div class="backdrop panel-backdrop" @onclick="() => _showEventsPanel = false"></div>
         <aside class="campanel events-panel" role="dialog" aria-label="Event history">
-            <div class="campanel-head">
-                <button class="chip @(_panelTab == "events" ? "" : "chip-off")"
-                        @onclick='() => _panelTab = "events"'>🕘 Events</button>
-                @if (_continuousSupported)
-                {
-                    <button class="chip @(_panelTab == "recordings" ? "" : "chip-off")"
-                            @onclick="OpenRecordingsTabAsync">🎞 Recordings</button>
-                }
+            <div class="campanel-head events-head">
+                <span class="events-head-title">🕘 Events
+                    <span class="event-day-count">@PanelEvents.Count()</span>
+                </span>
+                <span class="events-head-sub">@(_eventsDate is { } d0 ? d0.ToString("ddd, d MMM yyyy") : "last 24 hours")</span>
                 <span class="tile-spacer"></span>
-                @if (_panelTab == "events")
+                <select class="event-filter" @bind="_eventCameraFilter" title="Filter by camera">
+                    <option value="">all cameras</option>
+                    @foreach (var c in _cameras)
+                    {
+                        <option value="@c.Name">@c.Name</option>
+                    }
+                </select>
+                <button class="chip @(_eventsUnreviewedOnly ? "chip-active" : "chip-off")" title="Only show unreviewed events"
+                        @onclick="() => _eventsUnreviewedOnly = !_eventsUnreviewedOnly">unreviewed</button>
+                <input class="event-filter event-date-input" type="date" title="Jump to a specific day"
+                       max="@DateTime.Today.ToString("yyyy-MM-dd")"
+                       value="@(_eventsDate?.ToString("yyyy-MM-dd") ?? "")"
+                       @onchange="e => SetEventsDateAsync((string?)e.Value)" />
+                @if (_eventsDate != null)
                 {
-                    <select class="event-filter" @bind="_eventCameraFilter" title="Filter by camera">
-                        <option value="">all cameras</option>
-                        @foreach (var c in _cameras)
-                        {
-                            <option value="@c.Name">@c.Name</option>
-                        }
-                    </select>
-                    <button class="chip @(_eventsUnreviewedOnly ? "" : "chip-off")" title="Only show unreviewed events"
-                            @onclick="() => _eventsUnreviewedOnly = !_eventsUnreviewedOnly">unreviewed</button>
-                }
-                else
-                {
-                    <select class="event-filter" value="@_recCamera" title="Camera"
-                            @onchange="e => SelectRecordingCameraAsync((string?)e.Value)">
-                        @foreach (var c in _cameras)
-                        {
-                            <option value="@c.Name">@c.Name</option>
-                        }
-                    </select>
+                    <button class="chip" title="Back to the rolling last 24 hours"
+                            @onclick="() => SetEventsDateAsync(null)">↺ 24h</button>
                 }
                 <button class="icon-btn" title="Close" @onclick="() => _showEventsPanel = false">✕</button>
             </div>
 
-            @if (_panelTab == "events")
-            {
-                @if (!FilteredEvents.Any())
+            <div class="events-panel-scroll">
+                @if (_eventsDateLoading)
+                {
+                    <div class="notice">Loading @(_eventsDate?.ToString("d MMM"))…</div>
+                }
+                else if (!PanelEvents.Any())
                 {
                     <div class="notice">
-                        @(_eventsUnreviewedOnly ? "Nothing awaiting review — all clear." : "No recorded events yet.")
+                        @(_eventsUnreviewedOnly ? "Nothing awaiting review — all clear."
+                            : _eventsDate != null ? "No events on this day."
+                            : "No events in the last 24 hours.")
                     </div>
                 }
-                @foreach (var day in FilteredEvents.GroupBy(e => e.Start.ToLocalTime().Date))
+                @foreach (var day in PanelEvents.GroupBy(e => e.Start.ToLocalTime().Date))
                 {
-                    <div class="campanel-section">
-                        <div class="campanel-section-title">@DayLabel(day.Key) <span class="event-day-count">@day.Count()</span></div>
+                    <div class="campanel-section events-day">
+                        <div class="campanel-section-title events-day-head">
+                            @DayLabel(day.Key) <span class="event-day-count">@day.Count()</span>
+                        </div>
                         @foreach (var ev in day)
                         {
                             <div class="event-row @(ev.Reviewed ? "reviewed" : "")" @key="ev.Id"
                                  title="Click to play" @onclick="() => OpenEvent(ev)">
-                                <span class="event-row-time">@ev.Start.ToLocalTime().ToString("HH:mm:ss")</span>
-                                <span class="event-row-icon">@ev.Icon</span>
+                                <div class="event-row-thumb">
+                                    @if (ev.HasThumb)
+                                    {
+                                        <img src="@EventArtifactUrl(ev, "thumb")" loading="lazy" alt="" />
+                                    }
+                                    else
+                                    {
+                                        <span class="event-thumb-icon">@ev.Icon</span>
+                                    }
+                                    <span class="event-row-dur">@DurationText(ev)</span>
+                                    @if (ev.Ongoing)
+                                    {
+                                        <span class="event-live">● REC</span>
+                                    }
+                                </div>
                                 <div class="event-row-main">
-                                    <span class="event-title">@ev.Title</span>
-                                    <span class="event-sub">@ev.Camera · @DurationText(ev)</span>
+                                    <span class="event-title">@ev.Icon @ev.Title</span>
+                                    <span class="event-sub">@ev.Camera · @ev.Start.ToLocalTime().ToString("HH:mm:ss")</span>
                                 </div>
                                 @if (!ev.Reviewed)
                                 {
+                                    <span class="event-new-dot" title="Unreviewed"></span>
                                     <button class="icon-btn" title="Dismiss (mark reviewed)"
                                             @onclick="() => DismissAsync(ev)" @onclick:stopPropagation="true">✕</button>
                                 }
@@ -726,62 +740,8 @@
                         }
                     </div>
                 }
-            }
-            else
-            {
-                @* Continuous (24/7) footage browser: days → segment files. *@
-                @if (_recDays.Count == 0)
-                {
-                    <div class="notice">
-                        No continuous footage for @(_recCamera.Length > 0 ? _recCamera : "this camera") yet.
-                        Enable “Continuous (24/7)” in the camera's settings (⚙) to record around the clock.
-                    </div>
-                }
-                @foreach (var day in _recDays)
-                {
-                    <div class="campanel-section">
-                        <div class="campanel-section-title rec-day" title="Show/hide this day"
-                             @onclick="() => ToggleRecordingDayAsync(day)">
-                            @(_recExpanded.Contains(day) ? "▾" : "▸") @RecDayLabel(day)
-                        </div>
-                        @if (_recExpanded.Contains(day) && _recSegments.TryGetValue(day, out var segments))
-                        {
-                            @if (segments.Count == 0)
-                            {
-                                <div class="notice small">No segments.</div>
-                            }
-                            @foreach (var seg in segments)
-                            {
-                                <div class="event-row" @key="seg.File" title="Click to play"
-                                     @onclick="() => _playSegment = (_recCamera, day, seg)">
-                                    <span class="event-row-icon">🎞</span>
-                                    <div class="event-row-main">
-                                        <span class="event-title">@seg.TimeLabel</span>
-                                        <span class="event-sub">@seg.SizeLabel</span>
-                                    </div>
-                                </div>
-                            }
-                        }
-                    </div>
-                }
-            }
-        </aside>
-    }
-
-    @if (_playSegment is { } ps)
-    {
-        <div class="backdrop player-backdrop" @onclick="() => _playSegment = null"></div>
-        <div class="event-player" role="dialog" aria-label="Recording playback">
-            <div class="event-player-head">
-                <div class="event-player-title">
-                    <span class="event-title">🎞 Continuous recording</span>
-                    <span class="event-sub">@ps.Camera · @RecDayLabel(ps.Date) @ps.Segment.TimeLabel · @ps.Segment.SizeLabel</span>
-                </div>
-                <button class="icon-btn" title="Close" @onclick="() => _playSegment = null">✕</button>
             </div>
-            <video controls autoplay playsinline @key="@($"{ps.Camera}/{ps.Date}/{ps.Segment.File}")"
-                   src="@SegmentUrl(ps.Camera, ps.Date, ps.Segment.File)"></video>
-        </div>
+        </aside>
     }
 
     @if (_playEvent != null)
@@ -938,13 +898,10 @@
     private bool _secWarnDismissed;
     private DotNetObjectReference<Home>? _selfRef;
 
-    // Continuous (24/7) footage browser
-    private string _panelTab = "events";
-    private string _recCamera = "";
-    private List<string> _recDays = new();
-    private readonly Dictionary<string, List<ApiSegment>> _recSegments = new();
-    private readonly HashSet<string> _recExpanded = new();
-    private (string Camera, string Date, ApiSegment Segment)? _playSegment;
+    // Events panel: rolling last-24h by default, or one server-fetched calendar day
+    private DateTime? _eventsDate;
+    private List<ApiEvent> _eventsForDate = new();
+    private bool _eventsDateLoading;
 
     protected override void OnInitialized() => EnsureSlots();
 
@@ -1641,9 +1598,58 @@
 
     // ------------------------------------------------------------ recorded events
 
-    private IEnumerable<ApiEvent> FilteredEvents => _events
-        .Where(e => _eventCameraFilter.Length == 0 || e.Camera == _eventCameraFilter)
-        .Where(e => !_eventsUnreviewedOnly || !e.Reviewed);
+    /// <summary>
+    /// What the events panel shows: the rolling last 24 hours (from the regular
+    /// poll) or, when a date is picked, that server-fetched calendar day.
+    /// </summary>
+    private IEnumerable<ApiEvent> PanelEvents
+    {
+        get
+        {
+            var source = _eventsDate == null
+                ? _events.Where(e => e.Start >= DateTime.UtcNow.AddHours(-24))
+                : _eventsForDate.AsEnumerable();
+            return source
+                .Where(e => _eventCameraFilter.Length == 0 || e.Camera == _eventCameraFilter)
+                .Where(e => !_eventsUnreviewedOnly || !e.Reviewed)
+                .OrderByDescending(e => e.Start);
+        }
+    }
+
+    /// <summary>Blank/invalid input returns to the rolling 24-hour view.</summary>
+    private async Task SetEventsDateAsync(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw) || !DateTime.TryParse(raw, out var day))
+        {
+            _eventsDate = null;
+            _eventsForDate = new List<ApiEvent>();
+            return;
+        }
+        _eventsDate = day.Date;
+        await LoadEventsForDateAsync();
+    }
+
+    private async Task LoadEventsForDateAsync()
+    {
+        if (_eventsDate is not { } day) return;
+        _eventsDateLoading = true;
+        try
+        {
+            using var res = await Http.SendAsync(ApiRequest(HttpMethod.Get,
+                $"/api/events?limit=1000&date={day:yyyy-MM-dd}"));
+            _eventsForDate = res.IsSuccessStatusCode
+                ? await res.Content.ReadFromJsonAsync<List<ApiEvent>>() ?? new List<ApiEvent>()
+                : new List<ApiEvent>();
+        }
+        catch
+        {
+            _eventsForDate = new List<ApiEvent>();
+        }
+        finally
+        {
+            _eventsDateLoading = false;
+        }
+    }
 
     private string EventArtifactUrl(ApiEvent ev, string kind) =>
         $"{_server.TrimEnd('/')}/api/events/{Uri.EscapeDataString(ev.Id)}/{kind}{TokenQuery('?')}";
@@ -1679,7 +1685,6 @@
                 _latestVersion = features.LatestVersion;
                 if (!string.IsNullOrEmpty(features.RepoUrl)) _repoUrl = features.RepoUrl;
             }
-            if (!_continuousSupported && _panelTab == "recordings") _panelTab = "events";
         }
         catch
         {
@@ -1687,7 +1692,8 @@
         }
         try
         {
-            using var res = await Http.SendAsync(ApiRequest(HttpMethod.Get, "/api/events?limit=300"));
+            // 500 covers a full busy day, so the panel's rolling 24h view is honest.
+            using var res = await Http.SendAsync(ApiRequest(HttpMethod.Get, "/api/events?limit=500"));
             if (res.StatusCode == System.Net.HttpStatusCode.Unauthorized)
             {
                 _authEnabled = true;
@@ -1766,6 +1772,8 @@
         if (!await PostEventReviewAsync(ev, reviewed: true)) return;
         int i = _events.FindIndex(e => e.Id == ev.Id);
         if (i >= 0) _events[i] = _events[i] with { Reviewed = true };
+        int j = _eventsForDate.FindIndex(e => e.Id == ev.Id);
+        if (j >= 0) _eventsForDate[j] = _eventsForDate[j] with { Reviewed = true };
         if (_playEvent?.Id == ev.Id) _playEvent = _playEvent with { Reviewed = true };
     }
 
@@ -1830,74 +1838,6 @@
         : ev.Duration.TotalSeconds < 1 ? "<1s"
         : ev.Duration.TotalSeconds < 90 ? $"{(int)Math.Ceiling(ev.Duration.TotalSeconds)}s"
         : $"{(int)Math.Round(ev.Duration.TotalMinutes)} min";
-
-    // ------------------------------------------------------------ continuous footage
-
-    private string SegmentUrl(string camera, string date, string file) =>
-        $"{_server.TrimEnd('/')}/api/recordings/{Uri.EscapeDataString(camera)}/{date}/{file}{TokenQuery('?')}";
-
-    private static string RecDayLabel(string day) =>
-        DateTime.TryParseExact(day, "yyyy-MM-dd", null, System.Globalization.DateTimeStyles.None, out var d)
-            ? DayLabel(d.Date)
-            : day;
-
-    private Task OpenRecordingsTabAsync()
-    {
-        _panelTab = "recordings";
-        if (_recCamera.Length == 0)
-            _recCamera = _eventCameraFilter.Length > 0 ? _eventCameraFilter : _cameras.FirstOrDefault()?.Name ?? "";
-        return LoadRecordingDaysAsync();
-    }
-
-    private Task SelectRecordingCameraAsync(string? camera)
-    {
-        _recCamera = camera ?? "";
-        return LoadRecordingDaysAsync();
-    }
-
-    private async Task LoadRecordingDaysAsync()
-    {
-        _recDays.Clear();
-        _recSegments.Clear();
-        _recExpanded.Clear();
-        if (_recCamera.Length == 0 || string.IsNullOrWhiteSpace(_server)) return;
-        try
-        {
-            using var res = await Http.SendAsync(ApiRequest(HttpMethod.Get,
-                $"/api/recordings/{Uri.EscapeDataString(_recCamera)}"));
-            var days = res.IsSuccessStatusCode ? await res.Content.ReadFromJsonAsync<List<string>>() : null;
-            if (days != null) _recDays = days;
-        }
-        catch (Exception ex)
-        {
-            _error = $"Cannot reach {_server}: {ex.Message}";
-            return;
-        }
-        // Most recent day opens by itself; older days load on click.
-        if (_recDays.Count > 0)
-            await ToggleRecordingDayAsync(_recDays[0]);
-    }
-
-    private async Task ToggleRecordingDayAsync(string day)
-    {
-        if (!_recExpanded.Add(day))
-        {
-            _recExpanded.Remove(day);
-            return;
-        }
-        if (_recSegments.ContainsKey(day)) return;
-        try
-        {
-            using var res = await Http.SendAsync(ApiRequest(HttpMethod.Get,
-                $"/api/recordings/{Uri.EscapeDataString(_recCamera)}/{day}"));
-            var segments = res.IsSuccessStatusCode ? await res.Content.ReadFromJsonAsync<List<ApiSegment>>() : null;
-            _recSegments[day] = segments ?? new List<ApiSegment>();
-        }
-        catch
-        {
-            _recSegments[day] = new List<ApiSegment>();
-        }
-    }
 
     // ------------------------------------------------------------ layout
 

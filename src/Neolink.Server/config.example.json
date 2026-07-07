@@ -99,5 +99,15 @@
       // Optional: restrict this camera to specific users from "users" above.
       // "permitted_users": [ "me" ]
     }
+
+    // Generic (non-Reolink) camera: give RTSP URLs instead of address/username —
+    // put the login inside the URL. It streams, plays in the web UI and records
+    // continuous (24/7) footage; Reolink-only extras (PTZ, LED, PIR, detection
+    // events, stream profiles) are unavailable for these.
+    // {
+    //   "name": "garage-3rdparty",
+    //   "rtsp_main": "rtsp://user:pass@192.168.1.60:554/stream1",   // required (or "rtsp")
+    //   "rtsp_sub": "rtsp://user:pass@192.168.1.60:554/stream2"     // optional low-res twin
+    // }
   ]
 }

@@ -173,14 +173,39 @@
         {
             <div class="campanel-section">
                 <div class="campanel-section-title">RECORDING</div>
-                <div class="control-row">
-                    <span>Detection events</span>
-                    <button class="chip @(_recording.Events ? "" : "chip-off")"
-                            @onclick="() => SetRecordingAsync(events: !_recording.Events)">
-                        @(_recording.Events ? "on" : "off")
-                    </button>
-                </div>
-                @if (_recording.Events)
+                @if ((_recording.AvailableStreams?.Count ?? 0) > 1)
+                {
+                    <div class="control-row">
+                        <span>Record from stream</span>
+                        <select class="event-filter" value="@(_recording.RecordStream ?? "")"
+                                title="Which of this camera's streams gets taped (events and 24/7 alike)"
+                                @onchange='e => SetRecordingAsync(recordStream: (string?)e.Value ?? "")'>
+                            <option value="">default (@StreamLabel(_recording.DefaultRecordStream))</option>
+                            @foreach (var kind in _recording.AvailableStreams!)
+                            {
+                                <option value="@kind">@StreamLabel(kind)</option>
+                            }
+                        </select>
+                    </div>
+                }
+                @if (_recording.EventsAvailable)
+                {
+                    <div class="control-row">
+                        <span>Detection events</span>
+                        <button class="chip @(_recording.Events ? "" : "chip-off")"
+                                @onclick="() => SetRecordingAsync(events: !_recording.Events)">
+                            @(_recording.Events ? "on" : "off")
+                        </button>
+                    </div>
+                }
+                else
+                {
+                    <div class="notice small">
+                        This camera has no detection pushes (generic RTSP), so event recording
+                        is unavailable — continuous (24/7) recording works normally.
+                    </div>
+                }
+                @if (_recording.EventsAvailable && _recording.Events)
                 {
                     <div class="control-row">
                         <span>Keep event clips (days)</span>
@@ -219,7 +244,7 @@
                         0 keeps footage forever. Expired days are removed by the hourly cleanup.
                     </div>
                 }
-                @if (_recording.Events)
+                @if (_recording.EventsAvailable && _recording.Events)
                 {
                     <div class="control-row rec-types-row">
                         <span>Event types</span>
@@ -245,21 +270,24 @@
             </div>
         }
 
-        <div class="campanel-section">
-            <div class="campanel-section-title">MAINTENANCE</div>
-            <div class="control-row">
-                <span>Restart the camera</span>
-                @if (!_confirmReboot)
-                {
-                    <button class="chip" @onclick="() => _confirmReboot = true">Reboot…</button>
-                }
-                else
-                {
-                    <button class="chip chip-danger" @onclick="RebootAsync">Confirm reboot</button>
-                    <button class="chip" @onclick="() => _confirmReboot = false">Cancel</button>
-                }
+        @if (_caps.Features?.Reboot != false)
+        {
+            <div class="campanel-section">
+                <div class="campanel-section-title">MAINTENANCE</div>
+                <div class="control-row">
+                    <span>Restart the camera</span>
+                    @if (!_confirmReboot)
+                    {
+                        <button class="chip" @onclick="() => _confirmReboot = true">Reboot…</button>
+                    }
+                    else
+                    {
+                        <button class="chip chip-danger" @onclick="RebootAsync">Confirm reboot</button>
+                        <button class="chip" @onclick="() => _confirmReboot = false">Cancel</button>
+                    }
+                </div>
             </div>
-        </div>
+        }
 
         @if (_status != null)
         {
@@ -390,12 +418,20 @@
     };
 
     private async Task SetRecordingAsync(bool? events = null, bool? continuous = null, List<string>? eventTypes = null,
-        int? eventRetentionDays = null, int? continuousRetentionDays = null)
+        int? eventRetentionDays = null, int? continuousRetentionDays = null, string? recordStream = null)
     {
-        object body = new { events, continuous, eventTypes, eventRetentionDays, continuousRetentionDays };
+        object body = new { events, continuous, eventTypes, eventRetentionDays, continuousRetentionDays, recordStream };
         if (await PostAsync("recording", body))
             _recording = await GetAsync<ApiRecordingSettings>("recording");
     }
+
+    private static string StreamLabel(string? kind) => kind switch
+    {
+        "mainStream" => "Main",
+        "subStream" => "Sub",
+        "externStream" => "Ext",
+        _ => kind ?? "Main",
+    };
 
     private static string RetentionLabel(int days) =>
         days > 0 ? $"default ({days}d)" : "default (forever)";

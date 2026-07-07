@@ -23,7 +23,7 @@ public sealed record ApiVersion(string? Name, string? Model, string? Serial, str
     string? Hardware, string? Build);
 
 public sealed record ApiFeatures(bool Ptz, bool Led, bool Pir, bool Battery,
-    bool StreamSettings = false);
+    bool StreamSettings = false, bool Reboot = true);
 
 /// <summary>GET /api/cameras/{name}/capabilities — discovered device info and features.</summary>
 public sealed record ApiCapabilities(bool Online, ApiVersion? Version, ApiFeatures? Features, JsonElement Support);
@@ -64,7 +64,9 @@ public sealed record ApiUserInfo(string Name, bool Admin);
 public sealed record ApiRecordingSettings(bool Events, bool Continuous,
     List<string>? EventTypes, List<string>? KnownTypes, bool ContinuousAvailable = false,
     int? EventRetentionDays = null, int? ContinuousRetentionDays = null,
-    int DefaultEventRetentionDays = 7, int DefaultContinuousRetentionDays = 7)
+    int DefaultEventRetentionDays = 7, int DefaultContinuousRetentionDays = 7,
+    bool EventsAvailable = true, string? RecordStream = null,
+    string? DefaultRecordStream = null, List<string>? AvailableStreams = null)
 {
     /// <summary>null EventTypes = every detection type is recorded.</summary>
     public bool TypeEnabled(string label) => EventTypes == null || EventTypes.Contains(label);
