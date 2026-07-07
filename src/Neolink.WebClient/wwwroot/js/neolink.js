@@ -572,5 +572,9 @@
         },
         lsGet(key) { return localStorage.getItem(key); },
         lsSet(key, value) { localStorage.setItem(key, value); },
+        // Session-scoped flags: things that must NOT survive to the next visit
+        // (e.g. dismissing the "no sign-in" security banner).
+        ssGet(key) { return sessionStorage.getItem(key); },
+        ssSet(key, value) { sessionStorage.setItem(key, value); },
     };
 })();

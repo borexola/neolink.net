@@ -1018,8 +1018,11 @@
                 var el = JsonSerializer.Deserialize<JsonElement>(auth);
                 if (el.TryGetProperty("token", out var t)) _authToken = t.GetString();
             }
-            _setupDismissed = await JS.InvokeAsync<string?>("neolink.lsGet", "neolink.setupDismissed") == "1";
-            _secWarnDismissed = await JS.InvokeAsync<string?>("neolink.lsGet", "neolink.secWarnDismissed") == "1";
+            // Dismissals are scoped to the server (a new/redeployed open server must
+            // warn again), and the sidebar banner only stays hidden for this browsing
+            // session — an unsecured server re-warns on every fresh visit.
+            _setupDismissed = await JS.InvokeAsync<string?>("neolink.lsGet", SetupDismissKey) == "1";
+            _secWarnDismissed = await JS.InvokeAsync<string?>("neolink.ssGet", SecWarnDismissKey) == "1";
             _updateDismissedVersion = await JS.InvokeAsync<string?>("neolink.lsGet", "neolink.updateDismissed");
         }
         catch { }
@@ -1028,10 +1031,15 @@
     /// <summary>Which version's update banner the user dismissed (a newer one re-shows it).</summary>
     private string? _updateDismissedVersion;
 
+    /// <summary>Dismissal keys carry the server address: another deployment warns afresh.</summary>
+    private string SetupDismissKey => $"neolink.setupDismissed:{_server.TrimEnd('/')}";
+    private string SecWarnDismissKey => $"neolink.secWarnDismissed:{_server.TrimEnd('/')}";
+
     private async Task DismissSecWarnAsync()
     {
+        // Session-scoped on purpose: hiding a security warning forever defeats it.
         _secWarnDismissed = true;
-        await JS.InvokeVoidAsync("neolink.lsSet", "neolink.secWarnDismissed", "1");
+        await JS.InvokeVoidAsync("neolink.ssSet", SecWarnDismissKey, "1");
     }
 
     private PersistedView SnapshotView() => new()
@@ -1144,6 +1152,10 @@
         _loginError = null;
         await JS.InvokeVoidAsync("neolink.lsSet", "neolink.auth",
             JsonSerializer.Serialize(new { token = _authToken, user = _authUser, admin = _authAdmin }));
+        // Auth works here now — re-arm the setup prompt so a future regression
+        // to an open server (e.g. a redeploy losing users.json) warns loudly again.
+        _setupDismissed = false;
+        await JS.InvokeVoidAsync("neolink.lsSet", SetupDismissKey, "");
         await LoadUserSettingsAsync();
         await RefreshCamerasAsync();
         await RefreshEventsAsync();
@@ -1228,7 +1240,7 @@
     {
         _showSetupPrompt = false;
         _setupDismissed = true;
-        await JS.InvokeVoidAsync("neolink.lsSet", "neolink.setupDismissed", "1");
+        await JS.InvokeVoidAsync("neolink.lsSet", SetupDismissKey, "1");
     }
 
     private static async Task<string?> ApiErrorAsync(HttpResponseMessage res)
