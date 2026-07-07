@@ -445,30 +445,48 @@ video[data-live="1"] ~ .tile-status { display: none; }
 
 .tile:hover .tile-bar { opacity: 1; }
 
-/* Per-tile delete: a trashcan on the tile itself (top-right), subtle until hover */
-.tile-trash {
-    position: absolute;
-    top: 6px;
-    right: 6px;
-    z-index: 3;
-    border: none;
-    background: rgba(0, 0, 0, 0.5);
-    color: #fff;
-    font-size: 14px;
-    line-height: 1;
-    width: 28px;
-    height: 28px;
-    border-radius: 7px;
-    cursor: pointer;
-    opacity: 0.35;
-    transition: opacity 0.15s ease, background 0.15s ease;
+/* One-time performance nudge: floats over the stage the first time more than
+   four main streams are on the wall, then auto-fades (or is dismissed). */
+.perf-toast {
+    position: fixed;
+    left: 50%;
+    bottom: 20px;
+    transform: translateX(-50%);
+    z-index: 30;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    max-width: min(580px, calc(100vw - 40px));
+    padding: 10px 14px;
+    background: color-mix(in srgb, var(--panel) 94%, transparent);
+    border: 1px solid var(--accent);
+    border-radius: 10px;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+    font-size: 13px;
+    line-height: 1.4;
+    animation: perf-toast-in 0.25s ease;
 }
 
-.tile:hover .tile-trash { opacity: 0.9; }
+.perf-toast .chip { flex: 0 0 auto; }
 
-.tile-trash:hover {
-    opacity: 1;
-    background: var(--err);
+@keyframes perf-toast-in {
+    from { opacity: 0; transform: translate(-50%, 10px); }
+}
+
+/* In-place maximize: the picked tile fills the stage while the other tiles
+   stay MOUNTED but hidden — their <video> players keep running, so restoring
+   the view never shows a wall of black reconnecting cards. */
+.grid.has-max { position: relative; }
+
+.grid.has-max .tile:not(.maxed) { display: none; }
+
+.grid.has-max .tile.maxed {
+    /* wins over per-mode inline geometry (grid-area, free-mode pixels) */
+    position: absolute !important;
+    inset: 0 !important;
+    width: auto !important;
+    height: auto !important;
+    z-index: 5;
 }
 
 /* Flash a tile red when its camera is picked again (already on screen).
@@ -606,7 +624,6 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
     .grid.mode-free { overflow: auto; }
 
     .tile-bar { opacity: 1; } /* no hover on touch: keep controls visible */
-    .tile-trash { opacity: 0.85; }
 }
 
 /* ---------- camera settings dialog ---------- */
