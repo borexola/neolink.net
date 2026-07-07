@@ -69,6 +69,16 @@ public sealed record ApiRecordingSettings(bool Events, bool Continuous,
     public bool TypeEnabled(string label) => EventTypes == null || EventTypes.Contains(label);
 }
 
+/// <summary>GET /api/system/stats — static facts about the server process/host.</summary>
+public sealed record ApiSystemInfo(string? Os, string? Arch, string? Runtime, int Processors,
+    long MachineMemory, long StartUtcMs, string? Disk, long SamplePeriodMs = 2000);
+
+/// <summary>GET /api/system/stats — one resource sample (compact keys keep the 2s poll light).</summary>
+public sealed record ApiSystemSample(long T, double Cpu, long Ws, long Heap, double Alloc,
+    int Thr, int Fd, long DTot, long DFree, long Rec, int View);
+
+public sealed record ApiSystemStats(ApiSystemInfo? Info, List<ApiSystemSample> Samples);
+
 /// <summary>GET /api/recordings/{camera}/{date} — one continuous-recording segment.</summary>
 public sealed record ApiSegment(string File, long Size)
 {

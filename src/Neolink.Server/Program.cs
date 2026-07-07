@@ -72,6 +72,11 @@ catch (Exception ex)
     return Fail($"Failed to load config '{configPath}': {ex.Message}");
 }
 
+// Capture log lines from here on for the web UI's admin log stream — created
+// before anything interesting happens so startup lines are in the backlog.
+var logBuffer = new Neolink.Web.LogBuffer();
+Log.Tap = logBuffer.Publish;
+
 Log.Info($"Neolink.NET {Version} starting");
 var tzOffset = DateTimeOffset.Now.Offset;
 Log.Info($"Local time: {DateTime.Now:yyyy-MM-dd HH:mm:ss} " +
@@ -277,6 +282,13 @@ if (config.WebPort > 0)
     var updates = new UpdateChecker(Version);
     tasks.Add(Task.Run(() => updates.RunAsync(shutdown.Token)));
 
+    // Resource sampler for the UI's monitor page (CPU/RAM/disk/viewers over time).
+    var monitor = new SystemMonitor(
+        diskProbePath: eventStore?.Root ?? stateDir,
+        recordingsRoot: eventStore?.Root,
+        viewerCount: () => webCameras.Sum(c => c.Streams.Sum(s => s.Hub.SubscriberCount)));
+    tasks.Add(Task.Run(() => monitor.RunAsync(shutdown.Token)));
+
     var webOptions = new WebApiOptions
     {
         BindAddr = config.WebBind ?? config.BindAddr,
@@ -294,6 +306,8 @@ if (config.WebPort > 0)
         Version = Version,
         ConfigPath = Path.GetFullPath(configPath),
         Updates = updates,
+        Monitor = monitor,
+        Logs = logBuffer,
         // Graceful shutdown; docker's restart policy (or systemd) starts us again.
         RestartRequested = () =>
         {

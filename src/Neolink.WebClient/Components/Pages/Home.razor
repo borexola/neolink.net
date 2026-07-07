@@ -181,7 +181,7 @@
                            muted, so the strip shows what happened without any clicks.
                            Capped so a big backlog doesn't decode dozens of videos. *@
                         bool trickle = (ev.HasPreview || ev.HasClip) && !ev.Ongoing && trickleBudget-- > 0;
-                        <div class="event-card @(ev.Ongoing ? "live" : "")" @key="ev.Id"
+                        <div class="event-card @(ev.Ongoing ? "live" : "")" @key="ev.Id" style="@CardAspect(ev)"
                              title="@ev.Title — click to play" @onclick="() => OpenEvent(ev)">
                             <div class="event-thumb">
                                 @if (trickle)
@@ -293,6 +293,9 @@
                     <a class="tool-btn" href="timeline" title="Scrub recorded footage across all cameras">📼 <span class="tool-name">Timeline</span></a>
                 }
             }
+
+            <span class="tool-sep"></span>
+            <a class="tool-btn" href="monitor" title="Server & browser resource usage, live">📈 <span class="tool-name">Monitor</span></a>
         </div>
 
         @if (_showLayouts)
@@ -1607,6 +1610,21 @@
 
     private string EventArtifactUrl(ApiEvent ev, string kind) =>
         $"{_server.TrimEnd('/')}/api/events/{Uri.EscapeDataString(ev.Id)}/{kind}{TokenQuery('?')}";
+
+    /// <summary>
+    /// Strip cards take the shape of their camera so ultrawide footage shows its
+    /// full width instead of being cropped to a fixed 5:4. Falls back to 16:9
+    /// when the camera (or its resolution) is unknown; contain-fit absorbs any
+    /// remaining mismatch as bars, never a crop.
+    /// </summary>
+    private string CardAspect(ApiEvent ev)
+    {
+        var cam = _cameras.FirstOrDefault(c => string.Equals(c.Name, ev.Camera, StringComparison.OrdinalIgnoreCase));
+        var s = cam?.Streams.FirstOrDefault(x => x.Width > 0 && x.Height > 0);
+        double aspect = s != null ? (double)s.Width / s.Height : 16.0 / 9;
+        aspect = Math.Clamp(aspect, 1.0, 4.0);
+        return $"aspect-ratio: {aspect.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)}";
+    }
 
     private async Task RefreshEventsAsync()
     {

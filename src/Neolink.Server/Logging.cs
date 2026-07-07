@@ -19,6 +19,12 @@ public static class Log
     public static LogLevel Level = LogLevel.Info;
     private static readonly object Gate = new();
 
+    /// <summary>
+    /// Optional tap receiving every emitted line (feeds the web UI's live log
+    /// stream). MUST be non-throwing and must never log (that would recurse).
+    /// </summary>
+    public static Action<LogLevel, string>? Tap;
+
     static Log()
     {
         var env = Environment.GetEnvironmentVariable("NEOLINK_LOG");
@@ -49,6 +55,7 @@ public static class Log
     private static void Write(LogLevel level, string msg)
     {
         if (level < Level) return;
+        try { Tap?.Invoke(level, msg); } catch { /* the tap must never break logging */ }
         var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] [{LevelTag(level)}] {msg}";
         lock (Gate)
         {
@@ -66,7 +73,8 @@ public static class Log
         }
     }
 
-    private static string LevelTag(LogLevel l) => l switch
+    /// <summary>Three-letter console tag for a level ("INF", "WRN", ...).</summary>
+    public static string LevelTag(LogLevel l) => l switch
     {
         LogLevel.Trace => "TRC",
         LogLevel.Debug => "DBG",

@@ -829,8 +829,11 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
     flex: 0 0 auto;
     /* Width follows the (resizable) bar height so previews scale with it */
     height: 100%;
+    /* Default shape; each card overrides this inline with its camera's true
+       aspect (plus meta-row headroom) so ultrawide footage isn't cropped. */
     aspect-ratio: 5 / 4;
     min-width: 150px;
+    max-width: 560px;
     transition: transform 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
 }
 
@@ -858,7 +861,10 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
 .event-thumb video {
     width: 100%;
     height: 100%;
-    object-fit: cover;
+    /* contain, not cover: ultrawide cameras must show their full width (the
+       card already matches the camera's aspect, so bars only appear when the
+       camera is unknown and the 16:9 fallback misses). */
+    object-fit: contain;
     display: block;
     pointer-events: none; /* clicks land on the card (open player) */
 }
@@ -987,7 +993,7 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
     position: fixed;
     inset: 0;
     margin: auto;
-    width: min(920px, calc(100vw - 32px));
+    width: min(1440px, calc(100vw - 32px));
     height: fit-content;
     max-height: calc(100vh - 32px);
     background: var(--panel);
@@ -1328,6 +1334,248 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
     border-bottom: 1px solid var(--line);
     box-shadow: inset 0 6px 8px -8px rgba(0, 0, 0, 0.5);
 }
+
+/* ------------------------------------------------------------ monitor page */
+
+.mon-page {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    background: var(--bg);
+}
+
+.mon-scroll {
+    flex: 1;
+    overflow-y: auto;
+    padding: 14px 16px 24px;
+}
+
+/* Heartbeat next to the title: sampling is alive (steady pulse) or paused (dim) */
+.mon-pulse {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--ok);
+    animation: mon-pulse 2s ease-in-out infinite;
+}
+
+.mon-pulse.paused {
+    background: var(--muted);
+    animation: none;
+}
+
+@keyframes mon-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(63, 208, 127, 0.5); }
+    50% { box-shadow: 0 0 0 5px rgba(63, 208, 127, 0); }
+}
+
+.mon-section {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin: 18px 2px 10px;
+}
+
+.mon-section:first-child { margin-top: 2px; }
+
+.mon-section-title {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    color: var(--accent);
+}
+
+.mon-section-sub {
+    font-size: 12px;
+    color: var(--muted);
+}
+
+/* Headline numbers: current values at a glance, charts below tell the story */
+.mon-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    gap: 10px;
+    margin-bottom: 12px;
+}
+
+.mon-card {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 10px 14px;
+}
+
+.mon-card-label {
+    font-size: 10px;
+    letter-spacing: 1.5px;
+    color: var(--muted);
+}
+
+.mon-card-value {
+    font-size: 22px;
+    font-weight: 700;
+    line-height: 1.15;
+    font-variant-numeric: tabular-nums;
+}
+
+.mon-card-sub {
+    font-size: 11px;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.mon-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+    gap: 10px;
+}
+
+.mon-chart {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 10px 12px 8px;
+}
+
+.mon-chart-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 6px;
+}
+
+.mon-chart-title {
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.mon-leg {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    color: var(--muted);
+}
+
+.mon-leg i {
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+}
+
+.mon-leg b {
+    color: var(--text);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Y-axis ceiling, right-aligned over the plot */
+.mon-chart-max {
+    margin-left: auto;
+    font-size: 10px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+}
+
+.mon-chart-body { position: relative; }
+
+.mon-svg {
+    display: block;
+    width: 100%;
+    height: 150px;
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--bg) 60%, var(--panel));
+}
+
+.mon-gridline {
+    stroke: var(--line);
+    stroke-width: 1;
+    stroke-dasharray: 2 5;
+    vector-effect: non-scaling-stroke;
+}
+
+.mon-empty {
+    height: 150px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    color: var(--muted);
+}
+
+.mon-foot {
+    margin-top: 14px;
+    font-size: 11px;
+    color: var(--muted);
+    text-align: center;
+}
+
+/* ------------------------------------------------------------ logs page */
+
+/* Live server logs (admin): terminal-style tail, lines appended by JS */
+.logs-page {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    background: var(--bg);
+}
+
+.logs-hint { padding: 8px 16px 0; }
+
+/* On the dedicated page the terminal takes all remaining height */
+.mon-logs.logs-full {
+    flex: 1;
+    height: auto;
+    margin: 10px 16px 16px;
+}
+
+.mon-logs {
+    height: 380px;
+    overflow-y: auto;
+    background: #0a0d13;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 10px 12px;
+    font: 11.5px/1.55 ui-monospace, Consolas, "Cascadia Mono", monospace;
+    overflow-anchor: none; /* JS owns the follow-the-tail behavior */
+}
+
+.log-line {
+    display: flex;
+    gap: 10px;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.log-time {
+    flex: 0 0 auto;
+    color: var(--muted);
+}
+
+.log-lvl {
+    flex: 0 0 30px;
+    font-weight: 700;
+}
+
+.log-msg { color: var(--text); }
+
+.log-inf .log-lvl { color: var(--accent); }
+.log-wrn .log-lvl { color: #ffb020; }
+.log-wrn .log-msg { color: color-mix(in srgb, #ffb020 55%, var(--text)); }
+.log-err .log-lvl { color: var(--err); }
+.log-err .log-msg { color: color-mix(in srgb, var(--err) 60%, var(--text)); }
+.log-dbg, .log-trc { opacity: 0.6; }
+
+/* Level filter: the container class hides matching lines (DBG chip covers TRC too) */
+.mon-logs.log-hide-dbg :is(.log-dbg, .log-trc),
+.mon-logs.log-hide-inf .log-inf,
+.mon-logs.log-hide-wrn .log-wrn,
+.mon-logs.log-hide-err .log-err { display: none; }
 
 /* ------------------------------------------------------------ saved layouts */
 

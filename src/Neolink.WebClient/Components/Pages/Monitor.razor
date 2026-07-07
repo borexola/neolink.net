@@ -1,0 +1,362 @@
+@page "/monitor"
+@using System.Diagnostics
+@using System.Text.Json
+@inject HttpClient Http
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+@* Live resource monitor: the backend (Neolink.Server process + storage disk)
+   sampled server-side every 2s, and the frontend (this very browser tab —
+   JS heap, frame rate, circuit round-trip) sampled locally at the same beat. *@
+
+<PageTitle>Neolink — Monitor</PageTitle>
+
+<div class="mon-page">
+    <div class="toolbar mon-toolbar">
+        <a class="tool-btn" href="" title="Back to live view">‹ Live</a>
+        <span class="tool-label">SYSTEM MONITOR</span>
+        <span class="mon-pulse @(_paused ? "paused" : "")" title="@(_paused ? "Paused" : "Sampling every 2s")"></span>
+        <span class="tool-sep"></span>
+        <span class="tool-label">WINDOW</span>
+        @foreach (var (label, sec) in Windows)
+        {
+            <button class="chip @(_windowSec == sec ? "chip-active" : "chip-off")"
+                    @onclick="() => _windowSec = sec">@label</button>
+        }
+        <span class="tool-sep"></span>
+        <button class="tool-btn @(_paused ? "active" : "")" title="Freeze the charts (sampling continues server-side)"
+                @onclick="() => _paused = !_paused">
+            @(_paused ? "▶" : "❚❚") <span class="tool-name">@(_paused ? "Resume" : "Pause")</span>
+        </button>
+        @if (_admin)
+        {
+            <span class="tool-sep"></span>
+            <a class="tool-btn" href="logs" title="Live server log tail (admin)">🧾 <span class="tool-name">Logs</span></a>
+        }
+    </div>
+
+    @if (_error != null)
+    {
+        <div class="notice error">@_error</div>
+    }
+    else if (!_supported)
+    {
+        <div class="notice">This server does not expose resource statistics — update Neolink.Server.</div>
+    }
+    else
+    {
+        <div class="mon-scroll">
+            @* ---------------- backend ---------------- *@
+            <div class="mon-section">
+                <span class="mon-section-title">BACKEND</span>
+                <span class="mon-section-sub">Neolink.Server process@(_info?.Os != null ? $" · {ShortOs(_info.Os)}" : "")@(_info != null ? $" · {_info.Processors} cores" : "")</span>
+            </div>
+
+            <div class="mon-cards">
+                <div class="mon-card">
+                    <span class="mon-card-label">CPU</span>
+                    <span class="mon-card-value" style="color:@CpuColor()">@(Last is { } s1 ? $"{s1.Cpu:0.#}%" : "—")</span>
+                    <span class="mon-card-sub">of all cores</span>
+                </div>
+                <div class="mon-card">
+                    <span class="mon-card-label">MEMORY</span>
+                    <span class="mon-card-value">@(Last is { } s2 ? Bytes(s2.Ws) : "—")</span>
+                    <span class="mon-card-sub">working set@(_info is { MachineMemory: > 0 } ? $" of {Bytes(_info.MachineMemory)}" : "")</span>
+                </div>
+                <div class="mon-card">
+                    <span class="mon-card-label">DISK FREE</span>
+                    <span class="mon-card-value" style="color:@DiskColor()">@(Last is { DTot: > 0 } s3 ? Bytes(s3.DFree) : "—")</span>
+                    <span class="mon-card-sub">@(_info?.Disk ?? "volume")@(Last is { Rec: >= 0 } s4 ? $" · recordings {Bytes(s4.Rec)}" : "")</span>
+                </div>
+                <div class="mon-card">
+                    <span class="mon-card-label">VIEWERS</span>
+                    <span class="mon-card-value">@(Last?.View.ToString() ?? "—")</span>
+                    <span class="mon-card-sub">live stream subscribers</span>
+                </div>
+                <div class="mon-card">
+                    <span class="mon-card-label">UPTIME</span>
+                    <span class="mon-card-value">@Uptime()</span>
+                    <span class="mon-card-sub">@(_info?.Runtime ?? "")</span>
+                </div>
+            </div>
+
+            <div class="mon-grid">
+                <MonChart Title="CPU" Unit="%" FixedMax="100" WindowSec="_windowSec"
+                          Series="@(new() { new("process", Blue, Pts(s => s.Cpu)) })" />
+                <MonChart Title="Memory" Unit=" MB" WindowSec="_windowSec"
+                          Series="@(new()
+                                  {
+                                      new("working set", Blue, Pts(s => s.Ws / Mb)),
+                                      new("managed heap", Green, Pts(s => s.Heap / Mb)),
+                                  })" />
+                <MonChart Title="Allocation rate" Unit=" MB/s" WindowSec="_windowSec"
+                          Series="@(new() { new("managed", Purple, Pts(s => s.Alloc)) })" />
+                <MonChart Title="Threads & handles" WindowSec="_windowSec"
+                          Series="@(new()
+                                  {
+                                      new("threads", Blue, Pts(s => s.Thr)),
+                                      new("handles", Amber, Pts(s => s.Fd)),
+                                  })" />
+                <MonChart Title="Disk used" Unit="%" FixedMax="100" WindowSec="_windowSec"
+                          Series="@(new() { new(_info?.Disk ?? "volume", Amber,
+                                      Pts(s => s.DTot > 0 ? (s.DTot - s.DFree) * 100.0 / s.DTot : 0)) })" />
+                <MonChart Title="Stream viewers" WindowSec="_windowSec"
+                          Series="@(new() { new("subscribers", Green, Pts(s => s.View)) })" />
+            </div>
+
+            @* ---------------- frontend ---------------- *@
+            <div class="mon-section">
+                <span class="mon-section-title">FRONTEND</span>
+                <span class="mon-section-sub">this browser tab — sampled locally at the same beat</span>
+            </div>
+
+            <div class="mon-cards">
+                <div class="mon-card">
+                    <span class="mon-card-label">JS HEAP</span>
+                    <span class="mon-card-value">@(_browser.Count > 0 && _browser[^1].HeapMb >= 0 ? $"{_browser[^1].HeapMb:0} MB" : "n/a")</span>
+                    <span class="mon-card-sub">@(_heapSupported ? "used by this tab" : "Chromium-only metric")</span>
+                </div>
+                <div class="mon-card">
+                    <span class="mon-card-label">FRAME RATE</span>
+                    <span class="mon-card-value">@(_browser.Count > 0 && _browser[^1].Fps >= 0 ? $"{_browser[^1].Fps:0}" : "—")</span>
+                    <span class="mon-card-sub">rendered fps</span>
+                </div>
+                <div class="mon-card">
+                    <span class="mon-card-label">CIRCUIT</span>
+                    <span class="mon-card-value">@(_browser.Count > 0 ? $"{_browser[^1].LatencyMs:0} ms" : "—")</span>
+                    <span class="mon-card-sub">UI round-trip (SignalR)</span>
+                </div>
+                <div class="mon-card">
+                    <span class="mon-card-label">DOM</span>
+                    <span class="mon-card-value">@(_browser.Count > 0 ? _browser[^1].DomNodes.ToString("n0") : "—")</span>
+                    <span class="mon-card-sub">elements on this page</span>
+                </div>
+            </div>
+
+            <div class="mon-grid">
+                @if (_heapSupported)
+                {
+                    <MonChart Title="Browser JS heap" Unit=" MB" WindowSec="_windowSec"
+                              Series="@(new() { new("used", Blue, BPts(b => b.HeapMb)) })" />
+                }
+                <MonChart Title="Frame rate" Unit=" fps" WindowSec="_windowSec"
+                          Series="@(new() { new("rendered", Green, BPts(b => b.Fps)) })" />
+                <MonChart Title="UI latency" Unit=" ms" WindowSec="_windowSec"
+                          Series="@(new() { new("round-trip", Purple, BPts(b => b.LatencyMs)) })" />
+            </div>
+
+            <div class="mon-foot">
+                @(_samples.Count) backend samples · @(_browser.Count) browser samples ·
+                history covers the last hour · charts show the selected window
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    // Series colors (match the app palette)
+    private const string Blue = "#4f8cff";
+    private const string Green = "#3fd07f";
+    private const string Amber = "#ffb020";
+    private const string Purple = "#b06bff";
+    private const double Mb = 1024.0 * 1024.0;
+
+    private static readonly (string Label, int Sec)[] Windows = { ("5m", 300), ("15m", 900), ("1h", 3600) };
+
+    private string _server = "";
+    private string? _token;
+    private string? _error;
+    private bool _supported = true;
+    private bool _paused;
+    private int _windowSec = 900;
+    private bool _heapSupported = true;
+
+    private ApiSystemInfo? _info;
+    private readonly List<ApiSystemSample> _samples = new();
+    private readonly List<BrowserSample> _browser = new();
+    private PeriodicTimer? _timer;
+    private bool _perfStarted;
+
+    // Admin session? Gates the toolbar link to the logs page.
+    private bool _admin;
+
+    private sealed record BrowserSample(long T, double HeapMb, double Fps, double LatencyMs, int DomNodes);
+    private sealed record JsPerf(long Heap, long HeapLimit, double Fps, int DomNodes);
+
+    private ApiSystemSample? Last => _samples.Count > 0 ? _samples[^1] : null;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+
+        // Server + session are shared with the live view's persisted settings.
+        try
+        {
+            var json = await JS.InvokeAsync<string?>("neolink.lsGet", "neolink.view");
+            if (json != null)
+                _server = JsonSerializer.Deserialize<PersistedView>(json)?.Server ?? "";
+            var auth = await JS.InvokeAsync<string?>("neolink.lsGet", "neolink.auth");
+            if (!string.IsNullOrWhiteSpace(auth))
+            {
+                var el = JsonSerializer.Deserialize<JsonElement>(auth);
+                if (el.TryGetProperty("token", out var t)) _token = t.GetString();
+            }
+        }
+        catch { }
+        if (string.IsNullOrWhiteSpace(_server))
+            _server = await JS.InvokeAsync<string>("neolink.defaultServer");
+
+        await JS.InvokeVoidAsync("neolink.perfStart");
+        _perfStarted = true;
+
+        await FetchAuthAsync();  // are we the admin? gates the live-logs section
+        await FetchAsync();      // backfills up to an hour of server history
+        StateHasChanged();
+        _ = PollLoopAsync();
+    }
+
+    private async Task PollLoopAsync()
+    {
+        _timer = new PeriodicTimer(TimeSpan.FromSeconds(2));
+        try
+        {
+            while (await _timer.WaitForNextTickAsync())
+            {
+                if (_paused) continue;
+                await InvokeAsync(async () =>
+                {
+                    await FetchAsync();
+                    await SampleBrowserAsync();
+                    StateHasChanged();
+                });
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (ObjectDisposedException) { }
+    }
+
+    private async Task FetchAsync()
+    {
+        try
+        {
+            long after = Last?.T ?? 0;
+            var req = new HttpRequestMessage(HttpMethod.Get, $"{_server.TrimEnd('/')}/api/system/stats?after={after}");
+            if (!string.IsNullOrEmpty(_token))
+                req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _token);
+            using var res = await Http.SendAsync(req);
+            if (res.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+            {
+                _error = "Authentication required — sign in on the live view first.";
+                return;
+            }
+            if (res.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                _supported = false;
+                return;
+            }
+            if (!res.IsSuccessStatusCode) return;
+            var stats = await res.Content.ReadFromJsonAsync<ApiSystemStats>();
+            if (stats == null) return;
+            _error = null;
+            _info ??= stats.Info;
+            _samples.AddRange(stats.Samples);
+            // Mirror the server's ring: an hour at 2s.
+            if (_samples.Count > 1800) _samples.RemoveRange(0, _samples.Count - 1800);
+        }
+        catch (Exception ex)
+        {
+            _error = _samples.Count == 0 ? $"Cannot reach {_server}: {ex.Message}" : _error;
+        }
+    }
+
+    private async Task FetchAuthAsync()
+    {
+        try
+        {
+            var req = new HttpRequestMessage(HttpMethod.Get, $"{_server.TrimEnd('/')}/api/auth/status");
+            if (!string.IsNullOrEmpty(_token))
+                req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _token);
+            using var res = await Http.SendAsync(req);
+            if (!res.IsSuccessStatusCode) return;
+            var status = await res.Content.ReadFromJsonAsync<ApiAuthStatus>();
+            _admin = status?.Admin ?? false;
+        }
+        catch { /* the logs link just stays hidden */ }
+    }
+
+    private async Task SampleBrowserAsync()
+    {
+        try
+        {
+            // The awaited no-op measures the full circuit round-trip on the side.
+            var sw = Stopwatch.StartNew();
+            await JS.InvokeAsync<int>("neolink.perfPing");
+            sw.Stop();
+
+            var p = await JS.InvokeAsync<JsPerf>("neolink.perfSample");
+            _heapSupported = p.Heap >= 0;
+            _browser.Add(new BrowserSample(
+                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                p.Heap >= 0 ? p.Heap / Mb : -1,
+                p.Fps,
+                sw.Elapsed.TotalMilliseconds,
+                p.DomNodes));
+            if (_browser.Count > 1800) _browser.RemoveRange(0, _browser.Count - 1800);
+        }
+        catch { /* circuit hiccup: skip this beat */ }
+    }
+
+    // ------------------------------------------------------------ chart data
+
+    private IReadOnlyList<(long, double)> Pts(Func<ApiSystemSample, double> f) =>
+        _samples.Select(s => (s.T, f(s))).ToList();
+
+    private IReadOnlyList<(long, double)> BPts(Func<BrowserSample, double> f) =>
+        _browser.Where(b => f(b) >= 0).Select(b => (b.T, f(b))).ToList();
+
+    // ------------------------------------------------------------ formatting
+
+    private static string Bytes(long v) => v switch
+    {
+        >= 1024L * 1024 * 1024 * 1024 => $"{v / (1024.0 * 1024 * 1024 * 1024):0.##} TB",
+        >= 1024 * 1024 * 1024 => $"{v / (1024.0 * 1024 * 1024):0.#} GB",
+        >= 1024 * 1024 => $"{v / (1024.0 * 1024):0} MB",
+        _ => $"{v / 1024.0:0} KB",
+    };
+
+    private string Uptime()
+    {
+        if (_info == null) return "—";
+        var up = DateTimeOffset.UtcNow - DateTimeOffset.FromUnixTimeMilliseconds(_info.StartUtcMs);
+        return up.TotalDays >= 1 ? $"{(int)up.TotalDays}d {up.Hours}h"
+            : up.TotalHours >= 1 ? $"{(int)up.TotalHours}h {up.Minutes}m"
+            : $"{up.Minutes}m {up.Seconds}s";
+    }
+
+    private static string ShortOs(string os) =>
+        os.Contains("Windows", StringComparison.OrdinalIgnoreCase) ? "Windows"
+        : os.Contains("Linux", StringComparison.OrdinalIgnoreCase) ? "Linux"
+        : os.Contains("Darwin", StringComparison.OrdinalIgnoreCase) ? "macOS"
+        : os;
+
+    private string CpuColor() => Last?.Cpu switch
+    {
+        >= 85 => "var(--err)",
+        >= 60 => "#ffb020",
+        _ => "var(--ok)",
+    };
+
+    private string DiskColor() => Last is { DTot: > 0 } s && s.DFree < s.DTot / 10
+        ? "var(--err)"
+        : "var(--text)";
+
+    public async ValueTask DisposeAsync()
+    {
+        _timer?.Dispose();
+        if (_perfStarted)
+        {
+            try { await JS.InvokeVoidAsync("neolink.perfStop"); }
+            catch { /* circuit already gone */ }
+        }
+    }
+}

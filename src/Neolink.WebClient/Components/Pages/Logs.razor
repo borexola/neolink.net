@@ -1,0 +1,137 @@
+@page "/logs"
+@using System.Text.Json
+@inject HttpClient Http
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+@* Full-page live tail of the server log (admin only). The lines are appended
+   straight into the DOM by neolink.js — see logsAttach — so a chatty server
+   never churns the Blazor circuit. *@
+
+<PageTitle>Neolink — Logs</PageTitle>
+
+<div class="logs-page">
+    <div class="toolbar">
+        <a class="tool-btn" href="" title="Back to live view">‹ Live</a>
+        <a class="tool-btn" href="monitor" title="Resource monitor">📈 <span class="tool-name">Monitor</span></a>
+        <span class="tool-label">SERVER LOGS</span>
+        @if (_admin)
+        {
+            <span class="mon-pulse" title="Streaming live"></span>
+            <span class="tool-sep"></span>
+            <span class="tool-label">SHOW</span>
+            @foreach (var lvl in LogLevelChips)
+            {
+                <button class="chip @(_hiddenLevels.Contains(lvl) ? "chip-off" : "chip-active")"
+                        title="@(_hiddenLevels.Contains(lvl) ? "Hidden — click to show" : "Shown — click to hide")"
+                        @onclick="() => ToggleLevel(lvl)">@lvl</button>
+            }
+            <span class="tile-spacer"></span>
+            <button class="tool-btn" title="Empty the view (the server keeps its backlog)"
+                    @onclick="ClearAsync">Clear</button>
+        }
+    </div>
+
+    @if (_admin)
+    {
+        <div class="event-sub logs-hint">
+            Scroll up to freeze the view, scroll back to the bottom to follow. The newest
+            ~500 lines are kept server-side, so a fresh page starts with history.
+        </div>
+        <div id="logs-view" class="mon-logs logs-full @HiddenClasses()"></div>
+    }
+    else if (_checked && !_authEnabled)
+    {
+        <div class="notice">
+            Live server logs are admin-only — and with authentication off there is no admin yet.
+            Create the admin account from the live view, then come back here.
+        </div>
+    }
+    else if (_checked)
+    {
+        <div class="notice">Live server logs are visible to the admin account only.</div>
+    }
+</div>
+
+@code {
+    // DBG also covers TRC lines
+    private static readonly string[] LogLevelChips = { "DBG", "INF", "WRN", "ERR" };
+
+    private string _server = "";
+    private string? _token;
+    private bool _checked;      // auth status fetched (before that, render nothing judgmental)
+    private bool _authEnabled;
+    private bool _admin;
+    private bool _attached;
+    private readonly HashSet<string> _hiddenLevels = new();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+        {
+            // The container only exists once _admin is known (a later render).
+            if (_admin && !_attached)
+            {
+                _attached = true;
+                var url = $"{_server.TrimEnd('/')}/api/system/logs" +
+                          (string.IsNullOrEmpty(_token) ? "" : $"?token={Uri.EscapeDataString(_token)}");
+                await JS.InvokeVoidAsync("neolink.logsAttach", "logs-view", url);
+            }
+            return;
+        }
+
+        // Server + session are shared with the live view's persisted settings.
+        try
+        {
+            var json = await JS.InvokeAsync<string?>("neolink.lsGet", "neolink.view");
+            if (json != null)
+                _server = JsonSerializer.Deserialize<PersistedView>(json)?.Server ?? "";
+            var auth = await JS.InvokeAsync<string?>("neolink.lsGet", "neolink.auth");
+            if (!string.IsNullOrWhiteSpace(auth))
+            {
+                var el = JsonSerializer.Deserialize<JsonElement>(auth);
+                if (el.TryGetProperty("token", out var t)) _token = t.GetString();
+            }
+        }
+        catch { }
+        if (string.IsNullOrWhiteSpace(_server))
+            _server = await JS.InvokeAsync<string>("neolink.defaultServer");
+
+        try
+        {
+            var req = new HttpRequestMessage(HttpMethod.Get, $"{_server.TrimEnd('/')}/api/auth/status");
+            if (!string.IsNullOrEmpty(_token))
+                req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _token);
+            using var res = await Http.SendAsync(req);
+            if (res.IsSuccessStatusCode)
+            {
+                var status = await res.Content.ReadFromJsonAsync<ApiAuthStatus>();
+                _authEnabled = status?.Enabled ?? false;
+                _admin = status?.Admin ?? false;
+            }
+        }
+        catch { }
+        _checked = true;
+        StateHasChanged();
+    }
+
+    private void ToggleLevel(string lvl)
+    {
+        if (!_hiddenLevels.Remove(lvl)) _hiddenLevels.Add(lvl);
+    }
+
+    /// <summary>Container classes; CSS hides the matching .log-* lines (DBG also hides TRC).</summary>
+    private string HiddenClasses() =>
+        string.Join(' ', _hiddenLevels.Select(l => $"log-hide-{l.ToLowerInvariant()}"));
+
+    private Task ClearAsync() => JS.InvokeVoidAsync("neolink.logsClear", "logs-view").AsTask();
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_attached)
+        {
+            try { await JS.InvokeVoidAsync("neolink.logsDetach", "logs-view"); }
+            catch { /* circuit already gone */ }
+        }
+    }
+}

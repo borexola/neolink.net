@@ -297,6 +297,12 @@
     // ---------- timeline page (recorded footage scrubbing) ----------
     const scrubs = {};
 
+    // ---------- monitor page (browser-side FPS/heap sampling state) ----------
+    const perf = { raf: 0, frames: 0, windowStart: 0, fps: 0 };
+
+    // ---------- monitor page (live server log tails) ----------
+    const logTails = {};
+
     window.neolink = {
         freeInit,
 
@@ -459,6 +465,107 @@
         exitFullscreen() {
             if (document.fullscreenElement) document.exitFullscreen().catch(() => { });
         },
+        // ---------- monitor page: browser-side resource sampling ----------
+        // FPS is counted with a requestAnimationFrame loop (started on demand,
+        // stopped when the page stops sampling); JS heap comes from the
+        // non-standard performance.memory (Chromium only — -1 elsewhere).
+        perfStart() {
+            if (perf.raf) return;
+            perf.frames = 0;
+            perf.windowStart = performance.now();
+            perf.fps = 0;
+            const loop = (t) => {
+                perf.frames++;
+                if (t - perf.windowStart >= 1000) {
+                    perf.fps = Math.round(perf.frames * 1000 / (t - perf.windowStart));
+                    perf.frames = 0;
+                    perf.windowStart = t;
+                }
+                perf.raf = requestAnimationFrame(loop);
+            };
+            perf.raf = requestAnimationFrame(loop);
+        },
+        perfStop() {
+            if (perf.raf) cancelAnimationFrame(perf.raf);
+            perf.raf = 0;
+        },
+        perfSample() {
+            const m = performance.memory; // Chromium-only
+            return {
+                heap: m ? m.usedJSHeapSize : -1,
+                heapLimit: m ? m.jsHeapSizeLimit : -1,
+                fps: perf.raf ? perf.fps : -1,
+                domNodes: document.getElementsByTagName('*').length,
+            };
+        },
+        // No-op whose only purpose is to be awaited: the caller times the full
+        // Blazor circuit round-trip (browser → SignalR → server → back).
+        perfPing() { return 0; },
+
+        // ---------- live server log tail (admin) ----------
+        // Lines are appended straight into the DOM here — routing every log line
+        // through the Blazor circuit would re-render the page per line. The view
+        // auto-follows while scrolled to the bottom; scrolling up freezes it.
+        logsAttach(containerId, httpUrl) {
+            this.logsDetach(containerId);
+            const el = document.getElementById(containerId);
+            if (!el) return;
+            const state = { alive: true, ws: null, timer: 0, lastSeq: 0 };
+            logTails[containerId] = state;
+
+            const append = (e) => {
+                if (!e || e.seq <= state.lastSeq) return; // reconnect overlap: already shown
+                state.lastSeq = e.seq;
+                const pinned = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+                const line = document.createElement('div');
+                line.className = 'log-line log-' + String(e.lvl || 'inf').toLowerCase();
+                const time = document.createElement('span');
+                time.className = 'log-time';
+                time.textContent = new Date(e.t).toLocaleTimeString(undefined, { hour12: false });
+                const lvl = document.createElement('span');
+                lvl.className = 'log-lvl';
+                lvl.textContent = e.lvl;
+                const msg = document.createElement('span');
+                msg.className = 'log-msg';
+                msg.textContent = e.msg; // textContent: log content can never become markup
+                line.append(time, lvl, msg);
+                el.appendChild(line);
+                while (el.childElementCount > 2000) el.firstElementChild.remove();
+                if (pinned) el.scrollTop = el.scrollHeight;
+            };
+            const retry = () => {
+                if (!state.alive) return;
+                clearTimeout(state.timer);
+                state.timer = setTimeout(connect, 3000);
+            };
+            const connect = () => {
+                if (!state.alive) return;
+                try { state.ws = new WebSocket(httpUrl.replace(/^http/, 'ws')); }
+                catch { retry(); return; }
+                state.ws.onmessage = (ev) => {
+                    try {
+                        const data = JSON.parse(ev.data); // backlog = array, live = single entry
+                        if (Array.isArray(data)) { data.forEach(append); el.scrollTop = el.scrollHeight; }
+                        else append(data);
+                    } catch { }
+                };
+                state.ws.onclose = () => retry();
+                state.ws.onerror = () => { try { state.ws.close(); } catch { } };
+            };
+            connect();
+        },
+        logsDetach(containerId) {
+            const s = logTails[containerId];
+            if (!s) return;
+            s.alive = false;
+            clearTimeout(s.timer);
+            try { s.ws && s.ws.close(); } catch { }
+            delete logTails[containerId];
+        },
+        logsClear(containerId) {
+            document.getElementById(containerId)?.replaceChildren();
+        },
+
         defaultServer() {
             // The UI is served by Neolink.Server itself: API is on the same origin.
             return location.origin;

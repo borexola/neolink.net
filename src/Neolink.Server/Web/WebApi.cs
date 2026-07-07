@@ -39,6 +39,10 @@ public sealed class WebApiOptions
     public required string Version { get; init; }
     public required string ConfigPath { get; init; }
     public UpdateChecker? Updates { get; init; }
+    /// <summary>Process/disk resource sampler feeding the UI's monitor page.</summary>
+    public SystemMonitor? Monitor { get; init; }
+    /// <summary>Captured server log lines for the UI's live log stream (admin only).</summary>
+    public LogBuffer? Logs { get; init; }
     /// <summary>Gracefully stops the process; the supervisor (docker/systemd) restarts it.</summary>
     public required Action RestartRequested { get; init; }
 }
@@ -803,6 +807,69 @@ public static class WebApi
             });
         }
 
+        // ------------------------------------------------------------ resource monitor
+
+        if (o.Monitor is { } monitor)
+        {
+            // Incremental polling: ?after=<unix ms> returns only newer samples, so
+            // the 2s poll ships a couple hundred bytes, not the whole hour.
+            app.MapGet("/api/system/stats", (long? after) => Results.Json(new
+            {
+                info = monitor.Info(),
+                samples = monitor.Since(after ?? 0).Select(s => new
+                {
+                    t = s.UnixMs,
+                    cpu = s.CpuPercent,
+                    ws = s.WorkingSetBytes,
+                    heap = s.ManagedHeapBytes,
+                    alloc = s.AllocMbPerSec,
+                    thr = s.Threads,
+                    fd = s.Handles,
+                    dTot = s.DiskTotalBytes,
+                    dFree = s.DiskFreeBytes,
+                    rec = s.RecordingsBytes,
+                    view = s.Viewers,
+                }),
+            }));
+        }
+
+        if (o.Logs is { } logBuffer)
+        {
+            // Live server log tail over WebSocket: the backlog as one JSON array,
+            // then one JSON entry per line. Logs reveal paths, camera names and
+            // usernames, so this is strictly admin — and with authentication off
+            // there IS no admin, matching the other admin-only endpoints.
+            app.Map("/api/system/logs", async ctx =>
+            {
+                if (!ctx.WebSockets.IsWebSocketRequest)
+                {
+                    ctx.Response.StatusCode = 400;
+                    await ctx.Response.WriteAsync("WebSocket endpoint");
+                    return;
+                }
+                if (!IsAdmin(ctx))
+                {
+                    ctx.Response.StatusCode = 403;
+                    await ctx.Response.WriteAsJsonAsync(new
+                    {
+                        error = userStore.Enabled
+                            ? "admin only"
+                            : "create the admin account first (live logs need one)",
+                    });
+                    return;
+                }
+                using var ws = await ctx.WebSockets.AcceptWebSocketAsync();
+                try
+                {
+                    await StreamLogsAsync(ws, logBuffer, ct).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    Log.Debug($"Log stream ended: {Log.Flatten(ex)}");
+                }
+            });
+        }
+
         app.Map("/api/stream", async ctx =>
         {
             if (!ctx.WebSockets.IsWebSocketRequest)
@@ -887,6 +954,55 @@ public static class WebApi
             .Select(s => uint.TryParse(s, out var v) ? v : 0u)
             .Where(v => v > 0)
             .ToList();
+
+    // ------------------------------------------------------------------ live logs over WebSocket
+
+    /// <summary>Sends the backlog as one JSON array, then one JSON object per new line.</summary>
+    private static async Task StreamLogsAsync(WebSocket ws, LogBuffer logs, CancellationToken appCt)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(appCt);
+        var ct = cts.Token;
+
+        // Drain (and ignore) incoming messages so we notice the client closing.
+        var receiveTask = Task.Run(async () =>
+        {
+            var buf = new byte[512];
+            try
+            {
+                while (ws.State == WebSocketState.Open)
+                {
+                    var res = await ws.ReceiveAsync(buf, ct).ConfigureAwait(false);
+                    if (res.MessageType == WebSocketMessageType.Close) break;
+                }
+            }
+            catch { }
+            cts.Cancel();
+        }, CancellationToken.None);
+
+        object Shape(LogEntry e) => new { seq = e.Seq, t = e.UnixMs, lvl = e.Level, msg = e.Message };
+
+        async Task SendJsonAsync(object payload) =>
+            await ws.SendAsync(JsonSerializer.SerializeToUtf8Bytes(payload),
+                WebSocketMessageType.Text, true, ct).ConfigureAwait(false);
+
+        var (subId, reader) = logs.Subscribe();
+        try
+        {
+            // Subscribe BEFORE snapshotting so no line can fall between the two;
+            // the client dedupes the overlap by sequence number.
+            await SendJsonAsync(logs.Snapshot().Select(Shape).ToList()).ConfigureAwait(false);
+            await foreach (var entry in reader.ReadAllAsync(ct).ConfigureAwait(false))
+                await SendJsonAsync(Shape(entry)).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            logs.Unsubscribe(subId);
+            cts.Cancel();
+            await TryCloseAsync(ws, WebSocketCloseStatus.NormalClosure, "bye");
+            try { await receiveTask.ConfigureAwait(false); } catch { }
+        }
+    }
 
     // ------------------------------------------------------------------ fMP4 over WebSocket
 

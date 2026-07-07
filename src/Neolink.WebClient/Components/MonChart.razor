@@ -1,0 +1,123 @@
+@using System.Globalization
+@using System.Text
+
+@* One monitor time-series chart: hand-rolled SVG (no chart library), scrolling
+   right-to-left as samples arrive. Series share the x (time) and y axes; the
+   first series is the "primary" one and gets an area fill. *@
+
+<div class="mon-chart">
+    <div class="mon-chart-head">
+        <span class="mon-chart-title">@Title</span>
+        @foreach (var s in Series)
+        {
+            <span class="mon-leg">
+                <i style="background:@s.Color"></i>@s.Label
+                <b>@(Current(s) is { } v ? Fmt(v) + Unit : "—")</b>
+            </span>
+        }
+        <span class="mon-chart-max">@Fmt(MaxY())@Unit</span>
+    </div>
+    <div class="mon-chart-body">
+        @if (Series.All(s => Visible(s).Count < 2))
+        {
+            <div class="mon-empty">gathering data…</div>
+        }
+        else
+        {
+            @Svg()
+        }
+    </div>
+</div>
+
+@code {
+    /// <summary>One line on the chart: label, CSS color and (unix ms, value) points.</summary>
+    public sealed record Line(string Label, string Color, IReadOnlyList<(long T, double V)> Pts);
+
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+    [Parameter] public string Unit { get; set; } = "";
+    /// <summary>Pin the y-axis (e.g. 100 for percentages); null = auto-scale to the data.</summary>
+    [Parameter] public double? FixedMax { get; set; }
+    /// <summary>Visible time span in seconds; older points scroll off the left edge.</summary>
+    [Parameter] public int WindowSec { get; set; } = 900;
+    [Parameter, EditorRequired] public List<Line> Series { get; set; } = new();
+
+    private const double W = 600, H = 150;
+
+    private static string F(double v) => v.ToString("0.##", CultureInfo.InvariantCulture);
+
+    /// <summary>Human number: trims to a sensible precision for axis/legend labels.</summary>
+    private static string Fmt(double v) => Math.Abs(v) switch
+    {
+        >= 100 => v.ToString("0", CultureInfo.InvariantCulture),
+        >= 10 => v.ToString("0.#", CultureInfo.InvariantCulture),
+        _ => v.ToString("0.##", CultureInfo.InvariantCulture),
+    };
+
+    private long DomainEnd() =>
+        Series.SelectMany(s => s.Pts).Select(p => p.T).DefaultIfEmpty(0).Max();
+
+    private long DomainStart() => DomainEnd() - (long)WindowSec * 1000;
+
+    private List<(long T, double V)> Visible(Line s)
+    {
+        var start = DomainStart();
+        return s.Pts.Where(p => p.T >= start).ToList();
+    }
+
+    private double MaxY()
+    {
+        if (FixedMax is { } fixedMax) return fixedMax;
+        var max = Series.SelectMany(Visible).Select(p => p.V).DefaultIfEmpty(0).Max();
+        return NiceMax(max * 1.1);
+    }
+
+    /// <summary>Rounds up to a 1/2/2.5/5×10ⁿ boundary so the axis label reads cleanly.</summary>
+    private static double NiceMax(double v)
+    {
+        if (v <= 0 || double.IsNaN(v) || double.IsInfinity(v)) return 1;
+        double mag = Math.Pow(10, Math.Floor(Math.Log10(v)));
+        double n = v / mag;
+        double step = n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10;
+        return step * mag;
+    }
+
+    private static double? Current(Line s) => s.Pts.Count > 0 ? s.Pts[^1].V : null;
+
+    private MarkupString Svg()
+    {
+        long start = DomainStart();
+        double spanMs = Math.Max(1, DomainEnd() - start);
+        double max = MaxY();
+        double X(long t) => (t - start) / spanMs * W;
+        double Y(double v) => H - Math.Clamp(v / max, 0, 1) * H;
+
+        var sb = new StringBuilder();
+        sb.Append($"<svg class=\"mon-svg\" viewBox=\"0 0 {F(W)} {F(H)}\" preserveAspectRatio=\"none\" aria-hidden=\"true\">");
+        for (int i = 1; i <= 3; i++)
+            sb.Append($"<line class=\"mon-gridline\" x1=\"0\" y1=\"{F(H * i / 4)}\" x2=\"{F(W)}\" y2=\"{F(H * i / 4)}\"/>");
+
+        bool first = true;
+        foreach (var s in Series)
+        {
+            var pts = Visible(s);
+            if (pts.Count < 2) continue;
+            var line = new StringBuilder();
+            foreach (var p in pts)
+            {
+                line.Append(line.Length == 0 ? "M" : "L");
+                line.Append(F(X(p.T))).Append(' ').Append(F(Y(p.V)));
+            }
+            if (first)
+            {
+                // Only the primary series gets the area fill — stacked fills turn to mud.
+                var area = $"{line}L{F(X(pts[^1].T))} {F(H)}L{F(X(pts[0].T))} {F(H)}Z";
+                sb.Append($"<path d=\"{area}\" fill=\"{s.Color}\" opacity=\"0.16\"/>");
+                first = false;
+            }
+            sb.Append($"<path d=\"{line}\" fill=\"none\" stroke=\"{s.Color}\" stroke-width=\"1.6\" " +
+                      "stroke-linejoin=\"round\" vector-effect=\"non-scaling-stroke\"/>");
+        }
+        sb.Append("</svg>");
+        return new MarkupString(sb.ToString());
+    }
+}
