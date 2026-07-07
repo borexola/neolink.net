@@ -10,11 +10,12 @@ using Neolink.Streaming;
 namespace Neolink.Recording;
 
 /// <summary>
-/// Writes hub video packets into a fragmented-MP4 file (playable by browsers and
+/// Writes hub media packets into a fragmented-MP4 file (playable by browsers and
 /// ffmpeg alike). Same pacing trick as the live web player: a camera buffer's true
 /// duration is only known when the NEXT buffer arrives (RTP delta), so one buffer
 /// is held back and its measured delta spread evenly across its frames.
-/// Video-only by design — detection clips don't need the audio track.
+/// AAC audio is recorded as track 2 when the camera has it; ADPCM cameras record
+/// video-only (raw PCM in MP4 is unplayable in browsers).
 ///
 /// Disk I/O is fully decoupled from the caller: fragments are muxed on the
 /// caller's thread but written by a dedicated background thread (below-normal
@@ -54,6 +55,12 @@ public sealed class ClipWriter : IDisposable
     private int _dropped;
     private bool _disposed;
 
+    // Audio (AAC track 2) mux state — same producer thread.
+    private readonly int _audioRate; // 0 = no audio track in this file
+    private long _audioDecodeTime;   // sample-rate ticks; Volatile.Read on the writer thread
+    private uint _prevAudioTs;
+    private bool _haveAudioTs;
+
     // Shared with the writer thread.
     private long _queuedBytes;
     private long _approxBytes; // cumulative bytes destined for the file (size-cap roll)
@@ -61,10 +68,11 @@ public sealed class ClipWriter : IDisposable
 
     private readonly record struct QueueItem(byte[] Data, bool Keyframe, ulong DecodeTime);
 
-    private ClipWriter(string path, VideoCodec codec, byte[] init)
+    private ClipWriter(string path, VideoCodec codec, byte[] init, int audioRate)
     {
         _path = path;
         _codec = codec;
+        _audioRate = audioRate;
         _approxBytes = init.Length; // the init segment is already on its way to disk
         var boxes = FindHeaderBoxes(init);
         new Thread(() => WriteLoop(init, boxes))
@@ -96,8 +104,10 @@ public sealed class ClipWriter : IDisposable
         var pps = hub.Pps;
         if (codec == null || sps == null || pps == null)
             return null;
-        var init = FMp4.BuildInit(codec.Value, sps, pps, hub.Vps, hub.Width, hub.Height);
-        return new ClipWriter(path, codec.Value, init);
+        var audio = hub.Audio is { IsAac: true, AudioSpecificConfig: not null } a ? a : null;
+        var init = FMp4.BuildInit(codec.Value, sps, pps, hub.Vps, hub.Width, hub.Height,
+            audio?.AudioSpecificConfig, audio?.SampleRate ?? 0, audio?.Channels ?? 0);
+        return new ClipWriter(path, codec.Value, init, audio?.SampleRate ?? 0);
     }
 
     /// <summary>
@@ -135,6 +145,27 @@ public sealed class ClipWriter : IDisposable
         var aus = FMp4.SplitAccessUnits(_codec, v.AnnexB);
         if (aus.Count > 0)
             _pending = aus;
+    }
+
+    /// <summary>
+    /// Feeds one AAC access unit (hub order, same producer thread as
+    /// <see cref="Add"/>). Ignored while the clip still waits for its first video
+    /// keyframe, so both tracks start on the same instant. The decode-time advance
+    /// comes from the RTP delta: dropped packets shift the timeline instead of
+    /// desyncing it.
+    /// </summary>
+    public void AddAudio(HubAudioAac aac)
+    {
+        if (_audioRate == 0 || _waitKeyframe) return;
+        if (_haveAudioTs)
+        {
+            uint d = unchecked(aac.RtpTs - _prevAudioTs);
+            _audioDecodeTime += (d > 0 && d < 30u * (uint)_audioRate) ? d : FMp4.AacSamplesPerAu;
+        }
+        _prevAudioTs = aac.RtpTs;
+        _haveAudioTs = true;
+        Enqueue(FMp4.BuildFragment(_sequence++, (ulong)_audioDecodeTime, FMp4.AacSamplesPerAu, aac.Au,
+            keyframe: true, trackId: FMp4.AudioTrackId), keyframe: false, 0);
     }
 
     private void FlushPending(uint totalDuration)
@@ -206,7 +237,7 @@ public sealed class ClipWriter : IDisposable
 
     // ------------------------------------------------------------------ writer thread
 
-    private void WriteLoop(byte[] init, Dictionary<string, int> boxes)
+    private void WriteLoop(byte[] init, Dictionary<string, List<int>> boxes)
     {
         FileStream? file = null;
         bool failed = false;
@@ -265,17 +296,26 @@ public sealed class ClipWriter : IDisposable
     }
 
     /// <summary>Backfills the total duration into the init-segment headers.</summary>
-    private void PatchDurations(FileStream file, Dictionary<string, int> boxes)
+    private void PatchDurations(FileStream file, Dictionary<string, List<int>> boxes)
     {
         ulong decodeTime = (ulong)Volatile.Read(ref _decodeTime);
         if (decodeTime == 0) return;
-        // mvhd/tkhd run on the movie timescale (1000 = ms), mdhd on the media
-        // timescale (90 kHz). All are version-0 boxes, i.e. 32-bit durations.
+        // mvhd/tkhd run on the movie timescale (1000 = ms); each mdhd runs on its
+        // own media timescale (track 1: 90 kHz, track 2: the audio sample rate).
+        // All are version-0 boxes, i.e. 32-bit durations. Tracks appear in the
+        // init in ID order, so the box lists line up: [0]=video, [1]=audio.
         uint ms = (uint)Math.Min(uint.MaxValue, decodeTime * 1000 / FMp4.Timescale);
         uint ticks = (uint)Math.Min(uint.MaxValue, decodeTime);
-        if (boxes.TryGetValue("mvhd", out var mvhd)) WriteU32At(file, mvhd + 24, ms);
-        if (boxes.TryGetValue("tkhd", out var tkhd)) WriteU32At(file, tkhd + 28, ms);
-        if (boxes.TryGetValue("mdhd", out var mdhd)) WriteU32At(file, mdhd + 24, ticks);
+        if (boxes.TryGetValue("mvhd", out var mvhd)) WriteU32At(file, mvhd[0] + 24, ms);
+        if (boxes.TryGetValue("tkhd", out var tkhds))
+            foreach (var tkhd in tkhds) WriteU32At(file, tkhd + 28, ms);
+        if (boxes.TryGetValue("mdhd", out var mdhds))
+        {
+            WriteU32At(file, mdhds[0] + 24, ticks);
+            if (mdhds.Count > 1)
+                WriteU32At(file, mdhds[1] + 24,
+                    (uint)Math.Min(uint.MaxValue, (ulong)Volatile.Read(ref _audioDecodeTime) + FMp4.AacSamplesPerAu));
+        }
         file.Seek(0, SeekOrigin.End);
     }
 
@@ -329,10 +369,11 @@ public sealed class ClipWriter : IDisposable
         file.Write(buf);
     }
 
-    /// <summary>Absolute offsets of the duration-carrying boxes inside the init segment.</summary>
-    private static Dictionary<string, int> FindHeaderBoxes(byte[] init)
+    /// <summary>Absolute offsets of the duration-carrying boxes inside the init
+    /// segment, in file order (one tkhd/mdhd per track).</summary>
+    private static Dictionary<string, List<int>> FindHeaderBoxes(byte[] init)
     {
-        var found = new Dictionary<string, int>();
+        var found = new Dictionary<string, List<int>>();
         Walk(0, init.Length);
         return found;
 
@@ -343,7 +384,8 @@ public sealed class ClipWriter : IDisposable
                 uint size = BinaryPrimitives.ReadUInt32BigEndian(init.AsSpan(pos));
                 if (size < 8 || pos + size > (uint)end) return;
                 var type = Encoding.ASCII.GetString(init, pos + 4, 4);
-                if (type is "mvhd" or "tkhd" or "mdhd") found[type] = pos;
+                if (type is "mvhd" or "tkhd" or "mdhd")
+                    (found.TryGetValue(type, out var list) ? list : found[type] = new()).Add(pos);
                 if (type is "moov" or "trak" or "mdia") Walk(pos + 8, pos + (int)size);
                 pos += (int)size;
             }

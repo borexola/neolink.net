@@ -362,7 +362,9 @@
                 var slot = _slots[index];
                 var camera = slot.Camera == null ? null : _cameras.FirstOrDefault(c => c.Name == slot.Camera);
 
-                <div class="tile @(index == 0 && (_mode is "focus" or "mosaic") ? "hero" : "")"
+                @* theater = the maximized/solo view: digital zoom is available there
+                   (and in browser fullscreen, where JS checks the fullscreen element) *@
+                <div class="tile @(index == 0 && (_mode is "focus" or "mosaic") ? "hero" : "") @(_mode == "theater" ? "zoom-on" : "")"
                      id="tile-@index" data-slot="@index" style="@TileStyle(index)" @key="index"
                      @ondblclick="() => ToggleMaximize(index)"
                      @onclick="() => OnTileClick(index)">
@@ -401,6 +403,8 @@
                                 </select>
                             }
                             <span class="tile-spacer"></span>
+                            @* JS-owned (neolink.audioInit): shown only when the stream has audio *@
+                            <button type="button" class="icon-btn" data-audio-toggle style="display:none">🔇</button>
                             <button class="icon-btn" title="@(_backup != null && _mode == "theater" ? "Restore view" : "Maximize")"
                                     @onclick="() => ToggleMaximize(index)">@(_backup != null && _mode == "theater" ? "❐" : "⛶")</button>
                             @* glyph comes from CSS so it can follow browser fullscreen state *@
@@ -408,6 +412,7 @@
                                     @onclick="() => FullscreenAsync(index)"></button>
                             <button class="icon-btn" title="Remove" @onclick="() => CloseSlot(index)">✕</button>
                         </div>
+                        @ZoomHud
                     }
                 </div>
             }
@@ -442,13 +447,16 @@
                         }
                     </select>
                 }
+                @* JS-owned (neolink.audioInit): shown only when the stream has audio *@
+                <button type="button" class="icon-btn" data-audio-toggle style="display:none">🔇</button>
                 <button class="icon-btn fs-toggle" title="Browser fullscreen (click again to exit)"
                         @onclick="QuickFullscreenAsync"></button>
                 <button class="icon-btn" title="Close" @onclick="CloseQuickView">✕</button>
             </div>
-            <div class="quick-view-media" id="quick-view-media">
+            <div class="quick-view-media zoom-on" id="quick-view-media">
                 <video id="vid-quick" muted playsinline></video>
                 <div class="tile-status">connecting…</div>
+                @ZoomHud
             </div>
         </div>
     }
@@ -922,6 +930,13 @@
         await ReconcilePlayersAsync();
         if (_mode == "free")
             await JS.InvokeVoidAsync("neolink.freeInit", "stage-grid");
+        // Digital zoom (theater/fullscreen/quick view). Re-invoked per render so
+        // zoom resets when a surface stops being zoomable (e.g. un-maximized).
+        await JS.InvokeVoidAsync("neolink.zoomInit");
+        // Speaker toggles: re-sync glyphs/visibility after every render.
+        await JS.InvokeVoidAsync("neolink.audioInit");
+        // Esc closes the event player / quick view pop-ups.
+        await JS.InvokeVoidAsync("neolink.escInit");
         // Blazor's `muted` attribute only sets defaultMuted on dynamically created
         // elements, which blocks autoplay — the helper mutes for real and plays.
         if (_eventsSupported && _events.Any(e => !e.Reviewed))
@@ -1996,6 +2011,15 @@
         _slots[index].Clear();
         _ = SaveAsync();
     }
+
+    // Digital-zoom HUD: JS (neolink.zoomInit) owns the clicks and the badge —
+    // no Blazor handlers, so wheel/drag/click stay off the circuit entirely.
+    private RenderFragment ZoomHud => @<div class="zoom-hud" @onclick:stopPropagation="true" @ondblclick:stopPropagation="true">
+        <button type="button" class="icon-btn zoom-btn" data-zoom="in" title="Zoom in (or mouse-wheel up on the video)">＋</button>
+        <span class="zoom-badge" data-zoom-badge>100%</span>
+        <button type="button" class="icon-btn zoom-btn" data-zoom="out" title="Zoom out (or mouse-wheel down)">−</button>
+        <button type="button" class="icon-btn zoom-btn zoom-reset" data-zoom="reset" title="Restore 1:1 (or double-click the video)">1:1</button>
+    </div>;
 
     private void OnTileClick(int index)
     {

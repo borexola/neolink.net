@@ -44,8 +44,8 @@ public sealed class EventRecorder
     // records the sub stream into preview.mp4 alongside the full clip — that's
     // what the review strip's ambient players use, keeping client decode cheap.
     private readonly object _mediaGate = new();
-    private readonly List<(HubVideo Video, bool Gap)> _preroll = new();
-    private readonly List<(HubVideo Video, bool Gap)> _previewPreroll = new();
+    private readonly List<(HubPacket Packet, bool Gap)> _preroll = new();
+    private readonly List<(HubPacket Packet, bool Gap)> _previewPreroll = new();
     private ClipWriter? _writer;
     private ClipWriter? _previewWriter;
     /// <summary>The hub the record pump is subscribed to RIGHT NOW — clips must
@@ -145,12 +145,13 @@ public sealed class EventRecorder
 
                         bool gap = lastIndex >= 0 && packet.Index != lastIndex + 1;
                         lastIndex = packet.Index;
-                        if (packet is not HubVideo v) continue;
+                        if (packet is not HubVideo and not HubAudioAac) continue;
                         lock (_mediaGate)
                         {
                             if (_writer != null)
                             {
-                                _writer.Add(v, gap);
+                                if (packet is HubVideo v) _writer.Add(v, gap);
+                                else _writer.AddAudio((HubAudioAac)packet);
                                 if (_writer.Faulted)
                                 {
                                     Log.Warn($"{_camera}: clip writer failed; event continues without further video");
@@ -160,8 +161,8 @@ public sealed class EventRecorder
                             }
                             else
                             {
-                                _preroll.Add((v, gap));
-                                TrimPreroll(_preroll);
+                                _preroll.Add((packet, gap));
+                                if (packet is HubVideo) TrimPreroll(_preroll);
                             }
                         }
                     }
@@ -202,7 +203,7 @@ public sealed class EventRecorder
                 bool gap = lastIndex >= 0 && packet.Index != lastIndex + 1;
                 lastIndex = packet.Index;
 
-                if (packet is not HubVideo v) continue;
+                if (packet is not HubVideo and not HubAudioAac) continue;
                 lock (_mediaGate)
                 {
                     var writer = preview ? _previewWriter : _writer;
@@ -210,7 +211,8 @@ public sealed class EventRecorder
                     {
                         // Add never blocks on disk (background writer thread); a dead
                         // disk surfaces as Faulted and the event continues clip-less.
-                        writer.Add(v, gap);
+                        if (packet is HubVideo v) writer.Add(v, gap);
+                        else writer.AddAudio((HubAudioAac)packet);
                         if (writer.Faulted)
                         {
                             Log.Warn($"{_camera}: {(preview ? "preview" : "clip")} writer failed; " +
@@ -223,8 +225,8 @@ public sealed class EventRecorder
                     else
                     {
                         var buffer = preview ? _previewPreroll : _preroll;
-                        buffer.Add((v, gap));
-                        TrimPreroll(buffer);
+                        buffer.Add((packet, gap));
+                        if (packet is HubVideo) TrimPreroll(buffer);
                     }
                 }
             }
@@ -239,17 +241,18 @@ public sealed class EventRecorder
     /// <summary>
     /// Keeps a pre-roll spanning at least PreSeconds while starting on a keyframe
     /// (a clip must begin decodable): drop everything before the latest keyframe
-    /// that still preserves the wanted span.
+    /// that still preserves the wanted span. Only called right after a VIDEO
+    /// packet was appended; interleaved audio is trimmed along with its video.
     /// </summary>
-    private void TrimPreroll(List<(HubVideo Video, bool Gap)> buffer)
+    private void TrimPreroll(List<(HubPacket Packet, bool Gap)> buffer)
     {
         uint want = (uint)_cfg.PreSeconds * FMp4.Timescale;
-        uint last = buffer[^1].Video.RtpTs;
+        uint last = ((HubVideo)buffer[^1].Packet).RtpTs;
         int cut = -1;
         for (int i = buffer.Count - 1; i >= 0; i--)
         {
-            if (!buffer[i].Video.Keyframe) continue;
-            if (unchecked(last - buffer[i].Video.RtpTs) >= want)
+            if (buffer[i].Packet is not HubVideo { Keyframe: true } kv) continue;
+            if (unchecked(last - kv.RtpTs) >= want)
             {
                 cut = i;
                 break;
@@ -258,8 +261,8 @@ public sealed class EventRecorder
         if (cut > 0)
             buffer.RemoveRange(0, cut);
         // Safety valve for streams with pathological keyframe intervals.
-        if (buffer.Count > 4096)
-            buffer.RemoveRange(0, buffer.Count - 4096);
+        if (buffer.Count > 8192)
+            buffer.RemoveRange(0, buffer.Count - 8192);
     }
 
     // ------------------------------------------------------------------ event lifecycle
@@ -381,8 +384,13 @@ public sealed class EventRecorder
                 }
                 else
                 {
-                    foreach (var (v, gap) in _preroll)
-                        _writer.Add(v, gap);
+                    // Audio before the first keyframe is ignored by the writer,
+                    // so both tracks start on the same instant.
+                    foreach (var (p, gap) in _preroll)
+                    {
+                        if (p is HubVideo v) _writer.Add(v, gap);
+                        else if (p is HubAudioAac a) _writer.AddAudio(a);
+                    }
                     _preroll.Clear();
                 }
             }
@@ -401,8 +409,11 @@ public sealed class EventRecorder
                     _previewWriter = ClipWriter.TryCreate(Path.Combine(_store.EventDir(rec), "preview.mp4"), _previewHub);
                     if (_previewWriter != null)
                     {
-                        foreach (var (v, gap) in _previewPreroll)
-                            _previewWriter.Add(v, gap);
+                        foreach (var (p, gap) in _previewPreroll)
+                        {
+                            if (p is HubVideo v) _previewWriter.Add(v, gap);
+                            else if (p is HubAudioAac a) _previewWriter.AddAudio(a);
+                        }
                         _previewPreroll.Clear();
                     }
                 }

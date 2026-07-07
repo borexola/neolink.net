@@ -7,15 +7,25 @@ using System.Text;
 namespace Neolink.Media;
 
 /// <summary>
-/// Minimal fragmented-MP4 (fMP4/CMAF-style) muxer for live H.264/H.265 video,
-/// suitable for browser Media Source Extensions. One video track, one sample
-/// per fragment (lowest latency). Timescale is the RTP video clock (90 kHz).
+/// Minimal fragmented-MP4 (fMP4/CMAF-style) muxer for live H.264/H.265 video
+/// plus optional AAC audio, suitable for browser Media Source Extensions.
+/// Track 1 is video (timescale = the RTP video clock, 90 kHz), track 2 — when
+/// the camera has AAC audio — runs on the audio sample rate. One sample per
+/// fragment (lowest latency). ADPCM cameras get no MP4 audio track: browsers
+/// can't play raw PCM via MSE, so their audio is RTSP-only.
 /// </summary>
 public static class FMp4
 {
     public const uint Timescale = 90_000;
+    public const uint AudioTrackId = 2;
+    /// <summary>An AAC access unit is always exactly 1024 samples.</summary>
+    public const uint AacSamplesPerAu = 1024;
 
     // ------------------------------------------------------------------ public API
+
+    /// <summary>MSE codec string for an AAC track, e.g. mp4a.40.2 (AAC-LC).</summary>
+    public static string AacCodecString(byte[] audioSpecificConfig) =>
+        $"mp4a.40.{(audioSpecificConfig.Length > 0 ? audioSpecificConfig[0] >> 3 : 2)}";
 
     /// <summary>MIME codec string for MSE, e.g. avc1.64001F or hvc1.1.6.L153.B0.</summary>
     public static string CodecString(VideoCodec codec, byte[] sps)
@@ -36,10 +46,16 @@ public static class FMp4
         return $"hvc1.{profileIdc}.{reversed:X}.{(highTier ? 'H' : 'L')}{level}.B0";
     }
 
-    /// <summary>Builds ftyp + moov (the MSE initialization segment).</summary>
-    public static byte[] BuildInit(VideoCodec codec, byte[] sps, byte[] pps, byte[]? vps, uint width, uint height)
+    /// <summary>
+    /// Builds ftyp + moov (the MSE initialization segment). When
+    /// <paramref name="aacConfig"/> is given, a second (AAC audio) track is
+    /// declared with the audio sample rate as its timescale.
+    /// </summary>
+    public static byte[] BuildInit(VideoCodec codec, byte[] sps, byte[] pps, byte[]? vps, uint width, uint height,
+        byte[]? aacConfig = null, int aacRate = 0, int aacChannels = 0)
     {
         var w = new Mp4Writer();
+        bool audio = aacConfig != null && aacRate > 0;
 
         using (w.Box("ftyp"))
         {
@@ -60,7 +76,7 @@ public static class FMp4
                 w.U16(0); w.U32(0); w.U32(0);
                 WriteIdentityMatrix(w);
                 for (int i = 0; i < 6; i++) w.U32(0); // pre_defined
-                w.U32(2);              // next_track_ID
+                w.U32(audio ? 3u : 2u); // next_track_ID
             }
 
             using (w.Box("trak"))
@@ -124,22 +140,39 @@ public static class FMp4
                 }
             }
 
+            if (audio)
+                WriteAudioTrak(w, aacConfig!, aacRate, aacChannels);
+
             using (w.Box("mvex"))
-            using (w.FullBox("trex", 0, 0))
             {
-                w.U32(1);            // track ID
-                w.U32(1);            // default sample description index
-                w.U32(0);            // default sample duration
-                w.U32(0);            // default sample size
-                w.U32(0x01010000);   // default flags: non-sync sample
+                using (w.FullBox("trex", 0, 0))
+                {
+                    w.U32(1);            // track ID
+                    w.U32(1);            // default sample description index
+                    w.U32(0);            // default sample duration
+                    w.U32(0);            // default sample size
+                    w.U32(0x01010000);   // default flags: non-sync sample
+                }
+                if (audio)
+                {
+                    using (w.FullBox("trex", 0, 0))
+                    {
+                        w.U32(AudioTrackId);
+                        w.U32(1);
+                        w.U32(0);
+                        w.U32(0);
+                        w.U32(0x02000000); // default flags: sync sample (all AAC AUs are)
+                    }
+                }
             }
         }
 
         return w.ToArray();
     }
 
-    /// <summary>Builds one moof + mdat fragment containing a single video sample.</summary>
-    public static byte[] BuildFragment(uint sequence, ulong decodeTime, uint duration, byte[] sample, bool keyframe)
+    /// <summary>Builds one moof + mdat fragment containing a single sample (video or audio).</summary>
+    public static byte[] BuildFragment(uint sequence, ulong decodeTime, uint duration, byte[] sample, bool keyframe,
+        uint trackId = 1)
     {
         var w = new Mp4Writer();
         int trunDataOffsetPos;
@@ -152,7 +185,7 @@ public static class FMp4
             using (w.Box("traf"))
             {
                 using (w.FullBox("tfhd", 0, 0x020000)) // default-base-is-moof
-                    w.U32(1);                          // track ID
+                    w.U32(trackId);
                 using (w.FullBox("tfdt", 1, 0))
                     w.U64(decodeTime);
                 // trun flags: data-offset | first-sample-flags | sample-duration | sample-size
@@ -281,6 +314,117 @@ public static class FMp4
             pos += 4 + nal.Length;
         }
         return result;
+    }
+
+    // ------------------------------------------------------------------ audio track
+
+    private static void WriteAudioTrak(Mp4Writer w, byte[] asc, int rate, int channels)
+    {
+        using (w.Box("trak"))
+        {
+            using (w.FullBox("tkhd", 0, 7)) // enabled | in movie | in preview
+            {
+                w.U32(0); w.U32(0);   // times
+                w.U32(AudioTrackId);
+                w.U32(0);             // reserved
+                w.U32(0);             // duration
+                w.U32(0); w.U32(0);   // reserved
+                w.U16(0); w.U16(0);   // layer, alternate group
+                w.U16(0x0100);        // volume 1.0 (audio track)
+                w.U16(0);             // reserved
+                WriteIdentityMatrix(w);
+                w.U32(0); w.U32(0);   // width/height (audio = 0)
+            }
+
+            using (w.Box("mdia"))
+            {
+                using (w.FullBox("mdhd", 0, 0))
+                {
+                    w.U32(0); w.U32(0);
+                    w.U32((uint)rate);  // timescale = sample rate
+                    w.U32(0);           // duration
+                    w.U16(0x55C4);      // language "und"
+                    w.U16(0);
+                }
+                using (w.FullBox("hdlr", 0, 0))
+                {
+                    w.U32(0);
+                    w.Tag("soun");
+                    w.U32(0); w.U32(0); w.U32(0);
+                    w.Bytes(Encoding.ASCII.GetBytes("Neolink.NET Audio\0"));
+                }
+                using (w.Box("minf"))
+                {
+                    using (w.FullBox("smhd", 0, 0))
+                    {
+                        w.U16(0); // balance
+                        w.U16(0);
+                    }
+                    using (w.Box("dinf"))
+                    using (w.FullBox("dref", 0, 0))
+                    {
+                        w.U32(1);
+                        using (w.FullBox("url ", 0, 1)) { } // self-contained
+                    }
+                    using (w.Box("stbl"))
+                    {
+                        using (w.FullBox("stsd", 0, 0))
+                        {
+                            w.U32(1);
+                            WriteAudioSampleEntry(w, asc, rate, channels);
+                        }
+                        using (w.FullBox("stts", 0, 0)) w.U32(0);
+                        using (w.FullBox("stsc", 0, 0)) w.U32(0);
+                        using (w.FullBox("stsz", 0, 0)) { w.U32(0); w.U32(0); }
+                        using (w.FullBox("stco", 0, 0)) w.U32(0);
+                    }
+                }
+            }
+        }
+    }
+
+    private static void WriteAudioSampleEntry(Mp4Writer w, byte[] asc, int rate, int channels)
+    {
+        using (w.Box("mp4a"))
+        {
+            for (int i = 0; i < 6; i++) w.U8(0);   // reserved
+            w.U16(1);                              // data reference index
+            w.U32(0); w.U32(0);                    // reserved
+            w.U16((ushort)Math.Max(channels, 1));
+            w.U16(16);                             // sample size (bits)
+            w.U16(0); w.U16(0);                    // pre_defined, reserved
+            w.U32((uint)rate << 16);               // sample rate, 16.16 fixed point
+
+            // esds: the MPEG-4 descriptor chain that carries the
+            // AudioSpecificConfig — decoders refuse mp4a without it.
+            using (w.FullBox("esds", 0, 0))
+            {
+                int dsiLen = asc.Length;
+                int dcdLen = 13 + 2 + dsiLen;      // DecoderConfig + nested DSI
+                int esLen = 3 + 2 + dcdLen + 3;    // ES header + DCD + SLConfig
+
+                w.U8(0x03);                        // ES_Descriptor
+                w.U8((byte)esLen);
+                w.U16((ushort)AudioTrackId);       // ES_ID
+                w.U8(0);                           // flags
+
+                w.U8(0x04);                        // DecoderConfigDescriptor
+                w.U8((byte)dcdLen);
+                w.U8(0x40);                        // objectTypeIndication: MPEG-4 Audio
+                w.U8(0x15);                        // streamType audio (0x05<<2 | 1)
+                w.U8(0); w.U16(0);                 // bufferSizeDB (24-bit)
+                w.U32(0);                          // maxBitrate (unknown)
+                w.U32(0);                          // avgBitrate (unknown)
+
+                w.U8(0x05);                        // DecoderSpecificInfo
+                w.U8((byte)dsiLen);
+                w.Bytes(asc);
+
+                w.U8(0x06);                        // SLConfigDescriptor
+                w.U8(1);
+                w.U8(0x02);                        // MP4 predefined
+            }
+        }
     }
 
     // ------------------------------------------------------------------ codec boxes

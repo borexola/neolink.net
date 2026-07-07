@@ -97,6 +97,14 @@ public sealed class ContinuousRecorder
                 // Hub indices are global across video and audio — see EventRecorder.
                 bool gap = lastIndex >= 0 && packet.Index != lastIndex + 1;
                 lastIndex = packet.Index;
+
+                // AAC audio rides into the open segment; everything that decides the
+                // segment's lifecycle (on/off, roll, create) stays video-driven.
+                if (packet is HubAudioAac aac)
+                {
+                    writer?.AddAudio(aac);
+                    continue;
+                }
                 if (packet is not HubVideo v) continue;
 
                 bool on = _settings.Get(_camera).Continuous;
