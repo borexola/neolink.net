@@ -1,3 +1,12 @@
+﻿// Copyright (c) 2026 Oluwabori Olaleye
+// Licensed under the GNU Affero General Public License v3.0; see the LICENSE file
+// in the repository root.
+//
+// The Baichuan protocol format and the encryption/decryption schemes implemented
+// in this file derive from the reverse-engineering work of the original Neolink
+// project by George Hilliard (github.com/thirtythreeforty/neolink) and its
+// actively maintained fork by @QuantumEntangledAndy
+// (github.com/QuantumEntangledAndy/neolink).
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Channels;

@@ -1,3 +1,6 @@
+﻿// Copyright (c) 2026 Oluwabori Olaleye
+// Licensed under the GNU Affero General Public License v3.0; see the LICENSE file
+// in the repository root.
 using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Text;

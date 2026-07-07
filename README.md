@@ -15,7 +15,10 @@ Duo, TrackMix, and many others).
 Your NVR software (**Frigate**, Blue Iris, Home Assistant, Shinobi, VLC, ffmpeg, …) connects to
 Neolink.NET, which logs into the camera, demuxes its media stream, and re-serves it as
 standards-compliant RTSP. On top of that, Neolink.NET ships a **built-in browser UI** —
-a multi-camera wall with live low-latency video, no plugins, no transcoding, no GStreamer.
+a multi-camera wall with live low-latency video, no plugins, no transcoding, no GStreamer —
+and a native **MQTT integration for Home Assistant**: each camera appears in HA
+automatically (via MQTT Discovery) with motion/person/vehicle/animal sensors, controls,
+and availability, driven by the camera's own detections.
 
 The cameras are unmodified and no Reolink NVR is required.
 
@@ -54,6 +57,17 @@ The cameras are unmodified and no Reolink NVR is required.
 - Everything persists in browser localStorage: server address, layout, tile
   assignments, window geometry
 - Adaptive jitter buffer that measures each stream's delivery cadence
+
+**Home Assistant / MQTT (optional)**
+- A **device per camera appears in Home Assistant automatically** via
+  [MQTT Discovery](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery) —
+  no YAML on the HA side
+- Motion / person / vehicle / animal `binary_sensor`s driven by the **camera's own
+  detections** (event-driven, no server-side inference, no polling), plus battery,
+  night vision, floodlight, PIR, PTZ and reboot entities where the camera supports them
+- Two-level availability (service + per-camera), retained state so HA repopulates
+  after restarts; MQTT 3.1.1 spoken natively — no external MQTT library
+- See [Home Assistant (MQTT)](#home-assistant-mqtt) for setup and the full entity list
 
 **Protocol / robustness**
 - Full login handshake including modern encryption: BCEncrypt (XOR), AES-128-CFB, and
@@ -331,11 +345,16 @@ config file (in Docker: the `/config` mount), so they survive restarts:
 | `continuous_retention_days` | = `retention_days` | Days to keep continuous footage (`0` = forever) |
 
 Everything is fragmented MP4 (H.264/H.265 passthrough, video-only) playable in
-the browser and by ffmpeg/VLC. Storage layout is plain files —
-`recordings/<camera>/<date>/<time>-<id>/{event.json, clip.mp4, thumb.jpg}` for
-events, `recordings/<camera>/continuous/<date>/<HH-mm-ss>.mp4` for 24/7 footage —
-so backups and external tooling are trivial. Set `"record": false` on a camera
-to start with events off (the UI switch can re-enable it).
+the browser and by ffmpeg/VLC. Storage layout is plain files, with everything
+for one camera-day under a single date folder —
+`recordings/<camera>/<date>/detections/<time>-<id>/{event.json, clip.mp4, thumb.jpg, preview.mp4}`
+for events and `recordings/<camera>/<date>/continuous/<HH-mm-ss>.mp4` for 24/7
+footage — so backups and external tooling are trivial. Recordings from older
+versions (events directly under the date folder, continuous under
+`<camera>/continuous/<date>`) are migrated to this layout automatically on
+startup — directory renames, instant regardless of footage size. Set
+`"record": false` on a camera to start with events off (the UI switch can
+re-enable it).
 
 ### Per camera
 
@@ -510,6 +529,20 @@ per-client backpressure, in-stream resynchronization.
 Not (yet) supported: TLS for RTSP (`rtsps://` — put a TLS-terminating proxy in front),
 battery/UID cameras that need UDP discovery (Argus etc.), and the auxiliary subcommands
 (PIR, reboot, status LED, two-way talk).
+
+## Project status & disclaimer
+
+Neolink.NET is a personal project. I built it for my own use because the existing
+options did not fully meet my needs, and I publish it in the hope that it is useful
+to others in the same situation.
+
+**It is provided "as is", without warranty of any kind** — no guarantee of
+correctness, reliability, security, or fitness for a particular purpose, and no
+commitment to support, maintenance, or timely fixes. Evaluate it against your own
+requirements before depending on it, particularly where security footage or
+around-the-clock monitoring matters. Issues and pull requests are welcome and
+handled on a best-effort basis. The [license](LICENSE) contains the formal
+warranty and liability disclaimers.
 
 ## Credits & license
 

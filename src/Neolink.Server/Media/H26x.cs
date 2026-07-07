@@ -1,3 +1,6 @@
+﻿// Copyright (c) 2026 Oluwabori Olaleye
+// Licensed under the GNU Affero General Public License v3.0; see the LICENSE file
+// in the repository root.
 namespace Neolink.Media;
 
 /// <summary>Utilities for H.264/H.265 Annex-B elementary streams.</summary>

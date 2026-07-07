@@ -215,6 +215,26 @@
                                value="@(_recording.EventRetentionDays?.ToString() ?? "")"
                                @onchange="e => SetRetentionAsync(forEvents: true, (string?)e.Value)" />
                     </div>
+                    <div class="control-row rec-types-row">
+                        <span>Event types</span>
+                        <div class="stream-options">
+                            @foreach (var t in _recording.KnownTypes ?? new List<string>())
+                            {
+                                <button class="chip @(_recording.TypeEnabled(t) ? "" : "chip-off")"
+                                        title="@(_recording.TypeEnabled(t) ? "Recording" : "Discarded")"
+                                        @onclick="() => ToggleEventTypeAsync(t)">
+                                    @TypeIcon(t) @t
+                                </button>
+                            }
+                        </div>
+                    </div>
+                    <div class="notice small">
+                        ⚠ Person/vehicle/animal labels only arrive when the matching Smart Detection is
+                        enabled <b>in the Reolink app</b> (camera → Settings → Detection) — the camera does
+                        the detecting and must be set up to send this data. The chips above are a Neolink-side
+                        filter on what arrives: disabled types are discarded and the camera's own settings
+                        are never changed.
+                    </div>
                 }
                 @if (_recording.ContinuousAvailable)
                 {
@@ -242,29 +262,6 @@
                     <div class="notice small">
                         Retention is per camera and per recording type: blank uses the server default,
                         0 keeps footage forever. Expired days are removed by the hourly cleanup.
-                    </div>
-                }
-                @if (_recording.EventsAvailable && _recording.Events)
-                {
-                    <div class="control-row rec-types-row">
-                        <span>Event types</span>
-                        <div class="stream-options">
-                            @foreach (var t in _recording.KnownTypes ?? new List<string>())
-                            {
-                                <button class="chip @(_recording.TypeEnabled(t) ? "" : "chip-off")"
-                                        title="@(_recording.TypeEnabled(t) ? "Recording" : "Discarded")"
-                                        @onclick="() => ToggleEventTypeAsync(t)">
-                                    @TypeIcon(t) @t
-                                </button>
-                            }
-                        </div>
-                    </div>
-                    <div class="notice small">
-                        ⚠ Person/vehicle/animal labels only arrive when the matching Smart Detection is
-                        enabled <b>in the Reolink app</b> (camera → Settings → Detection) — the camera does
-                        the detecting and must be set up to send this data. The chips above are a Neolink-side
-                        filter on what arrives: disabled types are discarded and the camera's own settings
-                        are never changed.
                     </div>
                 }
             </div>

@@ -1,3 +1,6 @@
+﻿// Copyright (c) 2026 Oluwabori Olaleye
+// Licensed under the GNU Affero General Public License v3.0; see the LICENSE file
+// in the repository root.
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
