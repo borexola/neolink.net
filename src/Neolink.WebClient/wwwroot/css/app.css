@@ -707,6 +707,14 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
     font-weight: 600;
 }
 
+/* Hosts the card list plus the edge chevrons that page it */
+.strip-scroll-wrap {
+    position: relative;
+    display: flex;
+    flex: 1;
+    min-width: 0;
+}
+
 .events-bar-scroll {
     display: flex;
     align-items: stretch;
@@ -715,7 +723,47 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
     overflow-y: hidden;
     scrollbar-width: thin;
     flex: 1;
+    min-width: 0;
     padding: 2px 0;
+    scroll-behavior: smooth;
+}
+
+/* Edge chevrons: a gradient fade into the panel colour with a centered arrow,
+   shown only while there is content to scroll toward that side. */
+.strip-nav {
+    position: absolute;
+    top: 2px;
+    bottom: 12px; /* keep clear of the resize handle / scrollbar */
+    width: 44px;
+    z-index: 4;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    color: var(--text);
+    font-size: 16px;
+    display: flex;
+    align-items: center;
+    transition: opacity 0.18s ease;
+}
+
+.strip-nav-left {
+    left: 0;
+    justify-content: flex-start;
+    background: linear-gradient(to right, var(--panel) 30%, transparent);
+}
+
+.strip-nav-right {
+    right: 0;
+    justify-content: flex-end;
+    background: linear-gradient(to left, var(--panel) 30%, transparent);
+}
+
+.strip-nav { text-shadow: 0 1px 3px #000; }
+.strip-nav:hover { color: var(--accent); font-size: 18px; }
+
+.strip-nav-hidden {
+    opacity: 0;
+    pointer-events: none;
 }
 
 .event-card {

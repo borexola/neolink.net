@@ -350,6 +350,27 @@ to start with events off (the UI switch can re-enable it).
 | `permitted_users` | all users | Restrict this camera's mounts to specific `users` |
 | `record` | `true` | Initial default for this camera's "Detection events" switch (changeable in the web UI) |
 
+## Behind a reverse proxy (HAProxy / nginx / Caddy)
+
+The web UI works behind a TLS-terminating reverse proxy (e.g. HAProxy on
+OPNsense) pointing at `web_port`. Two things matter:
+
+- **WebSocket upgrade** must be allowed for `/_blazor` (the UI's interactive
+  circuit) and `/api/stream` (live video). Most proxies pass the `Upgrade`
+  header by default; in HAProxy make sure the backend has a generous
+  `timeout tunnel` (e.g. `1h`) so long-lived streams aren't cut.
+- **The container never needs to reach its own public URL.** The UI runs on
+  Blazor Server, so its API calls execute *inside* the container; when the
+  configured server address is the page's own origin, those calls
+  automatically short-circuit to loopback instead of going back out through
+  the proxy — no hairpin NAT, split DNS, or internal-CA trust required.
+  (Symptom of the old behaviour: the page loads but the camera list shows
+  "Cannot reach https://… The SSL connection could not be established".)
+
+Only the browser-facing traffic (the page, the live-video WebSocket, event
+clips/thumbnails) traverses the proxy, so your TLS certificate only needs to
+be valid for the browser.
+
 ## Home Assistant (MQTT)
 
 Add an `mqtt` section and Neolink connects to your broker and publishes

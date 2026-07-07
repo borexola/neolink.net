@@ -300,6 +300,36 @@
     window.neolink = {
         freeInit,
 
+        // Review-strip edge chevrons: page the card list left/right with smooth
+        // scrolling and show each arrow only while there is content that way.
+        // Idempotent — called per render so visibility tracks card changes too.
+        stripNavInit(wrapId) {
+            const wrap = document.getElementById(wrapId);
+            if (!wrap) return;
+            const scroll = wrap.querySelector('.events-bar-scroll');
+            const left = wrap.querySelector('.strip-nav-left');
+            const right = wrap.querySelector('.strip-nav-right');
+            if (!scroll || !left || !right) return;
+
+            const sync = () => {
+                const max = scroll.scrollWidth - scroll.clientWidth;
+                const overflow = max > 4;
+                left.classList.toggle('strip-nav-hidden', !overflow || scroll.scrollLeft <= 4);
+                right.classList.toggle('strip-nav-hidden', !overflow || scroll.scrollLeft >= max - 4);
+            };
+
+            if (!wrap.dataset.navInit) {
+                wrap.dataset.navInit = '1';
+                const page = (dir) =>
+                    scroll.scrollBy({ left: dir * Math.max(180, scroll.clientWidth * 0.8), behavior: 'smooth' });
+                left.addEventListener('click', () => page(-1));
+                right.addEventListener('click', () => page(1));
+                scroll.addEventListener('scroll', sync, { passive: true });
+                new ResizeObserver(sync).observe(scroll);
+            }
+            sync();
+        },
+
         // Briefly flash a tile's border red — used when a camera the user picked
         // is already on screen (so we don't duplicate or clobber another tile).
         flashTile(id) {

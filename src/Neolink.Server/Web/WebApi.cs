@@ -106,6 +106,10 @@ public static class WebApi
             builder.Services.AddRazorComponents().AddInteractiveServerComponents();
             // The UI's camera-list fetches run server-side (Blazor Server circuits)
             builder.Services.AddSingleton(_ => new HttpClient { Timeout = TimeSpan.FromSeconds(5) });
+            // Circuits must talk to THIS server via loopback, never back out through
+            // a reverse proxy's public URL (TLS/hairpin failures behind HAProxy etc.).
+            var loopbackHost = bindAddr is "0.0.0.0" or "::" or "[::]" or "*" ? "127.0.0.1" : bindAddr;
+            builder.Services.AddSingleton(new Neolink.WebClient.LocalApiInfo($"http://{loopbackHost}:{port}"));
         }
         var app = builder.Build();
 

@@ -2,6 +2,7 @@
 @using System.Text.Json
 @inject HttpClient Http
 @inject IJSRuntime JS
+@inject LocalApiInfo Local
 @implements IAsyncDisposable
 
 @* NVR-style timeline: pick a day, scrub the lanes, and every included camera
@@ -175,8 +176,9 @@
                 }
             }
             catch { }
+            try { _origin = await JS.InvokeAsync<string>("neolink.defaultServer"); } catch { }
             if (string.IsNullOrWhiteSpace(_server))
-                _server = await JS.InvokeAsync<string>("neolink.defaultServer");
+                _server = _origin;
 
             try
             {
@@ -214,7 +216,19 @@
 
     // ------------------------------------------------------------ data
 
+    /// <summary>Base for BROWSER-side URLs (the segment videos) — goes through any reverse proxy.</summary>
     private string Base => _server.TrimEnd('/');
+
+    /// <summary>
+    /// Base for SERVER-side fetches: the circuit runs in this process, so its own
+    /// origin resolves to loopback instead of looping out through a reverse proxy.
+    /// </summary>
+    private string ApiBase =>
+        _origin.Length > 0 && string.Equals(Base, _origin.TrimEnd('/'), StringComparison.OrdinalIgnoreCase)
+            ? Local.BaseUrl.TrimEnd('/')
+            : Base;
+
+    private string _origin = "";
 
     private string TokenQuery(char sep) =>
         string.IsNullOrEmpty(_token) ? "" : $"{sep}token={Uri.EscapeDataString(_token)}";
@@ -222,7 +236,7 @@
     /// <summary>Authenticated GET; null on failure (401 also sets the sign-in notice).</summary>
     private async Task<T?> GetJsonAsync<T>(string path)
     {
-        var req = new HttpRequestMessage(HttpMethod.Get, $"{Base}{path}");
+        var req = new HttpRequestMessage(HttpMethod.Get, $"{ApiBase}{path}");
         if (!string.IsNullOrEmpty(_token))
             req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _token);
         using var res = await Http.SendAsync(req);
