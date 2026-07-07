@@ -87,6 +87,11 @@
                 return;
             }
             this.setStatus('connecting…');
+            // Tell the UI whether this stream carries audio — the speaker toggle
+            // only shows for cameras that actually have some.
+            if (meta.audio) this.video.dataset.audio = '1';
+            else delete this.video.dataset.audio;
+            window.neolink.audioSync();
             this.ms = new MediaSource();
             this.video.src = URL.createObjectURL(this.ms);
             this.ms.addEventListener('sourceopen', () => {
@@ -372,7 +377,223 @@
             const page = (dir) => scroll.scrollBy({ left: dir * scroll.clientWidth * 0.8, behavior: 'smooth' });
             wrap.querySelector('.strip-nav-left')?.addEventListener('click', () => page(-1));
             wrap.querySelector('.strip-nav-right')?.addEventListener('click', () => page(1));
+
+            // Swipe/drag panning (mouse only): press anywhere on the strip and drag
+            // to scroll it. Touch is left alone — the browser already pans natively.
+            // A real drag (>5px) swallows the click on release so the card under
+            // the cursor doesn't open, but a plain click still plays its event.
+            const drag = { active: false, moved: false, startX: 0, startLeft: 0 };
+            scroll.addEventListener('pointerdown', (e) => {
+                if (e.pointerType !== 'mouse' || e.button !== 0) return;
+                drag.active = true;
+                drag.moved = false;
+                drag.startX = e.clientX;
+                drag.startLeft = scroll.scrollLeft;
+            });
+            scroll.addEventListener('pointermove', (e) => {
+                if (!drag.active) return;
+                const dx = e.clientX - drag.startX;
+                if (!drag.moved) {
+                    if (Math.abs(dx) < 5) return; // still just a (wobbly) click
+                    drag.moved = true;
+                    scroll.classList.add('strip-dragging');
+                    try { scroll.setPointerCapture(e.pointerId); } catch { }
+                }
+                scroll.scrollLeft = drag.startLeft - dx;
+            });
+            const dragEnd = (e) => {
+                if (!drag.active) return;
+                drag.active = false;
+                scroll.classList.remove('strip-dragging');
+                try { scroll.releasePointerCapture(e.pointerId); } catch { }
+            };
+            scroll.addEventListener('pointerup', dragEnd);
+            scroll.addEventListener('pointercancel', dragEnd);
+            scroll.addEventListener('click', (e) => {
+                if (!drag.moved) return;
+                drag.moved = false; // this click ends the pan, nothing more
+                e.stopPropagation();
+                e.preventDefault();
+            }, { capture: true });
+            // Thumbnails are draggable by default; that would hijack the pan.
+            scroll.addEventListener('dragstart', (e) => e.preventDefault());
+
             update();
+        },
+
+        // Esc dismisses the top-most pop-up (event player / quick view). The key
+        // routes through the dialog's own Close button, so every Blazor-side
+        // close effect (mark-reviewed on close, player teardown) runs exactly
+        // as if it was clicked.
+        escInit() {
+            if (document.body.dataset.escInit) return;
+            document.body.dataset.escInit = '1';
+            document.addEventListener('keydown', (e) => {
+                if (e.key !== 'Escape') return;
+                const dialogs = document.querySelectorAll('.event-player, .quick-view');
+                const btn = dialogs.length
+                    ? dialogs[dialogs.length - 1].querySelector('.icon-btn[title="Close"]')
+                    : null;
+                if (btn) {
+                    e.preventDefault();
+                    btn.click();
+                }
+            });
+        },
+
+        // Live-audio mute toggles: cameras with AAC audio expose a speaker button
+        // (tile bar / quick view). Videos start muted so autoplay always works;
+        // clicking the toggle is the user gesture that lets sound through. JS owns
+        // the state — audioSync re-stamps the glyphs after every Blazor render.
+        audioInit() {
+            if (!document.body.dataset.audioInit) {
+                document.body.dataset.audioInit = '1';
+                document.addEventListener('click', (e) => {
+                    const btn = e.target instanceof Element ? e.target.closest('[data-audio-toggle]') : null;
+                    if (!btn) return;
+                    e.preventDefault();
+                    e.stopPropagation(); // the tile underneath must not react
+                    const video = btn.closest('.tile, .quick-view')?.querySelector('video');
+                    if (!video) return;
+                    video.muted = !video.muted;
+                    if (!video.muted) video.volume = 1;
+                    this.audioSync();
+                }, { capture: true });
+            }
+            this.audioSync();
+        },
+
+        audioSync() {
+            document.querySelectorAll('[data-audio-toggle]').forEach(btn => {
+                const video = btn.closest('.tile, .quick-view')?.querySelector('video');
+                const has = !!(video && video.dataset.audio);
+                btn.style.display = has ? '' : 'none';
+                if (!has) return;
+                btn.textContent = video.muted ? '🔇' : '🔊';
+                btn.title = video.muted ? 'Unmute — this camera has audio' : 'Mute';
+            });
+        },
+
+        // Digital zoom on live video (theater/maximized tiles, browser fullscreen,
+        // and the quick-view pop-up): the mouse wheel zooms around the cursor so
+        // the spot under it stays put, dragging pans while zoomed, the HUD pill
+        // steps in/out and restores 1:1, and a double-click snaps back to 1:1.
+        // All state lives DOM-side — nothing touches the Blazor circuit.
+        zoomInit() {
+            if (document.body.dataset.zoomInit) { this._zoomSweep?.(); return; }
+            document.body.dataset.zoomInit = '1';
+
+            const MAXZ = 8, STEP = 1.25;
+            const states = new WeakMap();  // container -> { z, tx, ty }
+            const zoomedBoxes = new Set(); // containers currently zoomed in (class
+                                           // alone won't do: Blazor re-renders clobber it)
+            const boxOf = (t) => (t instanceof Element ? t : null)?.closest?.('.tile, .quick-view-media');
+            const eligible = (box) => !!box && !!box.querySelector('video') &&
+                (box.classList.contains('zoom-on') || box === document.fullscreenElement);
+            const stOf = (box) => {
+                let s = states.get(box);
+                if (!s) { s = { z: 1, tx: 0, ty: 0 }; states.set(box, s); }
+                return s;
+            };
+
+            // Clamp the pan so the frame always covers the container, then paint.
+            const apply = (box) => {
+                const st = stOf(box);
+                const v = box.querySelector('video');
+                if (!v) return;
+                st.z = Math.min(MAXZ, Math.max(1, st.z));
+                st.tx = Math.min(0, Math.max(box.clientWidth * (1 - st.z), st.tx));
+                st.ty = Math.min(0, Math.max(box.clientHeight * (1 - st.z), st.ty));
+                if (st.z <= 1.001) {
+                    st.z = 1; st.tx = 0; st.ty = 0;
+                    v.style.transform = '';
+                } else {
+                    v.style.transformOrigin = '0 0';
+                    v.style.transform = `translate(${st.tx}px, ${st.ty}px) scale(${st.z})`;
+                }
+                box.classList.toggle('zoomed', st.z > 1);
+                if (st.z > 1) zoomedBoxes.add(box); else zoomedBoxes.delete(box);
+                const badge = box.querySelector('[data-zoom-badge]');
+                if (badge) badge.textContent = Math.round(st.z * 100) + '%';
+            };
+            // Rescale keeping the container point (px,py) fixed on screen.
+            const zoomAt = (box, factor, px, py) => {
+                const st = stOf(box);
+                const z0 = st.z;
+                st.z = Math.min(MAXZ, Math.max(1, z0 * factor));
+                const k = st.z / z0;
+                st.tx = px - k * (px - st.tx);
+                st.ty = py - k * (py - st.ty);
+                apply(box);
+            };
+            const reset = (box) => { const st = stOf(box); st.z = 1; st.tx = 0; st.ty = 0; apply(box); };
+            // Layout changed under us (unmaximized, left fullscreen): back to 1:1.
+            this._zoomSweep = () => [...zoomedBoxes]
+                .forEach(b => { if (!b.isConnected || !eligible(b)) reset(b); });
+
+            document.addEventListener('wheel', (e) => {
+                const box = boxOf(e.target);
+                if (!eligible(box)) return;
+                e.preventDefault(); // the wheel is zoom here, never page scroll
+                const r = box.getBoundingClientRect();
+                zoomAt(box, e.deltaY < 0 ? STEP : 1 / STEP, e.clientX - r.left, e.clientY - r.top);
+            }, { passive: false, capture: true });
+
+            // HUD buttons — capture phase so the tile underneath never sees the click.
+            document.addEventListener('click', (e) => {
+                const btn = e.target instanceof Element ? e.target.closest('[data-zoom]') : null;
+                if (!btn) return;
+                const box = boxOf(btn);
+                if (!box) return;
+                e.preventDefault();
+                e.stopPropagation();
+                if (btn.dataset.zoom === 'reset') reset(box);
+                else zoomAt(box, btn.dataset.zoom === 'in' ? STEP : 1 / STEP,
+                    box.clientWidth / 2, box.clientHeight / 2);
+            }, { capture: true });
+
+            // Drag pans while zoomed; the click on release is swallowed so the
+            // tile doesn't react to it.
+            const pan = { box: null, moved: false, x: 0, y: 0 };
+            document.addEventListener('pointerdown', (e) => {
+                const box = boxOf(e.target);
+                if (!eligible(box) || stOf(box).z <= 1) return;
+                if (e.target.closest('.tile-bar, .zoom-hud, button, select')) return;
+                pan.box = box; pan.moved = false; pan.x = e.clientX; pan.y = e.clientY;
+            }, { capture: true });
+            document.addEventListener('pointermove', (e) => {
+                if (!pan.box) return;
+                const dx = e.clientX - pan.x, dy = e.clientY - pan.y;
+                if (!pan.moved && Math.hypot(dx, dy) < 4) return; // still just a click
+                pan.moved = true;
+                pan.box.classList.add('zoom-panning');
+                const st = stOf(pan.box);
+                st.tx += dx; st.ty += dy;
+                pan.x = e.clientX; pan.y = e.clientY;
+                apply(pan.box);
+            }, { capture: true });
+            const panEnd = () => { pan.box?.classList.remove('zoom-panning'); pan.box = null; };
+            document.addEventListener('pointerup', panEnd, { capture: true });
+            document.addEventListener('pointercancel', panEnd, { capture: true });
+            document.addEventListener('click', (e) => {
+                if (!pan.moved) return;
+                pan.moved = false; // the pan is over; this click is not a tile click
+                e.stopPropagation();
+                e.preventDefault();
+            }, { capture: true });
+
+            // Double-click zoomed video: back to 1:1 (swallowed so the tile's own
+            // double-click — maximize/restore — only fires from an unzoomed state).
+            document.addEventListener('dblclick', (e) => {
+                const box = boxOf(e.target);
+                if (!box || stOf(box).z <= 1) return;
+                e.stopPropagation();
+                e.preventDefault();
+                reset(box);
+            }, { capture: true });
+
+            document.addEventListener('fullscreenchange', () => setTimeout(this._zoomSweep, 0));
+            this._zoomSweep();
         },
 
         // Review-strip vertical resizing: drag the handle at the bar's bottom edge.

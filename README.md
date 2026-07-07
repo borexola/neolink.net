@@ -45,6 +45,10 @@ The cameras are unmodified and no Reolink NVR is required.
 **Web UI (optional, built in)**
 - Live video in the browser via **fMP4 over WebSocket + Media Source Extensions** —
   ~1 s latency, no plugins, no ffmpeg
+- **Live audio** for cameras with AAC sound: streams start muted (browser autoplay
+  rules), a speaker button on the tile/quick-view unmutes; event clips and 24/7
+  recordings carry the audio track too. ADPCM-only cameras play audio via RTSP only
+  (browsers can't decode raw PCM in MP4)
 - Camera wall with five layout modes: **Grid** (1–16 tiles), **Focus** (hero + thumbnail
   strip, click to promote), **Mosaic** (classic CCTV wall), **Theater** (one camera,
   center stage), **Free** (draggable, resizable floating windows)

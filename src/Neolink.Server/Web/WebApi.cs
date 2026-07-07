@@ -1104,18 +1104,27 @@ public static class WebApi
             return;
         }
 
+        // AAC audio rides along as MP4 track 2. ADPCM cameras stay video-only in
+        // the browser (MSE can't play raw PCM) — their audio is RTSP-only.
+        var audio = hub.Audio is { IsAac: true, AudioSpecificConfig: not null } a ? a : null;
+
         string codecString = FMp4.CodecString(codec, sps);
+        string mimeCodecs = audio != null
+            ? $"{codecString}, {FMp4.AacCodecString(audio.AudioSpecificConfig!)}"
+            : codecString;
         var meta = JsonSerializer.Serialize(new
         {
             type = "init",
             codec = codecString,
-            mime = $"video/mp4; codecs=\"{codecString}\"",
+            mime = $"video/mp4; codecs=\"{mimeCodecs}\"",
             width = hub.Width,
             height = hub.Height,
+            audio = audio != null,
         });
         await ws.SendAsync(Encoding.UTF8.GetBytes(meta), WebSocketMessageType.Text, true, ct).ConfigureAwait(false);
 
-        var init = FMp4.BuildInit(codec, sps, pps, hub.Vps, hub.Width, hub.Height);
+        var init = FMp4.BuildInit(codec, sps, pps, hub.Vps, hub.Width, hub.Height,
+            audio?.AudioSpecificConfig, audio?.SampleRate ?? 0, audio?.Channels ?? 0);
         await ws.SendAsync(init, WebSocketMessageType.Binary, true, ct).ConfigureAwait(false);
 
         var (subId, reader) = hub.Subscribe(viewer: true);
@@ -1136,17 +1145,31 @@ public static class WebApi
             uint sequence = 1;
             List<(byte[] Sample, bool Keyframe)>? pending = null;
 
+            // Audio fragments accumulate here and ship inside the next video batch:
+            // sending each ~21ms AAC frame as its own WebSocket message would wreck
+            // the client's delivery-cadence measurement (its jitter buffer sizing).
+            var audioFrags = new List<byte[]>();
+            ulong audioDt = 0;
+            uint prevAudioTs = 0;
+            bool haveAudioTs = false;
+
             async Task FlushPendingAsync(uint totalDuration)
             {
-                if (pending == null || pending.Count == 0) { pending = null; return; }
-                uint per = Math.Clamp(totalDuration / (uint)pending.Count, 900u, 45_000u); // 10..500ms per frame
+                if ((pending == null || pending.Count == 0) && audioFrags.Count == 0) { pending = null; return; }
                 using var batch = new MemoryStream();
-                foreach (var (sample, key) in pending)
+                if (pending is { Count: > 0 })
                 {
-                    batch.Write(FMp4.BuildFragment(sequence++, decodeTime, per, sample, key));
-                    decodeTime += per;
+                    uint per = Math.Clamp(totalDuration / (uint)pending.Count, 900u, 45_000u); // 10..500ms per frame
+                    foreach (var (sample, key) in pending)
+                    {
+                        batch.Write(FMp4.BuildFragment(sequence++, decodeTime, per, sample, key));
+                        decodeTime += per;
+                    }
                 }
                 pending = null;
+                foreach (var frag in audioFrags)
+                    batch.Write(frag);
+                audioFrags.Clear();
                 // Send straight from the stream's buffer — copying it per batch would
                 // double the allocation on the per-frame hot path, per viewer.
                 var payload = new ArraySegment<byte>(batch.GetBuffer(), 0, (int)batch.Length);
@@ -1160,6 +1183,24 @@ public static class WebApi
                 // video packet look like a drop (which would discard all P-frames).
                 bool gap = lastIndex >= 0 && packet.Index != lastIndex + 1;
                 lastIndex = packet.Index;
+
+                // Audio: fixed 1024-sample AUs; the decode-time advance comes from the
+                // RTP delta so hub drops shift the timeline instead of desyncing it.
+                // Held until the first video keyframe so both tracks start together.
+                if (packet is HubAudioAac aac && audio != null)
+                {
+                    if (waitKeyframe) continue;
+                    if (haveAudioTs)
+                    {
+                        uint d = unchecked(aac.RtpTs - prevAudioTs);
+                        audioDt += (d > 0 && d < 30u * (uint)audio.SampleRate) ? d : FMp4.AacSamplesPerAu;
+                    }
+                    prevAudioTs = aac.RtpTs;
+                    haveAudioTs = true;
+                    audioFrags.Add(FMp4.BuildFragment(sequence++, audioDt, FMp4.AacSamplesPerAu, aac.Au,
+                        keyframe: true, trackId: FMp4.AudioTrackId));
+                    continue;
+                }
 
                 if (packet is not HubVideo v) continue;
                 if (gap)

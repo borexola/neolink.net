@@ -844,6 +844,15 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
     flex: 1;
     min-width: 0;
     padding: 2px 0;
+    cursor: grab; /* the strip pans with a mouse drag (cards override with pointer) */
+}
+
+/* While drag-panning: grabbing cursor everywhere and no accidental text/image
+   selection on the cards flying past (JS toggles the class). */
+.events-bar-scroll.strip-dragging,
+.events-bar-scroll.strip-dragging * {
+    cursor: grabbing !important;
+    user-select: none;
 }
 
 /* Edge scroll arrows: near full height of the strip, gradient fade into the
@@ -1233,6 +1242,59 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
     object-fit: contain;
     background: #000;
 }
+
+/* ---------- digital zoom (theater/maximized tiles, fullscreen, quick view) ---------- */
+
+/* Vertical glass pill hugging the right edge; appears while hovering a
+   zoomable surface and stays pinned while zoomed. JS (zoomInit) owns all
+   state — wheel zooms at the cursor, drag pans, double-click restores 1:1. */
+.zoom-hud {
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 6;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 8px 5px;
+    background: color-mix(in srgb, var(--panel) 82%, transparent);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    backdrop-filter: blur(6px);
+}
+
+.zoom-on:hover .zoom-hud,
+.zoom-on.zoomed .zoom-hud,
+.tile:fullscreen:hover .zoom-hud,
+.tile:fullscreen.zoomed .zoom-hud {
+    display: flex;
+}
+
+.zoom-badge {
+    font-size: 10px;
+    font-weight: 700;
+    min-width: 34px;
+    text-align: center;
+    color: var(--muted);
+    user-select: none;
+}
+
+.zoomed .zoom-badge { color: var(--accent); }
+
+.zoom-btn { font-size: 14px; }
+
+.zoom-reset {
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+}
+
+/* While zoomed the frame pans with a drag */
+.zoomed video { cursor: grab; }
+.zoom-panning video { cursor: grabbing; }
+.zoom-panning { user-select: none; }
 
 /* ------------------------------------------------------------ timeline page */
 

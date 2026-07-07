@@ -578,6 +578,89 @@ public static class SelfTest
             }
         });
 
+        Test("clip writer muxes an AAC audio track", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var hub = new Streaming.StreamHub("audiotest");
+                byte[] Nal(byte type, int len)
+                {
+                    var nal = new byte[len];
+                    Array.Fill(nal, (byte)0xAA);
+                    nal[0] = type;
+                    nal[1] = 0x80;
+                    return nal;
+                }
+                byte[] Au(params byte[][] nals)
+                {
+                    var ms = new MemoryStream();
+                    foreach (var n in nals)
+                    {
+                        ms.Write(new byte[] { 0, 0, 0, 1 });
+                        ms.Write(n);
+                    }
+                    return ms.ToArray();
+                }
+                var sps = new byte[] { 0x67, 0x42, 0xE0, 0x1F, 0xA0 };
+                var pps = new byte[] { 0x68, 0xCE, 0x38, 0x80 };
+                hub.PublishVideo(new VideoFrame(VideoCodec.H264, Keyframe: true, Microseconds: 0, UnixTime: null,
+                    Au(sps, pps, Nal(0x65, 40))));
+
+                // One ADTS frame: syncword, MPEG-4/no-CRC, AAC-LC, 16 kHz, mono,
+                // frame length 39 (7-byte header + 32-byte payload).
+                var adts = new byte[39];
+                adts[0] = 0xFF; adts[1] = 0xF1; adts[2] = 0x60; adts[3] = 0x40; adts[4] = 0x04; adts[5] = 0xE0;
+                hub.PublishAac(new AacFrame(adts));
+                Assert(hub.Audio is { IsAac: true, SampleRate: 16000, Channels: 1 }, "hub learned the AAC track");
+                AssertEq(FMp4.AacCodecString(hub.Audio!.AudioSpecificConfig!), "mp4a.40.2");
+
+                var path = Path.Combine(dir, "clip.mp4");
+                var writer = Recording.ClipWriter.TryCreate(path, hub);
+                Assert(writer != null, "writer created");
+                // Audio before the first video keyframe is skipped (track alignment).
+                writer!.AddAudio(new Streaming.HubAudioAac(0, new byte[32], 500));
+                writer.Add(new Streaming.HubVideo(1, Au(Nal(0x65, 40)), true, 1000));
+                writer.AddAudio(new Streaming.HubAudioAac(2, new byte[32], 5000));
+                writer.AddAudio(new Streaming.HubAudioAac(3, new byte[32], 5000 + 1024));
+                writer.Add(new Streaming.HubVideo(4, Au(Nal(0x41, 25)), false, 4000));
+                writer.Dispose();
+                Assert(writer.Completion.Wait(TimeSpan.FromSeconds(10)), "writer finalizes");
+                Assert(!writer.Faulted, "no write faults");
+
+                var bytes = File.ReadAllBytes(path);
+                var text = Encoding.ASCII.GetString(bytes);
+                Assert(text.Contains("mp4a"), "AAC sample entry present");
+                Assert(text.Contains("soun"), "audio handler present");
+                Assert(text.Contains("esds"), "decoder config present");
+
+                static List<int> IndicesOf(string haystack, string needle)
+                {
+                    var list = new List<int>();
+                    for (int i = haystack.IndexOf(needle, StringComparison.Ordinal); i >= 0;
+                         i = haystack.IndexOf(needle, i + 1, StringComparison.Ordinal))
+                        list.Add(i);
+                    return list;
+                }
+                AssertEq(IndicesOf(text, "tkhd").Count, 2);
+                AssertEq(IndicesOf(text, "trex").Count, 2);
+
+                // Both media headers carry a real duration after finalization —
+                // video in 90 kHz ticks, audio in sample-rate ticks (2 AUs = 2048).
+                var mdhds = IndicesOf(text, "mdhd");
+                AssertEq(mdhds.Count, 2);
+                uint DurAt(int mdhd) => System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(
+                    bytes.AsSpan(mdhd + 20));
+                Assert(DurAt(mdhds[0]) > 0, "video mdhd duration patched");
+                AssertEq(DurAt(mdhds[1]), 2048u);
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+        });
+
         Test("loopback base for blazor circuits (reverse-proxy fix)", () =>
         {
             // Wildcard binds are not dialable — the circuit's own-server calls
