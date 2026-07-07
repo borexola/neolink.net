@@ -2,6 +2,7 @@
 @using System.Text.Json
 @inject HttpClient Http
 @inject IJSRuntime JS
+@inject LocalApiInfo Local
 @implements IAsyncDisposable
 
 @* Full-page live tail of the server log (admin only). The lines are appended
@@ -58,6 +59,7 @@
     private static readonly string[] LogLevelChips = { "DBG", "INF", "WRN", "ERR" };
 
     private string _server = "";
+    private string _origin = "";
     private string? _token;
     private bool _checked;      // auth status fetched (before that, render nothing judgmental)
     private bool _authEnabled;
@@ -73,6 +75,8 @@
             if (_admin && !_attached)
             {
                 _attached = true;
+                // This URL is fetched by the BROWSER (neolink.js), not the circuit —
+                // it keeps the page origin so it flows through any reverse proxy.
                 var url = $"{_server.TrimEnd('/')}/api/system/logs" +
                           (string.IsNullOrEmpty(_token) ? "" : $"?token={Uri.EscapeDataString(_token)}");
                 await JS.InvokeVoidAsync("neolink.logsAttach", "logs-view", url);
@@ -94,12 +98,13 @@
             }
         }
         catch { }
+        try { _origin = await JS.InvokeAsync<string>("neolink.defaultServer"); } catch { }
         if (string.IsNullOrWhiteSpace(_server))
-            _server = await JS.InvokeAsync<string>("neolink.defaultServer");
+            _server = _origin;
 
         try
         {
-            var req = new HttpRequestMessage(HttpMethod.Get, $"{_server.TrimEnd('/')}/api/auth/status");
+            var req = new HttpRequestMessage(HttpMethod.Get, $"{ApiBase}/api/auth/status");
             if (!string.IsNullOrEmpty(_token))
                 req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _token);
             using var res = await Http.SendAsync(req);
@@ -114,6 +119,14 @@
         _checked = true;
         StateHasChanged();
     }
+
+    /// <summary>Where the auth-status fetch goes. It runs SERVER-side (Blazor circuit),
+    /// so when the configured server is the page's own origin it uses loopback
+    /// instead of dialing back out through a reverse proxy's public URL.</summary>
+    private string ApiBase => _origin.Length > 0
+        && string.Equals(_server.TrimEnd('/'), _origin.TrimEnd('/'), StringComparison.OrdinalIgnoreCase)
+        ? Local.BaseUrl.TrimEnd('/')
+        : _server.TrimEnd('/');
 
     private void ToggleLevel(string lvl)
     {

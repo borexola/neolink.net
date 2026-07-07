@@ -3,6 +3,7 @@
 @using System.Text.Json
 @inject HttpClient Http
 @inject IJSRuntime JS
+@inject LocalApiInfo Local
 @implements IAsyncDisposable
 
 @* Live resource monitor: the backend (Neolink.Server process + storage disk)
@@ -181,6 +182,7 @@
     private static readonly (string Label, int Sec)[] Windows = { ("5m", 300), ("15m", 900), ("1h", 3600) };
 
     private string _server = "";
+    private string _origin = "";
     private string? _token;
     private string? _error;
     private bool _supported = true;
@@ -202,6 +204,14 @@
 
     private ApiSystemSample? Last => _samples.Count > 0 ? _samples[^1] : null;
 
+    /// <summary>Where this page's fetches go. They run SERVER-side (Blazor circuit),
+    /// so when the configured server is the page's own origin they use loopback
+    /// instead of dialing back out through a reverse proxy's public URL.</summary>
+    private string ApiBase => _origin.Length > 0
+        && string.Equals(_server.TrimEnd('/'), _origin.TrimEnd('/'), StringComparison.OrdinalIgnoreCase)
+        ? Local.BaseUrl.TrimEnd('/')
+        : _server.TrimEnd('/');
+
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (!firstRender) return;
@@ -220,8 +230,9 @@
             }
         }
         catch { }
+        try { _origin = await JS.InvokeAsync<string>("neolink.defaultServer"); } catch { }
         if (string.IsNullOrWhiteSpace(_server))
-            _server = await JS.InvokeAsync<string>("neolink.defaultServer");
+            _server = _origin;
 
         await JS.InvokeVoidAsync("neolink.perfStart");
         _perfStarted = true;
@@ -257,7 +268,7 @@
         try
         {
             long after = Last?.T ?? 0;
-            var req = new HttpRequestMessage(HttpMethod.Get, $"{_server.TrimEnd('/')}/api/system/stats?after={after}");
+            var req = new HttpRequestMessage(HttpMethod.Get, $"{ApiBase}/api/system/stats?after={after}");
             if (!string.IsNullOrEmpty(_token))
                 req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _token);
             using var res = await Http.SendAsync(req);
@@ -282,7 +293,7 @@
         }
         catch (Exception ex)
         {
-            _error = _samples.Count == 0 ? $"Cannot reach {_server}: {ex.Message}" : _error;
+            _error = _samples.Count == 0 ? $"Cannot reach {ApiBase}: {ex.Message}" : _error;
         }
     }
 
@@ -290,7 +301,7 @@
     {
         try
         {
-            var req = new HttpRequestMessage(HttpMethod.Get, $"{_server.TrimEnd('/')}/api/auth/status");
+            var req = new HttpRequestMessage(HttpMethod.Get, $"{ApiBase}/api/auth/status");
             if (!string.IsNullOrEmpty(_token))
                 req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _token);
             using var res = await Http.SendAsync(req);
