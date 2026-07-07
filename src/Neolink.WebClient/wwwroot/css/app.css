@@ -818,6 +818,7 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
 }
 
 .event-card {
+    position: relative; /* anchors the overlaid meta and the dismiss button */
     display: flex;
     flex-direction: column;
     align-items: stretch;
@@ -829,9 +830,10 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
     flex: 0 0 auto;
     /* Width follows the (resizable) bar height so previews scale with it */
     height: 100%;
-    /* Default shape; each card overrides this inline with its camera's true
-       aspect (plus meta-row headroom) so ultrawide footage isn't cropped. */
-    aspect-ratio: 5 / 4;
+    /* The card takes the camera's exact shape (inline aspect-ratio per event;
+       this is the fallback) and the media fills it edge to edge — the title
+       overlays the bottom of the clip, so no meta row distorts the geometry. */
+    aspect-ratio: 16 / 9;
     min-width: 150px;
     max-width: 560px;
     transition: transform 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
@@ -886,13 +888,28 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
 
 @keyframes event-pulse { 50% { opacity: 0.45; } }
 
+/* Title/time float over the clip's bottom edge (NVR style) so the card can be
+   exactly the camera's shape — a meta row below would pad the media with bars. */
 .event-meta {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
     display: flex;
     flex-direction: column;
-    gap: 2px;
-    min-width: 0;
-    padding: 5px 8px 7px;
+    gap: 1px;
+    padding: 14px 8px 5px;
+    background: linear-gradient(transparent, rgba(0, 0, 0, 0.82));
+    pointer-events: none; /* clicks land on the card (open player) */
 }
+
+.event-meta .event-title,
+.event-meta .event-sub {
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+}
+
+/* Muted grey is unreadable over video: lift the sub-line on overlaid cards */
+.event-meta .event-sub { color: #c6cdd9; }
 
 .event-title {
     font-size: 12px;

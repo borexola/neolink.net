@@ -1612,10 +1612,11 @@
         $"{_server.TrimEnd('/')}/api/events/{Uri.EscapeDataString(ev.Id)}/{kind}{TokenQuery('?')}";
 
     /// <summary>
-    /// Strip cards take the shape of their camera so ultrawide footage shows its
-    /// full width instead of being cropped to a fixed 5:4. Falls back to 16:9
-    /// when the camera (or its resolution) is unknown; contain-fit absorbs any
-    /// remaining mismatch as bars, never a crop.
+    /// A strip card takes the exact shape of its camera (the meta text overlays
+    /// the clip, so the whole card is media): ultrawide footage gets a wide card,
+    /// nothing is cropped and nothing is padded. Falls back to 16:9 when the
+    /// camera (or its resolution) is unknown; contain-fit absorbs that rare
+    /// mismatch as bars.
     /// </summary>
     private string CardAspect(ApiEvent ev)
     {
