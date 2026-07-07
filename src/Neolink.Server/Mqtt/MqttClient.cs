@@ -77,7 +77,20 @@ public sealed class MqttClient
     private async Task ConnectAndServeAsync(CancellationToken ct)
     {
         using var tcp = new TcpClient { NoDelay = true };
-        await tcp.ConnectAsync(_opt.Host, _opt.Port, ct).ConfigureAwait(false);
+        // Own connect timeout: a wrong/absent broker host must fail fast and log,
+        // not sit in the OS connect timeout (20s+) between retry warnings.
+        using (var connectCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
+        {
+            connectCts.CancelAfter(TimeSpan.FromSeconds(10));
+            try
+            {
+                await tcp.ConnectAsync(_opt.Host, _opt.Port, connectCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                throw new IOException($"broker did not answer within 10s — is '{_opt.Host}' the right address?");
+            }
+        }
         Stream stream = tcp.GetStream();
         if (_opt.Tls)
         {
