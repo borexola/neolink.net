@@ -46,6 +46,15 @@ public sealed record ApiEncodeProfile(string Type, uint Width, uint Height,
 /// <summary>GET /api/cameras/{name}/streaminfo — the encode profiles of each stream.</summary>
 public sealed record ApiStreamProfiles(List<ApiEncodeProfile> Profiles);
 
+/// <summary>
+/// The server's own loopback API address, injected by the host. Blazor circuits
+/// run SERVER-side: their HTTP calls must not go out through a reverse proxy's
+/// public URL (TLS/hairpin problems) when the target is this very server — they
+/// use this instead. Browser-side URLs (video WS, media elements) keep the page
+/// origin so they DO flow through the proxy.
+/// </summary>
+public sealed record LocalApiInfo(string BaseUrl);
+
 /// <summary>Server capability flags (GET /api/features).</summary>
 public sealed record ApiFeaturesInfo(bool Events, bool Continuous, double TrickleSpeed = 4,
     string? Version = null, string? LatestVersion = null, string? RepoUrl = null);

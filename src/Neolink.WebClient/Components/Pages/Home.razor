@@ -2,6 +2,7 @@
 @using System.Text.Json
 @inject HttpClient Http
 @inject IJSRuntime JS
+@inject LocalApiInfo Local
 @implements IAsyncDisposable
 
 <div class="shell">
@@ -415,7 +416,7 @@
 
     @if (_panelCamera != null)
     {
-        <CameraPanel Server="@_server" CameraName="@_panelCamera"
+        <CameraPanel Server="@ApiBase" CameraName="@_panelCamera"
                      Camera="_cameras.FirstOrDefault(c => c.Name == _panelCamera)"
                      User="@_user" Pass="@_pass" Token="@_authToken"
                      OnClose="() => _panelCamera = null" />
@@ -988,8 +989,9 @@
             await SaveAsync();
         }
 
+        try { _origin = await JS.InvokeAsync<string>("neolink.defaultServer"); } catch { }
         if (string.IsNullOrWhiteSpace(_server))
-            _server = await JS.InvokeAsync<string>("neolink.defaultServer");
+            _server = _origin;
 
         // Session + one-time flags
         try
@@ -1071,9 +1073,29 @@
 
     // ------------------------------------------------------------ authentication
 
+    private string _origin = "";
+
+    /// <summary>
+    /// Where SERVER-side fetches go. Blazor circuits run in this very process, so
+    /// when the configured server is the page's own origin, calls go to loopback
+    /// instead of back out through a reverse proxy's public URL (which the host
+    /// often can't reach, or rejects for its internal TLS cert). A genuinely
+    /// remote server address is used as-is. Browser-side URLs (video WS, media
+    /// elements) intentionally keep <see cref="_server"/> so they traverse the proxy.
+    /// </summary>
+    private string ResolveApi(string server)
+    {
+        var s = server.TrimEnd('/');
+        return _origin.Length > 0 && string.Equals(s, _origin.TrimEnd('/'), StringComparison.OrdinalIgnoreCase)
+            ? Local.BaseUrl.TrimEnd('/')
+            : s;
+    }
+
+    private string ApiBase => ResolveApi(_server);
+
     private HttpRequestMessage ApiRequest(HttpMethod method, string path)
     {
-        var req = new HttpRequestMessage(method, $"{_server.TrimEnd('/')}{path}");
+        var req = new HttpRequestMessage(method, $"{ApiBase}{path}");
         if (!string.IsNullOrEmpty(_authToken))
             req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _authToken);
         return req;
@@ -1542,7 +1564,7 @@
         if (string.IsNullOrWhiteSpace(server)) return false;
         try
         {
-            var req = new HttpRequestMessage(HttpMethod.Get, $"{server.TrimEnd('/')}/api/cameras");
+            var req = new HttpRequestMessage(HttpMethod.Get, $"{ResolveApi(server)}/api/cameras");
             if (!string.IsNullOrEmpty(_authToken))
                 req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _authToken);
             using var res = await Http.SendAsync(req);
@@ -1792,7 +1814,7 @@
         try
         {
             var req = new HttpRequestMessage(HttpMethod.Post,
-                $"{_server.TrimEnd('/')}/api/events/{Uri.EscapeDataString(ev.Id)}/review");
+                $"{ApiBase}/api/events/{Uri.EscapeDataString(ev.Id)}/review");
             if (!string.IsNullOrEmpty(_authToken))
             {
                 req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _authToken);
