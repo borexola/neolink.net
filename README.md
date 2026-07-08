@@ -31,6 +31,8 @@ The cameras are unmodified and no Reolink NVR is required.
                                └─────────────────┘                └──────────────────┘
 ```
 
+![The Neolink.NET web UI: camera wall with resizable tiles and the event review strip](docs/screenshot.png)
+
 ## Features
 
 **RTSP bridge**
