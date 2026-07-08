@@ -84,15 +84,16 @@ public sealed class BcConnection : IAsyncDisposable
                 }
                 else
                 {
-                    // The FIRST sighting of an unhandled push gets a visible line:
-                    // new firmware features (doorbell buttons, extra sensors) tend
-                    // to arrive on message ids nobody subscribed to yet, and the
-                    // payload is exactly what's needed to map them.
+                    // The first sighting of an unhandled push logs its payload —
+                    // that's how new firmware features (doorbell buttons, extra
+                    // sensors) get mapped. Debug level on purpose: cameras
+                    // broadcast a burst of routine status pushes (VideoInput,
+                    // Serial, sleepStatus, ...) on every login, and at Info that
+                    // drowned real logs. Set NEOLINK_LOG=debug when hunting.
                     bool first;
                     lock (_subGate) { first = _reportedUnhandled.Add(msg.Meta.MsgId); }
                     if (first)
-                        Log.Info($"BC: unhandled push msgId={msg.Meta.MsgId}{XmlPreview(msg)} — if this " +
-                                 "line appears right after a camera action (say, a doorbell press), please report it");
+                        Log.Debug($"BC: unhandled push msgId={msg.Meta.MsgId}{XmlPreview(msg)}");
                     else
                         Log.Trace($"Ignoring uninteresting message ID {msg.Meta.MsgId}");
                 }
