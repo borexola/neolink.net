@@ -309,6 +309,10 @@ foreach (var (primary, name, recorderSink) in motionTargets)
         recorderSink?.Invoke(push);
         bridge?.OnMotion(name, push);
     };
+    // Unsolicited status pushes (Wi-Fi signal, siren, floodlight) only feed the
+    // bridge; the listener only runs when the sink is set.
+    if (bridge != null)
+        primary.StatusSink = push => bridge.OnStatus(name, push);
 }
 
 // Web API (camera list + fMP4 live streams for browsers); guarded like the cameras.

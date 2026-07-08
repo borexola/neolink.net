@@ -60,6 +60,13 @@ public sealed class CameraService : ILiveCameraSource
     /// </summary>
     public Action<MotionPush>? MotionSink { get; set; }
 
+    /// <summary>
+    /// When set (on the primary stream service), unsolicited status pushes (Wi-Fi
+    /// signal, sleep, siren, floodlight) are forwarded here. Assigned once during
+    /// startup wiring.
+    /// </summary>
+    public Action<StatusPush>? StatusSink { get; set; }
+
     private string Tag => $"{_config.Name} ({_kind})";
 
     public async Task RunAsync(CancellationToken ct)
@@ -151,6 +158,9 @@ public sealed class CameraService : ILiveCameraSource
         Task? motionTask = MotionSink is { } sink
             ? Task.Run(() => WatchMotionGuardedAsync(camera, sink, linked.Token), CancellationToken.None)
             : null;
+        Task? statusTask = StatusSink is { } statusSink
+            ? Task.Run(() => WatchStatusGuardedAsync(camera, statusSink, linked.Token), CancellationToken.None)
+            : null;
         try
         {
             while (!ct.IsCancellationRequested)
@@ -197,6 +207,10 @@ public sealed class CameraService : ILiveCameraSource
             {
                 try { await motionTask.ConfigureAwait(false); } catch { }
             }
+            if (statusTask != null)
+            {
+                try { await statusTask.ConfigureAwait(false); } catch { }
+            }
         }
     }
 
@@ -235,6 +249,24 @@ public sealed class CameraService : ILiveCameraSource
         {
             // Connection died; the video loop notices and reconnects everything.
             Log.Debug($"{Tag}: motion watch ended: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Status-push listener riding the same connection as the video stream. These
+    /// are purely informational, so any failure stays local to this task.
+    /// </summary>
+    private async Task WatchStatusGuardedAsync(IBcCamera camera, Action<StatusPush> sink, CancellationToken ct)
+    {
+        try
+        {
+            await camera.WatchStatusAsync(sink, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+        {
+            // Connection died; the video loop notices and reconnects everything.
+            Log.Debug($"{Tag}: status watch ended: {ex.Message}");
         }
     }
 }

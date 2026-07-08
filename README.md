@@ -455,6 +455,8 @@ in exchange you get an integration light enough to leave running forever.
 | Motion / Person / Vehicle / Animal | `binary_sensor` | From the camera's alarm pushes (AI labels need Smart Detection enabled in the Reolink app) |
 | Doorbell | `event` | Video doorbells: every button press publishes an MQTT event (`event_type: press`, `device_class: doorbell`) — the natural trigger for ring automations |
 | Battery | `sensor` | Battery cameras; charge status + temperature as attributes |
+| Wi-Fi signal | `sensor` | Diagnostic; RSSI in dBm from the camera's own status pushes (Wi-Fi cameras) |
+| Siren | `binary_sensor` | Cameras that report their siren state (appears on the first status push) |
 | Night vision | `select` | `auto` / `on` / `off` |
 | Floodlight | `light` | Cameras with a spotlight |
 | PIR sensor | `switch` | Enable/disable the PIR |

@@ -42,6 +42,14 @@ public interface IBcCamera : IAsyncDisposable
     /// </summary>
     Task WatchMotionAsync(Action<MotionPush> onEvent, CancellationToken ct);
 
+    /// <summary>
+    /// Listens for the unsolicited status pushes the camera broadcasts on its own —
+    /// Wi-Fi signal (msg 464), sleep state (msg 623), siren (msg 547) and floodlight
+    /// (msg 291) — and invokes <paramref name="onEvent"/> for each one it can parse,
+    /// until cancelled or the connection drops. Unlike motion, no opt-in is needed.
+    /// </summary>
+    Task WatchStatusAsync(Action<StatusPush> onEvent, CancellationToken ct);
+
     /// <summary>Requests a JPEG snapshot from the camera (msg 109), or null if unsupported.</summary>
     Task<byte[]?> SnapAsync(CancellationToken ct);
 
@@ -67,6 +75,23 @@ public sealed record MotionPush(string Status, IReadOnlyList<string> AiTypes)
     /// <summary>True when this push signals active detection (as opposed to all-clear).</summary>
     public bool Active => !string.Equals(Status, "none", StringComparison.OrdinalIgnoreCase) || AiTypes.Count > 0;
 }
+
+/// <summary>
+/// One unsolicited status push from the camera (see <see cref="IBcCamera.WatchStatusAsync"/>).
+/// </summary>
+public abstract record StatusPush;
+
+/// <summary>msg 464 NetInfo: connection type and Wi-Fi signal strength (RSSI, dBm).</summary>
+public sealed record WifiSignalPush(string? NetType, int SignalDbm) : StatusPush;
+
+/// <summary>msg 623 sleepStatus: battery cameras report entering/leaving power-save sleep.</summary>
+public sealed record SleepStatusPush(bool Sleeping) : StatusPush;
+
+/// <summary>msg 547 SirenStatusList: the siren switched on or off.</summary>
+public sealed record SirenStatusPush(bool On) : StatusPush;
+
+/// <summary>msg 291 FloodlightStatusList: the floodlight switched on or off.</summary>
+public sealed record FloodlightStatusPush(bool On) : StatusPush;
 
 /// <summary>The camera answered a control command with a non-200 response code.</summary>
 public sealed class CameraCommandException : Exception

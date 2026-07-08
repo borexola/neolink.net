@@ -324,6 +324,102 @@ public sealed class BcCamera : IBcCamera
         return new MotionPush(status, aiTypes);
     }
 
+    public async Task WatchStatusAsync(Action<StatusPush> onEvent, CancellationToken ct)
+    {
+        // Cameras broadcast these without any opt-in request. The connection allows
+        // one subscriber per message id, so each id gets its own long-lived listener;
+        // none of these ids are used by the polled control commands.
+        await Task.WhenAll(
+            WatchStatusIdAsync(BcConstants.MsgIdNetInfo, "NetInfo", ParseNetInfo, onEvent, ct),
+            WatchStatusIdAsync(BcConstants.MsgIdSleepStatus, "sleepStatus", ParseSleepStatus, onEvent, ct),
+            WatchStatusIdAsync(BcConstants.MsgIdSirenStatusList, "SirenStatusList",
+                el => ParseStatusList(el, _channelId) is { } on ? new SirenStatusPush(on) : null, onEvent, ct),
+            WatchStatusIdAsync(BcConstants.MsgIdFloodlightStatusList, "FloodlightStatusList",
+                el => ParseStatusList(el, _channelId) is { } on ? new FloodlightStatusPush(on) : null, onEvent, ct)
+        ).ConfigureAwait(false);
+    }
+
+    private async Task WatchStatusIdAsync(uint msgId, string elementName,
+        Func<XElement, StatusPush?> parse, Action<StatusPush> onEvent, CancellationToken ct)
+    {
+        using var sub = _conn.Subscribe(msgId);
+        while (!ct.IsCancellationRequested)
+        {
+            BcMessage msg;
+            try
+            {
+                // Pushes are sporadic by nature: no read timeout (same as motion).
+                msg = await sub.Messages.ReadAsync(ct).ConfigureAwait(false);
+            }
+            catch (ChannelClosedException)
+            {
+                return; // connection closed
+            }
+
+            // Firmware capitalization varies; match the wrapper element leniently.
+            var el = msg.Xml?.Raw.FirstOrDefault(
+                e => e.Name.LocalName.Equals(elementName, StringComparison.OrdinalIgnoreCase));
+            if (el == null) continue;
+            if (parse(el) is { } push)
+            {
+                Log.Debug($"BC ch{_channelId}: status push {el.ToString(SaveOptions.DisableFormatting)}");
+                onEvent(push);
+            }
+        }
+    }
+
+    /// <summary>First descendant with the given name, any capitalization.</summary>
+    private static XElement? Descendant(XElement el, string name) =>
+        el.Descendants().FirstOrDefault(d => d.Name.LocalName.Equals(name, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// msg 464 NetInfo push. Captured sample: &lt;net_type&gt;wifi&lt;/net_type&gt;
+    /// &lt;signal&gt;-45&lt;/signal&gt; — signal is the Wi-Fi RSSI in dBm. Pushes
+    /// without a numeric signal (wired cameras) are ignored.
+    /// </summary>
+    internal static WifiSignalPush? ParseNetInfo(XElement el)
+    {
+        if (Descendant(el, "signal") is not { } signal
+            || !int.TryParse(signal.Value.Trim(), out var dbm))
+            return null;
+        var netType = Descendant(el, "net_type")?.Value.Trim();
+        return new WifiSignalPush(string.IsNullOrEmpty(netType) ? null : netType, dbm);
+    }
+
+    /// <summary>
+    /// msg 623 sleepStatus push. The value rides in a &lt;status&gt; child (or the
+    /// element body); firmware uses numeric and token forms, so accept both.
+    /// </summary>
+    internal static SleepStatusPush? ParseSleepStatus(XElement el)
+    {
+        var v = (Descendant(el, "status")?.Value ?? el.Value).Trim().ToLowerInvariant();
+        if (v.Length == 0) return null;
+        return new SleepStatusPush(v is "1" or "true" or "sleep" or "sleeping");
+    }
+
+    /// <summary>
+    /// Shared shape of the SirenStatusList (msg 547) / FloodlightStatusList (msg 291)
+    /// pushes: per-channel entries carrying a status. Returns the on/off state for
+    /// <paramref name="channelId"/>, or null when the push has no entry for it.
+    /// Entries without a channel element apply to any channel (single-camera pushes).
+    /// </summary>
+    internal static bool? ParseStatusList(XElement list, byte channelId)
+    {
+        foreach (var entry in list.Elements())
+        {
+            var chEl = entry.Elements().FirstOrDefault(e =>
+                e.Name.LocalName.Equals("channel", StringComparison.OrdinalIgnoreCase)
+                || e.Name.LocalName.Equals("channelId", StringComparison.OrdinalIgnoreCase));
+            if (chEl != null && uint.TryParse(chEl.Value.Trim(), out var ch) && ch != channelId)
+                continue;
+            var status = entry.Elements().FirstOrDefault(e =>
+                e.Name.LocalName.Equals("status", StringComparison.OrdinalIgnoreCase))?.Value.Trim().ToLowerInvariant();
+            if (status is null or "") continue;
+            return status is not ("0" or "close" or "off" or "false" or "none");
+        }
+        return null;
+    }
+
     public async Task<byte[]?> SnapAsync(CancellationToken ct)
     {
         using var sub = _conn.Subscribe(BcConstants.MsgIdSnap);
