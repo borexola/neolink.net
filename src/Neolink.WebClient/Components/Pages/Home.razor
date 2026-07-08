@@ -92,7 +92,7 @@
         @foreach (var cam in _cameras)
         {
             @* The card is a drag source: drop it on any tile to show this camera there. *@
-            <div class="cam @(cam.Online ? "" : "cam-offline")" draggable="true"
+            <div class="cam @(cam.Online ? "" : "cam-offline") @(IsRouteCamera(cam.Name) ? "cam-active" : "")" draggable="true"
                  @ondragstart="() => _dragCamera = cam.Name"
                  @ondragend="ClearDragState">
                 @* Stream readiness latches once video has flowed, so only the live
@@ -117,7 +117,7 @@
                        which shows that camera maximized on that exact stream. *@
                     @foreach (var s in cam.Streams)
                     {
-                        <button class="chip @(s.Ready ? "" : "chip-off")"
+                        <button class="chip @(s.Ready ? "" : "chip-off") @(IsRouteStream(cam.Name, s.Kind) ? "chip-active" : "")"
                                 title="Open @cam.Name (@s.Label) full size — @s.Path @(s.Codec != null ? $"({s.Codec} {s.Width}x{s.Height})" : "")"
                                 @onclick="() => Nav.NavigateTo(StreamUrl(cam.Name, s.Kind))">
                             @s.Label
@@ -368,6 +368,14 @@
                        @onkeydown='e => { if (e.Key == "Enter") _ = SaveLayoutAsAsync(); }' />
                 <button class="chip" disabled="@(string.IsNullOrWhiteSpace(_layoutName))"
                         @onclick="SaveLayoutAsAsync">＋ Save as new</button>
+            </div>
+        }
+
+        @if (_missingCamera != null)
+        {
+            <div class="perf-toast" role="status">
+                <span>Camera “<b>@_missingCamera</b>” doesn't exist on this server — showing the camera wall instead.</span>
+                <button class="chip" @onclick="() => _missingCamera = null">Got it</button>
             </div>
         }
 
@@ -1740,6 +1748,7 @@
             _cameras.Clear();
             if (cams != null) _cameras.AddRange(cams);
             _error = null;
+            _camerasFetched = true;
             return true;
         }
         catch (Exception ex)
@@ -2352,6 +2361,20 @@
     /// <summary>Optional stream segment (/cameras/{name}/main|sub|ext) pinning the shown stream.</summary>
     [Parameter] public string? Stream { get; set; }
 
+    /// <summary>A deep link named a camera the server doesn't have — shown as a notice on the wall.</summary>
+    private string? _missingCamera;
+
+    /// <summary>True once the camera list has been fetched successfully at least once.</summary>
+    private bool _camerasFetched;
+
+    /// <summary>True when this sidebar camera is the one named in the URL — its card gets the highlight.</summary>
+    private bool IsRouteCamera(string name) =>
+        Camera != null && string.Equals(name, Camera, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>True when the URL pins this exact camera + stream (/cameras/{name}/{stream}).</summary>
+    private bool IsRouteStream(string name, string kind) =>
+        IsRouteCamera(name) && KindFromSegment(Stream) == kind;
+
     private static string CameraUrl(string name) => $"cameras/{Uri.EscapeDataString(name)}";
 
     private static string StreamUrl(string name, string kind) =>
@@ -2394,7 +2417,21 @@
             return;
         }
         var cam = _cameras.FirstOrDefault(c => string.Equals(c.Name, Camera, StringComparison.OrdinalIgnoreCase));
-        if (cam == null) return; // unknown camera (or list not fetched yet): leave the wall alone
+        if (cam == null)
+        {
+            // Only a successfully fetched camera list can prove a deep link is bad —
+            // fetch errors and the login gate leave the wall alone (the route is
+            // re-applied once the list arrives). A truly unknown camera falls back
+            // to the wall with a notice instead of silently rendering under the
+            // bogus /cameras/... URL.
+            if (_camerasFetched && _error == null && !_showLogin)
+            {
+                _missingCamera = Camera;
+                Nav.NavigateTo("", replace: true);
+            }
+            return;
+        }
+        _missingCamera = null;
 
         // An explicit /main|/sub|/ext segment pins the stream; without one the
         // maximize auto-main logic decides (and restores) as usual.

@@ -17,8 +17,10 @@ namespace Neolink.Mqtt;
 ///
 /// Per camera it publishes (all retained, so HA repopulates after a restart):
 ///   • binary_sensor: motion, person, vehicle, animal   (from the alarm pushes)
+///   • binary_sensor: siren                              (from the status pushes)
 ///   • event:         doorbell press                     (video doorbells; not retained)
 ///   • sensor:        battery                            (battery cameras)
+///   • sensor:        Wi-Fi signal, diagnostic           (from the status pushes)
 ///   • switch:        PIR sensor                         (PIR cameras)
 ///   • select:        night vision (auto/on/off)         (IR-capable cameras)
 ///   • light:         floodlight                         (cameras with a spotlight)
@@ -96,6 +98,13 @@ public sealed class HomeAssistantMqtt
             cam.OnMotion(push);
     }
 
+    /// <summary>Feeds one camera's status push (Wi-Fi signal, siren, floodlight, ...) into its bridge.</summary>
+    public void OnStatus(string cameraName, StatusPush push)
+    {
+        if (_cameras.TryGetValue(Sanitize(cameraName), out var cam))
+            cam.OnStatus(push);
+    }
+
     // ------------------------------------------------------------------ MQTT plumbing
 
     internal Task PublishAsync(string topic, string payload, CancellationToken ct = default) =>
@@ -168,6 +177,9 @@ internal sealed class CameraBridge
 
     private bool _featuresAnnounced;
     private bool _doorbellAnnounced;
+    private bool _wifiAnnounced, _sirenAnnounced;  // lazily, on the first status push
+    private int? _wifiDbm;
+    private bool? _sirenOn, _floodlightOn;
     private bool _hasFloodlight, _hasIr, _hasSnapshot;
     private string? _model;
     private DateTime _lastSnapshot = DateTime.MinValue;
@@ -224,6 +236,11 @@ internal sealed class CameraBridge
         // doorbell (lazily created on first press) so it survives, like the rest.
         if (_doorbellAnnounced)
             await AnnounceEntityAsync("event", "doorbell", DoorbellEventConfig(), ct).ConfigureAwait(false);
+        // Same for the entities created lazily on the first status push.
+        if (_wifiAnnounced)
+            await AnnounceEntityAsync("sensor", "wifi_signal", WifiSignalConfig(), ct).ConfigureAwait(false);
+        if (_sirenAnnounced)
+            await AnnounceEntityAsync("binary_sensor", "siren", SirenConfig(), ct).ConfigureAwait(false);
     }
 
     /// <summary>Generic cameras: online/offline as a diagnostic connectivity sensor.</summary>
@@ -438,6 +455,95 @@ internal sealed class CameraBridge
         availability_mode = "all",
     };
 
+    // ------------------------------------------------------------------ status pushes
+
+    public void OnStatus(StatusPush push) => _ = PublishStatusAsync(push, CancellationToken.None);
+
+    /// <summary>
+    /// Unsolicited status pushes keep entities live without polling. All publishes
+    /// are edge-triggered (only on a changed value); the Wi-Fi and siren entities
+    /// are announced lazily on their first push, so cameras that never send one
+    /// don't grow dead entities in HA.
+    /// </summary>
+    private async Task PublishStatusAsync(StatusPush push, CancellationToken ct)
+    {
+        try
+        {
+            switch (push)
+            {
+                case WifiSignalPush wifi:
+                    if (!_wifiAnnounced)
+                    {
+                        _wifiAnnounced = true;
+                        await AnnounceEntityAsync("sensor", "wifi_signal", WifiSignalConfig(), ct).ConfigureAwait(false);
+                    }
+                    if (wifi.SignalDbm != _wifiDbm)
+                    {
+                        _wifiDbm = wifi.SignalDbm;
+                        await _hub.PublishAsync(StateTopic("wifi_signal"), wifi.SignalDbm.ToString(), ct).ConfigureAwait(false);
+                    }
+                    break;
+
+                case SirenStatusPush siren:
+                    if (!_sirenAnnounced)
+                    {
+                        _sirenAnnounced = true;
+                        await AnnounceEntityAsync("binary_sensor", "siren", SirenConfig(), ct).ConfigureAwait(false);
+                    }
+                    if (siren.On != _sirenOn)
+                    {
+                        _sirenOn = siren.On;
+                        await _hub.PublishAsync(StateTopic("siren"), siren.On ? "ON" : "OFF", ct).ConfigureAwait(false);
+                    }
+                    break;
+
+                case FloodlightStatusPush fl:
+                    // The floodlight entity itself is announced from the LedState
+                    // probe; the push just keeps its state fresh between polls.
+                    if (_hasFloodlight && fl.On != _floodlightOn)
+                    {
+                        _floodlightOn = fl.On;
+                        await _hub.PublishAsync(StateTopic("floodlight"), fl.On ? "ON" : "OFF", ct).ConfigureAwait(false);
+                    }
+                    break;
+
+                // SleepStatusPush: parsed for the log, no HA surface yet.
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"{_cam.Name}: status publish failed: {Log.Flatten(ex)}");
+        }
+    }
+
+    /// <summary>Wi-Fi signal strength as a diagnostic sensor (RSSI in dBm, from msg 464 pushes).</summary>
+    private object WifiSignalConfig() => new
+    {
+        name = "Wi-Fi signal",
+        unique_id = $"neolink_{Id}_wifi_signal",
+        state_topic = StateTopic("wifi_signal"),
+        device_class = "signal_strength",
+        unit_of_measurement = "dBm",
+        state_class = "measurement",
+        entity_category = "diagnostic",
+        device = Device(),
+        availability = Availability(),
+        availability_mode = "all",
+    };
+
+    private object SirenConfig() => new
+    {
+        name = "Siren",
+        unique_id = $"neolink_{Id}_siren",
+        state_topic = StateTopic("siren"),
+        payload_on = "ON",
+        payload_off = "OFF",
+        device_class = "sound",
+        device = Device(),
+        availability = Availability(),
+        availability_mode = "all",
+    };
+
     /// <summary>Publishes ON/OFF only on transitions (edge-triggered), keeping traffic minimal.</summary>
     private async Task PublishSensorEdgesAsync(CancellationToken ct)
     {
@@ -512,7 +618,10 @@ internal sealed class CameraBridge
         if (_hasIr && Str(led, "state") is { Length: > 0 } ir)
             await _hub.PublishAsync(StateTopic("ir"), IrToHa(ir), ct).ConfigureAwait(false);
         if (_hasFloodlight && Str(led, "lightState") is { Length: > 0 } fl)
-            await _hub.PublishAsync(StateTopic("floodlight"), fl == "open" ? "ON" : "OFF", ct).ConfigureAwait(false);
+        {
+            _floodlightOn = fl == "open"; // keep the push edge-detector in sync with the poll
+            await _hub.PublishAsync(StateTopic("floodlight"), _floodlightOn.Value ? "ON" : "OFF", ct).ConfigureAwait(false);
+        }
     }
 
     private async Task PublishPirAsync(CancellationToken ct)
