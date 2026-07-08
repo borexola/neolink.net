@@ -225,41 +225,92 @@
         key: 'neolink.freegeo',
         z: 10,
         saveTimer: null,
+        // In-memory geometry is the truth; localStorage is only persistence.
+        // Re-applying straight from localStorage raced the debounced save: a
+        // Blazor render right after a drag re-read the OLD positions (snap-back),
+        // which then "corrected themselves" once the 250ms write landed.
+        geo: null,
+        applying: false, // programmatic layout must not echo back into capture
         load() {
-            try { return JSON.parse(localStorage.getItem(this.key)) || {}; } catch { return {}; }
+            if (!this.geo) {
+                try { this.geo = JSON.parse(localStorage.getItem(this.key)) || {}; } catch { this.geo = {}; }
+            }
+            return this.geo;
         },
         save(geo) {
+            this.geo = geo;
             clearTimeout(this.saveTimer);
             this.saveTimer = setTimeout(() => localStorage.setItem(this.key, JSON.stringify(geo)), 250);
         },
+        // Geometry is stored as FRACTIONS of the stage, so freeform windows scale
+        // with the browser instead of being stranded at fixed pixel spots.
         capture(stage) {
+            if (this.applying) return;
+            const W = stage.clientWidth, H = stage.clientHeight;
+            if (!W || !H) return;
             const geo = this.load();
             stage.querySelectorAll('.tile').forEach(tile => {
                 if (!tile.style.width) return;
                 geo[tile.dataset.slot] = {
-                    x: tile.offsetLeft, y: tile.offsetTop,
-                    w: tile.offsetWidth, h: tile.offsetHeight,
+                    x: tile.offsetLeft / W, y: tile.offsetTop / H,
+                    w: tile.offsetWidth / W, h: tile.offsetHeight / H,
                 };
             });
             this.save(geo);
+        },
+        // Lays every (non-dragging) tile out from its stored fractions at the
+        // stage's CURRENT size — also runs whenever the stage resizes.
+        apply(stage) {
+            const W = stage.clientWidth, H = stage.clientHeight;
+            if (!W || !H) return;
+            const geo = this.load();
+            this.applying = true;
+            let migrated = false;
+            stage.querySelectorAll('.tile').forEach((tile, idx) => {
+                if (tile.dataset.dragging) return;
+                const slot = tile.dataset.slot ?? String(idx);
+                let g = geo[slot] || {
+                    x: (24 + 32 * idx) / W, y: (24 + 32 * idx) / H,
+                    w: Math.min(0.55, 440 / W), h: Math.min(0.5, 280 / H),
+                };
+                // Legacy pixel geometry (pre-fractions): convert once and WRITE IT
+                // BACK — re-normalizing the same pixels at a different stage size
+                // would corrupt the layout.
+                if (g.w > 1.5 || g.h > 1.5) {
+                    g = { x: g.x / W, y: g.y / H, w: g.w / W, h: g.h / H };
+                    geo[slot] = g;
+                    migrated = true;
+                }
+                const w = Math.min(Math.max(g.w, 0.08), 1);
+                const h = Math.min(Math.max(g.h, 0.08), 1);
+                const x = Math.min(Math.max(g.x, 0), 1 - w);
+                const y = Math.min(Math.max(g.y, 0), 1 - h);
+                tile.style.left = Math.round(x * W) + 'px';
+                tile.style.top = Math.round(y * H) + 'px';
+                tile.style.width = Math.round(w * W) + 'px';
+                tile.style.height = Math.round(h * H) + 'px';
+            });
+            if (migrated) this.save(geo);
+            setTimeout(() => { this.applying = false; }, 80); // outlive the ResizeObserver echo
         },
     };
 
     function freeInit(stageId) {
         const stage = document.getElementById(stageId);
         if (!stage || !stage.classList.contains('mode-free')) return;
-        const geo = free.load();
+
+        free.apply(stage);
+
+        // Follow the browser: when the stage resizes, re-lay the windows out
+        // from their fractions so they grow/shrink with it.
+        if (!stage.dataset.freeResize) {
+            stage.dataset.freeResize = '1';
+            new ResizeObserver(() => {
+                if (stage.classList.contains('mode-free')) free.apply(stage);
+            }).observe(stage);
+        }
 
         stage.querySelectorAll('.tile').forEach((tile, idx) => {
-            const slot = tile.dataset.slot ?? String(idx);
-            if (!tile.dataset.dragging) {
-                const g = geo[slot] || { x: 24 + 32 * idx, y: 24 + 32 * idx, w: 440, h: 280 };
-                tile.style.left = g.x + 'px';
-                tile.style.top = g.y + 'px';
-                tile.style.width = g.w + 'px';
-                tile.style.height = g.h + 'px';
-            }
-
             if (tile.dataset.freeInit) return;
             tile.dataset.freeInit = '1';
 
@@ -310,6 +361,18 @@
 
     window.neolink = {
         freeInit,
+
+        // Freeform geometry accessors for Blazor (saved layouts). They talk to
+        // the LIVE in-memory state — a plain localStorage read could be a
+        // debounce-interval behind what's on screen.
+        freeGeometry() {
+            return JSON.stringify(free.load());
+        },
+        freeSetGeometry(json) {
+            try { free.geo = JSON.parse(json) || {}; } catch { free.geo = {}; }
+            clearTimeout(free.saveTimer);
+            localStorage.setItem(free.key, JSON.stringify(free.geo));
+        },
 
         // Briefly flash a tile's border red — used when a camera the user picked
         // is already on screen (so we don't duplicate or clobber another tile).
@@ -430,6 +493,13 @@
             document.body.dataset.escInit = '1';
             document.addEventListener('keydown', (e) => {
                 if (e.key !== 'Escape') return;
+                // The tile context menu closes first (its backdrop is the closer).
+                const ctx = document.querySelector('.ctx-backdrop');
+                if (ctx) {
+                    e.preventDefault();
+                    ctx.click();
+                    return;
+                }
                 const dialogs = document.querySelectorAll('.event-player, .quick-view');
                 const btn = dialogs.length
                     ? dialogs[dialogs.length - 1].querySelector('.icon-btn[title="Close"]')
@@ -438,6 +508,66 @@
                     e.preventDefault();
                     btn.click();
                 }
+            });
+        },
+
+        // HTML5 drag sources must put SOMETHING in dataTransfer or Firefox never
+        // starts the drag; the real drag state lives Blazor-side. Idempotent.
+        dndInit() {
+            if (document.body.dataset.dndInit) return;
+            document.body.dataset.dndInit = '1';
+            document.addEventListener('dragstart', (e) => {
+                const src = e.target instanceof Element ? e.target.closest('[draggable="true"]') : null;
+                if (src && e.dataTransfer) {
+                    e.dataTransfer.setData('text/plain', src.id || 'neolink');
+                    e.dataTransfer.effectAllowed = 'move';
+                }
+            });
+        },
+
+        // Grid-mode corner grips: dragging resizes a tile in whole grid-cell
+        // steps (live inline preview; the span is committed to Blazor on release
+        // and persisted with the view). All motion stays off the circuit.
+        tileResizeInit(dotnetRef) {
+            if (document.body.dataset.tileResizeInit) return;
+            document.body.dataset.tileResizeInit = '1';
+            document.addEventListener('pointerdown', (e) => {
+                const handle = e.target instanceof Element ? e.target.closest('.tile-size-handle') : null;
+                if (!handle) return;
+                const tile = handle.closest('.tile');
+                const grid = document.getElementById('stage-grid');
+                if (!tile || !grid) return;
+                e.preventDefault();
+                e.stopPropagation();
+                tile.draggable = false; // the grip resizes — it must not start a tile drag
+
+                const colCount = getComputedStyle(grid).gridTemplateColumns.split(' ').length;
+                const gap = parseFloat(getComputedStyle(grid).gap) || 8;
+                const start = tile.getBoundingClientRect();
+                const c0 = parseInt(tile.dataset.cols || '1');
+                const r0 = parseInt(tile.dataset.rows || '1');
+                const unitW = (start.width - gap * (c0 - 1)) / c0;
+                const unitH = (start.height - gap * (r0 - 1)) / r0;
+                let cols = c0, rows = r0;
+
+                const move = (ev) => {
+                    cols = Math.max(1, Math.min(colCount,
+                        Math.round((ev.clientX - start.left + gap / 2) / (unitW + gap)) + 0));
+                    rows = Math.max(1, Math.round((ev.clientY - start.top + gap / 2) / (unitH + gap)));
+                    tile.style.gridColumn = `span ${cols}`;
+                    tile.style.gridRow = `span ${rows}`;
+                };
+                const up = () => {
+                    handle.removeEventListener('pointermove', move);
+                    handle.removeEventListener('pointerup', up);
+                    handle.removeEventListener('pointercancel', up);
+                    dotnetRef.invokeMethodAsync('OnTileSpan', parseInt(tile.dataset.slot), cols, rows)
+                        .catch(() => { });
+                };
+                try { handle.setPointerCapture(e.pointerId); } catch { }
+                handle.addEventListener('pointermove', move);
+                handle.addEventListener('pointerup', up);
+                handle.addEventListener('pointercancel', up);
             });
         },
 
@@ -560,6 +690,9 @@
                 if (!eligible(box) || stOf(box).z <= 1) return;
                 if (e.target.closest('.tile-bar, .zoom-hud, button, select')) return;
                 pan.box = box; pan.moved = false; pan.x = e.clientX; pan.y = e.clientY;
+                // While zoomed, dragging PANS — it must not start an HTML5 tile
+                // drag (Blazor re-stamps draggable on the next render).
+                if (box instanceof HTMLElement) box.draggable = false;
             }, { capture: true });
             document.addEventListener('pointermove', (e) => {
                 if (!pan.box) return;

@@ -1,5 +1,6 @@
 @page "/"
 @page "/cameras/{Camera}"
+@page "/cameras/{Camera}/{Stream}"
 @using System.Text.Json
 @inject HttpClient Http
 @inject IJSRuntime JS
@@ -90,11 +91,14 @@
 
         @foreach (var cam in _cameras)
         {
-            <div class="cam @(cam.Online ? "" : "cam-offline")">
+            @* The card is a drag source: drop it on any tile to show this camera there. *@
+            <div class="cam @(cam.Online ? "" : "cam-offline")" draggable="true"
+                 @ondragstart="() => _dragCamera = cam.Name"
+                 @ondragend="ClearDragState">
                 @* Stream readiness latches once video has flowed, so only the live
                    control connection (Online) is a truthful liveness signal. *@
-                <div class="cam-head" title="@(cam.Online ? "Add to view" : "Camera unreachable — reconnecting")"
-                     @onclick="() => AddCamera(cam)">
+                <div class="cam-head" title="@(cam.Online ? "Open full view (main stream) — drag the card onto a tile to add it to the wall" : "Camera unreachable — reconnecting")"
+                     @onclick="() => OpenCameraMain(cam)">
                     <span class="dot @(cam.Online ? "on" : "off")"></span>
                     <span class="cam-name">@cam.Name</span>
                     @if (!cam.Online)
@@ -112,11 +116,13 @@
                             @onclick="() => OpenQuickView(cam)" @onclick:stopPropagation="true">⛶</button>
                 </div>
                 <div class="cam-streams">
+                    @* A stream chip is a LINK: it navigates to /cameras/{name}/{stream},
+                       which shows that camera maximized on that exact stream. *@
                     @foreach (var s in cam.Streams)
                     {
                         <button class="chip @(s.Ready ? "" : "chip-off")"
-                                title="@s.Path @(s.Codec != null ? $"({s.Codec} {s.Width}x{s.Height})" : "")"
-                                @onclick="() => AddStream(cam, s)">
+                                title="Open @cam.Name (@s.Label) full size — @s.Path @(s.Codec != null ? $"({s.Codec} {s.Width}x{s.Height})" : "")"
+                                @onclick="() => Nav.NavigateTo(StreamUrl(cam.Name, s.Kind))">
                             @s.Label
                             @if (s.Codec == "H265")
                             {
@@ -389,10 +395,22 @@
                    them, so their players keep running and restore is instant.
                    zoom-on marks the surfaces where digital zoom is available
                    (theater layout / maximized tile; JS checks fullscreen itself). *@
-                <div class="tile @(index == 0 && (_mode is "focus" or "mosaic") ? "hero" : "") @(_mode == "theater" || _maxIndex == index ? "zoom-on" : "") @(_maxIndex == index ? "maxed" : "")"
-                     id="tile-@index" data-slot="@index" style="@TileStyle(index)" @key="index"
+                @* Tiles are drag-and-drop surfaces: drag one onto another to swap
+                   them, drop a sidebar camera to load it, right-click to pick a
+                   camera. Free mode keeps its own JS drag/resize; a maximized tile
+                   is not draggable (dragging a full-screen card means nothing). *@
+                <div class="tile @(index == 0 && (_mode is "focus" or "mosaic") ? "hero" : "") @(_mode == "theater" || _maxIndex == index ? "zoom-on" : "") @(_maxIndex == index ? "maxed" : "") @(_dropIndex == index ? "drop-target" : "")"
+                     id="tile-@index" data-slot="@index" data-cols="@slot.Cols" data-rows="@slot.Rows"
+                     style="@TileStyle(index)" @key="index"
+                     draggable="@(TileDraggable(index) ? "true" : "false")"
+                     @ondragstart="() => _dragTile = index"
+                     @ondragend="ClearDragState"
+                     @ondragenter="() => _dropIndex = index"
+                     @ondragover:preventDefault="true"
+                     @ondrop="() => DropOnTileAsync(index)" @ondrop:preventDefault="true"
+                     @oncontextmenu="e => OpenTileMenu(index, e)" @oncontextmenu:preventDefault="true"
                      @ondblclick="() => ToggleMaximize(index)"
-                     @onclick="() => OnTileClick(index)">
+                     @onclick="e => OnTileClick(index, e)">
                     @if (_mode == "free")
                     {
                         <div class="tile-head">
@@ -402,7 +420,7 @@
                     }
                     @if (slot.Camera == null)
                     {
-                        <div class="tile-empty" title="Pick a camera from the sidebar">＋</div>
+                        <div class="tile-empty" title="Click to choose a camera — or drag one from the sidebar">＋</div>
                     }
                     else
                     {
@@ -435,6 +453,12 @@
                             <button class="icon-btn" title="Remove" @onclick="() => CloseSlot(index)">✕</button>
                         </div>
                         @ZoomHud
+                        @if (_mode == "grid" && _maxIndex != index)
+                        {
+                            @* Corner grip: drag to grow/shrink the tile in grid-cell steps
+                               (JS previews live, .NET commits the span on release). *@
+                            <div class="tile-size-handle" title="Drag to resize"></div>
+                        }
                     }
                 </div>
             }
@@ -480,6 +504,34 @@
                 <div class="tile-status">connecting…</div>
                 @ZoomHud
             </div>
+        </div>
+    }
+
+    @if (_ctxIndex is int ctxIdx)
+    {
+        @* Right-click camera picker for a tile. *@
+        <div class="ctx-backdrop" @onclick="CloseTileMenu" @oncontextmenu="CloseTileMenu" @oncontextmenu:preventDefault="true"></div>
+        <div class="ctx-menu" style="left:@(_ctxX)px; top:@(_ctxY)px" role="menu">
+            <div class="ctx-title">Show camera</div>
+            @foreach (var cam in _cameras)
+            {
+                var c = cam;
+                bool current = _slots[ctxIdx].Camera == c.Name;
+                <button class="ctx-item @(current ? "ctx-item-active" : "")" role="menuitem"
+                        @onclick="() => PickTileCameraAsync(ctxIdx, c)">
+                    <span class="dot @(c.Online ? "on" : "off")"></span> @c.Name
+                    @if (current)
+                    {
+                        <span class="ctx-check">✓</span>
+                    }
+                </button>
+            }
+            @if (_slots[ctxIdx].Camera != null)
+            {
+                <div class="ctx-sep"></div>
+                <button class="ctx-item ctx-danger" role="menuitem"
+                        @onclick="() => { CloseSlot(ctxIdx); CloseTileMenu(); }">✕ Clear tile</button>
+            }
         </div>
     }
 
@@ -967,8 +1019,12 @@
         await JS.InvokeVoidAsync("neolink.zoomInit");
         // Speaker toggles: re-sync glyphs/visibility after every render.
         await JS.InvokeVoidAsync("neolink.audioInit");
-        // Esc closes the event player / quick view pop-ups.
+        // Esc closes the event player / quick view pop-ups (and the tile menu).
         await JS.InvokeVoidAsync("neolink.escInit");
+        // Drag & drop shim (Firefox needs dataTransfer payloads) + grid resize grips.
+        _selfRef ??= DotNetObjectReference.Create(this);
+        await JS.InvokeVoidAsync("neolink.dndInit");
+        await JS.InvokeVoidAsync("neolink.tileResizeInit", _selfRef);
         // Blazor's `muted` attribute only sets defaultMuted on dynamically created
         // elements, which blocks autoplay — the helper mutes for real and plays.
         if (_eventsSupported && _events.Any(e => !e.Reviewed))
@@ -2032,9 +2088,101 @@
             }
             case "free":
                 return null; // geometry is owned by JS (drag/resize, persisted separately)
+            case "grid":
+            {
+                // User-resized tiles span whole grid cells (corner grip).
+                var s = _slots[i];
+                return s.Cols > 1 || s.Rows > 1
+                    ? $"grid-column: span {Math.Min(s.Cols, GridColumns(_count))}; grid-row: span {s.Rows};"
+                    : "";
+            }
             default:
                 return "";   // explicit empty: clears leftover free-mode geometry on mode switch
         }
+    }
+
+    // ------------------------------------------------------------ drag & drop, context menu, resize
+
+    private int? _dragTile;      // tile being dragged (drop = swap)
+    private string? _dragCamera; // sidebar camera being dragged onto a tile
+    private int? _dropIndex;     // hovered drop target (highlight)
+    private int? _ctxIndex;      // tile whose right-click menu is open
+    private double _ctxX, _ctxY;
+
+    private bool TileDraggable(int index) =>
+        _mode != "free" && _maxIndex == null && _slots[index].Camera != null;
+
+    private void ClearDragState()
+    {
+        _dragTile = null;
+        _dragCamera = null;
+        _dropIndex = null;
+    }
+
+    private async Task DropOnTileAsync(int index)
+    {
+        var fromCamera = _dragCamera;
+        var fromTile = _dragTile;
+        ClearDragState();
+        if (fromCamera != null)
+        {
+            var cam = _cameras.FirstOrDefault(c => c.Name == fromCamera);
+            if (cam != null) await SetTileCameraAsync(index, cam);
+        }
+        else if (fromTile is int from && from != index && from < _slots.Count)
+        {
+            // Swap the whole slots — the camera moves together with its size.
+            (_slots[from], _slots[index]) = (_slots[index], _slots[from]);
+            await SaveAsync();
+        }
+    }
+
+    /// <summary>Drops and right-click picks put the SUB stream on the tile (wall duty);
+    /// if the camera already lives on another tile it MOVES here instead of duplicating.</summary>
+    private async Task SetTileCameraAsync(int index, ApiCamera cam)
+    {
+        var s = DefaultStream(cam);
+        if (s == null) return;
+        int existing = _slots.FindIndex(x => x.Camera == cam.Name);
+        var slot = _slots[index];
+        slot.Camera = cam.Name;
+        slot.Kind = s.Kind;
+        slot.Path = s.Path;
+        if (existing >= 0 && existing != index)
+            _slots[existing].Clear();
+        MaybeWarnMainStreams();
+        await SaveAsync();
+    }
+
+    private void OpenTileMenu(int index, MouseEventArgs e)
+    {
+        _ctxIndex = index;
+        _ctxX = e.ClientX;
+        _ctxY = e.ClientY;
+    }
+
+    private void CloseTileMenu() => _ctxIndex = null;
+
+    private async Task PickTileCameraAsync(int index, ApiCamera cam)
+    {
+        CloseTileMenu();
+        await SetTileCameraAsync(index, cam);
+    }
+
+    /// <summary>Called from JS when a grid tile's corner grip is released.</summary>
+    [JSInvokable]
+    public async Task OnTileSpan(int index, int cols, int rows)
+    {
+        if (_mode != "grid" || index < 0 || index >= _slots.Count) return;
+        int maxCols = GridColumns(_count);
+        int maxRows = Math.Max(1, (int)Math.Ceiling((double)_count / maxCols));
+        _slots[index].Cols = Math.Clamp(cols, 1, maxCols);
+        _slots[index].Rows = Math.Clamp(rows, 1, maxRows);
+        await InvokeAsync(async () =>
+        {
+            await SaveAsync();
+            StateHasChanged();
+        });
     }
 
     // ------------------------------------------------------------ slot actions
@@ -2042,80 +2190,13 @@
     private static ApiStream? DefaultStream(ApiCamera cam) =>
         cam.Streams.FirstOrDefault(s => s.Kind == "subStream") ?? cam.Streams.FirstOrDefault();
 
-    private void AddCamera(ApiCamera cam)
+    /// <summary>Sidebar camera-name click: open it full size on the MAIN stream.
+    /// (Putting a camera on a tile is drag-and-drop or the tile's right-click menu.)</summary>
+    private void OpenCameraMain(ApiCamera cam)
     {
-        var s = DefaultStream(cam);
-        if (s != null) AddStream(cam, s);
-    }
-
-    private void AddStream(ApiCamera cam, ApiStream stream)
-    {
-        int shown = _slots.FindIndex(s => s.Camera == cam.Name);
-
-        // While a tile is maximized, picking a camera means "show me THAT one big":
-        // navigate to its URL and let the route apply it (promoting the camera's
-        // already-live background tile when it has one, swapping content otherwise).
-        if (_maxIndex is int maxed)
-        {
-            if (shown == maxed)
-                _ = JS.InvokeVoidAsync("neolink.flashTile", $"tile-{maxed}");
-            else
-                Nav.NavigateTo(CameraUrl(cam.Name));
-            _sidebarOpen = false;
-            return;
-        }
-
-        // Already on screen? Don't duplicate or clobber another tile — flash the
-        // existing tile red so the user can see where the camera already is.
-        if (shown >= 0)
-        {
-            _ = JS.InvokeVoidAsync("neolink.flashTile", $"tile-{shown}");
-            _sidebarOpen = false;
-            return;
-        }
-
-        // Theater shows exactly ONE card: picking another camera means "show me
-        // that one here" — swap the card's content. There is no other tile to
-        // protect and nowhere to grow, so the usual don't-clobber rule doesn't apply.
-        if (_mode == "theater")
-        {
-            var shownSlot = _slots[0];
-            shownSlot.Camera = cam.Name;
-            shownSlot.Kind = stream.Kind;
-            shownSlot.Path = stream.Path;
-            MaybeWarnMainStreams();
-            _sidebarOpen = false;
-            _ = SaveAsync();
-            return;
-        }
-
-        var slot = _slots.FirstOrDefault(s => s.Camera == null);
-        if (slot == null)
-        {
-            // No free tile: grow the layout by one rather than replacing a tile
-            // that already has content.
-            int grown = ClampCount(_mode, _count + 1);
-            if (grown > _count)
-            {
-                _count = grown;
-                EnsureSlots();
-                slot = _slots.FirstOrDefault(s => s.Camera == null);
-            }
-            if (slot == null)
-            {
-                // At the layout's max tiles: flash the last one instead of clobbering.
-                _ = JS.InvokeVoidAsync("neolink.flashTile", $"tile-{_slots.Count - 1}");
-                _sidebarOpen = false;
-                return;
-            }
-        }
-
-        slot.Camera = cam.Name;
-        slot.Kind = stream.Kind;
-        slot.Path = stream.Path;
-        MaybeWarnMainStreams();
+        var main = cam.Streams.FirstOrDefault(s => s.Kind == "mainStream");
         _sidebarOpen = false; // mobile drawer: close after picking
-        _ = SaveAsync();
+        Nav.NavigateTo(main != null ? StreamUrl(cam.Name, main.Kind) : CameraUrl(cam.Name));
     }
 
     private void ChangeStream(int index, ApiCamera camera, string? path)
@@ -2152,10 +2233,17 @@
         <button type="button" class="icon-btn zoom-btn zoom-reset" data-zoom="reset" title="Restore 1:1 (or double-click the video)">1:1</button>
     </div>;
 
-    private void OnTileClick(int index)
+    private void OnTileClick(int index, MouseEventArgs e)
     {
+        // An empty tile invites a click: open the camera picker right there
+        // (same menu as right-click, friendlier for touch and discovery).
+        if (_slots[index].Camera == null)
+        {
+            OpenTileMenu(index, e);
+            return;
+        }
         // In focus mode, clicking a thumbnail promotes it to the hero pane.
-        if (_mode == "focus" && index > 0 && _slots[index].Camera != null)
+        if (_mode == "focus" && index > 0)
         {
             (_slots[0], _slots[index]) = (_slots[index], _slots[0]);
             _ = SaveAsync();
@@ -2194,7 +2282,7 @@
         Slots = _slots.Select(s => s.Clone()).ToList(),
         // Freeform tiles keep their exact pixel geometry (owned by JS in localStorage).
         FreeGeometry = _mode == "free"
-            ? await JS.InvokeAsync<string?>("neolink.lsGet", "neolink.freegeo")
+            ? await JS.InvokeAsync<string?>("neolink.freeGeometry")
             : null,
     };
 
@@ -2221,7 +2309,7 @@
     private async Task LoadLayoutAsync(SavedLayout l)
     {
         if (l.FreeGeometry != null)
-            await JS.InvokeVoidAsync("neolink.lsSet", "neolink.freegeo", l.FreeGeometry);
+            await JS.InvokeVoidAsync("neolink.freeSetGeometry", l.FreeGeometry);
         _mode = Modes.Any(m => m.Mode == l.Mode) ? l.Mode : "grid";
         _count = ClampCount(_mode, l.Count);
         _slots = l.Slots.Select(s => s.Clone()).ToList();
@@ -2251,7 +2339,29 @@
     /// <summary>The camera named in the URL (/cameras/{name}) — it owns the maximized state.</summary>
     [Parameter] public string? Camera { get; set; }
 
+    /// <summary>Optional stream segment (/cameras/{name}/main|sub|ext) pinning the shown stream.</summary>
+    [Parameter] public string? Stream { get; set; }
+
     private static string CameraUrl(string name) => $"cameras/{Uri.EscapeDataString(name)}";
+
+    private static string StreamUrl(string name, string kind) =>
+        $"cameras/{Uri.EscapeDataString(name)}/{SegmentFromKind(kind)}";
+
+    private static string? KindFromSegment(string? seg) => seg?.ToLowerInvariant() switch
+    {
+        "main" => "mainStream",
+        "sub" => "subStream",
+        "ext" or "extern" => "externStream",
+        _ => null,
+    };
+
+    private static string SegmentFromKind(string kind) => kind switch
+    {
+        "mainStream" => "main",
+        "subStream" => "sub",
+        "externStream" => "ext",
+        _ => kind,
+    };
 
     protected override void OnParametersSet()
     {
@@ -2276,12 +2386,17 @@
         var cam = _cameras.FirstOrDefault(c => string.Equals(c.Name, Camera, StringComparison.OrdinalIgnoreCase));
         if (cam == null) return; // unknown camera (or list not fetched yet): leave the wall alone
 
+        // An explicit /main|/sub|/ext segment pins the stream; without one the
+        // maximize auto-main logic decides (and restores) as usual.
+        var wantKind = KindFromSegment(Stream);
+        var want = wantKind != null ? cam.Streams.FirstOrDefault(s => s.Kind == wantKind) : null;
+
         int index = _slots.FindIndex(s => string.Equals(s.Camera, cam.Name, StringComparison.OrdinalIgnoreCase));
         if (index < 0)
         {
             // Not on the wall yet: reuse the currently maximized card if any,
             // else the first free tile (growing the layout when possible).
-            var stream = DefaultStream(cam);
+            var stream = want ?? DefaultStream(cam);
             if (stream == null) return;
             var slot = _maxIndex is int m ? _slots[m] : _slots.FirstOrDefault(s => s.Camera == null);
             if (slot == null)
@@ -2295,12 +2410,32 @@
             slot.Path = stream.Path;
             index = _slots.IndexOf(slot);
         }
-        if (_maxIndex == index) return; // already showing it big
-        RevertAutoMainSwitch();
-        _maxIndex = index;
-        AutoMainStream(index);
-        MaybeWarnMainStreams(); // route-driven maximize can add a main stream too
-        _ = SaveAsync();
+
+        bool changed = false;
+        var target = _slots[index];
+        if (want != null && target.Kind != want.Kind)
+        {
+            // The URL asked for this stream by name — a deliberate choice, so the
+            // maximize auto-switch bookkeeping must not undo it later.
+            target.Kind = want.Kind;
+            target.Path = want.Path;
+            if (_maxIndex == index)
+                _maxPrevKind = _maxPrevPath = _maxPrevCamera = null;
+            changed = true;
+        }
+        if (_maxIndex != index)
+        {
+            RevertAutoMainSwitch();
+            _maxIndex = index;
+            if (want == null) AutoMainStream(index);
+            else _maxPrevKind = _maxPrevPath = _maxPrevCamera = null;
+            changed = true;
+        }
+        if (changed)
+        {
+            MaybeWarnMainStreams(); // route-driven maximize can add a main stream too
+            _ = SaveAsync();
+        }
     }
 
     private void ToggleMaximize(int index)

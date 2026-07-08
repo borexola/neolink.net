@@ -149,9 +149,12 @@ public sealed class ViewSlot
     public string? Camera { get; set; }
     public string? Kind { get; set; }
     public string? Path { get; set; }
+    /// <summary>Grid-cell span (grid mode only), user-resizable via the corner grip.</summary>
+    public int Cols { get; set; } = 1;
+    public int Rows { get; set; } = 1;
 
-    public ViewSlot Clone() => new() { Camera = Camera, Kind = Kind, Path = Path };
-    public void Clear() { Camera = null; Kind = null; Path = null; }
+    public ViewSlot Clone() => new() { Camera = Camera, Kind = Kind, Path = Path, Cols = Cols, Rows = Rows };
+    public void Clear() { Camera = null; Kind = null; Path = null; Cols = 1; Rows = 1; }
 }
 
 /// <summary>A snapshot of the view, used to restore after maximizing a tile.</summary>
