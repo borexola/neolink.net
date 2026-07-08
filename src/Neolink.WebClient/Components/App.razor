@@ -32,7 +32,7 @@
             <div class="reconnect-when-failed">
                 <div class="reconnect-title">Server unreachable</div>
                 <div class="reconnect-sub">The connection could not be re-established.</div>
-                <button class="chip chip-active" onclick="window.Blazor.reconnect()">Try again</button>
+                <button class="chip chip-active" onclick="(window.Blazor &amp;&amp; Blazor.reconnect) ? Blazor.reconnect() : location.reload()">Try again</button>
                 <button class="chip" onclick="location.reload()">Reload page</button>
             </div>
             <div class="reconnect-when-rejected">

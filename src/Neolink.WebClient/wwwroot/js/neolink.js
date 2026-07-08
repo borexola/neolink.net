@@ -214,6 +214,14 @@
 
     const players = {};
 
+    // Flat speaker SVGs (built once — audioSync runs on every render). Emoji
+    // render inconsistently across platforms, so these are inline SVG.
+    const _spk = (body) => '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" '
+        + 'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" '
+        + 'aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>' + body + '</svg>';
+    const VOL_ON = _spk('<path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>');
+    const VOL_OFF = _spk('<line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>');
+
     // Fullscreen state only exists browser-side; expose it as a body class so
     // CSS can swap the enter/exit glyph on the tile buttons without a server trip.
     document.addEventListener('fullscreenchange', () => {
@@ -594,17 +602,15 @@
         },
 
         audioSync() {
-            // Flat SVG speaker states (emoji render inconsistently across platforms)
-            const svg = (body) => '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" '
-                + 'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" '
-                + 'aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>' + body + '</svg>';
-            const VOL_ON = svg('<path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>');
-            const VOL_OFF = svg('<line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>');
             document.querySelectorAll('[data-audio-toggle]').forEach(btn => {
                 const video = btn.closest('.tile, .quick-view')?.querySelector('video');
                 const has = !!(video && video.dataset.audio);
                 btn.style.display = has ? '' : 'none';
                 if (!has) return;
+                // Only touch the DOM when the muted state actually changed.
+                const state = video.muted ? 'off' : 'on';
+                if (btn.dataset.spk === state) return;
+                btn.dataset.spk = state;
                 btn.innerHTML = video.muted ? VOL_OFF : VOL_ON;
                 btn.title = video.muted ? 'Unmute — this camera has audio' : 'Mute';
             });

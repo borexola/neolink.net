@@ -219,6 +219,11 @@ internal sealed class CameraBridge
 
         if (_featuresAnnounced)
             await AnnounceFeaturesAsync(ct).ConfigureAwait(false);
+
+        // A broker restart wipes retained discovery configs; re-announce the
+        // doorbell (lazily created on first press) so it survives, like the rest.
+        if (_doorbellAnnounced)
+            await AnnounceEntityAsync("event", "doorbell", DoorbellEventConfig(), ct).ConfigureAwait(false);
     }
 
     /// <summary>Generic cameras: online/offline as a diagnostic connectivity sensor.</summary>
