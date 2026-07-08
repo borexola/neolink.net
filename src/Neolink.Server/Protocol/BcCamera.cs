@@ -36,6 +36,7 @@ public sealed class BcCamera : IBcCamera
     private readonly BcConnection _conn;
     private readonly byte _channelId;
     private int _messageNum = -1;
+    private bool _oddMotionPushLogged; // one diagnostic per connection is plenty
 
     public byte ChannelId => _channelId;
     public DeviceInfoXml? DeviceInfo { get; private set; }
@@ -271,24 +272,56 @@ public sealed class BcCamera : IBcCamera
             }
 
             var list = msg.Xml?.RawElement("AlarmEventList");
-            if (list == null) continue;
+            if (list == null)
+            {
+                // Some firmware variants push different XML on the motion channel
+                // (doorbell/visitor pushes among the suspects) — surface the first
+                // one seen so the mapping can be extended from a real sample.
+                if (msg.Xml != null && !_oddMotionPushLogged)
+                {
+                    _oddMotionPushLogged = true;
+                    var raw = Encoding.UTF8.GetString(msg.Xml.Serialize()).Replace('\r', ' ').Replace('\n', ' ');
+                    Log.Info($"BC ch{_channelId}: motion-channel push without AlarmEventList — " +
+                             $"raw: {(raw.Length > 400 ? raw[..400] + "…" : raw)} (please report if this " +
+                             "coincides with a doorbell press)");
+                }
+                continue;
+            }
+            Log.Debug($"BC ch{_channelId}: alarm push {list.ToString(SaveOptions.DisableFormatting)}");
             foreach (var ev in list.Elements("AlarmEvent"))
             {
                 if (uint.TryParse(ev.Element("channelId")?.Value.Trim(), out var ch) && ch != _channelId)
                     continue;
-                var status = ev.Element("status")?.Value.Trim() ?? "";
-                // AItype variants seen in the wild: repeated elements, comma lists,
-                // "none" placeholders, and differing capitalization.
-                var aiTypes = ev.Elements()
-                    .Where(e => e.Name.LocalName.Equals("AItype", StringComparison.OrdinalIgnoreCase))
-                    .SelectMany(e => e.Value.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries))
-                    .Select(t => t.Trim().ToLowerInvariant())
-                    .Where(t => t is not ("" or "none"))
-                    .Distinct()
-                    .ToList();
-                onEvent(new MotionPush(status, aiTypes));
+                onEvent(ParseAlarmEvent(ev));
             }
         }
+    }
+
+    /// <summary>
+    /// One AlarmEvent element → MotionPush. AItype carries the AI classifications
+    /// on most firmware (repeated elements, comma lists, "none" placeholders,
+    /// varying capitalization) — but some put detection tokens INSIDE the status
+    /// list instead: a video doorbell's button press arrives as
+    /// status="MD,visitor" with AItype="none" (captured from a real Reolink
+    /// doorbell). Detection tokens found in the status are folded into the AI list.
+    /// </summary>
+    internal static MotionPush ParseAlarmEvent(XElement ev)
+    {
+        var status = ev.Element("status")?.Value.Trim() ?? "";
+        var aiTypes = ev.Elements()
+            .Where(e => e.Name.LocalName.Equals("AItype", StringComparison.OrdinalIgnoreCase))
+            .SelectMany(e => e.Value.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries))
+            .Select(t => t.Trim().ToLowerInvariant())
+            .Where(t => t is not ("" or "none"))
+            .Distinct()
+            .ToList();
+        foreach (var t in status.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var token = t.Trim().ToLowerInvariant();
+            if (token is "visitor" or "doorbell" && !aiTypes.Contains(token))
+                aiTypes.Add(token);
+        }
+        return new MotionPush(status, aiTypes);
     }
 
     public async Task<byte[]?> SnapAsync(CancellationToken ct)

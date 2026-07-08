@@ -257,6 +257,15 @@ public static class SelfTest
             AssertEq(string.Join(",", Recording.EventRecorder.LabelsOf(new MotionPush("MD", new[] { "visitor" }))),
                 "doorbell");
             Assert(new MotionPush("none", new[] { "visitor" }).Active, "a doorbell press is an active event");
+
+            // Captured from a real Reolink doorbell (FrontDoor, 2026-07-08): the
+            // press token rides in the STATUS list, not the AItype field.
+            var pressXml = System.Xml.Linq.XElement.Parse(
+                "<AlarmEvent version=\"1.1\"><channelId>0</channelId><status>MD,visitor</status>" +
+                "<AItype>none</AItype><recording>0</recording><timeStamp>0</timeStamp></AlarmEvent>");
+            var press = BcCamera.ParseAlarmEvent(pressXml);
+            Assert(press.Active, "captured press is active");
+            AssertEq(string.Join(",", Recording.EventRecorder.LabelsOf(press)), "doorbell");
         });
 
         Test("event store roundtrip + retention", () =>

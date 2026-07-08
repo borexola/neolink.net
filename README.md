@@ -71,9 +71,10 @@ The cameras are unmodified and no Reolink NVR is required.
 - Motion / person / vehicle / animal `binary_sensor`s driven by the **camera's own
   detections** (event-driven, no server-side inference, no polling), plus battery,
   night vision, floodlight, PIR, PTZ and reboot entities where the camera supports them
-- **Video doorbells**: a button press fires an HA `event` entity (`device_class:
-  doorbell`) for ring automations, is logged, and is recorded as a "Doorbell
-  pressed" event with pre-roll like any other detection
+- **Video doorbells**: a button press is published as an MQTT event — surfacing
+  in HA as an `event` entity (`device_class: doorbell`) for ring automations —
+  and is also logged and recorded as a "Doorbell pressed" event with pre-roll
+  like any other detection
 - Two-level availability (service + per-camera), retained state so HA repopulates
   after restarts; MQTT 3.1.1 spoken natively — no external MQTT library
 - See [Home Assistant (MQTT)](#home-assistant-mqtt) for setup and the full entity list
@@ -411,7 +412,8 @@ video frame for motion or AI. All of that already happens *on the camera*, whose
 dedicated silicon detects motion and classifies people, vehicles and animals in
 real time. Neolink simply **listens for the alarm messages the camera pushes**
 over the Baichuan connection (the same events that drive Reolink's own app) and
-relays them to Home Assistant as MQTT sensors. That means:
+relays them to Home Assistant as MQTT sensors — and doorbell button presses as
+MQTT events. That means:
 
 - **No GPU, no Coral, no CPU-hungry inference** — unlike setups where a server
   re-analyses every stream, Neolink adds essentially zero processing load. It
@@ -451,6 +453,7 @@ in exchange you get an integration light enough to leave running forever.
 | Entity | Type | Notes |
 |---|---|---|
 | Motion / Person / Vehicle / Animal | `binary_sensor` | From the camera's alarm pushes (AI labels need Smart Detection enabled in the Reolink app) |
+| Doorbell | `event` | Video doorbells: every button press publishes an MQTT event (`event_type: press`, `device_class: doorbell`) — the natural trigger for ring automations |
 | Battery | `sensor` | Battery cameras; charge status + temperature as attributes |
 | Night vision | `select` | `auto` / `on` / `off` |
 | Floodlight | `light` | Cameras with a spotlight |
@@ -458,9 +461,18 @@ in exchange you get an integration light enough to leave running forever.
 | Reboot, Pan up/down/left/right | `button` | PTZ buttons on pan-tilt cameras |
 | Snapshot | `camera` | Latest JPEG, refreshed periodically (when the camera supports snapshots) |
 
+**Doorbell presses** are published to `{base_topic}/{camera}/doorbell` with the
+payload `{"event_type":"press"}`, so non-HA consumers (Node-RED, scripts) can
+subscribe to the same topic. Press events are deliberately **not retained** —
+a retained press would re-ring your automations after every broker restart. The
+entity is announced on the first detected press, so it appears in HA the first
+time someone rings. Presses are also logged and recorded as regular "Doorbell
+pressed" events with pre-roll video.
+
 Availability is two-level: entities show **unavailable** when either the Neolink
 service (a Last-Will topic) or the individual camera goes offline. State and
-discovery messages are retained, so Home Assistant repopulates after a restart.
+discovery messages are retained (press events excepted, as above), so Home
+Assistant repopulates after a restart.
 Commands from HA (toggle the floodlight, reboot, nudge PTZ…) are executed on the
 camera over the same Baichuan connection. No external MQTT library is used —
 Neolink speaks MQTT 3.1.1 directly, keeping the zero-dependency build.

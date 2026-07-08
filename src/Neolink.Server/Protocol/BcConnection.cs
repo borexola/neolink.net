@@ -8,6 +8,7 @@
 // actively maintained fork by @QuantumEntangledAndy
 // (github.com/QuantumEntangledAndy/neolink).
 using System.Net.Sockets;
+using System.Text;
 using System.Threading.Channels;
 using Neolink.Bc;
 
@@ -22,6 +23,7 @@ public sealed class BcConnection : IAsyncDisposable
     private readonly TcpClient _tcp;
     private readonly NetworkStream _stream;
     private readonly Dictionary<uint, Channel<BcMessage>> _subscribers = new();
+    private readonly HashSet<uint> _reportedUnhandled = new();
     private readonly object _subGate = new();
     private readonly SemaphoreSlim _sendLock = new(1, 1);
     private readonly CancellationTokenSource _cts;
@@ -82,7 +84,17 @@ public sealed class BcConnection : IAsyncDisposable
                 }
                 else
                 {
-                    Log.Trace($"Ignoring uninteresting message ID {msg.Meta.MsgId}");
+                    // The FIRST sighting of an unhandled push gets a visible line:
+                    // new firmware features (doorbell buttons, extra sensors) tend
+                    // to arrive on message ids nobody subscribed to yet, and the
+                    // payload is exactly what's needed to map them.
+                    bool first;
+                    lock (_subGate) { first = _reportedUnhandled.Add(msg.Meta.MsgId); }
+                    if (first)
+                        Log.Info($"BC: unhandled push msgId={msg.Meta.MsgId}{XmlPreview(msg)} — if this " +
+                                 "line appears right after a camera action (say, a doorbell press), please report it");
+                    else
+                        Log.Trace($"Ignoring uninteresting message ID {msg.Meta.MsgId}");
                 }
             }
         }
@@ -100,6 +112,15 @@ public sealed class BcConnection : IAsyncDisposable
                 _subscribers.Clear();
             }
         }
+    }
+
+    /// <summary>Compact one-line body preview for diagnostics of unknown pushes.</summary>
+    private static string XmlPreview(BcMessage msg)
+    {
+        if (msg.Xml == null)
+            return msg.Binary is { Length: > 0 } b ? $" ({b.Length} binary bytes)" : "";
+        var s = Encoding.UTF8.GetString(msg.Xml.Serialize()).Replace('\r', ' ').Replace('\n', ' ');
+        return " xml=" + (s.Length > 400 ? s[..400] + "…" : s);
     }
 
     public BcSubscription Subscribe(uint msgId)

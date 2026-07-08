@@ -33,6 +33,14 @@ public sealed class CameraService : ILiveCameraSource
     private readonly StreamKind _kind;
     private readonly IMediaSink _hub;
     private readonly TimeSpan _startupDelay;
+
+    /// <summary>AI tokens the pipeline knows how to normalize (see EventRecorder.LabelsOf).</summary>
+    private static readonly HashSet<string> KnownAiTypes = new(StringComparer.Ordinal)
+    {
+        "people", "person", "face", "vehicle", "car", "dog_cat", "animal", "pet",
+        "package", "visitor", "doorbell",
+    };
+    private readonly HashSet<string> _reportedAiTypes = new(StringComparer.Ordinal);
     private volatile IBcCamera? _live;
 
     public CameraService(CameraConfig config, StreamKind kind, IMediaSink hub, TimeSpan startupDelay)
@@ -204,6 +212,13 @@ public sealed class CameraService : ILiveCameraSource
         {
             if (push.Active && (push.AiTypes.Contains("visitor") || push.AiTypes.Contains("doorbell")))
                 Log.Info($"{Tag}: doorbell pressed");
+            // AI tokens we don't recognize still become events (raw label), but
+            // say so once — firmware vocabularies vary, and the token is exactly
+            // what's needed to extend the mapping (doorbells especially).
+            foreach (var t in push.AiTypes)
+                if (!KnownAiTypes.Contains(t) && _reportedAiTypes.Add(t))
+                    Log.Info($"{Tag}: camera pushed unrecognized AI type '{t}' (kept as an event label) — " +
+                             "if this fired when the doorbell was pressed, please report the label");
             sink(push);
         }
 
