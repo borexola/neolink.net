@@ -1,14 +1,22 @@
-/* ---------- Neolink web client ---------- */
+/* ---------- Neolink web client ----------
+   Design language: quiet, minimal dark. One accent, hairline dividers instead
+   of boxed borders, generous radii, soft depth. Every page (live wall,
+   timeline, monitor, logs) shares these tokens. */
 :root {
-    --bg: #0e1116;
-    --panel: #161b24;
-    --panel-2: #1c2230;
-    --line: #262e3f;
-    --text: #dfe5f0;
-    --muted: #7d8798;
-    --accent: #4f8cff;
-    --ok: #3fd07f;
-    --err: #ff5f6b;
+    color-scheme: dark; /* native widgets (select lists, scrollbars, pickers) render dark */
+    --bg: #0b0d12;
+    --panel: #10131a;
+    --panel-2: #171b25;
+    --line: #222839;
+    --text: #e7ebf4;
+    --muted: #8b94a7;
+    --accent: #5b9dff;
+    --accent-soft: rgba(91, 157, 255, 0.14);
+    --ok: #35d392;
+    --err: #ff6b76;
+    --radius: 12px;
+    --radius-sm: 9px;
+    --shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
 }
 
 * { box-sizing: border-box; }
@@ -18,13 +26,24 @@ html, body {
     height: 100%;
     background: var(--bg);
     color: var(--text);
-    font: 14px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif;
+    font: 14px/1.5 "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system,
+        "Helvetica Neue", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
 }
 
 .shell {
     display: flex;
     height: 100vh;
+    height: 100dvh; /* mobile: track the real visual viewport (URL bar collapse) */
     overflow: hidden;
+}
+
+/* Focus is always visible, never a default blue box */
+:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+    border-radius: 4px;
 }
 
 /* ---------- sidebar ---------- */
@@ -66,9 +85,9 @@ html, body {
 
 .settings {
     background: var(--panel-2);
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    padding: 10px;
+    border: none;
+    border-radius: var(--radius-sm);
+    padding: 12px;
     display: flex;
     flex-direction: column;
     gap: 6px;
@@ -83,11 +102,12 @@ html, body {
 
 .settings input {
     background: var(--bg);
-    border: 1px solid var(--line);
+    border: 1px solid transparent;
     color: var(--text);
-    border-radius: 6px;
-    padding: 7px 9px;
+    border-radius: var(--radius-sm);
+    padding: 8px 10px;
     outline: none;
+    transition: border-color 0.12s ease;
 }
 
 .settings input:focus { border-color: var(--accent); }
@@ -112,10 +132,13 @@ html, body {
 
 .cam {
     background: var(--panel-2);
-    border: 1px solid var(--line);
-    border-radius: 10px;
-    padding: 9px 10px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    padding: 10px 11px;
+    transition: border-color 0.12s ease;
 }
+
+.cam:hover { border-color: var(--line); }
 
 .cam-head {
     display: flex;
@@ -195,15 +218,22 @@ html, body {
     color: var(--text);
     border-radius: 999px;
     font-size: 12px;
-    padding: 3px 10px;
+    padding: 4px 11px;
+    min-height: 26px;
     cursor: pointer;
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    transition: border-color 0.12s ease, color 0.12s ease, opacity 0.12s ease;
+    transition: border-color 0.12s ease, color 0.12s ease, opacity 0.12s ease,
+        background 0.12s ease;
 }
 
-.chip:hover { border-color: var(--accent); color: var(--accent); }
+.chip:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-soft);
+}
+
 .chip-off { opacity: 0.45; }
 
 .badge {
@@ -275,35 +305,85 @@ html, body {
 .toolbar {
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 10px 14px;
+    gap: 4px;
+    padding: 8px 12px;
     border-bottom: 1px solid var(--line);
     background: var(--panel);
 }
 
 .tool-label {
     color: var(--muted);
-    font-size: 11px;
+    font-size: 10px;
+    font-weight: 600;
     letter-spacing: 2px;
-    margin-right: 4px;
+    margin: 0 4px;
 }
 
+/* Quiet ghost buttons: chrome appears on hover, the accent marks active */
 .tool-btn {
-    background: var(--panel-2);
+    background: transparent;
     color: var(--text);
-    border: 1px solid var(--line);
-    border-radius: 6px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
     min-width: 34px;
-    padding: 5px 9px;
+    min-height: 32px;
+    padding: 5px 10px;
     cursor: pointer;
     font-size: 13px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    white-space: nowrap;
+    text-decoration: none;
+    transition: background 0.12s ease, border-color 0.12s ease;
 }
 
-.tool-btn:hover { border-color: var(--accent); }
-.tool-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
-.tool-btn.back { min-width: unset; }
+.tool-btn:hover { background: var(--panel-2); }
+
+.tool-btn.active {
+    background: var(--accent-soft);
+    border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+    color: var(--accent);
+}
+
+.tool-btn.back { min-width: unset; color: var(--accent); }
+
+/* The view-mode dropdown, dressed as a toolbar control (native picker on phones) */
+.tool-select {
+    appearance: none;
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    min-height: 32px;
+    padding: 5px 26px 5px 10px;
+    font-size: 13px;
+    cursor: pointer;
+    background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+        linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+    background-position: calc(100% - 15px) 55%, calc(100% - 10px) 55%;
+    background-size: 5px 5px;
+    background-repeat: no-repeat;
+    transition: border-color 0.12s ease;
+}
+
+.tool-select:hover, .tool-select:focus { border-color: var(--accent); outline: none; }
 
 .tool-name { font-size: 12px; }
+
+/* The loaded layout's name inside the Layouts button */
+.layout-cur {
+    color: var(--accent);
+    font-size: 12px;
+    font-weight: 600;
+    max-width: 130px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.tool-caret { color: var(--muted); font-size: 9px; }
+
 .tool-count {
     min-width: 26px;
     text-align: center;
@@ -313,13 +393,15 @@ html, body {
 
 .tool-sep {
     width: 1px;
-    height: 22px;
+    height: 20px;
     background: var(--line);
-    margin: 0 8px;
+    margin: 0 6px;
+    flex: 0 0 auto;
 }
 
 @media (max-width: 1100px) {
     .tool-name { display: none; }
+    .layout-cur { max-width: 90px; }
 }
 
 /* ---------- grid & tiles ---------- */
@@ -392,12 +474,15 @@ html, body {
 .tile {
     position: relative;
     background: #000;
-    border: 1px solid var(--line);
-    border-radius: 10px;
+    border: 1px solid color-mix(in srgb, var(--line) 55%, transparent);
+    border-radius: var(--radius);
     overflow: hidden;
     min-height: 0;
     display: flex;
+    transition: border-color 0.15s ease;
 }
+
+.tile:hover { border-color: var(--line); }
 
 .tile video {
     width: 100%;
@@ -536,11 +621,15 @@ video[data-live="1"] ~ .tile-status { display: none; }
     cursor: pointer;
     font-size: 14px;
     padding: 2px 5px;
-    border-radius: 5px;
+    border-radius: 6px;
     line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 0.12s ease, background 0.12s ease;
 }
 
-.icon-btn:hover { color: var(--accent); background: rgba(79, 140, 255, 0.12); }
+.icon-btn:hover { color: var(--accent); background: var(--accent-soft); }
 
 /* Keyboard navigation: a visible ring on any focused control, mouse clicks unaffected */
 :is(button, a, select, input):focus-visible {
@@ -575,7 +664,7 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
 
 @media (max-width: 900px) {
     /* Sidebar becomes a slide-in drawer */
-    .menu-btn { display: inline-block; }
+    .menu-btn { display: inline-flex; }
 
     .sidebar {
         position: fixed;
@@ -628,6 +717,32 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
     .grid.mode-free { overflow: auto; }
 
     .tile-bar { opacity: 1; } /* no hover on touch: keep controls visible */
+
+    /* Phones: the toolbar scrolls sideways instead of stacking into a wall */
+    .toolbar {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        scrollbar-width: none;
+        padding: 8px 10px;
+        padding-left: max(10px, env(safe-area-inset-left));
+        padding-right: max(10px, env(safe-area-inset-right));
+    }
+
+    .toolbar::-webkit-scrollbar { display: none; }
+
+    .layouts-bar { flex-wrap: wrap; }
+
+    /* The review strip trades a little height for stage room */
+    .events-bar { height: min(150px, 24dvh) !important; }
+}
+
+/* Touch devices, any width: finger-sized targets and no hover-only affordances */
+@media (pointer: coarse) {
+    .tool-btn, .tool-select { min-height: 40px; }
+    .icon-btn { min-width: 36px; min-height: 36px; }
+    .chip { min-height: 32px; padding: 5px 13px; }
+    .zoom-hud { display: flex; } /* no hover on touch: keep the zoom pill visible */
+    .zoom-hud:not(:is(.zoom-on *, :fullscreen *)) { display: none; }
 }
 
 /* ---------- camera settings dialog ---------- */
@@ -2054,3 +2169,28 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
 }
 
 .ptz-speed input[type="range"] { width: 100%; accent-color: var(--accent); }
+
+/* ---------- mobile bottom sheets (kept LAST: these must out-cascade the
+   dialogs' desktop geometry above, which shares their specificity) ---------- */
+@media (max-width: 700px) {
+    .event-player,
+    .quick-view {
+        width: 100vw;
+        max-height: calc(100dvh - 20px);
+        margin: auto auto 0;
+        border-radius: var(--radius) var(--radius) 0 0;
+        border-left: none;
+        border-right: none;
+        border-bottom: none;
+    }
+
+    .campanel {
+        width: 100vw;
+        top: auto;
+        left: 0;
+        bottom: 0;
+        transform: none;
+        max-height: 88dvh;
+        border-radius: var(--radius) var(--radius) 0 0;
+    }
+}

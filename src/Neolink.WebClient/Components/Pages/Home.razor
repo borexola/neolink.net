@@ -1,8 +1,10 @@
 @page "/"
+@page "/cameras/{Camera}"
 @using System.Text.Json
 @inject HttpClient Http
 @inject IJSRuntime JS
 @inject LocalApiInfo Local
+@inject NavigationManager Nav
 @implements IAsyncDisposable
 
 <div class="shell">
@@ -272,11 +274,15 @@
         <div class="toolbar">
             <button class="tool-btn menu-btn" title="Cameras" @onclick="() => _sidebarOpen = !_sidebarOpen">☰</button>
             <span class="tool-label">VIEW</span>
-            @foreach (var (mode, icon, name) in Modes)
-            {
-                <button class="tool-btn @(_mode == mode ? "active" : "")" title="@name"
-                        @onclick="() => SetMode(mode)">@icon <span class="tool-name">@name</span></button>
-            }
+            @* One dropdown instead of five buttons: compact on desktop, and on
+               phones it opens the platform's native picker. *@
+            <select class="tool-select" title="How the camera wall is laid out"
+                    value="@_mode" @onchange="e => SetMode((string)e.Value!)">
+                @foreach (var (mode, icon, name) in Modes)
+                {
+                    <option value="@mode">@icon @name</option>
+                }
+            </select>
 
             @if (_mode != "theater")
             {
@@ -294,10 +300,17 @@
             }
 
             <span class="tool-sep"></span>
+            @* Always says "Layout": the loaded layout's name rides along as a value,
+               so "Default" reads as a layout name, not a mystery button. *@
             <button class="tool-btn layouts-btn @(_showLayouts ? "active" : "")"
-                    title="@(_activeLayout != null ? $"Saved layouts (current: {_activeLayout})" : "Saved layouts")"
+                    title="@(_activeLayout != null ? $"Saved layouts (current: {_activeLayout})" : "Saved layouts — save and reload camera arrangements")"
                     @onclick="() => _showLayouts = !_showLayouts">
-                ▤ <span class="tool-name">@(_activeLayout ?? "Layouts")</span>
+                ▤ <span class="tool-name">Layout@(_activeLayout != null ? ":" : "s")</span>
+                @if (_activeLayout != null)
+                {
+                    <span class="layout-cur">@_activeLayout</span>
+                }
+                <span class="tool-caret">@(_showLayouts ? "▴" : "▾")</span>
                 @if (LayoutDirty)
                 {
                     <span class="layout-dirty-dot" title="This layout has unsaved changes"></span>
@@ -941,6 +954,7 @@
             await RefreshAuthAsync();
             await RefreshCamerasAsync();
             await RefreshEventsAsync();
+            ApplyRoute(); // deep links (/cameras/{name}) need the camera list first
             StateHasChanged();
             _ = PollLoopAsync();
             return;
@@ -1234,6 +1248,9 @@
         await LoadUserSettingsAsync();
         await RefreshCamerasAsync();
         await RefreshEventsAsync();
+        // A deep link (/cameras/{name}) opened on an auth-enabled server could
+        // not resolve until now — the camera list needed the session token.
+        ApplyRoute();
     }
 
     private async Task LoginAsync()
@@ -1979,6 +1996,7 @@
         if (_maxIndex == null) return;
         RevertAutoMainSwitch();
         _maxIndex = null;
+        if (Camera != null) Nav.NavigateTo(""); // keep the URL honest
     }
 
     private static int GridColumns(int n) => (int)Math.Ceiling(Math.Sqrt(n));
@@ -2034,34 +2052,16 @@
     {
         int shown = _slots.FindIndex(s => s.Camera == cam.Name);
 
-        // While a tile is maximized, picking a camera means "show me THAT one big".
-        // If its tile already runs in the hidden background, maximize that tile
-        // (player already live); otherwise swap the maximized card's content.
-        // Either way the outgoing card first gets its auto-switched stream back.
+        // While a tile is maximized, picking a camera means "show me THAT one big":
+        // navigate to its URL and let the route apply it (promoting the camera's
+        // already-live background tile when it has one, swapping content otherwise).
         if (_maxIndex is int maxed)
         {
             if (shown == maxed)
-            {
                 _ = JS.InvokeVoidAsync("neolink.flashTile", $"tile-{maxed}");
-                _sidebarOpen = false;
-                return;
-            }
-            RevertAutoMainSwitch();
-            if (shown >= 0)
-            {
-                _maxIndex = shown;
-            }
             else
-            {
-                var maxSlot = _slots[maxed];
-                maxSlot.Camera = cam.Name;
-                maxSlot.Kind = stream.Kind;
-                maxSlot.Path = stream.Path;
-            }
-            AutoMainStream(_maxIndex!.Value);
-            MaybeWarnMainStreams();
+                Nav.NavigateTo(CameraUrl(cam.Name));
             _sidebarOpen = false;
-            _ = SaveAsync();
             return;
         }
 
@@ -2137,6 +2137,7 @@
             // empty full-screen card helps nobody.
             _maxIndex = null;
             _maxPrevKind = _maxPrevPath = _maxPrevCamera = null;
+            if (Camera != null) Nav.NavigateTo("");
         }
         _slots[index].Clear();
         _ = SaveAsync();
@@ -2247,6 +2248,61 @@
         Slots = _slots.Select(s => s.Clone()).ToList(),
     };
 
+    /// <summary>The camera named in the URL (/cameras/{name}) — it owns the maximized state.</summary>
+    [Parameter] public string? Camera { get; set; }
+
+    private static string CameraUrl(string name) => $"cameras/{Uri.EscapeDataString(name)}";
+
+    protected override void OnParametersSet()
+    {
+        // Route changes re-enter the SAME component instance (both pages map here),
+        // so the background players survive URL navigation untouched.
+        if (_loaded) ApplyRoute();
+    }
+
+    /// <summary>
+    /// The URL owns the maximized state: /cameras/{name} shows that camera big
+    /// (adding it to the wall first when needed), plain / restores the wall.
+    /// Browser Back/Forward therefore walk between the two naturally, and every
+    /// camera is deep-linkable.
+    /// </summary>
+    private void ApplyRoute()
+    {
+        if (string.IsNullOrEmpty(Camera))
+        {
+            if (_maxIndex != null) RestoreMaximized();
+            return;
+        }
+        var cam = _cameras.FirstOrDefault(c => string.Equals(c.Name, Camera, StringComparison.OrdinalIgnoreCase));
+        if (cam == null) return; // unknown camera (or list not fetched yet): leave the wall alone
+
+        int index = _slots.FindIndex(s => string.Equals(s.Camera, cam.Name, StringComparison.OrdinalIgnoreCase));
+        if (index < 0)
+        {
+            // Not on the wall yet: reuse the currently maximized card if any,
+            // else the first free tile (growing the layout when possible).
+            var stream = DefaultStream(cam);
+            if (stream == null) return;
+            var slot = _maxIndex is int m ? _slots[m] : _slots.FirstOrDefault(s => s.Camera == null);
+            if (slot == null)
+            {
+                int grown = ClampCount(_mode, _count + 1);
+                if (grown > _count) { _count = grown; EnsureSlots(); }
+                slot = _slots.FirstOrDefault(s => s.Camera == null) ?? _slots[^1];
+            }
+            slot.Camera = cam.Name;
+            slot.Kind = stream.Kind;
+            slot.Path = stream.Path;
+            index = _slots.IndexOf(slot);
+        }
+        if (_maxIndex == index) return; // already showing it big
+        RevertAutoMainSwitch();
+        _maxIndex = index;
+        AutoMainStream(index);
+        MaybeWarnMainStreams(); // route-driven maximize can add a main stream too
+        _ = SaveAsync();
+    }
+
     private void ToggleMaximize(int index)
     {
         // Layout changes are invisible while the browser is fullscreened on a
@@ -2257,15 +2313,16 @@
             RestoreFromBackup(); // legacy persisted maximize from older versions
             return;
         }
-        if (_maxIndex != null)
+        // Maximize is a NAVIGATION: the URL flips to /cameras/{name} and back, so
+        // the browser's Back button undoes it like any other page.
+        if (_maxIndex == index)
         {
-            RestoreMaximized();
+            Nav.NavigateTo("");
             return;
         }
-        if (_slots[index].Camera == null) return;
-        _maxIndex = index;
-        AutoMainStream(index);
-        _ = SaveAsync();
+        var name = _slots[index].Camera;
+        if (name == null) return;
+        Nav.NavigateTo(CameraUrl(name));
     }
 
     /// <summary>
@@ -2314,7 +2371,7 @@
     /// <summary>Toolbar "Restore view": whichever maximize flavor is active.</summary>
     private void RestoreView()
     {
-        if (_maxIndex != null) RestoreMaximized();
+        if (_maxIndex != null) Nav.NavigateTo("");
         else RestoreFromBackup();
     }
 
