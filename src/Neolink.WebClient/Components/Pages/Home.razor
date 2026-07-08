@@ -846,7 +846,14 @@
                    The source is chosen by speed (JS owns it, preserving position):
                    full clip at 1×, low-res sub-stream preview when fast-forwarding
                    so the decoder doesn't stall on 2K/4K (esp. H.265) frames. *@
-                <video id="event-player-video" controls autoplay playsinline @key="_playEvent.Id"></video>
+                @* zoom-on: the recorded clip gets the same digital zoom as live
+                   tiles (wheel at the cursor, drag to pan, HUD, dbl-click 1:1).
+                   Keyed per event so zoom resets when navigating between events
+                   but survives the clip↔preview swap at higher speeds. *@
+                <div class="event-player-media zoom-on" @key="_playEvent.Id">
+                    <video id="event-player-video" controls autoplay playsinline></video>
+                    @ZoomHud
+                </div>
                 <div class="player-speed">
                     <span class="tool-label">SPEED</span>
                     @foreach (var s in PlaybackSpeeds)
@@ -910,6 +917,10 @@
     private string? _maxPrevKind;
     private string? _maxPrevPath;
     private string? _maxPrevCamera;
+    /// <summary>The stream kind the maximize flow itself put on the card (auto main
+    /// or the URL's explicit choice) — only that exact kind is reverted on restore,
+    /// so a stream picked by hand in the dropdown is respected.</summary>
+    private string? _maxSetKind;
     private string _server = "";
     private string? _user;
     private string? _pass;
@@ -1160,7 +1171,7 @@
         Server = _server, User = _user, Pass = _pass,
         Mode = _mode, Count = _count, Slots = _slots, Backup = _backup,
         MaxIndex = _maxIndex, MaxPrevKind = _maxPrevKind, MaxPrevPath = _maxPrevPath,
-        MaxPrevCamera = _maxPrevCamera,
+        MaxPrevCamera = _maxPrevCamera, MaxSetKind = _maxSetKind,
         HiddenTypes = _hiddenTypes.ToList(), HiddenCams = _hiddenCams.ToList(),
         StripHeight = _stripHeight,
         Layouts = _layouts, ActiveLayout = _activeLayout,
@@ -1191,6 +1202,7 @@
         _maxPrevKind = _maxIndex != null ? v.MaxPrevKind : null;
         _maxPrevPath = _maxIndex != null ? v.MaxPrevPath : null;
         _maxPrevCamera = _maxIndex != null ? v.MaxPrevCamera : null;
+        _maxSetKind = _maxIndex != null ? v.MaxSetKind : null;
     }
 
     /// <summary>Applies the server-stored per-user view (everything except the server address).</summary>
@@ -2217,7 +2229,7 @@
             // Closing the maximized feed also leaves the maximized view — an
             // empty full-screen card helps nobody.
             _maxIndex = null;
-            _maxPrevKind = _maxPrevPath = _maxPrevCamera = null;
+            _maxPrevKind = _maxPrevPath = _maxPrevCamera = _maxSetKind = null;
             if (Camera != null) Nav.NavigateTo("");
         }
         _slots[index].Clear();
@@ -2412,24 +2424,36 @@
         }
 
         bool changed = false;
-        var target = _slots[index];
-        if (want != null && target.Kind != want.Kind)
-        {
-            // The URL asked for this stream by name — a deliberate choice, so the
-            // maximize auto-switch bookkeeping must not undo it later.
-            target.Kind = want.Kind;
-            target.Path = want.Path;
-            if (_maxIndex == index)
-                _maxPrevKind = _maxPrevPath = _maxPrevCamera = null;
-            changed = true;
-        }
         if (_maxIndex != index)
         {
-            RevertAutoMainSwitch();
+            RevertAutoMainSwitch(); // the outgoing card gets its stream back first
             _maxIndex = index;
-            if (want == null) AutoMainStream(index);
-            else _maxPrevKind = _maxPrevPath = _maxPrevCamera = null;
             changed = true;
+        }
+        var target = _slots[index];
+        if (want != null)
+        {
+            if (target.Kind != want.Kind)
+            {
+                // The maximized view is a DETOUR: whatever stream it shows — the
+                // URL's explicit choice included — Restore view must put the tile
+                // back exactly as the wall had it. Record the original once; later
+                // chip switches (main↔sub) keep that first value.
+                if (_maxPrevKind == null)
+                {
+                    _maxPrevKind = target.Kind;
+                    _maxPrevPath = target.Path;
+                    _maxPrevCamera = target.Camera;
+                }
+                target.Kind = want.Kind;
+                target.Path = want.Path;
+                changed = true;
+            }
+            _maxSetKind = want.Kind;
+        }
+        else if (changed)
+        {
+            AutoMainStream(index); // no stream in the URL: the usual sub→main upgrade
         }
         if (changed)
         {
@@ -2467,7 +2491,7 @@
     /// </summary>
     private void AutoMainStream(int index)
     {
-        _maxPrevKind = _maxPrevPath = _maxPrevCamera = null;
+        _maxPrevKind = _maxPrevPath = _maxPrevCamera = _maxSetKind = null;
         var slot = _slots[index];
         var cam = _cameras.FirstOrDefault(c => c.Name == slot.Camera);
         var main = cam?.Streams.FirstOrDefault(s => s.Kind == "mainStream");
@@ -2475,6 +2499,7 @@
         _maxPrevKind = slot.Kind;
         _maxPrevPath = slot.Path;
         _maxPrevCamera = slot.Camera;
+        _maxSetKind = main.Kind;
         slot.Kind = main.Kind;
         slot.Path = main.Path;
     }
@@ -2487,13 +2512,14 @@
         if (_maxIndex is int i && _maxPrevKind != null)
         {
             var slot = _slots.ElementAtOrDefault(i);
-            if (slot != null && slot.Camera == _maxPrevCamera && slot.Kind == "mainStream")
+            if (slot != null && slot.Camera == _maxPrevCamera
+                && slot.Kind == (_maxSetKind ?? "mainStream"))
             {
                 slot.Kind = _maxPrevKind;
                 slot.Path = _maxPrevPath;
             }
         }
-        _maxPrevKind = _maxPrevPath = _maxPrevCamera = null;
+        _maxPrevKind = _maxPrevPath = _maxPrevCamera = _maxSetKind = null;
     }
 
     private void RestoreMaximized()

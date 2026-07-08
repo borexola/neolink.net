@@ -1421,12 +1421,22 @@ body.is-fullscreen .fs-toggle::before { content: "⇲"; }
 
 .event-player-title .event-title { font-size: 15px; }
 
+/* Wraps the clip so digital zoom has a clipping frame (same role as a tile) */
+.event-player-media {
+    position: relative;
+    width: 100%;
+    max-height: calc(100vh - 180px);
+    background: #000;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
 .event-player video {
+    display: block;
     width: 100%;
     aspect-ratio: 16 / 9; /* stable modal size while media loads */
     max-height: calc(100vh - 180px);
     background: #000;
-    border-radius: 8px;
     outline: none;
 }
 

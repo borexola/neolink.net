@@ -199,6 +199,8 @@ public sealed class PersistedView
     public string? MaxPrevKind { get; set; }
     public string? MaxPrevPath { get; set; }
     public string? MaxPrevCamera { get; set; }
+    /// <summary>Stream kind the maximize flow placed on the card (what restore undoes).</summary>
+    public string? MaxSetKind { get; set; }
     /// <summary>Review-strip filter: event types hidden from the top bar.</summary>
     public List<string> HiddenTypes { get; set; } = new();
     /// <summary>Review-strip filter: cameras hidden from the top bar.</summary>

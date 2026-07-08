@@ -617,7 +617,8 @@
             const states = new WeakMap();  // container -> { z, tx, ty }
             const zoomedBoxes = new Set(); // containers currently zoomed in (class
                                            // alone won't do: Blazor re-renders clobber it)
-            const boxOf = (t) => (t instanceof Element ? t : null)?.closest?.('.tile, .quick-view-media');
+            const boxOf = (t) => (t instanceof Element ? t : null)
+                ?.closest?.('.tile, .quick-view-media, .event-player-media');
             const eligible = (box) => !!box && !!box.querySelector('video') &&
                 (box.classList.contains('zoom-on') || box === document.fullscreenElement);
             const stOf = (box) => {
@@ -643,6 +644,10 @@
                 }
                 box.classList.toggle('zoomed', st.z > 1);
                 if (st.z > 1) zoomedBoxes.add(box); else zoomedBoxes.delete(box);
+                // The event player's native controls would scale with the frame and
+                // fight the pan gesture — hide them while zoomed, restore at 1:1.
+                if (box.classList.contains('event-player-media'))
+                    v.controls = st.z <= 1;
                 const badge = box.querySelector('[data-zoom-badge]');
                 if (badge) badge.textContent = Math.round(st.z * 100) + '%';
             };
