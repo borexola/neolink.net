@@ -140,6 +140,11 @@ html, body {
 
 .cam:hover { border-color: var(--line); }
 
+/* The camera named in the URL (/cameras/{name}): its sidebar card lights up. */
+.cam-active,
+.cam-active:hover { border-color: color-mix(in srgb, var(--accent) 60%, transparent); }
+.cam-active .cam-name { color: var(--accent); }
+
 .cam-head {
     display: flex;
     align-items: center;
