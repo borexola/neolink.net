@@ -198,9 +198,18 @@ public sealed class CameraService : ILiveCameraSource
     /// </summary>
     private async Task WatchMotionGuardedAsync(IBcCamera camera, Action<MotionPush> sink, CancellationToken ct)
     {
+        // A video doorbell's button press arrives as a "visitor" AI push — worth
+        // its own log line even when event recording and MQTT are switched off.
+        void LoggedSink(MotionPush push)
+        {
+            if (push.Active && (push.AiTypes.Contains("visitor") || push.AiTypes.Contains("doorbell")))
+                Log.Info($"{Tag}: doorbell pressed");
+            sink(push);
+        }
+
         try
         {
-            await camera.WatchMotionAsync(sink, ct).ConfigureAwait(false);
+            await camera.WatchMotionAsync(LoggedSink, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) when (ex is CameraCommandException or TimeoutException)

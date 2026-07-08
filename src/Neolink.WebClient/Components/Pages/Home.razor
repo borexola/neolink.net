@@ -18,7 +18,7 @@
     <aside class="sidebar @(_sidebarOpen ? "open" : "")">
         <div class="brand">
             <span class="brand-dot"></span> NEOLINK<span class="brand-net">.NET</span>
-            <button class="icon-btn" title="Server settings" @onclick="() => _showSettings = !_showSettings">⚙</button>
+            <button class="icon-btn" title="Server settings" @onclick="() => _showSettings = !_showSettings">@UiIcon.Render("gear", 18)</button>
         </div>
 
         @if (_setupRequired && !_secWarnDismissed)
@@ -56,7 +56,7 @@
                 @if (_authUser != null)
                 {
                     <div class="auth-row">
-                        <span class="event-sub">👤 @_authUser@(_authAdmin ? " · admin" : "")</span>
+                        <span class="event-sub">@UiIcon.Render("user", 11) @_authUser@(_authAdmin ? " · admin" : "")</span>
                         @if (_authAdmin)
                         {
                             <button class="chip" @onclick="OpenUsersAsync">Users…</button>
@@ -77,7 +77,7 @@
 
         <div class="section-title">
             CAMERAS
-            <button class="icon-btn" title="Refresh" @onclick="RefreshCamerasAsync">⟳</button>
+            <button class="icon-btn" title="Refresh" @onclick="RefreshCamerasAsync">@UiIcon.Render("refresh", 13)</button>
         </div>
 
         @if (_error != null)
@@ -109,11 +109,8 @@
                     {
                         <span class="cam-rec-badge" title="Recording 24/7 to disk">● REC</span>
                     }
-                    @* solo-btn (margin-left:auto) only on the FIRST button so the pair sits together at the right *@
                     <button class="icon-btn solo-btn" title="Camera settings & controls"
-                            @onclick="() => _panelCamera = cam.Name" @onclick:stopPropagation="true">⚙</button>
-                    <button class="icon-btn" title="Quick view (pop-up, keeps your layout)"
-                            @onclick="() => OpenQuickView(cam)" @onclick:stopPropagation="true">⛶</button>
+                            @onclick="() => _panelCamera = cam.Name" @onclick:stopPropagation="true">@UiIcon.Render("gear", 16)</button>
                 </div>
                 <div class="cam-streams">
                     @* A stream chip is a LINK: it navigates to /cameras/{name}/{stream},
@@ -139,7 +136,7 @@
             {
                 <div class="sidebar-user">
                     <span class="sidebar-user-id" title="Signed in as @_authUser">
-                        <span class="sidebar-user-icon">@(_authAdmin ? "🛡" : "👤")</span>
+                        <span class="sidebar-user-icon">@UiIcon.Render(_authAdmin ? "shield" : "user", 14)</span>
                         <span class="sidebar-user-name">@_authUser</span>
                         <span class="sidebar-user-role">@(_authAdmin ? "admin" : "user")</span>
                     </span>
@@ -278,15 +275,15 @@
         }
 
         <div class="toolbar">
-            <button class="tool-btn menu-btn" title="Cameras" @onclick="() => _sidebarOpen = !_sidebarOpen">☰</button>
+            <button class="tool-btn menu-btn" title="Cameras" @onclick="() => _sidebarOpen = !_sidebarOpen">@UiIcon.Render("menu", 16)</button>
             <span class="tool-label">VIEW</span>
             @* One dropdown instead of five buttons: compact on desktop, and on
                phones it opens the platform's native picker. *@
             <select class="tool-select" title="How the camera wall is laid out"
                     value="@_mode" @onchange="e => SetMode((string)e.Value!)">
-                @foreach (var (mode, icon, name) in Modes)
+                @foreach (var (mode, name) in Modes)
                 {
-                    <option value="@mode">@icon @name</option>
+                    <option value="@mode">@name</option>
                 }
             </select>
 
@@ -302,7 +299,7 @@
             @if (_backup != null || _maxIndex != null)
             {
                 <span class="tool-sep"></span>
-                <button class="tool-btn back" @onclick="RestoreView">⤡ Restore view</button>
+                <button class="tool-btn back" @onclick="RestoreView">@UiIcon.Render("collapse", 14) Restore view</button>
             }
 
             <span class="tool-sep"></span>
@@ -311,7 +308,7 @@
             <button class="tool-btn layouts-btn @(_showLayouts ? "active" : "")"
                     title="@(_activeLayout != null ? $"Saved layouts (current: {_activeLayout})" : "Saved layouts — save and reload camera arrangements")"
                     @onclick="() => _showLayouts = !_showLayouts">
-                ▤ <span class="tool-name">Layout@(_activeLayout != null ? ":" : "s")</span>
+                @UiIcon.Render("layout", 14) <span class="tool-name">Layout@(_activeLayout != null ? ":" : "s")</span>
                 @if (_activeLayout != null)
                 {
                     <span class="layout-cur">@_activeLayout</span>
@@ -327,15 +324,15 @@
             {
                 <span class="tool-sep"></span>
                 <button class="tool-btn @(_showEventsPanel ? "active" : "")" title="Event history"
-                        @onclick="() => _showEventsPanel = !_showEventsPanel">🕘 <span class="tool-name">Events</span></button>
+                        @onclick="() => _showEventsPanel = !_showEventsPanel">@UiIcon.Render("clock", 14) <span class="tool-name">Events</span></button>
                 @if (_continuousSupported)
                 {
-                    <a class="tool-btn" href="timeline" title="Scrub recorded footage across all cameras">📼 <span class="tool-name">Timeline</span></a>
+                    <a class="tool-btn" href="timeline" title="Scrub recorded footage across all cameras">@UiIcon.Render("film", 14) <span class="tool-name">Timeline</span></a>
                 }
             }
 
             <span class="tool-sep"></span>
-            <a class="tool-btn" href="monitor" title="Server & browser resource usage, live">📈 <span class="tool-name">Monitor</span></a>
+            <a class="tool-btn" href="monitor" title="Server & browser resource usage, live">@UiIcon.Render("activity", 14) <span class="tool-name">Monitor</span></a>
         </div>
 
         @if (_showLayouts)
@@ -444,12 +441,12 @@
                             }
                             <span class="tile-spacer"></span>
                             @* JS-owned (neolink.audioInit): shown only when the stream has audio *@
-                            <button type="button" class="icon-btn" data-audio-toggle style="display:none">🔇</button>
+                            <button type="button" class="icon-btn" data-audio-toggle style="display:none"></button>
                             <button class="icon-btn" title="@(_maxIndex == index || (_backup != null && _mode == "theater") ? "Restore view" : "Maximize")"
-                                    @onclick="() => ToggleMaximize(index)">@(_maxIndex == index || (_backup != null && _mode == "theater") ? "❐" : "⛶")</button>
-                            @* glyph comes from CSS so it can follow browser fullscreen state *@
+                                    @onclick="() => ToggleMaximize(index)">@UiIcon.Render(_maxIndex == index || (_backup != null && _mode == "theater") ? "collapse" : "expand", 14)</button>
+                            @* both states rendered; CSS shows the right one for the fullscreen state *@
                             <button class="icon-btn fs-toggle" title="Browser fullscreen (click again to exit)"
-                                    @onclick="() => FullscreenAsync(index)"></button>
+                                    @onclick="() => FullscreenAsync(index)"><span class="fs-enter">@UiIcon.Render("fs-enter", 14)</span><span class="fs-exit">@UiIcon.Render("fs-exit", 14)</span></button>
                             <button class="icon-btn" title="Remove" @onclick="() => CloseSlot(index)">✕</button>
                         </div>
                         @ZoomHud
@@ -494,9 +491,9 @@
                     </select>
                 }
                 @* JS-owned (neolink.audioInit): shown only when the stream has audio *@
-                <button type="button" class="icon-btn" data-audio-toggle style="display:none">🔇</button>
+                <button type="button" class="icon-btn" data-audio-toggle style="display:none"></button>
                 <button class="icon-btn fs-toggle" title="Browser fullscreen (click again to exit)"
-                        @onclick="QuickFullscreenAsync"></button>
+                        @onclick="QuickFullscreenAsync"><span class="fs-enter">@UiIcon.Render("fs-enter", 14)</span><span class="fs-exit">@UiIcon.Render("fs-exit", 14)</span></button>
                 <button class="icon-btn" title="Close" @onclick="CloseQuickView">✕</button>
             </div>
             <div class="quick-view-media zoom-on" id="quick-view-media">
@@ -620,7 +617,7 @@
             @foreach (var u in _uiUsers)
             {
                 <div class="control-row user-row" @key="u.Name">
-                    <span>@(u.Admin ? "🛡" : "👤") @u.Name@(u.Admin ? " · admin" : "")</span>
+                    <span>@UiIcon.Render(u.Admin ? "shield" : "user", 12) @u.Name@(u.Admin ? " · admin" : "")</span>
                     @if (_pwEditUser == u.Name)
                     {
                         <input class="user-pass-input" type="password" placeholder="new password (min 8)"
@@ -745,7 +742,7 @@
         <div class="backdrop panel-backdrop" @onclick="() => _showEventsPanel = false"></div>
         <aside class="campanel events-panel" role="dialog" aria-label="Event history">
             <div class="campanel-head events-head">
-                <span class="events-head-title">🕘 Events
+                <span class="events-head-title">@UiIcon.Render("clock", 14) Events
                     <span class="event-day-count">@PanelEvents.Count()</span>
                 </span>
                 <span class="events-head-sub">@(_eventsDate is { } d0 ? d0.ToString("ddd, d MMM yyyy") : "last 24 hours")</span>
@@ -892,13 +889,13 @@
 </div>
 
 @code {
-    private static readonly (string Mode, string Icon, string Name)[] Modes =
+    private static readonly (string Mode, string Name)[] Modes =
     {
-        ("grid", "▦", "Grid"),
-        ("focus", "◧", "Focus"),
-        ("mosaic", "▩", "Mosaic"),
-        ("theater", "▭", "Theater"),
-        ("free", "🗔", "Free"),
+        ("grid", "Grid"),
+        ("focus", "Focus"),
+        ("mosaic", "Mosaic"),
+        ("theater", "Theater"),
+        ("free", "Free"),
     };
 
     private const string StorageKey = "neolink.view";
@@ -1690,6 +1687,7 @@
         "vehicle" => "🚗",
         "animal" => "🐾",
         "package" => "📦",
+        "doorbell" => "🔔",
         "motion" => "👁",
         _ => "•",
     };

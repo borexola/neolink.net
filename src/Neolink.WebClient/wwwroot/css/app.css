@@ -558,6 +558,93 @@ video[data-live="1"] ~ .tile-status { display: none; }
     from { opacity: 0; transform: translate(-50%, 10px); }
 }
 
+/* ---------- circuit reconnect overlay ---------- */
+/* Blazor toggles components-reconnect-show / -failed / -rejected on the modal
+   element; everything visual lives here so the overlay matches the theme and
+   is impossible to miss (the framework default is a small white card). */
+.reconnect-modal {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 200; /* above every dialog — nothing works while disconnected */
+    align-items: center;
+    justify-content: center;
+    background: color-mix(in srgb, var(--bg) 72%, transparent);
+    backdrop-filter: blur(4px) saturate(0.6);
+}
+
+.reconnect-modal.components-reconnect-show,
+.reconnect-modal.components-reconnect-failed,
+.reconnect-modal.components-reconnect-rejected {
+    display: flex;
+}
+
+.reconnect-box {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    min-width: 280px;
+    max-width: min(420px, calc(100vw - 40px));
+    padding: 28px 32px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    text-align: center;
+    animation: perf-toast-in 0.2s ease;
+}
+
+.reconnect-title {
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+}
+
+.reconnect-sub {
+    color: var(--muted);
+    font-size: 13px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+}
+
+.reconnect-attempts { font-size: 11px; opacity: 0.8; }
+
+.reconnect-spinner {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    border: 3px solid var(--line);
+    border-top-color: var(--accent);
+    animation: reconnect-spin 0.9s linear infinite;
+}
+
+@keyframes reconnect-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* One message block per state */
+.reconnect-when-show,
+.reconnect-when-failed,
+.reconnect-when-rejected { display: none; }
+
+.components-reconnect-show .reconnect-when-show { display: block; }
+
+.components-reconnect-failed .reconnect-when-failed,
+.components-reconnect-rejected .reconnect-when-rejected { display: block; }
+
+.components-reconnect-failed .reconnect-spinner,
+.components-reconnect-rejected .reconnect-spinner {
+    animation: none;
+    border-top-color: var(--err);
+    opacity: 0.6;
+}
+
+.reconnect-when-failed .chip,
+.reconnect-when-rejected .chip { margin: 4px 3px 0; }
+
 /* ---------- tile drag & drop, resize grip, right-click menu ---------- */
 
 /* Where a dragged tile/camera would land */
@@ -726,8 +813,18 @@ video[data-live="1"] ~ .tile-status { display: none; }
 }
 
 /* Browser-fullscreen toggle: glyph follows the JS-maintained body class */
-.fs-toggle::before { content: "⤢"; }
-body.is-fullscreen .fs-toggle::before { content: "⇲"; }
+/* Both fullscreen glyphs are rendered; the body class picks the visible one */
+.fs-enter, .fs-exit { display: inline-flex; }
+.fs-exit { display: none; }
+body.is-fullscreen .fs-enter { display: none; }
+body.is-fullscreen .fs-exit { display: inline-flex; }
+
+/* Flat inline icons: behave in text flow AND as flex items */
+.nl-icon {
+    display: inline-block;
+    vertical-align: -2px;
+    flex: 0 0 auto;
+}
 
 /* Themed scrollbars. WebKit/Blink needs both width (vertical bars) AND height
    (horizontal bars, e.g. the event strip) or the horizontal one falls back to

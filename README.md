@@ -71,6 +71,9 @@ The cameras are unmodified and no Reolink NVR is required.
 - Motion / person / vehicle / animal `binary_sensor`s driven by the **camera's own
   detections** (event-driven, no server-side inference, no polling), plus battery,
   night vision, floodlight, PIR, PTZ and reboot entities where the camera supports them
+- **Video doorbells**: a button press fires an HA `event` entity (`device_class:
+  doorbell`) for ring automations, is logged, and is recorded as a "Doorbell
+  pressed" event with pre-roll like any other detection
 - Two-level availability (service + per-camera), retained state so HA repopulates
   after restarts; MQTT 3.1.1 spoken natively — no external MQTT library
 - See [Home Assistant (MQTT)](#home-assistant-mqtt) for setup and the full entity list

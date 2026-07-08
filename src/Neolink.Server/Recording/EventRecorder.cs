@@ -459,6 +459,7 @@ public sealed class EventRecorder
             "vehicle" or "car" => "vehicle",
             "dog_cat" or "animal" or "pet" => "animal",
             "package" => "package",
+            "visitor" or "doorbell" => "doorbell", // video doorbells: the button was pressed
             _ => t,
         }).Distinct().ToList();
         return labels.Count > 0 ? labels : new List<string> { "motion" };

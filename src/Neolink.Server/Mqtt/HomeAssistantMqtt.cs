@@ -17,6 +17,7 @@ namespace Neolink.Mqtt;
 ///
 /// Per camera it publishes (all retained, so HA repopulates after a restart):
 ///   • binary_sensor: motion, person, vehicle, animal   (from the alarm pushes)
+///   • event:         doorbell press                     (video doorbells; not retained)
 ///   • sensor:        battery                            (battery cameras)
 ///   • switch:        PIR sensor                         (PIR cameras)
 ///   • select:        night vision (auto/on/off)         (IR-capable cameras)
@@ -103,6 +104,11 @@ public sealed class HomeAssistantMqtt
     internal Task PublishAsync(string topic, byte[] payload, CancellationToken ct = default) =>
         _client.PublishAsync(topic, payload, retain: true, ct);
 
+    /// <summary>Publish WITHOUT retain — HA event entities must never replay a
+    /// stale occurrence from the broker after a restart.</summary>
+    internal Task PublishTransientAsync(string topic, string payload, CancellationToken ct = default) =>
+        _client.PublishAsync(topic, payload, retain: false, ct);
+
     private async Task OnConnectedAsync()
     {
         await _client.PublishAsync(_availabilityTopic, "online", retain: true, CancellationToken.None)
@@ -161,6 +167,7 @@ internal sealed class CameraBridge
     private readonly HashSet<string> _sensorOn = new();
 
     private bool _featuresAnnounced;
+    private bool _doorbellAnnounced;
     private bool _hasFloodlight, _hasIr, _hasSnapshot;
     private string? _model;
     private DateTime _lastSnapshot = DateTime.MinValue;
@@ -370,6 +377,8 @@ internal sealed class CameraBridge
     {
         var now = DateTime.UtcNow;
         var labels = EventRecorder.LabelsOf(push); // person/vehicle/animal/... or "motion"
+        if (push.Active && labels.Contains("doorbell"))
+            _ = PublishDoorbellPressAsync(CancellationToken.None);
         if (push.Active)
         {
             _activeUntil["motion"] = now + HomeAssistantMqtt.OffDelay;
@@ -387,6 +396,42 @@ internal sealed class CameraBridge
         }
         _ = PublishSensorEdgesAsync(CancellationToken.None);
     }
+
+    /// <summary>
+    /// A doorbell button press becomes an HA EVENT entity (device_class doorbell) —
+    /// the natural trigger for ring automations. Announced lazily on the FIRST
+    /// press, so ordinary cameras never grow a dead doorbell entity. (HA may need
+    /// a beat to create the entity, so the very first ring can be discovery-only.)
+    /// </summary>
+    private async Task PublishDoorbellPressAsync(CancellationToken ct)
+    {
+        try
+        {
+            if (!_doorbellAnnounced)
+            {
+                _doorbellAnnounced = true;
+                await AnnounceEntityAsync("event", "doorbell", DoorbellEventConfig(), ct).ConfigureAwait(false);
+            }
+            await _hub.PublishTransientAsync(StateTopic("doorbell"), "{\"event_type\":\"press\"}", ct)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"{_cam.Name}: doorbell publish failed: {Log.Flatten(ex)}");
+        }
+    }
+
+    private object DoorbellEventConfig() => new
+    {
+        name = "Doorbell",
+        unique_id = $"neolink_{Id}_doorbell",
+        state_topic = StateTopic("doorbell"),
+        event_types = new[] { "press" },
+        device_class = "doorbell",
+        device = Device(),
+        availability = Availability(),
+        availability_mode = "all",
+    };
 
     /// <summary>Publishes ON/OFF only on transitions (edge-triggered), keeping traffic minimal.</summary>
     private async Task PublishSensorEdgesAsync(CancellationToken ct)

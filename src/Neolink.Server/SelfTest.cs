@@ -253,6 +253,10 @@ public static class SelfTest
             Assert(new MotionPush("MD", Array.Empty<string>()).Active, "MD is active");
             Assert(!new MotionPush("none", Array.Empty<string>()).Active, "none is all-clear");
             Assert(new MotionPush("none", new[] { "people" }).Active, "AI type implies activity");
+            // Video doorbells: the button press arrives as a "visitor" AI push.
+            AssertEq(string.Join(",", Recording.EventRecorder.LabelsOf(new MotionPush("MD", new[] { "visitor" }))),
+                "doorbell");
+            Assert(new MotionPush("none", new[] { "visitor" }).Active, "a doorbell press is an active event");
         });
 
         Test("event store roundtrip + retention", () =>

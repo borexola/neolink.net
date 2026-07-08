@@ -13,6 +13,36 @@
 
 <body>
     <Routes @rendermode="InteractiveServer" />
+
+    @* Custom reconnect overlay: when this element exists, Blazor toggles its
+       state classes (components-reconnect-show/failed/rejected) here instead
+       of injecting its unthemed white default dialog. *@
+    <div id="components-reconnect-modal" class="reconnect-modal">
+        <div class="reconnect-box">
+            <div class="reconnect-spinner" aria-hidden="true"></div>
+            <div class="reconnect-when-show">
+                <div class="reconnect-title">Connection lost</div>
+                <div class="reconnect-sub">
+                    Reconnecting to the server…
+                    <span class="reconnect-attempts">(attempt
+                        <span id="components-reconnect-current-attempt"></span> of
+                        <span id="components-reconnect-max-retries"></span>)</span>
+                </div>
+            </div>
+            <div class="reconnect-when-failed">
+                <div class="reconnect-title">Server unreachable</div>
+                <div class="reconnect-sub">The connection could not be re-established.</div>
+                <button class="chip chip-active" onclick="window.Blazor.reconnect()">Try again</button>
+                <button class="chip" onclick="location.reload()">Reload page</button>
+            </div>
+            <div class="reconnect-when-rejected">
+                <div class="reconnect-title">Session expired</div>
+                <div class="reconnect-sub">The server restarted — the page needs a reload.</div>
+                <button class="chip chip-active" onclick="location.reload()">Reload page</button>
+            </div>
+        </div>
+    </div>
+
     <script src="_framework/blazor.web.js"></script>
     <script src="_content/Neolink.WebClient/js/neolink.js"></script>
 </body>
