@@ -268,6 +268,48 @@ public static class SelfTest
             AssertEq(string.Join(",", Recording.EventRecorder.LabelsOf(press)), "doorbell");
         });
 
+        Test("status push parsing (unsolicited camera broadcasts)", () =>
+        {
+            // msg 464 NetInfo — the inner fields are from a real Wi-Fi camera
+            // capture: signal is the RSSI in dBm.
+            var net = Bc.Xml.BcXmlBody.TryParse(Encoding.UTF8.GetBytes(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\" ?><body><NetInfo version=\"1.1\">" +
+                "<net_type>wifi</net_type><signal>-45</signal></NetInfo></body>"));
+            var wifi = BcCamera.ParseNetInfo(net?.RawElement("NetInfo")!);
+            Assert(wifi != null, "NetInfo parsed");
+            AssertEq(wifi!.NetType!, "wifi");
+            AssertEq(wifi.SignalDbm, -45);
+            // A wired camera pushes NetInfo without a numeric signal — no reading.
+            Assert(BcCamera.ParseNetInfo(System.Xml.Linq.XElement.Parse(
+                "<NetInfo version=\"1.1\"><net_type>ethernet</net_type></NetInfo>")) == null,
+                "no signal = no Wi-Fi reading");
+
+            // msg 623 sleepStatus — battery cameras announce power-save transitions;
+            // firmware uses both token and numeric status forms.
+            Assert(BcCamera.ParseSleepStatus(System.Xml.Linq.XElement.Parse(
+                "<sleepStatus version=\"1.1\"><channelId>0</channelId><status>sleep</status></sleepStatus>"))
+                is { Sleeping: true }, "token status: sleeping");
+            Assert(BcCamera.ParseSleepStatus(System.Xml.Linq.XElement.Parse(
+                "<sleepStatus version=\"1.1\"><status>0</status></sleepStatus>"))
+                is { Sleeping: false }, "numeric status: awake");
+
+            // msg 291 FloodlightStatusList / msg 547 SirenStatusList share the
+            // per-channel list-of-status shape.
+            var flood = System.Xml.Linq.XElement.Parse(
+                "<FloodlightStatusList version=\"1.1\"><FloodlightStatus>" +
+                "<channel>0</channel><status>1</status></FloodlightStatus></FloodlightStatusList>");
+            AssertEq(BcCamera.ParseStatusList(flood, 0), (bool?)true);
+            AssertEq(BcCamera.ParseStatusList(flood, 1), (bool?)null); // other channel's push is not ours
+            var siren = System.Xml.Linq.XElement.Parse(
+                "<SirenStatusList version=\"1.1\"><SirenStatus>" +
+                "<channelId>0</channelId><status>0</status></SirenStatus></SirenStatusList>");
+            AssertEq(BcCamera.ParseStatusList(siren, 0), (bool?)false);
+            // Entries without a channel element apply to any channel.
+            AssertEq(BcCamera.ParseStatusList(System.Xml.Linq.XElement.Parse(
+                "<SirenStatusList version=\"1.1\"><SirenStatus><status>1</status></SirenStatus></SirenStatusList>"), 0),
+                (bool?)true);
+        });
+
         Test("event store roundtrip + retention", () =>
         {
             var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
