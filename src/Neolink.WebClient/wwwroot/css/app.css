@@ -1826,6 +1826,20 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     color: var(--accent);
 }
 
+/* Adaptive playback: shown while the clock is held back for lagging streams */
+.tl-lag {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    color: #e8b054;
+    border: 1px solid color-mix(in srgb, #e8b054 40%, transparent);
+    background: color-mix(in srgb, #e8b054 9%, transparent);
+    border-radius: 999px;
+    padding: 2px 8px;
+    white-space: nowrap;
+    animation: talk-blink 1.4s ease-in-out infinite;
+}
+
 .tl-cams {
     display: flex;
     flex-wrap: wrap;

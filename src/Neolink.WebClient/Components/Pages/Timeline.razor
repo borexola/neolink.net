@@ -23,6 +23,20 @@
         <button class="tool-btn @(_playing ? "active" : "")" @onclick="TogglePlayAsync">
             @(_playing ? "❚❚" : "▶") <span class="tool-name">@(_playing ? "Pause" : "Play")</span>
         </button>
+        @* Fast playback for skimming a day; the choice sticks (localStorage). *@
+        @foreach (var s in SpeedOptions)
+        {
+            var sp = s;
+            <button class="chip tl-speed @(_speed == sp ? "chip-active" : "")"
+                    title="Play at @(sp)× speed (beta)" @onclick="() => SetSpeedAsync(sp)">@(sp)×</button>
+        }
+        <span class="beta-tag" title="Fast playback is new — expect rough edges and report anything odd">BETA</span>
+        @if (Lagging)
+        {
+            <span class="tl-lag" title="The streams can't sustain @(_speed)× right now (server delivery or browser decoding is the limit) — the timeline slows down until they catch up">
+                ⏳ catching up…
+            </span>
+        }
         <span class="tl-clock">@TimeText(_t)</span>
     </div>
 
@@ -153,7 +167,24 @@
     private sealed record Mark(double Start, double End, string Color, string Title);
 
     private const string PrefsKey = "neolink.timeline";
-    private sealed class Prefs { public List<string> Included { get; set; } = new(); }
+    private sealed class Prefs
+    {
+        public List<string> Included { get; set; } = new();
+        public int Speed { get; set; } = 1;
+    }
+
+    private static readonly int[] SpeedOptions = { 1, 2, 4, 8, 16 };
+    private int _speed = 1;
+
+    // Adaptive playback: when the slowest healthy video falls behind the cursor
+    // (server can't serve segments fast enough, or the browser can't decode this
+    // many streams at this rate), the clock slows toward it instead of racing
+    // ahead and forcing a seek-storm. Lag below LagSoft is normal jitter; at
+    // LagHard the cursor is nearly holding still.
+    private const double LagSoft = 1.5;
+    private const double LagHard = 5.0;
+    private double _maxLag;
+    private bool Lagging => _playing && _maxLag > LagSoft;
 
     /// <summary>Only explicitly selected cameras load footage — scrubbing all cams at once is expensive.</summary>
     private IEnumerable<ApiCamera> Included => _cameras.Where(c => _included.Contains(c.Name));
@@ -184,7 +215,10 @@
             {
                 var json = await JS.InvokeAsync<string?>("neolink.lsGet", PrefsKey);
                 if (json != null && JsonSerializer.Deserialize<Prefs>(json) is { } p)
+                {
                     _included = new HashSet<string>(p.Included, StringComparer.OrdinalIgnoreCase);
+                    _speed = SpeedOptions.Contains(p.Speed) ? p.Speed : 1;
+                }
             }
             catch { }
 
@@ -423,6 +457,17 @@
         await SyncVideosAsync();
     }
 
+    private async Task SetSpeedAsync(int speed)
+    {
+        _speed = speed;
+        await SavePrefsAsync();
+        await SyncVideosAsync(); // applies the new playbackRate immediately
+    }
+
+    private Task SavePrefsAsync() =>
+        JS.InvokeVoidAsync("neolink.lsSet", PrefsKey,
+            JsonSerializer.Serialize(new Prefs { Included = _included.ToList(), Speed = _speed })).AsTask();
+
     private async Task ClockLoopAsync()
     {
         _clock = new PeriodicTimer(TimeSpan.FromMilliseconds(500));
@@ -435,7 +480,15 @@
                 var elapsed = (now - _lastTick).TotalSeconds;
                 _lastTick = now;
                 if (!_playing) continue;
-                _t += elapsed;
+                double advance = elapsed * _speed;
+                if (_maxLag > LagSoft)
+                {
+                    // Feedback: hold the cursor back for the slowest stream. The
+                    // floor keeps it crawling forward so one bad file can never
+                    // freeze the whole timeline.
+                    advance *= Math.Clamp(1 - (_maxLag - LagSoft) / (LagHard - LagSoft), 0.1, 1.0);
+                }
+                _t += advance;
                 if (_t >= DaySeconds - 1)
                 {
                     _t = DaySeconds - 1;
@@ -465,23 +518,31 @@
         return null;
     }
 
-    /// <summary>Points every included camera's player at the footage under the cursor.</summary>
+    /// <summary>
+    /// Points every included camera's player at the footage under the cursor and
+    /// measures how far the slowest healthy player is behind it — the feedback
+    /// signal for the adaptive clock (broken media reports -1 and is ignored).
+    /// </summary>
     private async Task SyncVideosAsync()
     {
+        double maxLag = 0;
         foreach (var cam in Included)
         {
             var seg = SegmentAt(cam.Name);
             if (seg == null)
             {
                 _noFootage.Add(cam.Name);
-                await JS.InvokeVoidAsync("neolink.tlSync", VideoId(cam.Name), null!, 0d, false);
+                await JS.InvokeVoidAsync("neolink.tlSync", VideoId(cam.Name), null!, 0d, false, 1);
             }
             else
             {
                 _noFootage.Remove(cam.Name);
-                await JS.InvokeVoidAsync("neolink.tlSync", VideoId(cam.Name), seg.Url, _t - seg.Start, _playing);
+                var lag = await JS.InvokeAsync<double>("neolink.tlSync",
+                    VideoId(cam.Name), seg.Url, _t - seg.Start, _playing, _speed);
+                if (lag > maxLag) maxLag = lag;
             }
         }
+        _maxLag = maxLag;
     }
 
     // ------------------------------------------------------------ actions
@@ -506,8 +567,7 @@
             if (_continuous)
                 await LoadCoverageAsync(name); // lazy: only now does this camera cost anything
         }
-        await JS.InvokeVoidAsync("neolink.lsSet", PrefsKey,
-            JsonSerializer.Serialize(new Prefs { Included = _included.ToList() }));
+        await SavePrefsAsync();
         await SyncVideosAsync();
     }
 

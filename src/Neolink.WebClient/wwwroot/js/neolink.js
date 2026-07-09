@@ -790,26 +790,43 @@
         // Points a <video> at a recording segment and keeps it at the wanted
         // offset. Tolerance while playing avoids constant reseeks (the video
         // advances on its own); paused scrubbing snaps tightly.
-        tlSync(videoId, url, offset, playing) {
+        // Returns the video's LAG: how many seconds the picture is behind the
+        // timeline cursor (0 = keeping up / paused, -1 = broken media). Blazor
+        // uses the worst healthy lag as feedback to slow the cursor down when
+        // the server or the decoder can't sustain the chosen speed.
+        tlSync(videoId, url, offset, playing, rate) {
             const v = document.getElementById(videoId);
-            if (!v) return;
+            if (!v) return 0;
             v.muted = true;
             if (!url) {
                 delete v.dataset.tlUrl;
                 if (v.getAttribute('src')) { v.removeAttribute('src'); try { v.load(); } catch { } }
-                return;
+                return 0;
             }
+            const r = Math.max(0.25, Math.min(16, rate || 1));
             if (v.dataset.tlUrl !== url) {
                 v.dataset.tlUrl = url;
                 v.src = url;
                 try { v.load(); } catch { }
                 v.currentTime = offset;
             } else {
-                const tolerance = playing ? 1.5 : 0.35;
+                // The clock ticks every 500 ms, so timer jitter scales with the
+                // playback rate — widen the drift tolerance accordingly or fast
+                // playback degrades into a seek-storm. (The adaptive clock keeps
+                // real lag below this while playing; seeks stay exceptional.)
+                const tolerance = playing ? Math.max(1.5, r * 0.75) : 0.35;
                 if (Math.abs(v.currentTime - offset) > tolerance) v.currentTime = offset;
             }
+            // AFTER the src/load branch: load() resets playbackRate to the default,
+            // so set both — a new segment then starts at the chosen speed.
+            try {
+                if (v.defaultPlaybackRate !== r) v.defaultPlaybackRate = r;
+                if (v.playbackRate !== r) v.playbackRate = r;
+            } catch { }
             if (playing) { if (v.paused) v.play().catch(() => { }); }
             else if (!v.paused) v.pause();
+            if (v.error) return -1; // dead media must not hold the timeline hostage
+            return playing ? Math.max(0, offset - (v.currentTime || 0)) : 0;
         },
 
         // Pointer-drag scrubbing on the timeline lanes: reports the horizontal
