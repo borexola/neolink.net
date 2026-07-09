@@ -180,6 +180,7 @@ foreach (var cam in config.Cameras)
     var webStreams = new List<WebStreamInfo>();
     ICameraControl control;
     CameraService? primaryService = null;
+    var camServices = new List<CameraService>();
 
     if (cam.IsGenericRtsp)
     {
@@ -220,6 +221,7 @@ foreach (var cam in config.Cameras)
             webStreams.Add(new WebStreamInfo(suffix, $"/{cam.Name}/{suffix}", hub));
             var service = new CameraService(cam, kind, hub, TimeSpan.FromSeconds(2 * streamIndex++));
             primaryService ??= service;
+            camServices.Add(service);
             tasks.Add(Task.Run(() => RunCameraGuardedAsync(service, $"{cam.Name} ({kind})", shutdown.Token)));
         }
 
@@ -290,9 +292,15 @@ foreach (var cam in config.Cameras)
     }
 
     // Registered after the recorders so the web API can report live REC state.
+    var battery = primaryService;
+    var sleepers = camServices;
     webCameras.Add(new WebCameraInfo(cam.Name, webStreams, control, permitted,
         ContinuousActive: continuousRecorder == null ? null : () => continuousRecorder.IsWriting,
-        SupportsEvents: !cam.IsGenericRtsp));
+        SupportsEvents: !cam.IsGenericRtsp,
+        Battery: battery == null ? null : () => battery.Battery,
+        // Asleep = every stream of the camera is parked on purpose (battery doze),
+        // as opposed to offline-because-unreachable.
+        Asleep: sleepers.Count == 0 ? null : () => sleepers.All(s => s.Parked)));
     if (primaryService != null)
         motionTargets.Add((primaryService, cam.Name, recorderSink));
 }

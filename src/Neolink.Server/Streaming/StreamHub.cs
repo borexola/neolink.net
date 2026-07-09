@@ -210,12 +210,19 @@ public sealed class StreamHub : IStreamHub, IMediaSink
         }
     }
 
+    // Ticks (UTC) of the last DESCRIBE/init attempt — the wake signal for
+    // sleep-friendly battery cameras (see IStreamHub.LastViewerAskUtc).
+    private long _lastViewerAskTicks;
+
+    public DateTime LastViewerAskUtc => new(Volatile.Read(ref _lastViewerAskTicks), DateTimeKind.Utc);
+
     /// <summary>
     /// Waits until enough is known about the stream to answer a DESCRIBE:
     /// video params present, plus a short grace period to detect audio.
     /// </summary>
     public async Task<bool> WaitForDescribeInfoAsync(TimeSpan timeout, CancellationToken ct)
     {
+        Volatile.Write(ref _lastViewerAskTicks, DateTime.UtcNow.Ticks);
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(timeout);
         try

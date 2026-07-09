@@ -335,7 +335,9 @@ public sealed class BcCamera : IBcCamera
             WatchStatusIdAsync(BcConstants.MsgIdSirenStatusList, "SirenStatusList",
                 el => ParseStatusList(el, _channelId) is { } on ? new SirenStatusPush(on) : null, onEvent, ct),
             WatchStatusIdAsync(BcConstants.MsgIdFloodlightStatusList, "FloodlightStatusList",
-                el => ParseStatusList(el, _channelId) is { } on ? new FloodlightStatusPush(on) : null, onEvent, ct)
+                el => ParseStatusList(el, _channelId) is { } on ? new FloodlightStatusPush(on) : null, onEvent, ct),
+            WatchStatusIdAsync(BcConstants.MsgIdBatteryInfoList, "BatteryList",
+                el => ParseBatteryList(el, _channelId), onEvent, ct)
         ).ConfigureAwait(false);
     }
 
@@ -418,6 +420,40 @@ public sealed class BcCamera : IBcCamera
             return status is not ("0" or "close" or "off" or "false" or "none");
         }
         return null;
+    }
+
+    /// <summary>
+    /// msg 252 BatteryList push: per-channel &lt;BatteryInfo&gt; entries. Returns the
+    /// reading for <paramref name="channelId"/> (entries without a channel apply to
+    /// any), or null when the push has nothing usable.
+    /// </summary>
+    internal static BatteryPush? ParseBatteryList(XElement list, byte channelId)
+    {
+        foreach (var entry in list.Elements())
+        {
+            var chEl = entry.Elements().FirstOrDefault(e =>
+                e.Name.LocalName.Equals("channelId", StringComparison.OrdinalIgnoreCase)
+                || e.Name.LocalName.Equals("channel", StringComparison.OrdinalIgnoreCase));
+            if (chEl != null && uint.TryParse(chEl.Value.Trim(), out var ch) && ch != channelId)
+                continue;
+            if (ParseBatteryInfo(entry) is { } b)
+                return b;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// One &lt;BatteryInfo&gt; element (msg 253 reply or a BatteryList entry):
+    /// batteryPercent plus chargeStatus ("charging" / "chargeComplete" / "none").
+    /// Charging is true whenever a power source is attached.
+    /// </summary>
+    internal static BatteryPush? ParseBatteryInfo(XElement el)
+    {
+        if (Descendant(el, "batteryPercent") is not { } pctEl
+            || !int.TryParse(pctEl.Value.Trim(), out var pct))
+            return null;
+        var charge = Descendant(el, "chargeStatus")?.Value.Trim().ToLowerInvariant() ?? "";
+        return new BatteryPush(Math.Clamp(pct, 0, 100), charge.Contains("charg"));
     }
 
     public async Task<byte[]?> SnapAsync(CancellationToken ct)

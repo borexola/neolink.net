@@ -22,8 +22,11 @@ namespace Neolink.Web;
 public sealed record WebStreamInfo(string Kind, string Path, IStreamHub Hub);
 /// <param name="ContinuousActive">Probe: is 24/7 footage being written right now? Null when the camera has no continuous recorder.</param>
 /// <param name="SupportsEvents">False for generic RTSP cameras: no detection pushes, so event recording can't trigger.</param>
+/// <param name="Battery">Latest battery reading, or null (mains-powered / generic RTSP / unknown yet).</param>
+/// <param name="Asleep">Probe: is the camera intentionally disconnected so it can sleep (battery doze)?</param>
 public sealed record WebCameraInfo(string Name, List<WebStreamInfo> Streams, ICameraControl Control,
-    HashSet<string>? PermittedUsers, Func<bool>? ContinuousActive = null, bool SupportsEvents = true);
+    HashSet<string>? PermittedUsers, Func<bool>? ContinuousActive = null, bool SupportsEvents = true,
+    Func<BatteryPush?>? Battery = null, Func<bool>? Asleep = null);
 
 /// <summary>Everything the web API needs from the host.</summary>
 public sealed class WebApiOptions
@@ -439,6 +442,12 @@ public static class WebApi
                 online = c.Control.Online,
                 // 24/7 footage being written right now (drives the UI's REC badge)
                 recording = c.ContinuousActive?.Invoke() ?? false,
+                // Battery cameras: intentionally disconnected (dozing) vs offline,
+                // plus the latest battery reading when the camera reports one.
+                asleep = c.Asleep?.Invoke() ?? false,
+                battery = c.Battery?.Invoke() is { } b
+                    ? new { percent = b.Percent, charging = b.Charging }
+                    : null,
                 streams = c.Streams.Select(s => new
                 {
                     kind = s.Kind,

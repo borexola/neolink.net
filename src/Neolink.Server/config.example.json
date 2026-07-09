@@ -102,6 +102,13 @@
       // Only needed when connecting through a Reolink NVR: camera channel, starting at 0.
       "channel_id": 0
 
+      // Battery cameras (Argus etc.): unset = auto — cameras that report a battery
+      // sleep while nobody watches (connecting on demand); everything else streams
+      // around the clock. Set true to hold a battery camera awake 24/7 (needed for
+      // recording/motion events; drains the battery — pair with solar/USB power),
+      // or false to force sleep-friendly behavior.
+      // "always_on": false,
+
       // Optional: restrict this camera to specific users from "users" above.
       // "permitted_users": [ "me" ]
     }

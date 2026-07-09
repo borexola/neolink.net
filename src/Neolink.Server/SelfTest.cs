@@ -188,6 +188,13 @@ public static class SelfTest
                       "stream": "both",
                       "permitted_users": [ "me" ],
                     },
+                    {
+                      "name": "argus",
+                      "username": "admin",
+                      "password": "12345678",
+                      "address": "192.168.1.188",
+                      "always_on": true,
+                    },
                   ],
                 }
                 """;
@@ -198,12 +205,15 @@ public static class SelfTest
                 var cfg = NeolinkConfig.Load(tmp);
                 AssertEq(cfg.BindAddr, "127.0.0.1");
                 AssertEq(cfg.BindPort, 8555);
-                AssertEq(cfg.Cameras.Count, 1);
+                AssertEq(cfg.Cameras.Count, 2);
                 AssertEq(cfg.Cameras[0].Host, "192.168.1.187");
                 AssertEq(cfg.Cameras[0].Port, 9000); // default port applied
                 AssertEq(cfg.Users.Count, 1);
                 var permitted = cfg.PermittedUsersFor(cfg.Cameras[0]);
                 Assert(permitted != null && permitted.Contains("me"), "permitted users");
+                // Battery cameras: always_on is tri-state — unset means auto.
+                Assert(cfg.Cameras[0].AlwaysOn == null, "always_on defaults to auto");
+                Assert(cfg.Cameras[1].AlwaysOn == true, "always_on parsed");
             }
             finally
             {
@@ -308,6 +318,21 @@ public static class SelfTest
             AssertEq(BcCamera.ParseStatusList(System.Xml.Linq.XElement.Parse(
                 "<SirenStatusList version=\"1.1\"><SirenStatus><status>1</status></SirenStatus></SirenStatusList>"), 0),
                 (bool?)true);
+
+            // msg 253 BatteryInfo reply / msg 252 BatteryList push — battery cameras
+            // report percent + chargeStatus (none / charging / chargeComplete).
+            var bat = BcCamera.ParseBatteryInfo(System.Xml.Linq.XElement.Parse(
+                "<BatteryInfo version=\"1.1\"><channelId>0</channelId><adapterStatus>solarPanel</adapterStatus>" +
+                "<chargeStatus>charging</chargeStatus><batteryPercent>87</batteryPercent></BatteryInfo>"));
+            Assert(bat is { Percent: 87, Charging: true }, "BatteryInfo parsed");
+            var batList = BcCamera.ParseBatteryList(System.Xml.Linq.XElement.Parse(
+                "<BatteryList version=\"1.1\"><BatteryInfo><channelId>0</channelId>" +
+                "<chargeStatus>none</chargeStatus><batteryPercent>42</batteryPercent></BatteryInfo></BatteryList>"), 0);
+            Assert(batList is { Percent: 42, Charging: false }, "BatteryList push parsed");
+            Assert(BcCamera.ParseBatteryList(System.Xml.Linq.XElement.Parse(
+                "<BatteryList version=\"1.1\"><BatteryInfo><channelId>1</channelId>" +
+                "<batteryPercent>10</batteryPercent></BatteryInfo></BatteryList>"), 0) == null,
+                "other channel's battery is not ours");
         });
 
         Test("talk audio: encode → frame → parse → decode round-trip", () =>

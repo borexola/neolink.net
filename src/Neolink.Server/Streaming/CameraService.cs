@@ -28,10 +28,15 @@ public sealed class CameraService : ILiveCameraSource
     private static readonly TimeSpan MinBackoff = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan MaxBackoff = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan AuthRetryDelay = TimeSpan.FromSeconds(30);
+    /// <summary>How recent a viewer's DESCRIBE/init attempt still counts as demand.</summary>
+    private static readonly TimeSpan DemandWindow = TimeSpan.FromSeconds(20);
+    /// <summary>How long a sleep-friendly stream keeps running after the last viewer leaves.</summary>
+    private static readonly TimeSpan IdleGrace = TimeSpan.FromSeconds(60);
 
     private readonly CameraConfig _config;
     private readonly StreamKind _kind;
     private readonly IMediaSink _hub;
+    private readonly IStreamHub? _demandHub; // same hub, viewer-demand view (null in tests)
     private readonly TimeSpan _startupDelay;
 
     /// <summary>AI tokens the pipeline knows how to normalize (see EventRecorder.LabelsOf).</summary>
@@ -42,17 +47,41 @@ public sealed class CameraService : ILiveCameraSource
     };
     private readonly HashSet<string> _reportedAiTypes = new(StringComparer.Ordinal);
     private volatile IBcCamera? _live;
+    private volatile bool _batteryPowered;
+    private volatile BatteryPush? _battery;
+    private volatile bool _parked;
+    private bool _sleepHintLogged;
 
     public CameraService(CameraConfig config, StreamKind kind, IMediaSink hub, TimeSpan startupDelay)
     {
         _config = config;
         _kind = kind;
         _hub = hub;
+        _demandHub = hub as IStreamHub;
         _startupDelay = startupDelay;
     }
 
     public string Name => _config.Name;
     public IBcCamera? LiveCamera => _live;
+
+    /// <summary>True once the camera has answered a battery query (battery model).</summary>
+    public bool BatteryPowered => _batteryPowered;
+
+    /// <summary>Latest battery reading (login query + msg 252 pushes), or null.</summary>
+    public BatteryPush? Battery => _battery;
+
+    /// <summary>True while intentionally disconnected so a battery camera can sleep.</summary>
+    public bool Parked => _parked;
+
+    // Sleep policy: explicit always_on wins; unset = battery cameras doze,
+    // everything else streams around the clock (the pre-battery behavior).
+    private bool AllowSleep => _demandHub != null && !(_config.AlwaysOn ?? !_batteryPowered);
+
+    // Demand = someone is watching, or recently tried to start watching (viewers
+    // only subscribe once video is ready, so the DESCRIBE attempt is the wake call).
+    private bool DemandNow => _demandHub == null
+        || _demandHub.ViewerCount > 0
+        || DateTime.UtcNow - _demandHub.LastViewerAskUtc < DemandWindow;
 
     /// <summary>
     /// When set (on the primary stream service), alarm pushes are requested on each
@@ -87,11 +116,40 @@ public sealed class CameraService : ILiveCameraSource
         var backoff = MinBackoff;
         while (!ct.IsCancellationRequested)
         {
+            // Sleep-friendly cameras: stay disconnected while nobody watches, so
+            // the camera can power down. A viewer's DESCRIBE/init attempt wakes us.
+            if (AllowSleep && !DemandNow)
+            {
+                _parked = true;
+                Log.Info($"{Tag}: parked — letting the battery camera sleep (open the stream to reconnect)");
+                try
+                {
+                    while (!DemandNow)
+                        await Task.Delay(500, ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+                finally
+                {
+                    _parked = false;
+                }
+                Log.Info($"{Tag}: viewer waiting — reconnecting");
+                backoff = MinBackoff;
+            }
+
             bool gotFrames = false;
             try
             {
-                await StreamOnceAsync(ct, () => gotFrames = true).ConfigureAwait(false);
-                return; // cancelled cleanly
+                bool wentIdle = await StreamOnceAsync(ct, () => gotFrames = true).ConfigureAwait(false);
+                if (ct.IsCancellationRequested) return; // cancelled cleanly
+                if (wentIdle)
+                {
+                    backoff = MinBackoff;
+                    continue; // loop parks above until someone watches again
+                }
+                return;
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -117,8 +175,20 @@ public sealed class CameraService : ILiveCameraSource
             }
             catch (Exception ex)
             {
-                if (gotFrames) backoff = MinBackoff; // we did stream; reset the backoff
-                Log.Error($"{Tag}: {Log.Flatten(ex)}; retrying in {backoff.TotalSeconds:0}s");
+                if (gotFrames)
+                {
+                    backoff = MinBackoff; // we did stream; reset the backoff
+                    _sleepHintLogged = false;
+                }
+                // A sleeping battery camera refuses connections until IT wakes
+                // (PIR motion, the Reolink app) — say so once per outage.
+                string hint = "";
+                if (_batteryPowered && !gotFrames && !_sleepHintLogged)
+                {
+                    _sleepHintLogged = true;
+                    hint = " (a sleeping battery camera is unreachable until it wakes itself — PIR motion or the Reolink app)";
+                }
+                Log.Error($"{Tag}: {Log.Flatten(ex)}; retrying in {backoff.TotalSeconds:0}s{hint}");
             }
 
             try
@@ -133,7 +203,11 @@ public sealed class CameraService : ILiveCameraSource
         }
     }
 
-    private async Task StreamOnceAsync(CancellationToken ct, Action onFrame)
+    /// <summary>
+    /// One connected session. Returns true when the stream was stopped on purpose
+    /// to let an idle battery camera sleep; false when cancelled.
+    /// </summary>
+    private async Task<bool> StreamOnceAsync(CancellationToken ct, Action onFrame)
     {
         Log.Info($"{Tag}: connecting to {_config.Host}:{_config.Port}");
         await using IBcCamera camera = await BcCamera.ConnectAsync(_config.Host, _config.Port, _config.ChannelId, ct).ConfigureAwait(false);
@@ -142,6 +216,8 @@ public sealed class CameraService : ILiveCameraSource
         await camera.LoginAsync(_config.Username, _config.Password, ct).ConfigureAwait(false);
         var res = camera.DeviceInfo;
         Log.Info($"{Tag}: logged in{(res != null && res.Width > 0 ? $", camera reports {res.Width}x{res.Height}" : "")}");
+
+        await ProbeBatteryAsync(camera, ct).ConfigureAwait(false);
 
         var binary = Channel.CreateUnbounded<byte[]>(new UnboundedChannelOptions
         {
@@ -158,9 +234,16 @@ public sealed class CameraService : ILiveCameraSource
         Task? motionTask = MotionSink is { } sink
             ? Task.Run(() => WatchMotionGuardedAsync(camera, sink, linked.Token), CancellationToken.None)
             : null;
-        Task? statusTask = StatusSink is { } statusSink
-            ? Task.Run(() => WatchStatusGuardedAsync(camera, statusSink, linked.Token), CancellationToken.None)
-            : null;
+        // The status watch always runs: battery pushes keep the sidebar reading
+        // fresh even without MQTT; other pushes go to the external sink if any.
+        var externalStatusSink = StatusSink;
+        Action<StatusPush> statusSink = push =>
+        {
+            if (push is BatteryPush b) _battery = b;
+            externalStatusSink?.Invoke(push);
+        };
+        Task statusTask = Task.Run(() => WatchStatusGuardedAsync(camera, statusSink, linked.Token), CancellationToken.None);
+        DateTime? idleSince = null;
         try
         {
             while (!ct.IsCancellationRequested)
@@ -196,7 +279,30 @@ public sealed class CameraService : ILiveCameraSource
                         _hub.PublishAdpcm(adpcm);
                         break;
                 }
+
+                // Sleep-friendly: once the last viewer has been gone a while,
+                // disconnect on purpose so the camera can power down. Recorders
+                // don't count — holding a battery camera awake to record 24/7
+                // needs an explicit always_on.
+                if (AllowSleep)
+                {
+                    if (DemandNow)
+                    {
+                        idleSince = null;
+                    }
+                    else
+                    {
+                        idleSince ??= DateTime.UtcNow;
+                        if (DateTime.UtcNow - idleSince > IdleGrace)
+                        {
+                            Log.Info($"{Tag}: no viewers for {IdleGrace.TotalSeconds:0}s — " +
+                                     "disconnecting so the battery camera can sleep");
+                            return true;
+                        }
+                    }
+                }
             }
+            return false;
         }
         finally
         {
@@ -207,10 +313,38 @@ public sealed class CameraService : ILiveCameraSource
             {
                 try { await motionTask.ConfigureAwait(false); } catch { }
             }
-            if (statusTask != null)
+            try { await statusTask.ConfigureAwait(false); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// One battery query at session start: only battery models answer, so this
+    /// doubles as power-source detection for the sleep default and seeds the
+    /// sidebar reading (msg 252 pushes keep it fresh afterwards).
+    /// </summary>
+    private async Task ProbeBatteryAsync(IBcCamera camera, CancellationToken ct)
+    {
+        try
+        {
+            var info = await camera.GetBatteryInfoAsync(TimeSpan.FromSeconds(3), ct).ConfigureAwait(false);
+            if (info != null && BcCamera.ParseBatteryInfo(info) is { } b)
             {
-                try { await statusTask.ConfigureAwait(false); } catch { }
+                bool first = !_batteryPowered;
+                _batteryPowered = true;
+                _battery = b;
+                var reading = $"battery at {b.Percent}%{(b.Charging ? ", charging" : "")}";
+                if (first)
+                    Log.Info($"{Tag}: battery-powered camera detected ({reading}); " +
+                             (AllowSleep
+                                 ? "it will sleep while nobody watches (set \"always_on\": true to keep it awake)"
+                                 : "always_on keeps it awake around the clock"));
+                else
+                    Log.Debug($"{Tag}: {reading}");
             }
+        }
+        catch (Exception ex) when (ex is CameraCommandException or TimeoutException)
+        {
+            // Not battery-powered (or it declined to say) — treat as mains.
         }
     }
 

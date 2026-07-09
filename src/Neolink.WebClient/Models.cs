@@ -19,7 +19,11 @@ public sealed record ApiStream(string Kind, string Path, bool Ready, string? Cod
 }
 
 /// <param name="Recording">24/7 footage is being written for this camera right now.</param>
-public sealed record ApiCamera(string Name, bool Online, List<ApiStream> Streams, bool Recording = false);
+public sealed record ApiCamera(string Name, bool Online, List<ApiStream> Streams, bool Recording = false,
+    bool Asleep = false, ApiBattery? Battery = null);
+
+/// <summary>Battery reading of a battery-powered camera (null on mains-powered ones).</summary>
+public sealed record ApiBattery(int Percent, bool Charging);
 
 // ------------------------------------------------------------ camera control API
 
@@ -180,6 +184,9 @@ public static class UiIcon
             "user" => "<path d=\"M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2\"/><circle cx=\"12\" cy=\"7\" r=\"4\"/>",
             "x" => "<line x1=\"18\" y1=\"6\" x2=\"6\" y2=\"18\"/><line x1=\"6\" y1=\"6\" x2=\"18\" y2=\"18\"/>",
             "mic" => "<path d=\"M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z\"/><path d=\"M19 10v2a7 7 0 0 1-14 0v-2\"/><line x1=\"12\" y1=\"19\" x2=\"12\" y2=\"23\"/><line x1=\"8\" y1=\"23\" x2=\"16\" y2=\"23\"/>",
+            "battery" => "<rect x=\"1\" y=\"6\" width=\"18\" height=\"12\" rx=\"2\"/><line x1=\"23\" y1=\"11\" x2=\"23\" y2=\"13\"/>",
+            "bolt" => "<polygon points=\"13 2 3 14 12 14 11 22 21 10 12 10 13 2\"/>",
+            "moon" => "<path d=\"M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z\"/>",
             _ => "",
         };
         return new MarkupString(

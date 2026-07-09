@@ -43,6 +43,13 @@ public interface IStreamHub
     void Unsubscribe(Guid id);
 
     /// <summary>
+    /// When a would-be viewer last asked for this stream (DESCRIBE/init wait).
+    /// Viewers only subscribe once video is ready, so a sleeping battery camera
+    /// uses this — not <see cref="ViewerCount"/> — as its wake-up signal.
+    /// </summary>
+    DateTime LastViewerAskUtc { get; }
+
+    /// <summary>
     /// Waits until enough is known about the stream to answer a DESCRIBE:
     /// video params present, plus a short grace period to detect audio.
     /// </summary>

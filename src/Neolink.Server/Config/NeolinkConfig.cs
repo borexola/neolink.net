@@ -139,6 +139,7 @@ public sealed class NeolinkConfig
         string stream = "both";
         byte channelId = 0;
         bool record = true;
+        bool? alwaysOn = null;
         List<string>? permitted = null;
 
         foreach (var prop in el.EnumerateObject())
@@ -154,6 +155,7 @@ public sealed class NeolinkConfig
                 case "stream": stream = prop.Value.GetString() ?? "both"; break;
                 case "channelid": channelId = prop.Value.GetByte(); break;
                 case "record": record = prop.Value.GetBoolean(); break;
+                case "alwayson": alwaysOn = prop.Value.GetBoolean(); break;
                 // Generic (non-Reolink) camera: pull these RTSP URLs directly.
                 case "rtsp" or "rtspmain": rtspMain = prop.Value.GetString(); break;
                 case "rtspsub": rtspSub = prop.Value.GetString(); break;
@@ -170,7 +172,7 @@ public sealed class NeolinkConfig
         }
 
         return BuildCamera(name, username, password, address, uid, stream, channelId, permitted, httpAddress,
-            record, rtspMain, rtspSub);
+            record, rtspMain, rtspSub, alwaysOn);
     }
 
     private static RecordingConfig ParseJsonRecording(JsonElement el)
@@ -341,7 +343,8 @@ public sealed class NeolinkConfig
                 MiniToml.GetString(c, "http_address"),
                 MiniToml.GetBool(c, "record") ?? true,
                 MiniToml.GetString(c, "rtsp_main") ?? MiniToml.GetString(c, "rtsp"),
-                MiniToml.GetString(c, "rtsp_sub")));
+                MiniToml.GetString(c, "rtsp_sub"),
+                MiniToml.GetBool(c, "always_on")));
         }
         return config;
     }
@@ -354,7 +357,8 @@ public sealed class NeolinkConfig
 
     private static CameraConfig BuildCamera(string? name, string? username, string? password,
         string? address, string? uid, string stream, byte channelId, List<string>? permitted,
-        string? httpAddress = null, bool record = true, string? rtspMain = null, string? rtspSub = null)
+        string? httpAddress = null, bool record = true, string? rtspMain = null, string? rtspSub = null,
+        bool? alwaysOn = null)
     {
         if (name == null) throw new FormatException("camera entry missing \"name\"");
 
@@ -403,6 +407,7 @@ public sealed class NeolinkConfig
             PermittedUsers = permitted,
             HttpAddress = string.IsNullOrWhiteSpace(httpAddress) ? null : httpAddress.Trim(),
             Record = record,
+            AlwaysOn = alwaysOn,
         };
     }
 
@@ -608,4 +613,10 @@ public sealed class CameraConfig
     public string? HttpAddress { get; init; }
     /// <summary>Record detection events for this camera (when recording is configured).</summary>
     public bool Record { get; init; } = true;
+    /// <summary>
+    /// Battery cameras: true holds the connection (and the camera awake) around the
+    /// clock; false lets it sleep, connecting only while someone watches. Unset =
+    /// auto — cameras that report a battery sleep, everything else stays always-on.
+    /// </summary>
+    public bool? AlwaysOn { get; init; }
 }

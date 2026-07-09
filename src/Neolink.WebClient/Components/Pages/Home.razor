@@ -97,16 +97,30 @@
         @foreach (var cam in _cameras)
         {
             @* The card is a drag source: drop it on any tile to show this camera there. *@
-            <div class="cam @(cam.Online ? "" : "cam-offline") @(IsRouteCamera(cam.Name) ? "cam-active" : "")" draggable="true"
+            <div class="cam @(cam.Online || cam.Asleep ? "" : "cam-offline") @(IsRouteCamera(cam.Name) ? "cam-active" : "")" draggable="true"
                  @ondragstart="() => _dragCamera = cam.Name"
                  @ondragend="ClearDragState">
                 @* Stream readiness latches once video has flowed, so only the live
                    control connection (Online) is a truthful liveness signal. *@
-                <div class="cam-head" title="@(cam.Online ? "Open full view (main stream) — drag the card onto a tile to add it to the wall" : "Camera unreachable — reconnecting")"
+                <div class="cam-head" title="@CamHeadTitle(cam)"
                      @onclick="() => OpenCameraMain(cam)">
-                    <span class="dot @(cam.Online ? "on" : "off")"></span>
+                    <span class="dot @(cam.Online ? "on" : cam.Asleep ? "doze" : "off")"></span>
                     <span class="cam-name">@cam.Name</span>
-                    @if (!cam.Online)
+                    @if (cam.Battery is { } bat)
+                    {
+                        @* Battery-powered camera: level + charging hint. *@
+                        <span class="cam-battery @(bat.Percent <= 20 && !bat.Charging ? "battery-low" : "")"
+                              title="Battery-powered camera: @(bat.Percent)%@(bat.Charging ? ", charging" : "")">
+                            @UiIcon.Render(bat.Charging ? "bolt" : "battery", 11)@bat.Percent%
+                        </span>
+                    }
+                    @if (cam.Asleep && !cam.Online)
+                    {
+                        <span class="cam-doze-badge" title="Battery camera sleeping — open its stream to reconnect">
+                            @UiIcon.Render("moon", 10) asleep
+                        </span>
+                    }
+                    else if (!cam.Online)
                     {
                         <span class="cam-offline-badge">offline</span>
                     }
@@ -2289,6 +2303,13 @@
         _sidebarOpen = false; // mobile drawer: close after picking
         Nav.NavigateTo(main != null ? StreamUrl(cam.Name, main.Kind) : CameraUrl(cam.Name));
     }
+
+    private static string CamHeadTitle(ApiCamera cam) =>
+        cam.Online
+            ? "Open full view (main stream) — drag the card onto a tile to add it to the wall"
+            : cam.Asleep
+                ? "Battery camera sleeping to save power — opening a stream reconnects (it must be awake to answer)"
+                : "Camera unreachable — reconnecting";
 
     private void ChangeStream(int index, ApiCamera camera, string? path)
     {

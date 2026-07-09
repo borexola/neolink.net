@@ -105,6 +105,12 @@ public sealed record SirenStatusPush(bool On) : StatusPush;
 /// <summary>msg 291 FloodlightStatusList: the floodlight switched on or off.</summary>
 public sealed record FloodlightStatusPush(bool On) : StatusPush;
 
+/// <summary>
+/// Battery level, from the msg 252 BatteryList push or a msg 253 BatteryInfo
+/// query. Charging is true whenever a power source (adapter/solar) is attached.
+/// </summary>
+public sealed record BatteryPush(int Percent, bool Charging) : StatusPush;
+
 /// <summary>The camera answered a control command with a non-200 response code.</summary>
 public sealed class CameraCommandException : Exception
 {

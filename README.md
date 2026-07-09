@@ -66,6 +66,9 @@ The cameras are unmodified and no Reolink NVR is required.
   profiles (resolution, framerate/bitrate options), battery status, and — where the
   camera supports them — PTZ (press-and-hold pad), status LED / floodlight toggles,
   PIR motion sensor on/off, and reboot
+- **Battery cameras** (Argus etc.) are auto-detected: charge badge in the sidebar,
+  sleep-friendly by default (the camera dozes while nobody watches), `always_on`
+  per camera to hold it awake — see [Battery cameras](#battery-cameras-argus-etc)
 - Everything persists in browser localStorage: server address, layout, tile
   assignments, window geometry
 - Adaptive jitter buffer that measures each stream's delivery cadence
@@ -506,6 +509,42 @@ Frigate roles/consumers attach, and hands stalled ffmpeg processes a hard discon
 within 10 s so Frigate's watchdog recovers quickly. For headless Frigate boxes set
 `"webui": false` (or `"web_port": 0`).
 
+## Battery cameras (Argus etc.)
+
+Battery-powered Reolinks (Argus Eco/Pro, Reolink Go, battery doorbells) speak the
+same Baichuan protocol over the same direct TCP connection as mains cameras —
+**an awake battery camera streams out of the box**, no special transport needed.
+What sets them apart is power management: left to the default always-connected
+behavior, a permanent stream holds the camera awake and flattens the battery in a
+day or two. That's what this support is about — knowing the camera is
+battery-powered and managing sleep deliberately:
+
+- **Auto-detected**: a camera that reports a battery gets a charge badge in the
+  sidebar (with a charging bolt when powered), and defaults to **sleep-friendly
+  mode** — Neolink disconnects while nobody watches so the camera can power down,
+  and reconnects when you open one of its streams. A dozing camera shows an
+  "asleep" badge instead of the red offline one.
+- **`"always_on": true`** (per camera in the config) holds the connection — and
+  therefore the camera — awake around the clock. That's what you want for motion
+  events, MQTT and recording, which all need a live connection; it also drains a
+  battery in a day or two, so pair it with a solar panel or USB power.
+- **`"always_on": false`** forces sleep-friendly mode even if battery detection
+  fails.
+
+Limitations to know about (all inherited from how these cameras work, not fixable
+from our side):
+
+- The camera must be reachable **by IP over Wi-Fi** (`"address"` in the config —
+  give it a DHCP reservation). The UID/P2P relay transport is not implemented, so
+  cameras that can only be reached through Reolink's cloud relay won't connect.
+- **A sleeping camera cannot be woken over TCP.** Reconnection succeeds when the
+  camera wakes itself: PIR motion, the Reolink app, or `always_on` having held it
+  awake in the first place. Expect "open stream → wait" to work only if something
+  wakes the camera; with `always_on` this never comes up.
+- While asleep there are **no motion events, no MQTT updates, no recording, no
+  snapshots** — the camera is off the network on purpose. It still records
+  PIR events to its own SD card, as it does with the official app.
+
 ## Web UI notes
 
 - **H.265 in the browser**: sub streams are H.264 and play everywhere. Main streams on
@@ -583,9 +622,10 @@ Improvements: built-in web UI, no GStreamer/native dependencies, no transcoding 
 per-client backpressure, in-stream resynchronization.
 
 Not (yet) supported: TLS for RTSP (`rtsps://` — put a TLS-terminating proxy in front)
-and battery/UID cameras that need UDP discovery (Argus etc.). The auxiliary features
-(PIR, reboot, status LED, two-way talk) are covered by the web UI and API instead of
-CLI subcommands.
+and the UID/UDP discovery + relay transport (battery cameras work over direct TCP —
+see [Battery cameras](#battery-cameras-argus-etc) — but cameras reachable ONLY via
+Reolink's P2P relay are not). The auxiliary features (PIR, reboot, status LED,
+two-way talk) are covered by the web UI and API instead of CLI subcommands.
 
 ## Project status & disclaimer
 

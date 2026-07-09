@@ -191,6 +191,8 @@ html, body {
 
 .dot.on { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
 .dot.off { background: var(--err); box-shadow: 0 0 6px var(--err); }
+/* Battery camera dozing on purpose — calm, not alarming like offline-red */
+.dot.doze { background: var(--muted); box-shadow: 0 0 5px color-mix(in srgb, var(--muted) 60%, transparent); }
 
 /* Offline camera: unmistakable badge + a dimmed card (streams can't start) */
 .cam-offline { border-color: color-mix(in srgb, var(--err) 35%, var(--line)); }
@@ -207,6 +209,37 @@ html, body {
     border-radius: 999px;
     padding: 1px 7px;
     flex: 0 0 auto;
+}
+
+/* Battery-powered camera: charge level (and a bolt while charging) */
+.cam-battery {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--muted);
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+.cam-battery.battery-low { color: var(--err); }
+
+/* Battery camera intentionally sleeping (as opposed to unreachable) */
+.cam-doze-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--muted);
+    border: 1px solid var(--line);
+    background: color-mix(in srgb, var(--panel-2) 70%, transparent);
+    border-radius: 999px;
+    padding: 1px 7px;
+    flex: 0 0 auto;
+    white-space: nowrap;
 }
 
 /* 24/7 footage is actively being written for this camera (sidebar + tile bar) */
