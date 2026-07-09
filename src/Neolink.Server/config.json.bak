@@ -1,0 +1,108 @@
+﻿{
+  // Neolink.NET configuration.
+  // (Comments and trailing commas are allowed in this file.)
+
+  // Address to serve RTSP on. "0.0.0.0" = all networks, "127.0.0.1" = this computer only.
+  "bind": "0.0.0.0",
+  "bind_port": 8654,
+
+  // HTTP/WebSocket API for web clients (camera list + live fMP4 video). 0 disables it.
+  "web_port": 8655,
+
+  // Serve the browser UI on the web port. Set false for API-only (e.g. headless/Frigate setups).
+  "webui": true,
+
+  // Optional: password-protect the RTSP server. Remove this section for open access.
+  // Connect with e.g. rtsp://me:mepass@192.168.1.100:8654/driveway
+  "users": [
+    // { "name": "me", "pass": "mepass" }
+  ],
+
+  // One entry per camera.
+  "cameras": [
+    {
+      // Name used in the RTSP URL: rtsp://<host>:8654/driveway
+      "name": "FamilyRoom",
+
+      // Camera login (the same credentials as the Reolink app).
+      "username": "admin",
+      "password": "TxHVJTuwM6SVx3!",
+
+      // IP or hostname of the camera. Port defaults to 9000 if omitted.
+      "address": "10.1.1.209:9000",
+
+      // Which streams to serve: "mainStream", "subStream", "externStream", "both", or "all".
+      // "both" serves /driveway (+ /driveway/mainStream) and /driveway/subStream.
+      "stream": "both",
+
+      // Only needed when connecting through a Reolink NVR: camera channel, starting at 0.
+      "channel_id": 0
+
+      // Optional: restrict this camera to specific users from "users" above.
+      // "permitted_users": [ "me" ]
+    },
+    {
+      "name": "Driveway",
+      "username": "admin",
+      "password": "TxHVJTuwM6SVx3!",
+      "address": "10.1.1.148:9000",
+      "stream": "both",
+      "channel_id": 0
+      // "permitted_users": [ "me" ]
+    },
+    {
+      "name": "FrontDoor",
+      "username": "admin",
+      "password": "TxHVJTuwM6SVx3!",
+      "address": "10.1.1.63:9000",
+      "stream": "both",
+      "channel_id": 0
+      // "permitted_users": [ "me" ]
+    },
+    {
+      "name": "Backyard",
+      "username": "admin",
+      "password": "TxHVJTuwM6SVx3!",
+      "address": "10.1.1.174:9000",
+      "stream": "both",
+      "channel_id": 0
+      // "permitted_users": [ "me" ]
+    },
+    {
+      "name": "LivingRoom",
+      "username": "admin",
+      "password": "TxHVJTuwM6SVx3!",
+      "address": "10.1.1.67:9000",
+      "stream": "both",
+      "channel_id": 0
+      // "permitted_users": [ "me" ]
+    },
+    {
+      "name": "Basement",
+      "username": "admin",
+      "password": "TxHVJTuwM6SVx3!",
+      "address": "10.1.1.29:9000",
+      "stream": "both",
+      "channel_id": 0
+      // "permitted_users": [ "me" ]
+    },
+    {
+      "name": "Side",
+      "username": "admin",
+      "password": "TxHVJTuwM6SVx3!",
+      "address": "10.1.1.195:9000",
+      "stream": "both",
+      "channel_id": 0
+      // "permitted_users": [ "me" ]
+    },
+    {
+      "name": "Garage",
+      "username": "admin",
+      "password": "TxHVJTuwM6SVx3!",
+      "address": "10.1.1.35:9000",
+      "stream": "both",
+      "channel_id": 0
+      // "permitted_users": [ "me" ]
+    }
+  ]
+}

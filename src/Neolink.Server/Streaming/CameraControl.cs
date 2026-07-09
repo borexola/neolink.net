@@ -2,8 +2,10 @@
 // Licensed under the GNU Affero General Public License v3.0; see the LICENSE file
 // in the repository root.
 using System.Text.Json.Nodes;
+using System.Threading.Channels;
 using System.Xml.Linq;
 using Neolink.Bc.Xml;
+using Neolink.Media;
 using Neolink.Protocol;
 
 namespace Neolink.Streaming;
@@ -15,7 +17,7 @@ public sealed class CameraOfflineException : Exception
 }
 
 /// <summary>Features a camera was found to support, discovered by probing.</summary>
-public sealed record CameraFeatures(bool Ptz, bool Led, bool Pir, bool Battery);
+public sealed record CameraFeatures(bool Ptz, bool Led, bool Pir, bool Battery, bool Talk);
 
 /// <summary>Discovered camera capabilities: identity, advertised support flags, probed features.</summary>
 public sealed record CameraCapabilities(VersionInfoXml? Version, XElement? Support, CameraFeatures Features);
@@ -54,6 +56,20 @@ public interface ICameraControl
     Task SetPirEnabledAsync(bool enabled, CancellationToken ct);
     Task PtzAsync(string command, float speed, CancellationToken ct);
     Task RebootAsync(CancellationToken ct);
+
+    /// <summary>
+    /// Two-way talk: streams 16-bit LE mono PCM chunks at <paramref name="sampleRate"/>
+    /// to the camera's speaker until the channel completes or <paramref name="ct"/>
+    /// fires. One session per camera; a second concurrent call throws
+    /// <see cref="TalkBusyException"/>.
+    /// </summary>
+    Task TalkAsync(int sampleRate, ChannelReader<byte[]> pcm, CancellationToken ct);
+}
+
+/// <summary>A talk session was requested while another one is active on the same camera.</summary>
+public sealed class TalkBusyException : Exception
+{
+    public TalkBusyException(string name) : base($"Camera '{name}' already has an active talk session") { }
 }
 
 /// <summary>
@@ -115,11 +131,14 @@ public sealed class CameraControl : ICameraControl
             bool led = await ProbeAsync(() => camera.GetLedStateAsync(ProbeTimeout, ct)).ConfigureAwait(false);
             bool pir = await ProbeAsync(() => camera.GetPirStateAsync(ProbeTimeout, ct)).ConfigureAwait(false);
             bool battery = await ProbeAsync(() => camera.GetBatteryInfoAsync(ProbeTimeout, ct)).ConfigureAwait(false);
+            var talkAbility = await TryAsync(() => camera.GetTalkAbilityAsync(ProbeTimeout, ct)).ConfigureAwait(false);
+            bool talk = talkAbility != null
+                && talkAbility.AudioType.Equals("adpcm", StringComparison.OrdinalIgnoreCase);
 
-            _caps = new CameraCapabilities(version, support, new CameraFeatures(ptz, led, pir, battery));
+            _caps = new CameraCapabilities(version, support, new CameraFeatures(ptz, led, pir, battery, talk));
             _capsSession = camera;
             Log.Info($"{CameraName}: capabilities discovered " +
-                     $"(ptz={ptz}, led={led}, pir={pir}, battery={battery}" +
+                     $"(ptz={ptz}, led={led}, pir={pir}, battery={battery}, talk={talk}" +
                      $"{(version != null && version.Model.Length > 0 ? $", model={version.Model}" : "")})");
             return _caps;
         }, ct);
@@ -205,6 +224,78 @@ public sealed class CameraControl : ICameraControl
             await camera.RebootAsync(ct).ConfigureAwait(false);
             return null;
         }, ct);
+
+    // Talk sessions are long-lived, so they must not hold the command gate (PTZ,
+    // snapshots etc. keep working while talking); msg ids 10/201/202/11 are used
+    // by nothing else. A dedicated gate limits it to one session per camera.
+    private readonly SemaphoreSlim _talkGate = new(1, 1);
+
+    public async Task TalkAsync(int sampleRate, ChannelReader<byte[]> pcm, CancellationToken ct)
+    {
+        if (sampleRate is < 8000 or > 192000)
+            throw new ArgumentException($"implausible talk sample rate {sampleRate}");
+        if (!await _talkGate.WaitAsync(0, ct).ConfigureAwait(false))
+            throw new TalkBusyException(CameraName);
+        try
+        {
+            var camera = _source.LiveCamera ?? throw new CameraOfflineException(CameraName);
+
+            // The ability query is a one-shot command: take the command gate for
+            // it like every other command, then stream without holding anything.
+            await _gate.WaitAsync(ct).ConfigureAwait(false);
+            TalkAbilityXml? ability;
+            try
+            {
+                ability = await TryAsync(() => camera.GetTalkAbilityAsync(ProbeTimeout, ct)).ConfigureAwait(false);
+            }
+            finally
+            {
+                _gate.Release();
+            }
+            if (ability == null || !ability.AudioType.Equals("adpcm", StringComparison.OrdinalIgnoreCase))
+                throw new NotSupportedException($"{CameraName} does not support two-way talk");
+
+            Log.Info($"{CameraName}: talk session started ({ability.SampleRate} Hz " +
+                     $"{ability.AudioType}, {ability.LengthPerEncoder} samples/block, mic at {sampleRate} Hz)");
+
+            // PCM chunks → resample/encode/frame → BcMedia frames → camera.
+            var frames = Channel.CreateUnbounded<byte[]>(
+                new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
+            var encoder = new TalkFrameEncoder(sampleRate, (int)ability.SampleRate, (int)ability.LengthPerEncoder);
+            using var pumpCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            var pump = Task.Run(async () =>
+            {
+                try
+                {
+                    await foreach (var chunk in pcm.ReadAllAsync(pumpCts.Token).ConfigureAwait(false))
+                        foreach (var frame in encoder.Feed(chunk))
+                            frames.Writer.TryWrite(frame);
+                    frames.Writer.TryComplete();
+                }
+                catch (Exception ex)
+                {
+                    frames.Writer.TryComplete(ex);
+                }
+            }, CancellationToken.None);
+
+            try
+            {
+                await camera.TalkAsync(ability, frames.Reader, ct).ConfigureAwait(false);
+            }
+            finally
+            {
+                // If the camera side bailed first (config rejected, connection
+                // dropped), don't sit waiting for more microphone data.
+                pumpCts.Cancel();
+                await pump.ConfigureAwait(false);
+                Log.Info($"{CameraName}: talk session ended");
+            }
+        }
+        finally
+        {
+            _talkGate.Release();
+        }
+    }
 
     /// <summary>
     /// Interprets a Support flag. Values vary by model/firmware: numeric (0 = off),

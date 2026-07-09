@@ -53,6 +53,7 @@ public static class ConfigEditor
                     trickleSpeed = cfg.Ui.TrickleSpeed,
                     stateDir = cfg.Ui.StateDir,
                     resetAdminPassword = cfg.EffectiveResetAdminPassword,
+                    talk = cfg.Ui.Talk,
                 },
                 recording = cfg.Recording == null ? null : new
                 {

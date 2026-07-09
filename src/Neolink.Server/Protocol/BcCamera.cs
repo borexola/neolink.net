@@ -470,6 +470,79 @@ public sealed class BcCamera : IBcCamera
         }
     }
 
+    public async Task TalkAsync(TalkAbilityXml ability, ChannelReader<byte[]> frames, CancellationToken ct)
+    {
+        // TalkConfig claims the camera's speaker for our stream. Response 422
+        // means another talker (phone app, NVR) holds it — reset and retry once.
+        try
+        {
+            await SendTalkConfigAsync(ability, ct).ConfigureAwait(false);
+        }
+        catch (CameraCommandException ex) when (ex.ResponseCode == 422)
+        {
+            await SendTalkResetAsync(ct).ConfigureAwait(false);
+            await SendTalkConfigAsync(ability, ct).ConfigureAwait(false);
+        }
+
+        // The whole audio stream rides one message number, like the camera's own
+        // media stream does; binaryData=1 marks the payloads as raw media.
+        var talkNum = NewMessageNum();
+        try
+        {
+            while (await frames.WaitToReadAsync(ct).ConfigureAwait(false))
+            {
+                while (frames.TryRead(out var frame))
+                {
+                    var msg = new BcMessage
+                    {
+                        Meta = new BcMeta
+                        {
+                            MsgId = BcConstants.MsgIdTalk,
+                            ChannelId = _channelId,
+                            MsgNum = talkNum,
+                            StreamType = 0,
+                            ResponseCode = 0,
+                            Class = BcConstants.ClassModern,
+                        },
+                        Extension = new ExtensionXml { ChannelId = _channelId, BinaryData = 1 },
+                        Binary = frame,
+                    };
+                    await _conn.SendAsync(msg, ct).ConfigureAwait(false);
+                }
+            }
+        }
+        finally
+        {
+            // Release the speaker even when the caller's token is already
+            // cancelled — otherwise the camera stays "busy" for the next talker.
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+            try { await SendTalkResetAsync(cts.Token).ConfigureAwait(false); }
+            catch { /* best effort; the camera also times the session out */ }
+        }
+    }
+
+    private async Task SendTalkConfigAsync(TalkAbilityXml ability, CancellationToken ct)
+    {
+        var cfg = new XElement("TalkConfig",
+            new XAttribute("version", BcXmlBody.XmlVersion),
+            new XElement("channelId", _channelId),
+            new XElement("duplex", ability.Duplex),
+            new XElement("audioStreamMode", ability.AudioStreamMode),
+            new XElement("audioConfig",
+                new XElement("audioType", ability.AudioType),
+                new XElement("sampleRate", ability.SampleRate),
+                new XElement("samplePrecision", ability.SamplePrecision),
+                new XElement("lengthPerEncoder", ability.LengthPerEncoder),
+                new XElement("soundTrack", ability.SoundTrack)));
+        await SendCommandAsync(BcConstants.MsgIdTalkConfig, BcXmlBody.FromRaw(cfg),
+            new ExtensionXml { ChannelId = _channelId }, ct: ct).ConfigureAwait(false);
+    }
+
+    private Task SendTalkResetAsync(CancellationToken ct) =>
+        SendCommandAsync(BcConstants.MsgIdTalkReset,
+            extension: new ExtensionXml { ChannelId = _channelId },
+            replyTimeout: TimeSpan.FromSeconds(2), tolerateNoReply: true, ct: ct);
+
     public async Task PingAsync(CancellationToken ct)
     {
         using var sub = _conn.Subscribe(BcConstants.MsgIdPing);

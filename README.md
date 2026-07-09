@@ -51,6 +51,12 @@ The cameras are unmodified and no Reolink NVR is required.
   rules), a speaker button on the tile/quick-view unmutes; event clips and 24/7
   recordings carry the audio track too. ADPCM-only cameras play audio via RTSP only
   (browsers can't decode raw PCM in MP4)
+- **Two-way talk (beta, opt-in)** for cameras with a speaker (doorbells, floodlight
+  cams): a mic button on the maximized tile / quick view streams your microphone to
+  the camera — the browser's PCM is resampled and ADPCM-encoded server-side, no
+  plugins. Disabled by default; enable it in *Server settings → Web UI* (or
+  `"ui": { "talk": true }` in the config). Needs HTTPS (or localhost): browsers
+  only expose the microphone in secure contexts
 - Camera wall with five layout modes: **Grid** (1–16 tiles), **Focus** (hero + thumbnail
   strip, click to promote), **Mosaic** (classic CCTV wall), **Theater** (one camera,
   center stage), **Free** (draggable, resizable floating windows)
@@ -508,7 +514,13 @@ within 10 s so Frigate's watchdog recovers quickly. For headless Frigate boxes s
   the sub stream. This is a browser limitation — the RTSP side serves H.265 fine.
 - **Latency** adapts to the camera: ~1 s for cameras that deliver per-frame, more for
   cameras that batch whole GOPs (the buffer must cover the delivery gap).
-- Audio is not yet carried to the browser (RTSP clients do get AAC/PCM audio).
+- **Two-way talk is a beta feature and off by default**: enable it in
+  *Server settings → Web UI → Two-way talk* (writes `"ui": { "talk": true }` to the
+  config; applies after a restart). It also needs a secure context — browsers only
+  allow microphone capture over HTTPS (or on `localhost`). Behind a reverse proxy
+  with TLS it just works; on a plain `http://lan-ip` page the mic button reports that
+  HTTPS is required. The mic button only appears on cameras that advertise talk
+  support (and only while maximized or in quick view).
 
 ## Self-tests & development
 
@@ -570,9 +582,10 @@ by channel, nonce-derived AES session keys, binary-mode switching via
 Improvements: built-in web UI, no GStreamer/native dependencies, no transcoding of AAC,
 per-client backpressure, in-stream resynchronization.
 
-Not (yet) supported: TLS for RTSP (`rtsps://` — put a TLS-terminating proxy in front),
-battery/UID cameras that need UDP discovery (Argus etc.), and the auxiliary subcommands
-(PIR, reboot, status LED, two-way talk).
+Not (yet) supported: TLS for RTSP (`rtsps://` — put a TLS-terminating proxy in front)
+and battery/UID cameras that need UDP discovery (Argus etc.). The auxiliary features
+(PIR, reboot, status LED, two-way talk) are covered by the web UI and API instead of
+CLI subcommands.
 
 ## Project status & disclaimer
 

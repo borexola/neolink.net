@@ -601,6 +601,17 @@
             this.audioSync();
         },
 
+        // Un-mutes one player (talk sessions auto-enable the camera's audio so the
+        // conversation is two-way). Safe under autoplay rules: it only ever runs
+        // from a user gesture (the mic button click started the session).
+        unmute(videoId) {
+            const v = document.getElementById(videoId);
+            if (!v || !v.muted) return;
+            v.muted = false;
+            v.volume = 1;
+            this.audioSync();
+        },
+
         audioSync() {
             document.querySelectorAll('[data-audio-toggle]').forEach(btn => {
                 const video = btn.closest('.tile, .quick-view')?.querySelector('video');
@@ -871,6 +882,92 @@
         exitFullscreen() {
             if (document.fullscreenElement) document.exitFullscreen().catch(() => { });
         },
+        // ---------- two-way talk: microphone → camera speaker ----------
+        // One session at a time. Opens the /api/talk WebSocket, sends a JSON
+        // hello with the AudioContext's real sample rate (the server resamples
+        // to whatever the camera wants), then streams Int16 LE PCM chunks.
+        // State flows back to Blazor via OnTalkState("live"|"off"|"error").
+        async talkStart(wsUrl, dotnetRef) {
+            this.talkStop();
+            const report = (state, detail) => {
+                try { dotnetRef.invokeMethodAsync('OnTalkState', state, detail || null).catch(() => { }); } catch { }
+            };
+            if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) {
+                report('error', 'microphone access needs HTTPS (or localhost)');
+                return;
+            }
+            const s = { ws: null, ctx: null, stream: null, src: null, proc: null, report };
+            this._talk = s;
+            let stream;
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({
+                    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+                });
+            } catch (err) {
+                if (this._talk === s) this._talk = null;
+                report('error', err && err.name === 'NotAllowedError'
+                    ? 'microphone permission denied'
+                    : 'microphone unavailable');
+                return;
+            }
+            if (this._talk !== s) { stream.getTracks().forEach(t => t.stop()); return; } // stopped meanwhile
+            s.stream = stream;
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            s.ctx = ctx;
+            let ws;
+            try { ws = new WebSocket(wsUrl); } catch {
+                this._talkTeardown(false);
+                report('error', 'cannot open the talk connection');
+                return;
+            }
+            s.ws = ws;
+            ws.binaryType = 'arraybuffer';
+            ws.onopen = () => {
+                if (this._talk !== s) return;
+                ws.send(JSON.stringify({ sampleRate: ctx.sampleRate }));
+                // ScriptProcessor keeps this dependency-free; 2048 samples ≈ 43 ms
+                // per chunk at 48 kHz, plenty tight for voice.
+                const src = ctx.createMediaStreamSource(stream);
+                const proc = ctx.createScriptProcessor(2048, 1, 1);
+                proc.onaudioprocess = ev => {
+                    if (ws.readyState !== WebSocket.OPEN) return;
+                    const f32 = ev.inputBuffer.getChannelData(0);
+                    const i16 = new Int16Array(f32.length);
+                    for (let i = 0; i < f32.length; i++) {
+                        const v = Math.max(-1, Math.min(1, f32[i]));
+                        i16[i] = v < 0 ? v * 0x8000 : v * 0x7fff;
+                    }
+                    ws.send(i16.buffer);
+                };
+                src.connect(proc);
+                proc.connect(ctx.destination); // processing needs a sink; output stays silent
+                s.src = src;
+                s.proc = proc;
+                report('live');
+            };
+            ws.onclose = ev => {
+                const t = this._talkTeardown(false);
+                if (!t) return; // already stopped locally
+                const reason = ev.reason || '';
+                if (reason && reason !== 'bye') t.report('error', reason);
+                else t.report('off');
+            };
+            ws.onerror = () => { /* onclose follows with the close reason */ };
+        },
+        talkStop() { this._talkTeardown(true); },
+        _talkTeardown(reportOff) {
+            const s = this._talk;
+            if (!s) return null;
+            this._talk = null;
+            try { if (s.proc) { s.proc.onaudioprocess = null; s.proc.disconnect(); } } catch { }
+            try { if (s.src) s.src.disconnect(); } catch { }
+            try { if (s.stream) s.stream.getTracks().forEach(t => t.stop()); } catch { }
+            try { if (s.ctx) s.ctx.close(); } catch { }
+            try { if (s.ws && s.ws.readyState <= 1) s.ws.close(1000, 'bye'); } catch { }
+            if (reportOff) s.report('off');
+            return s;
+        },
+
         // ---------- monitor page: browser-side resource sampling ----------
         // FPS is counted with a requestAnimationFrame loop (started on demand,
         // stopped when the page stops sampling); JS heap comes from the

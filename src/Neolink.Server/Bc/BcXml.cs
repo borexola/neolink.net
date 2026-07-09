@@ -291,6 +291,44 @@ public sealed class EncodeTableXml
     public string BitrateTable = "";
 }
 
+/// <summary>
+/// The audio profile a camera accepts for two-way talk (msg 10 TalkAbility reply).
+/// Cameras list one or more audioConfig entries; the first (highest priority) is
+/// used. Missing fields fall back to the values every talk-capable Reolink model
+/// observed so far uses: full-duplex 16 kHz mono ADPCM.
+/// </summary>
+public sealed class TalkAbilityXml
+{
+    public string Duplex = "FDX";
+    public string AudioStreamMode = "followVideoStream";
+    public string AudioType = "adpcm";
+    public uint SampleRate = 16000;
+    public uint SamplePrecision = 16;
+    public uint LengthPerEncoder = 512;
+    public string SoundTrack = "mono";
+
+    public static TalkAbilityXml Parse(XElement el)
+    {
+        var ability = new TalkAbilityXml();
+        static string? S(XElement? e) => string.IsNullOrWhiteSpace(e?.Value) ? null : e!.Value.Trim();
+        static uint? U(XElement? e) => e != null && uint.TryParse(e.Value.Trim(), out var v) && v > 0 ? v : null;
+
+        ability.Duplex = S(el.Element("duplexList")?.Element("duplex")) ?? ability.Duplex;
+        ability.AudioStreamMode = S(el.Element("audioStreamModeList")?.Element("audioStreamMode"))
+            ?? ability.AudioStreamMode;
+        var cfg = el.Element("audioConfigList")?.Element("audioConfig");
+        if (cfg != null)
+        {
+            ability.AudioType = S(cfg.Element("audioType")) ?? ability.AudioType;
+            ability.SampleRate = U(cfg.Element("sampleRate")) ?? ability.SampleRate;
+            ability.SamplePrecision = U(cfg.Element("samplePrecision")) ?? ability.SamplePrecision;
+            ability.LengthPerEncoder = U(cfg.Element("lengthPerEncoder")) ?? ability.LengthPerEncoder;
+            ability.SoundTrack = S(cfg.Element("soundTrack")) ?? ability.SoundTrack;
+        }
+        return ability;
+    }
+}
+
 /// <summary>The `Extension` XML which precedes payloads (at the payload offset).</summary>
 public sealed class ExtensionXml
 {

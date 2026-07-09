@@ -384,6 +384,14 @@
             </div>
         }
 
+        @if (_talkError != null)
+        {
+            <div class="perf-toast" role="status">
+                <span><b>Two-way talk:</b> @_talkError</span>
+                <button class="chip" @onclick="() => _talkError = null">Got it</button>
+            </div>
+        }
+
         @if (_showMainWarn)
         {
             <div class="perf-toast" role="status">
@@ -455,6 +463,11 @@
                             <span class="tile-spacer"></span>
                             @* JS-owned (neolink.audioInit): shown only when the stream has audio *@
                             <button type="button" class="icon-btn" data-audio-toggle style="display:none"></button>
+                            @if (_maxIndex == index && TalkSupported(slot.Camera))
+                            {
+                                <button class="icon-btn talk-btn @TalkClass(slot.Camera!)" title="@TalkTitle(slot.Camera!)"
+                                        @onclick="() => ToggleTalkAsync(slot.Camera!)">@UiIcon.Render("mic", 14)</button>
+                            }
                             <button class="icon-btn" title="@(_maxIndex == index || (_backup != null && _mode == "theater") ? "Restore view" : "Maximize")"
                                     @onclick="() => ToggleMaximize(index)">@UiIcon.Render(_maxIndex == index || (_backup != null && _mode == "theater") ? "collapse" : "expand", 14)</button>
                             @* both states rendered; CSS shows the right one for the fullscreen state *@
@@ -463,6 +476,17 @@
                             <button class="icon-btn" title="Remove" @onclick="() => CloseSlot(index)">✕</button>
                         </div>
                         @ZoomHud
+                        @if (_maxIndex == index && TalkActive(slot.Camera!))
+                        {
+                            @* Big on-video indicator while the mic is live — also the stop button. *@
+                            <div class="talk-overlay @(_talkPhase == "live" ? "live" : "connecting")"
+                                 role="button" title="Click to stop talking"
+                                 @onclick="() => ToggleTalkAsync(slot.Camera!)"
+                                 @onclick:stopPropagation="true" @ondblclick:stopPropagation="true">
+                                <span class="talk-overlay-mic">@UiIcon.Render("mic", 16)</span>
+                                <span class="talk-overlay-label">@(_talkPhase == "live" ? "TALKING" : "CONNECTING…")</span>
+                            </div>
+                        }
                         @if (_mode == "grid" && _maxIndex != index)
                         {
                             @* Corner grip: drag to grow/shrink the tile in grid-cell steps
@@ -505,6 +529,11 @@
                 }
                 @* JS-owned (neolink.audioInit): shown only when the stream has audio *@
                 <button type="button" class="icon-btn" data-audio-toggle style="display:none"></button>
+                @if (TalkSupported(qv.Camera))
+                {
+                    <button class="icon-btn talk-btn @TalkClass(qv.Camera!)" title="@TalkTitle(qv.Camera!)"
+                            @onclick="() => ToggleTalkAsync(qv.Camera!)">@UiIcon.Render("mic", 14)</button>
+                }
                 <button class="icon-btn fs-toggle" title="Browser fullscreen (click again to exit)"
                         @onclick="QuickFullscreenAsync"><span class="fs-enter">@UiIcon.Render("fs-enter", 14)</span><span class="fs-exit">@UiIcon.Render("fs-exit", 14)</span></button>
                 <button class="icon-btn" title="Close" @onclick="CloseQuickView">✕</button>
@@ -513,6 +542,15 @@
                 <video id="vid-quick" muted playsinline></video>
                 <div class="tile-status">connecting…</div>
                 @ZoomHud
+                @if (TalkActive(qv.Camera!))
+                {
+                    <div class="talk-overlay @(_talkPhase == "live" ? "live" : "connecting")"
+                         role="button" title="Click to stop talking"
+                         @onclick="() => ToggleTalkAsync(qv.Camera!)" @onclick:stopPropagation="true">
+                        <span class="talk-overlay-mic">@UiIcon.Render("mic", 16)</span>
+                        <span class="talk-overlay-label">@(_talkPhase == "live" ? "TALKING" : "CONNECTING…")</span>
+                    </div>
+                }
             </div>
         </div>
     }
@@ -707,6 +745,18 @@
                     @AdminField("Preview playback speed (×)", "ui.trickleSpeed", "number")
                     @AdminField("State directory (accounts/settings)", "ui.stateDir", "text")
                     @AdminToggle("Allow admin-password reset on login", "ui.resetAdminPassword")
+                    <div class="control-row">
+                        <span>Two-way talk <span class="beta-tag">BETA</span></span>
+                        <button class="chip @(AdminBool("ui.talk") ? "" : "chip-off")"
+                                @onclick=@(() => _adminEdits["ui.talk"] = (!AdminBool("ui.talk")).ToString().ToLowerInvariant())>
+                            @(AdminBool("ui.talk") ? "on" : "off")</button>
+                    </div>
+                    <div class="notice small">
+                        Streams your microphone to the camera's speaker (doorbells and other
+                        cameras that support talk). Browsers only allow microphone access on
+                        <b>HTTPS</b> or <b>localhost</b> pages — on a plain http:// address the
+                        mic button will report that a secure connection is required.
+                    </div>
                 </div>
 
                 @if (_adminHasRecording)
@@ -729,8 +779,17 @@
                     <div class="notice">@_adminStatus</div>
                 }
 
+                @if (AdminPendingCount is var pending and > 0)
+                {
+                    <div class="notice pending">
+                        @pending unsaved change@(pending == 1 ? "" : "s") — nothing is written until
+                        you click <b>Save to config.json</b>. Closing this panel discards them.
+                    </div>
+                }
+
                 <div class="event-player-foot">
-                    <button class="chip" disabled="@(!_adminWritable)" @onclick="SaveServerSettingsAsync">Save to config.json</button>
+                    <button class="chip @(AdminPendingCount > 0 ? "chip-active" : "")" disabled="@(!_adminWritable)"
+                            @onclick="SaveServerSettingsAsync">Save to config.json</button>
                     <span class="tile-spacer"></span>
                     @if (!_confirmRestart)
                     {
@@ -1033,6 +1092,7 @@
             return;
         }
         await ReconcilePlayersAsync();
+        StopTalkIfOrphaned(); // talk ends when its surface (maximize/quick view) goes away
         if (_mode == "free")
             await JS.InvokeVoidAsync("neolink.freeInit", "stage-grid");
         // Digital zoom (theater/fullscreen/quick view). Re-invoked per render so
@@ -1535,9 +1595,15 @@
     }
 
     /// <summary>Current value of a dotted config path ("ui.trickleSpeed"), edit buffer first.</summary>
-    private string AdminValue(string path)
+    private string AdminValue(string path) =>
+        _adminEdits.TryGetValue(path, out var edited) ? edited : AdminRawValue(path);
+
+    /// <summary>Edits that actually differ from the file — a value toggled back doesn't count.</summary>
+    private int AdminPendingCount => _adminEdits.Count(kv => kv.Value != AdminRawValue(kv.Key));
+
+    /// <summary>The file's value of a dotted config path, ignoring the edit buffer.</summary>
+    private string AdminRawValue(string path)
     {
-        if (_adminEdits.TryGetValue(path, out var edited)) return edited;
         if (_adminConfig is not { } cfg) return "";
         JsonElement cur = cfg;
         foreach (var part in path.Split('.'))
@@ -1614,6 +1680,7 @@
                 case "ui.trickleSpeed": ui["trickleSpeed"] = Num(path); break;
                 case "ui.stateDir": ui["stateDir"] = AdminValue(path); break;
                 case "ui.resetAdminPassword": ui["resetAdminPassword"] = AdminBool(path); break;
+                case "ui.talk": ui["talk"] = AdminBool(path); break;
                 case "recording.path": rec["path"] = AdminValue(path); break;
                 case "recording.retentionDays": rec["retentionDays"] = Int(path); break;
                 case "recording.preSeconds": rec["preSeconds"] = Int(path); break;
@@ -2437,6 +2504,7 @@
             return;
         }
         _missingCamera = null;
+        _ = EnsureTalkCapAsync(cam.Name); // decides whether the mic button shows
 
         // An explicit /main|/sub|/ext segment pins the stream; without one the
         // maximize auto-main logic decides (and restores) as usual.
@@ -2585,6 +2653,7 @@
         if (s == null) return;
         _quickView = new ViewSlot { Camera = cam.Name, Kind = s.Kind, Path = s.Path };
         _sidebarOpen = false;
+        _ = EnsureTalkCapAsync(cam.Name); // decides whether the mic button shows
     }
 
     private void CloseQuickView()
@@ -2603,6 +2672,144 @@
 
     private async Task QuickFullscreenAsync() =>
         await JS.InvokeVoidAsync("neolink.fullscreen", "quick-view-media");
+
+    // ------------------------------------------------------------ two-way talk
+
+    // The mic button lives on the single-camera surfaces (maximized tile, quick
+    // view) and only on cameras whose capabilities advertise talk support.
+    private string? _talkCamera;        // camera with an active/starting session
+    private string _talkPhase = "off";  // connecting | live | off
+    private string? _talkError;         // one-shot toast text
+    private readonly Dictionary<string, bool> _talkCaps = new(StringComparer.OrdinalIgnoreCase);
+
+    private bool TalkSupported(string? cam) =>
+        cam != null && _talkCaps.TryGetValue(cam, out var t) && t;
+
+    private bool TalkActive(string cam) =>
+        _talkCamera != null && string.Equals(_talkCamera, cam, StringComparison.OrdinalIgnoreCase);
+
+    private string TalkClass(string cam) =>
+        TalkActive(cam) ? (_talkPhase == "live" ? "talk-live" : "talk-connecting") : "";
+
+    private string TalkTitle(string cam) =>
+        TalkActive(cam) ? "Stop talking" : "Talk through the camera's speaker";
+
+    /// <summary>
+    /// Looks up (once per camera) whether it supports two-way talk. Offline
+    /// cameras are re-probed on the next surface open instead of being cached.
+    /// </summary>
+    private async Task EnsureTalkCapAsync(string? cam)
+    {
+        if (cam == null || Locked || _talkCaps.ContainsKey(cam)) return;
+        _talkCaps[cam] = false; // placeholder: one probe in flight per camera
+        try
+        {
+            using var res = await Http.SendAsync(ApiRequest(HttpMethod.Get,
+                $"/api/cameras/{Uri.EscapeDataString(cam)}/capabilities"));
+            if (!res.IsSuccessStatusCode)
+            {
+                _talkCaps.Remove(cam);
+                return;
+            }
+            var json = await res.Content.ReadFromJsonAsync<JsonElement>();
+            if (!json.TryGetProperty("online", out var on) || !on.GetBoolean())
+            {
+                _talkCaps.Remove(cam);
+                return;
+            }
+            if (json.TryGetProperty("features", out var f)
+                && f.TryGetProperty("talk", out var t) && t.ValueKind == JsonValueKind.True)
+            {
+                _talkCaps[cam] = true;
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch
+        {
+            _talkCaps.Remove(cam);
+        }
+    }
+
+    private async Task ToggleTalkAsync(string cam)
+    {
+        if (_talkCamera != null)
+        {
+            bool same = TalkActive(cam);
+            await JS.InvokeVoidAsync("neolink.talkStop"); // JS reports "off" back
+            if (same) return;
+        }
+        _talkCamera = cam;
+        _talkPhase = "connecting";
+        _talkError = null;
+        _selfRef ??= DotNetObjectReference.Create(this);
+        await JS.InvokeVoidAsync("neolink.talkStart", TalkUrl(cam), _selfRef);
+    }
+
+    private void StopTalk()
+    {
+        if (_talkCamera == null) return;
+        _ = JS.InvokeVoidAsync("neolink.talkStop");
+    }
+
+    /// <summary>Ends the talk session once its camera no longer has a talk surface
+    /// (view restored, quick view closed, tile cleared...). One chokepoint, called
+    /// after every render, instead of hooks in each state mutation.</summary>
+    private void StopTalkIfOrphaned()
+    {
+        if (_talkCamera == null) return;
+        bool maxed = _maxIndex is int m && string.Equals(
+            _slots.ElementAtOrDefault(m)?.Camera, _talkCamera, StringComparison.OrdinalIgnoreCase);
+        bool quick = string.Equals(_quickView?.Camera, _talkCamera, StringComparison.OrdinalIgnoreCase);
+        if (!maxed && !quick) StopTalk();
+    }
+
+    private string? TalkUrl(string cam)
+    {
+        if (string.IsNullOrWhiteSpace(_server)) return null;
+        var baseUrl = _server.TrimEnd('/');
+        baseUrl = baseUrl.StartsWith("https", StringComparison.OrdinalIgnoreCase)
+            ? "wss" + baseUrl["https".Length..]
+            : "ws" + baseUrl["http".Length..];
+        return $"{baseUrl}/api/talk?camera={Uri.EscapeDataString(cam)}{TokenQuery('&')}";
+    }
+
+    /// <summary>The video element showing the talk camera (its surface), if any.</summary>
+    private string? TalkVideoId()
+    {
+        if (_talkCamera == null) return null;
+        if (string.Equals(_quickView?.Camera, _talkCamera, StringComparison.OrdinalIgnoreCase))
+            return QuickVideoId;
+        if (_maxIndex is int m && string.Equals(
+                _slots.ElementAtOrDefault(m)?.Camera, _talkCamera, StringComparison.OrdinalIgnoreCase))
+            return $"vid-{m}";
+        return null;
+    }
+
+    /// <summary>Called from JS as the talk session changes state.</summary>
+    [JSInvokable]
+    public Task OnTalkState(string state, string? detail) => InvokeAsync(() =>
+    {
+        switch (state)
+        {
+            case "live":
+                _talkPhase = "live";
+                // A conversation is two-way: make the camera audible too. The
+                // speaker toggle still mutes it again if the user prefers.
+                if (TalkVideoId() is { } videoId)
+                    _ = JS.InvokeVoidAsync("neolink.unmute", videoId);
+                break;
+            case "error":
+                _talkError = string.IsNullOrWhiteSpace(detail) ? "could not start" : detail;
+                _talkCamera = null;
+                _talkPhase = "off";
+                break;
+            default: // "off"
+                _talkCamera = null;
+                _talkPhase = "off";
+                break;
+        }
+        StateHasChanged();
+    });
 
     private void RestoreFromBackup()
     {
@@ -2732,6 +2939,11 @@
     public async ValueTask DisposeAsync()
     {
         _pollTimer?.Dispose();
+        if (_talkCamera != null)
+        {
+            try { await JS.InvokeVoidAsync("neolink.talkStop"); }
+            catch { /* circuit already gone */ }
+        }
         _selfRef?.Dispose();
         foreach (var i in _attached.Keys.ToList())
         {

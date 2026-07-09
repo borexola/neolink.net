@@ -41,6 +41,8 @@ public sealed class WebApiOptions
     public required UserStore UserStore { get; init; }
     public bool ResetAdminPassword { get; init; }
     public double TrickleSpeed { get; init; } = 4;
+    /// <summary>Beta: two-way talk (browser mic → camera speaker). Off unless ui.talk enables it.</summary>
+    public bool TalkEnabled { get; init; }
     public required string Version { get; init; }
     public required string ConfigPath { get; init; }
     public UpdateChecker? Updates { get; init; }
@@ -86,7 +88,8 @@ public static class WebApi
         int? EventRetentionDays = null, int? ContinuousRetentionDays = null, string? RecordStream = null);
     private sealed record CredentialsRequest(string? Username, string? Password);
     private sealed record PasswordRequest(string? Password);
-    private sealed record AdminUiSettings(double? TrickleSpeed, string? StateDir, bool? ResetAdminPassword);
+    private sealed record AdminUiSettings(double? TrickleSpeed, string? StateDir, bool? ResetAdminPassword,
+        bool? Talk = null);
     private sealed record AdminRecordingSettings(string? Path, int? RetentionDays, int? PreSeconds,
         int? PostSeconds, int? MaxClipSeconds, string? Stream, int? SegmentMinutes, int? ContinuousRetentionDays);
     private sealed record AdminConfigRequest(string? Bind, int? BindPort, int? WebPort, string? WebBind,
@@ -335,6 +338,7 @@ public static class WebApi
                     {
                         var ui = ConfigEditor.Section(root, "ui");
                         if (u.TrickleSpeed != null) ConfigEditor.Set(ui, "trickle_speed", u.TrickleSpeed);
+                        if (u.Talk != null) ConfigEditor.Set(ui, "talk", u.Talk);
                         if (u.StateDir != null)
                             ConfigEditor.Set(ui, "state_dir", u.StateDir.Length == 0 ? null : u.StateDir);
                         if (u.ResetAdminPassword != null)
@@ -420,6 +424,8 @@ public static class WebApi
             events = events != null,
             continuous = events != null && RecordingConfig.ContinuousEnabled,
             trickleSpeed,
+            talk = o.TalkEnabled, // beta, opt-in via ui.talk
+
             version = o.Version,
             latestVersion = o.Updates?.Latest,
             repoUrl = UpdateChecker.RepoUrl,
@@ -537,6 +543,9 @@ public static class WebApi
                         led = caps.Features.Led,
                         pir = caps.Features.Pir,
                         battery = caps.Features.Battery,
+                        // Gated on the server-wide beta switch: with ui.talk off,
+                        // the UI never shows a mic button even on capable cameras.
+                        talk = o.TalkEnabled && caps.Features.Talk,
                         streamSettings = control.CanSetStreamSettings,
                         // Baichuan-only: a generic RTSP camera can't be told to reboot
                         reboot = control is not GenericCameraControl,
@@ -961,6 +970,43 @@ public static class WebApi
             }
         });
 
+        // Two-way talk: microphone PCM in over a WebSocket, camera speaker out.
+        // Auth rides the same session middleware as every other /api route.
+        app.Map("/api/talk", async ctx =>
+        {
+            if (!o.TalkEnabled)
+            {
+                ctx.Response.StatusCode = 403;
+                await ctx.Response.WriteAsJsonAsync(new
+                {
+                    error = "two-way talk is a beta feature — enable it in Server settings (ui.talk)",
+                });
+                return;
+            }
+            if (!ctx.WebSockets.IsWebSocketRequest)
+            {
+                ctx.Response.StatusCode = 400;
+                await ctx.Response.WriteAsync("WebSocket endpoint");
+                return;
+            }
+            string? name = ctx.Request.Query["camera"];
+            var cam = cameras.FirstOrDefault(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase));
+            if (cam == null)
+            {
+                ctx.Response.StatusCode = 404;
+                return;
+            }
+            using var ws = await ctx.WebSockets.AcceptWebSocketAsync();
+            try
+            {
+                await TalkFromWebSocketAsync(ws, cam.Name, cam.Control, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Log.Debug($"{cam.Name}: talk session ended: {Log.Flatten(ex)}");
+            }
+        });
+
         if (webUi)
         {
             app.UseStaticFiles();     // physical wwwroot (published layout)
@@ -1255,6 +1301,90 @@ public static class WebApi
             await TryCloseAsync(ws, WebSocketCloseStatus.NormalClosure, "bye");
             try { await receiveTask.ConfigureAwait(false); } catch { }
         }
+    }
+
+    // ------------------------------------------------------------------ two-way talk over WebSocket
+
+    /// <summary>
+    /// Talk session protocol: the client opens with one JSON text message
+    /// ({"sampleRate": 48000}) describing its microphone PCM, then sends raw
+    /// 16-bit LE mono PCM as binary messages until it closes the socket. Errors
+    /// are reported in the close reason ("talk busy", "talk unsupported", ...).
+    /// </summary>
+    private static async Task TalkFromWebSocketAsync(WebSocket ws, string name, ICameraControl control, CancellationToken appCt)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(appCt);
+        var ct = cts.Token;
+        var buf = new byte[32 * 1024];
+
+        var first = await ws.ReceiveAsync(buf, ct).ConfigureAwait(false);
+        if (first.MessageType != WebSocketMessageType.Text)
+        {
+            await TryCloseAsync(ws, WebSocketCloseStatus.PolicyViolation, "expected a JSON hello first");
+            return;
+        }
+        int sampleRate = 16000;
+        try
+        {
+            using var doc = JsonDocument.Parse(Encoding.UTF8.GetString(buf, 0, first.Count));
+            if (doc.RootElement.TryGetProperty("sampleRate", out var sr))
+                sampleRate = sr.GetInt32();
+        }
+        catch { /* malformed hello: keep the default */ }
+
+        var pcm = System.Threading.Channels.Channel.CreateUnbounded<byte[]>(
+            new System.Threading.Channels.UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
+        var talk = control.TalkAsync(sampleRate, pcm.Reader, ct);
+
+        var receive = Task.Run(async () =>
+        {
+            try
+            {
+                while (ws.State == WebSocketState.Open)
+                {
+                    var res = await ws.ReceiveAsync(buf, ct).ConfigureAwait(false);
+                    if (res.MessageType == WebSocketMessageType.Close) break;
+                    if (res.MessageType == WebSocketMessageType.Binary && res.Count > 0)
+                        pcm.Writer.TryWrite(buf.AsSpan(0, res.Count).ToArray());
+                }
+            }
+            finally
+            {
+                pcm.Writer.TryComplete();
+            }
+        }, CancellationToken.None);
+
+        var finished = await Task.WhenAny(talk, receive).ConfigureAwait(false);
+        if (finished == receive)
+        {
+            // Client hung up: give the tail a moment to flush and release the
+            // camera's talk channel, then force the session down.
+            await Task.WhenAny(talk, Task.Delay(TimeSpan.FromSeconds(5), CancellationToken.None)).ConfigureAwait(false);
+        }
+
+        var status = WebSocketCloseStatus.NormalClosure;
+        var reason = "bye";
+        if (talk.IsCompleted)
+        {
+            try { await talk.ConfigureAwait(false); }
+            catch (OperationCanceledException) { }
+            catch (TalkBusyException) { (status, reason) = (WebSocketCloseStatus.PolicyViolation, "talk busy"); }
+            catch (NotSupportedException) { (status, reason) = (WebSocketCloseStatus.PolicyViolation, "talk unsupported"); }
+            catch (CameraOfflineException) { (status, reason) = (WebSocketCloseStatus.EndpointUnavailable, "camera offline"); }
+            catch (Exception ex)
+            {
+                Log.Debug($"{name}: talk failed: {Log.Flatten(ex)}");
+                (status, reason) = (WebSocketCloseStatus.InternalServerError, "talk failed");
+            }
+        }
+
+        // Close gracefully BEFORE cancelling: cancelling a pending ReceiveAsync
+        // aborts the socket, and the client would see code 1006 with no reason
+        // instead of the message above.
+        await TryCloseAsync(ws, status, reason);
+        cts.Cancel();
+        try { await talk.ConfigureAwait(false); } catch { }
+        try { await receive.ConfigureAwait(false); } catch { }
     }
 
     private static async Task TryCloseAsync(WebSocket ws, WebSocketCloseStatus status, string reason)
