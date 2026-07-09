@@ -94,7 +94,13 @@ public sealed record ApiSystemSample(long T, double Cpu, long Ws, long Heap, dou
     int Thr, int Fd, long DTot, long DFree, long Rec, int View,
     int RecCams = 0, double WMb = 0, long WFiles = 0);
 
-public sealed record ApiSystemStats(ApiSystemInfo? Info, List<ApiSystemSample> Samples);
+/// <summary>GET /api/system/stats — one camera's availability over the observed window.
+/// Runs are run-length transitions: [startUnixMs, 1|0(online)].</summary>
+public sealed record ApiCamAvail(string Cam, bool On, double Pct, long Obs,
+    int Outs, long Longest, long Since, List<long[]> Runs);
+
+public sealed record ApiSystemStats(ApiSystemInfo? Info, List<ApiSystemSample> Samples,
+    List<ApiCamAvail>? Avail = null);
 
 /// <summary>GET /api/recordings/{camera}/{date} — one continuous-recording segment.</summary>
 public sealed record ApiSegment(string File, long Size)

@@ -908,6 +908,81 @@
         // Blazor circuit round-trip (browser → SignalR → server → back).
         perfPing() { return 0; },
 
+        // ---------- monitor page: chart hover tooltip ----------
+        // Each MonChart body carries its series as JSON in data-hover; one
+        // delegated mousemove drives a shared tooltip + per-chart crosshair, so
+        // hovering costs zero circuit traffic. The crosshair snaps to the
+        // nearest sample of the primary series.
+        monHoverInit() {
+            if (document.body.dataset.monHover) return;
+            document.body.dataset.monHover = '1';
+            let tip = null, cross = null, curBody = null;
+            const hide = () => {
+                if (tip) tip.style.display = 'none';
+                if (cross) cross.remove();
+                cross = null;
+                curBody = null;
+            };
+            document.addEventListener('mousemove', (e) => {
+                const body = e.target instanceof Element
+                    ? e.target.closest('.mon-chart-body[data-hover]') : null;
+                if (!body) { hide(); return; }
+                // Re-parse only when the payload string actually changed (2s beat).
+                const raw = body.dataset.hover;
+                let data = body._monHover && body._monHover.raw === raw ? body._monHover.data : null;
+                if (!data) {
+                    try { data = JSON.parse(raw); } catch { hide(); return; }
+                    body._monHover = { raw, data };
+                }
+                if (!data.s || !data.s.length || !(data.b > data.a)) { hide(); return; }
+                const rect = body.getBoundingClientRect();
+                const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+                const t = data.a + frac * (data.b - data.a);
+                let snapT = null;
+                const rows = [];
+                for (const s of data.s) {
+                    let best = null, bd = Infinity;
+                    for (const p of s.p) {
+                        const d = Math.abs(p[0] - t);
+                        if (d < bd) { bd = d; best = p; }
+                    }
+                    if (!best) continue;
+                    if (snapT === null) snapT = best[0]; // primary series sets the crosshair
+                    rows.push({ l: s.l, c: s.c, v: best[1] });
+                }
+                if (!rows.length || snapT === null) { hide(); return; }
+                if (!tip) {
+                    tip = document.createElement('div');
+                    tip.className = 'mon-tip';
+                    document.body.appendChild(tip);
+                }
+                const when = new Date(snapT).toLocaleTimeString(undefined, { hour12: false });
+                // Labels/units/colors are app constants, never user input.
+                tip.innerHTML = '<div class="mon-tip-time">' + when + '</div>' +
+                    rows.map(r => '<div class="mon-tip-row"><i style="background:' + r.c + '"></i>' +
+                        r.l + '<b>' + (Math.round(r.v * 100) / 100) + (data.u || '') + '</b></div>').join('');
+                tip.style.display = 'block';
+                let x = e.clientX + 14;
+                if (x + tip.offsetWidth > innerWidth - 8) x = e.clientX - tip.offsetWidth - 14;
+                let y = e.clientY - tip.offsetHeight - 12;
+                if (y < 8) y = e.clientY + 16;
+                tip.style.left = x + 'px';
+                tip.style.top = y + 'px';
+                // Crosshair lives inside the chart body; Blazor re-renders can
+                // drop it, so recreate whenever it's gone.
+                if (curBody !== body && cross) { cross.remove(); cross = null; }
+                curBody = body;
+                if (!cross || !cross.isConnected) {
+                    cross = document.createElement('div');
+                    cross.className = 'mon-cross';
+                    body.appendChild(cross);
+                }
+                cross.style.left = ((snapT - data.a) / (data.b - data.a) * rect.width).toFixed(1) + 'px';
+            }, { passive: true });
+            document.addEventListener('mouseleave', hide);
+            document.addEventListener('scroll', hide, { passive: true, capture: true });
+        },
+
         // ---------- live server log tail (admin) ----------
         // Lines are appended straight into the DOM here — routing every log line
         // through the Blazor circuit would re-render the page per line. The view

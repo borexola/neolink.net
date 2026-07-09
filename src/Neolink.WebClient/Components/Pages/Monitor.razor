@@ -1,5 +1,6 @@
 @page "/monitor"
 @using System.Diagnostics
+@using System.Globalization
 @using System.Text.Json
 @inject HttpClient Http
 @inject IJSRuntime JS
@@ -121,6 +122,41 @@
                           Series="@(new() { new("to disk", Amber, Pts(s => s.WMb)) })" />
             </div>
 
+            @* ---------------- cameras ---------------- *@
+            @if (_avail.Count > 0)
+            {
+                <div class="mon-section">
+                    <span class="mon-section-title">CAMERAS</span>
+                    <span class="mon-section-sub">availability as seen from this server · last 24 h or since start</span>
+                </div>
+
+                <div class="mon-avail-grid">
+                    @foreach (var a in _avail)
+                    {
+                        <div class="mon-avail-card">
+                            <div class="mon-avail-head">
+                                <span class="mon-avail-dot @(a.On ? "up" : "down")"></span>
+                                <span class="mon-avail-name" title="@a.Cam">@a.Cam</span>
+                                <span class="mon-avail-grade @GradeClass(a.Pct)"
+                                      title="@GradeHint(a.Pct)">@Grade(a.Pct)</span>
+                                <span class="mon-avail-pct" style="color:@PctColor(a.Pct)">@PctLabel(a.Pct)%</span>
+                            </div>
+                            <div class="mon-avail-ribbon" aria-label="uptime timeline">
+                                @foreach (var seg in RibbonSegs(a))
+                                {
+                                    <span class="mon-avail-seg @(seg.On ? "up" : "down")"
+                                          style="width:@seg.Width%" title="@seg.Title"></span>
+                                }
+                            </div>
+                            <div class="mon-avail-sub">
+                                <span>@(a.On ? "online" : "offline") for @Dur(NowMs() - a.Since)</span>
+                                <span>@OutageLabel(a)</span>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+
             @* ---------------- frontend ---------------- *@
             <div class="mon-section">
                 <span class="mon-section-title">FRONTEND</span>
@@ -191,6 +227,7 @@
     private bool _heapSupported = true;
 
     private ApiSystemInfo? _info;
+    private List<ApiCamAvail> _avail = new();
     private readonly List<ApiSystemSample> _samples = new();
     private readonly List<BrowserSample> _browser = new();
     private PeriodicTimer? _timer;
@@ -236,6 +273,7 @@
 
         await JS.InvokeVoidAsync("neolink.perfStart");
         _perfStarted = true;
+        try { await JS.InvokeVoidAsync("neolink.monHoverInit"); } catch { }
 
         await FetchAuthAsync();  // are we the admin? gates the live-logs section
         await FetchAsync();      // backfills up to an hour of server history
@@ -287,6 +325,7 @@
             if (stats == null) return;
             _error = null;
             _info ??= stats.Info;
+            if (stats.Avail is { Count: > 0 } av) _avail = av;
             _samples.AddRange(stats.Samples);
             // Mirror the server's ring: an hour at 2s.
             if (_samples.Count > 1800) _samples.RemoveRange(0, _samples.Count - 1800);
@@ -341,6 +380,62 @@
 
     private IReadOnlyList<(long, double)> BPts(Func<BrowserSample, double> f) =>
         _browser.Where(b => f(b) >= 0).Select(b => (b.T, f(b))).ToList();
+
+    // ------------------------------------------------------------ availability
+
+    private sealed record Seg(bool On, string Width, string Title);
+
+    private static long NowMs() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+    /// <summary>Status-page ribbon: one span per online/offline run, widths as % of the observed window.</summary>
+    private static IEnumerable<Seg> RibbonSegs(ApiCamAvail a)
+    {
+        if (a.Runs.Count == 0) yield break;
+        long now = NowMs();
+        long start = a.Runs[0][0];
+        double span = Math.Max(1, now - start);
+        for (int i = 0; i < a.Runs.Count; i++)
+        {
+            long s = a.Runs[i][0];
+            long e = i + 1 < a.Runs.Count ? a.Runs[i + 1][0] : now;
+            if (e <= s) continue;
+            bool on = a.Runs[i][1] == 1;
+            var st = DateTimeOffset.FromUnixTimeMilliseconds(s).ToLocalTime();
+            var en = DateTimeOffset.FromUnixTimeMilliseconds(e).ToLocalTime();
+            yield return new Seg(on,
+                ((e - s) / span * 100).ToString("0.###", CultureInfo.InvariantCulture),
+                $"{(on ? "online" : "offline")} {st:HH:mm}–{en:HH:mm} ({Dur(e - s)})");
+        }
+    }
+
+    private static string PctLabel(double pct) => pct >= 99.995
+        ? "100"
+        : pct.ToString(pct >= 99 ? "0.##" : "0.#", CultureInfo.InvariantCulture);
+
+    // Report-card grade: harsh on purpose — a camera you can't reach isn't "97% fine".
+    private static string Grade(double pct) =>
+        pct >= 99.9 ? "A+" : pct >= 99 ? "A" : pct >= 97 ? "B" : pct >= 90 ? "C" : "D";
+
+    private static string GradeClass(double pct) => pct >= 99 ? "good" : pct >= 90 ? "warn" : "bad";
+
+    private static string GradeHint(double pct) =>
+        $"{PctLabel(pct)}% observed uptime (A+ ≥99.9 · A ≥99 · B ≥97 · C ≥90)";
+
+    private static string PctColor(double pct) =>
+        pct >= 99 ? "var(--ok)" : pct >= 90 ? "#ffb020" : "var(--err)";
+
+    private static string OutageLabel(ApiCamAvail a) => a.Outs == 0
+        ? $"no outages in {Dur(a.Obs)}"
+        : $"{a.Outs} outage{(a.Outs == 1 ? "" : "s")} · longest {Dur(a.Longest)}";
+
+    private static string Dur(long ms)
+    {
+        var t = TimeSpan.FromMilliseconds(Math.Max(0, ms));
+        return t.TotalDays >= 1 ? $"{(int)t.TotalDays}d {t.Hours}h"
+            : t.TotalHours >= 1 ? $"{(int)t.TotalHours}h {t.Minutes:00}m"
+            : t.TotalMinutes >= 1 ? $"{(int)t.TotalMinutes}m {t.Seconds:00}s"
+            : $"{t.Seconds}s";
+    }
 
     // ------------------------------------------------------------ formatting
 

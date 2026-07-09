@@ -310,6 +310,41 @@ public static class SelfTest
                 (bool?)true);
         });
 
+        Test("camera availability tracking", () =>
+        {
+            var av = new Web.CameraAvailability();
+            long t0 = 1_000_000;
+            av.Update("cam", true, t0);
+            av.Update("cam", true, t0 + 2_000);     // same state: no new run
+            av.Update("cam", false, t0 + 60_000);   // outage starts
+            av.Update("cam", true, t0 + 90_000);    // back after 30s
+            var snap = av.Snapshots(t0 + 120_000).Single();
+            Assert(snap.Online, "currently online");
+            AssertEq(snap.Outages, 1);
+            AssertEq(snap.LongestOutageMs, 30_000L);
+            AssertEq(snap.Runs.Count, 3);
+            // 120s observed, 30s of it down => 75% uptime.
+            Assert(Math.Abs(snap.UptimePct - 75.0) < 0.01, $"uptime pct = {snap.UptimePct}");
+            AssertEq(snap.CurrentSinceMs, t0 + 90_000);
+
+            // Runs that ended before the 24h window are trimmed; the surviving
+            // first run is clamped to the window edge when reporting.
+            long day = (long)Web.CameraAvailability.Window.TotalMilliseconds;
+            av.Update("cam", false, t0 + day + 200_000);
+            av.Update("cam", true, t0 + day + 260_000);
+            var later = av.Snapshots(t0 + day + 300_000).Single();
+            Assert(later.Runs.Count == 3, $"old runs trimmed (got {later.Runs.Count})");
+            Assert(later.ObservedMs <= day, "observation clamped to the window");
+            AssertEq(later.Outages, 1); // the pre-window outage aged out
+
+            // A camera that has only ever been offline scores zero.
+            av.Update("dead", false, t0);
+            var dead = av.Snapshots(t0 + 50_000).Single(s => s.Camera == "dead");
+            Assert(!dead.Online, "dead camera offline");
+            Assert(dead.UptimePct == 0, "dead camera scores 0%");
+            AssertEq(dead.Outages, 1);
+        });
+
         Test("event store roundtrip + retention", () =>
         {
             var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");

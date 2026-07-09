@@ -880,6 +880,21 @@ public static class WebApi
                     wMb = s.StorageMbPerSec,
                     wFiles = s.StorageFiles,
                 }),
+                // Per-camera availability: run-length transitions are tiny (a
+                // healthy camera is one run), so ship the full picture each poll.
+                avail = monitor.Availability
+                    .Snapshots(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
+                    .Select(a => new
+                    {
+                        cam = a.Camera,
+                        on = a.Online,
+                        pct = a.UptimePct,
+                        obs = a.ObservedMs,
+                        outs = a.Outages,
+                        longest = a.LongestOutageMs,
+                        since = a.CurrentSinceMs,
+                        runs = a.Runs,
+                    }),
             }));
         }
 

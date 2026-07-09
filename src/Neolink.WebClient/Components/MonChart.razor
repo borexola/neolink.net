@@ -17,7 +17,7 @@
         }
         <span class="mon-chart-max">@Fmt(MaxY())@Unit</span>
     </div>
-    <div class="mon-chart-body">
+    <div class="mon-chart-body" data-hover="@HoverJson()">
         @if (Series.All(s => Visible(s).Count < 2))
         {
             <div class="mon-empty">gathering data…</div>
@@ -82,6 +82,46 @@
     }
 
     private static double? Current(Line s) => s.Pts.Count > 0 ? s.Pts[^1].V : null;
+
+    /// <summary>
+    /// Payload for the JS hover tooltip (neolink.monHoverInit): the x domain plus
+    /// visible points per series, strided to ≤450 points so the 2s re-render diff
+    /// stays light — the mouse can't target finer than that anyway.
+    /// </summary>
+    private string HoverJson()
+    {
+        const int maxPts = 450;
+        var sb = new StringBuilder(256);
+        sb.Append("{\"u\":").Append(Json(Unit))
+          .Append(",\"a\":").Append(DomainStart())
+          .Append(",\"b\":").Append(DomainEnd())
+          .Append(",\"s\":[");
+        bool firstSeries = true;
+        foreach (var s in Series)
+        {
+            var pts = Visible(s);
+            if (pts.Count == 0) continue;
+            if (!firstSeries) sb.Append(',');
+            firstSeries = false;
+            sb.Append("{\"l\":").Append(Json(s.Label))
+              .Append(",\"c\":").Append(Json(s.Color)).Append(",\"p\":[");
+            int stride = Math.Max(1, (pts.Count + maxPts - 1) / maxPts);
+            bool firstPt = true;
+            // Phase-align to the last index so the newest point is always exact.
+            for (int i = (pts.Count - 1) % stride; i < pts.Count; i += stride)
+            {
+                if (!firstPt) sb.Append(',');
+                firstPt = false;
+                sb.Append('[').Append(pts[i].T).Append(',')
+                  .Append(Math.Round(pts[i].V, 2).ToString(CultureInfo.InvariantCulture)).Append(']');
+            }
+            sb.Append("]}");
+        }
+        sb.Append("]}");
+        return sb.ToString();
+    }
+
+    private static string Json(string s) => System.Text.Json.JsonSerializer.Serialize(s);
 
     private MarkupString Svg()
     {

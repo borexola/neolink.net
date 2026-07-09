@@ -338,7 +338,8 @@ if (config.WebPort > 0)
         diskProbePath: eventStore?.Root ?? stateDir,
         recordingsRoot: eventStore?.Root,
         viewerCount: () => webCameras.Sum(c => c.Streams.Sum(s => s.Hub.ViewerCount)),
-        recordingCameras: () => webCameras.Count(c => c.ContinuousActive?.Invoke() == true));
+        recordingCameras: () => webCameras.Count(c => c.ContinuousActive?.Invoke() == true),
+        cameraStates: () => webCameras.Select(c => (c.Name, c.Control.Online)));
     tasks.Add(Task.Run(() => monitor.RunAsync(shutdown.Token)));
 
     var webOptions = new WebApiOptions

@@ -39,6 +39,7 @@ public sealed class SystemMonitor
     private readonly string? _recordingsRoot;
     private readonly Func<int> _viewerCount;
     private readonly Func<int> _recordingCameras;
+    private readonly Func<IEnumerable<(string Name, bool Online)>> _cameraStates;
     private readonly object _gate = new();
     private readonly SystemSample[] _ring = new SystemSample[Capacity];
     private int _count;
@@ -57,14 +58,20 @@ public sealed class SystemMonitor
     /// <param name="recordingsRoot">Recordings tree to size, or null when recording is off.</param>
     /// <param name="viewerCount">External watchers across all stream hubs (recorders excluded).</param>
     /// <param name="recordingCameras">Cameras actively writing 24/7 footage.</param>
+    /// <param name="cameraStates">Current online/offline state of every configured camera.</param>
     public SystemMonitor(string diskProbePath, string? recordingsRoot,
-        Func<int> viewerCount, Func<int>? recordingCameras = null)
+        Func<int> viewerCount, Func<int>? recordingCameras = null,
+        Func<IEnumerable<(string Name, bool Online)>>? cameraStates = null)
     {
         _diskProbePath = diskProbePath;
         _recordingsRoot = recordingsRoot;
         _viewerCount = viewerCount;
         _recordingCameras = recordingCameras ?? (() => 0);
+        _cameraStates = cameraStates ?? (() => []);
     }
+
+    /// <summary>Uptime/outage history per camera, sampled on the same 2s tick.</summary>
+    public CameraAvailability Availability { get; } = new();
 
     /// <summary>Static facts for the monitor page header (measured once).</summary>
     public object Info() => new
@@ -162,6 +169,14 @@ public sealed class SystemMonitor
         try { viewers = _viewerCount(); } catch { }
         int recCams = 0;
         try { recCams = _recordingCameras(); } catch { }
+
+        long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        try
+        {
+            foreach (var (name, online) in _cameraStates())
+                Availability.Update(name, online, nowMs);
+        }
+        catch { /* availability is best-effort */ }
 
         var sample = new SystemSample(
             DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),

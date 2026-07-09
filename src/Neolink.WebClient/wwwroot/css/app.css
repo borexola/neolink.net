@@ -70,6 +70,16 @@ html, body {
 
 .brand .icon-btn { margin-left: auto; }
 
+/* The logo is also the "restore the wall" control */
+.brand-home {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+}
+
+.brand-home:hover .brand-dot { box-shadow: 0 0 14px var(--accent); }
+
 .brand-dot {
     width: 10px;
     height: 10px;
@@ -2076,6 +2086,147 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     font-size: 11px;
     color: var(--muted);
     text-align: center;
+}
+
+/* Chart hover: shared tooltip (document-level, JS-owned) + per-chart crosshair */
+.mon-tip {
+    position: fixed;
+    z-index: 300;
+    display: none;
+    pointer-events: none;
+    min-width: 140px;
+    padding: 8px 10px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow);
+    font-size: 12px;
+}
+
+.mon-tip-time {
+    margin-bottom: 4px;
+    font-size: 11px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+}
+
+.mon-tip-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    line-height: 1.6;
+    white-space: nowrap;
+}
+
+.mon-tip-row i {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+}
+
+.mon-tip-row b {
+    margin-left: auto;
+    padding-left: 14px;
+    font-variant-numeric: tabular-nums;
+}
+
+.mon-cross {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: color-mix(in srgb, var(--text) 35%, transparent);
+    pointer-events: none;
+}
+
+/* ---------------- camera availability (status-page ribbons) ---------------- */
+
+.mon-avail-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 10px;
+    margin-bottom: 18px;
+}
+
+.mon-avail-card {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px 14px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+}
+
+.mon-avail-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.mon-avail-dot {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+}
+
+.mon-avail-dot.up {
+    background: var(--ok);
+    box-shadow: 0 0 6px color-mix(in srgb, var(--ok) 70%, transparent);
+}
+
+.mon-avail-dot.down { background: var(--err); }
+
+.mon-avail-name {
+    font-weight: 600;
+    font-size: 13px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.mon-avail-grade {
+    flex: none;
+    padding: 1px 7px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+}
+
+.mon-avail-grade.good { color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent); }
+.mon-avail-grade.warn { color: #ffb020; background: rgba(255, 176, 32, 0.14); }
+.mon-avail-grade.bad { color: var(--err); background: color-mix(in srgb, var(--err) 14%, transparent); }
+
+.mon-avail-pct {
+    margin-left: auto;
+    font-weight: 600;
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+}
+
+/* The timeline: one span per online/offline run, oldest on the left */
+.mon-avail-ribbon {
+    display: flex;
+    height: 12px;
+    border-radius: 6px;
+    overflow: hidden;
+    background: var(--panel-2);
+}
+
+.mon-avail-seg { min-width: 3px; } /* a 10s blip on a 24h ribbon must still be visible */
+.mon-avail-seg.up { background: color-mix(in srgb, var(--ok) 55%, transparent); }
+.mon-avail-seg.down { background: var(--err); }
+
+.mon-avail-sub {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--muted);
 }
 
 /* ------------------------------------------------------------ logs page */

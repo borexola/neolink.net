@@ -17,7 +17,12 @@
 
     <aside class="sidebar @(_sidebarOpen ? "open" : "")">
         <div class="brand">
-            <span class="brand-dot"></span> NEOLINK<span class="brand-net">.NET</span>
+            @* The logo doubles as "home": it restores the full wall, exactly like
+               the toolbar's Restore view button (no-op when nothing is maximized). *@
+            <span class="brand-home" role="button" title="Back to the full camera wall"
+                  @onclick="RestoreView">
+                <span class="brand-dot"></span> NEOLINK<span class="brand-net">.NET</span>
+            </span>
             <button class="icon-btn" title="Server settings" @onclick="() => _showSettings = !_showSettings">@UiIcon.Render("gear", 18)</button>
         </div>
 
