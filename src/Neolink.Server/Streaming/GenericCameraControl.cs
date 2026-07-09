@@ -30,7 +30,7 @@ public sealed class GenericCameraControl : ICameraControl
         Task.FromResult(new CameraCapabilities(
             Version: null,
             Support: null,
-            Features: new CameraFeatures(Ptz: false, Led: false, Pir: false, Battery: false)));
+            Features: new CameraFeatures(Ptz: false, Led: false, Pir: false, Battery: false, Talk: false)));
 
     public Task<StreamInfoListXml?> GetStreamInfoAsync(CancellationToken ct) =>
         Task.FromResult<StreamInfoListXml?>(null);
@@ -60,4 +60,7 @@ public sealed class GenericCameraControl : ICameraControl
 
     public Task RebootAsync(CancellationToken ct) =>
         throw new NotSupportedException("reboot is not available for generic RTSP cameras");
+
+    public Task TalkAsync(int sampleRate, System.Threading.Channels.ChannelReader<byte[]> pcm, CancellationToken ct) =>
+        throw new NotSupportedException("two-way talk is not available for generic RTSP cameras");
 }

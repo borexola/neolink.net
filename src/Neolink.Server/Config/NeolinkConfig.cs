@@ -240,6 +240,7 @@ public sealed class NeolinkConfig
                 case "statedir": config.Ui.StateDir = prop.Value.GetString(); break;
                 case "resetadminpassword": config.Ui.ResetAdminPassword = prop.Value.GetBoolean(); break;
                 case "tricklespeed": config.Ui.TrickleSpeed = prop.Value.GetDouble(); break;
+                case "talk": config.Ui.Talk = prop.Value.GetBoolean(); break;
                 default:
                     Log.Warn($"Config: ignoring unknown ui option '{prop.Name}'");
                     break;
@@ -295,6 +296,7 @@ public sealed class NeolinkConfig
             config.Ui.StateDir = MiniToml.GetString(ui, "state_dir");
             config.Ui.ResetAdminPassword = MiniToml.GetBool(ui, "reset_admin_password") ?? false;
             if (MiniToml.GetInt(ui, "trickle_speed") is { } ts) config.Ui.TrickleSpeed = ts;
+            config.Ui.Talk = MiniToml.GetBool(ui, "talk") ?? false;
         }
 
         if (MiniToml.GetTable(root, "recording") is { } rec)
@@ -525,6 +527,8 @@ public sealed class UiConfig
     public bool ResetAdminPassword { get; set; }
     /// <summary>Playback rate of the review-strip's ambient clip previews.</summary>
     public double TrickleSpeed { get; set; } = 4;
+    /// <summary>Beta: two-way talk (browser microphone → camera speaker). Off by default.</summary>
+    public bool Talk { get; set; }
 }
 
 /// <summary>MQTT / Home Assistant integration settings ("mqtt" in the config).</summary>

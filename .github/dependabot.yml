@@ -1,0 +1,12 @@
+# Keeps the workflow actions current: opens a small PR when actions/checkout,
+# setup-dotnet, the docker/* actions etc. publish a new major. The CI merge
+# gate runs on those PRs like any other, so bumps prove themselves.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]

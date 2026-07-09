@@ -54,6 +54,18 @@ public interface IBcCamera : IAsyncDisposable
     Task<byte[]?> SnapAsync(CancellationToken ct);
 
     /// <summary>
+    /// Two-way talk: configures the camera's speaker for the given audio profile
+    /// (msg 201, retried once after a reset if another talker holds the channel),
+    /// then forwards each BcMedia-framed ADPCM frame from <paramref name="frames"/>
+    /// as a binary talk message (msg 202) until the channel completes or
+    /// <paramref name="ct"/> fires. Always releases the talk channel (msg 11) on
+    /// the way out. Frames are produced with <see cref="Media.AdpcmEncoder"/> +
+    /// <see cref="Media.BcMediaAdpcm"/> per the profile from
+    /// <see cref="BcCameraCommands.GetTalkAbilityAsync"/>.
+    /// </summary>
+    Task TalkAsync(TalkAbilityXml ability, ChannelReader<byte[]> frames, CancellationToken ct);
+
+    /// <summary>
     /// Sends one control message and awaits the camera's reply on the same message ID.
     /// Throws <see cref="CameraCommandException"/> when the camera answers with a
     /// non-200 response code. With <paramref name="tolerateNoReply"/> a missing reply

@@ -108,10 +108,16 @@ Console.CancelKeyPress += (_, e) =>
     if (!shutdown.IsCancellationRequested)
     {
         Log.Info("Shutting down...");
-        shutdown.Cancel();
+        try { shutdown.Cancel(); } catch (ObjectDisposedException) { }
     }
 };
-AppDomain.CurrentDomain.ProcessExit += (_, _) => shutdown.Cancel();
+// ProcessExit also fires on exits WE initiated (Ctrl+C, the UI's restart
+// button) — by then Main has finished and the `using` has disposed the CTS,
+// so Cancel would throw ObjectDisposedException into the exit handler.
+AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+{
+    try { shutdown.Cancel(); } catch (ObjectDisposedException) { }
+};
 
 var users = config.Users.ToDictionary(u => u.Name, u => u.Pass);
 if (users.Count > 0)
@@ -356,6 +362,7 @@ if (config.WebPort > 0)
         UserStore = userStore,
         ResetAdminPassword = config.EffectiveResetAdminPassword,
         TrickleSpeed = config.Ui.TrickleSpeed,
+        TalkEnabled = config.Ui.Talk,
         Version = Version,
         ConfigPath = Path.GetFullPath(configPath),
         Updates = updates,

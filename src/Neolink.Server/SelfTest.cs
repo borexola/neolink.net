@@ -310,6 +310,80 @@ public static class SelfTest
                 (bool?)true);
         });
 
+        Test("talk audio: encode → frame → parse → decode round-trip", () =>
+        {
+            // 16 kHz 440 Hz sine through the full outbound talk pipeline, fed in
+            // odd-sized chunks to exercise the mid-sample chunk-boundary carry.
+            const int rate = 16000, samplesPerBlock = 512, total = 3200;
+            var pcm = new byte[total * 2];
+            for (int i = 0; i < total; i++)
+            {
+                short s = (short)(Math.Sin(2 * Math.PI * 440 * i / rate) * 12000);
+                pcm[i * 2] = (byte)s;
+                pcm[i * 2 + 1] = (byte)(s >> 8);
+            }
+            var enc = new TalkFrameEncoder(rate, rate, samplesPerBlock);
+            var framed = new List<byte[]>();
+            for (int off = 0; off < pcm.Length;)
+            {
+                int len = Math.Min(1233 + off % 7, pcm.Length - off);
+                framed.AddRange(enc.Feed(pcm.AsSpan(off, len)));
+                off += len;
+            }
+            // The resampler primes on the first sample, so 3199 samples emitted
+            // → 6 full 512-sample blocks, the tail stays buffered.
+            AssertEq(framed.Count, 6);
+
+            // Frame header must match the layout captured from a real camera:
+            // magic "01wb", u16 size ×2 (4-byte sub-header + 260-byte block),
+            // u16 sub-magic 0x0100, u16 half block size.
+            var head = framed[0].AsSpan(0, 12).ToArray();
+            AssertSeq(head, new byte[] { 0x30, 0x31, 0x77, 0x62, 0x08, 0x01, 0x08, 0x01, 0x00, 0x01, 0x82, 0x00 });
+            foreach (var f in framed)
+                AssertEq(f.Length % 8, 0);
+
+            // Our own inbound parser must accept the frames...
+            var channel = Channel.CreateUnbounded<byte[]>();
+            foreach (var f in framed)
+                channel.Writer.TryWrite(f);
+            channel.Writer.Complete();
+            var reader = new MediaFrameReader(channel.Reader);
+            var decoded = new List<byte>();
+            for (int i = 0; i < framed.Count; i++)
+            {
+                var frame = reader.ReadFrameAsync(CancellationToken.None).AsTask().GetAwaiter().GetResult();
+                Assert(frame is AdpcmFrame, "frame parses as ADPCM");
+                // ...and the existing decoder must reproduce the sine.
+                decoded.AddRange(Adpcm.BlockToPcm(((AdpcmFrame)frame).Data));
+            }
+            AssertEq(decoded.Count, 6 * samplesPerBlock * 2);
+
+            double errSq = 0, sigSq = 0;
+            for (int i = 0; i < decoded.Count / 2; i++)
+            {
+                // The encoder emits input[i] as output[i] (one-sample latency at 1:1).
+                short want = (short)(pcm[i * 2] | (pcm[i * 2 + 1] << 8));
+                short got = (short)(decoded[i * 2] | (decoded[i * 2 + 1] << 8));
+                errSq += (double)(want - got) * (want - got);
+                sigSq += (double)want * want;
+            }
+            double ratio = Math.Sqrt(errSq / sigSq);
+            Assert(ratio < 0.05, $"round-trip RMS error {ratio:P1} of signal");
+
+            // Browser microphones run at 44.1/48 kHz: 3:1 linear resampling must
+            // land on the same tone at the camera rate.
+            var enc48 = new TalkFrameEncoder(48000, rate, 160);
+            var pcm48 = new byte[4801 * 2];
+            for (int i = 0; i < 4801; i++)
+            {
+                short s = (short)(Math.Sin(2 * Math.PI * 440 * i / 48000.0) * 12000);
+                pcm48[i * 2] = (byte)s;
+                pcm48[i * 2 + 1] = (byte)(s >> 8);
+            }
+            var frames48 = new List<byte[]>(enc48.Feed(pcm48));
+            AssertEq(frames48.Count, 10); // 4800/3 = 1600 samples out = 10×160
+        });
+
         Test("camera availability tracking", () =>
         {
             var av = new Web.CameraAvailability();
@@ -546,10 +620,12 @@ public static class SelfTest
                     Config.ConfigEditor.Set(root, "web_port", 9001);
                     var ui = Config.ConfigEditor.Section(root, "ui");
                     Config.ConfigEditor.Set(ui, "trickle_speed", 8);
+                    Config.ConfigEditor.Set(ui, "talk", true);
                 });
                 var reloaded = Config.NeolinkConfig.Load(path);
                 AssertEq(reloaded.WebPort, 9001);
                 Assert(Math.Abs(reloaded.Ui.TrickleSpeed - 8) < 0.001, "ui.trickle_speed written");
+                Assert(reloaded.Ui.Talk, "ui.talk (beta two-way talk) written");
                 Assert(File.Exists(path + ".bak"), "previous config backed up");
 
                 // Camera list (and any unknown fields) survive an unrelated edit.
@@ -826,6 +902,11 @@ public static class SelfTest
                 Assert(features.TryGetProperty("trickleSpeed", out _), "trickleSpeed exposed");
                 AssertEq(features.GetProperty("repoUrl").GetString()!, Web.UpdateChecker.RepoUrl);
 
+                // Two-way talk is a beta opt-in: off by default, and the endpoint
+                // refuses (403) rather than upgrading the socket while disabled.
+                Assert(!features.GetProperty("talk").GetBoolean(), "talk beta defaults off");
+                AssertEq((int)http.GetAsync("/api/talk?camera=apicam").Result.StatusCode, 403);
+
                 // Camera list — what ApiCamera/ApiStream bind to; open while no accounts exist.
                 var cams = GetJson(http, "/api/cameras");
                 AssertEq(cams.GetArrayLength(), 1);
@@ -1096,6 +1177,8 @@ public static class SelfTest
         public Task SetPirEnabledAsync(bool enabled, CancellationToken ct) => Task.CompletedTask;
         public Task PtzAsync(string command, float speed, CancellationToken ct) => Task.CompletedTask;
         public Task RebootAsync(CancellationToken ct) => Task.CompletedTask;
+        public Task TalkAsync(int sampleRate, ChannelReader<byte[]> pcm, CancellationToken ct) =>
+            throw new NotSupportedException();
     }
 
     private static BcContext NewContext()

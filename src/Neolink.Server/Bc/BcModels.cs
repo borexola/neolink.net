@@ -17,6 +17,8 @@ public static class BcConstants
     public const uint MsgIdLogin = 1;
     public const uint MsgIdLogout = 2;
     public const uint MsgIdVideo = 3;
+    public const uint MsgIdTalkAbility = 10;
+    public const uint MsgIdTalkReset = 11;
     public const uint MsgIdPtzControl = 18;
     public const uint MsgIdPtzPreset = 19;
     public const uint MsgIdReboot = 23;
@@ -31,6 +33,8 @@ public static class BcConstants
     public const uint MsgIdStreamInfoList = 146;
     public const uint MsgIdAbilityInfo = 151;
     public const uint MsgIdGetSupport = 199;
+    public const uint MsgIdTalkConfig = 201;
+    public const uint MsgIdTalk = 202;
     public const uint MsgIdGetLedStatus = 208;
     public const uint MsgIdSetLedStatus = 209;
     public const uint MsgIdGetPirAlarm = 212;

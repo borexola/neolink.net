@@ -102,4 +102,16 @@ public static class BcCameraCommands
     {
         await cam.SendCommandAsync(BcConstants.MsgIdReboot, ct: ct).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// The audio profile the camera accepts for two-way talk (msg 10), or null when
+    /// the camera has no speaker / doesn't support talk.
+    /// </summary>
+    public static async Task<TalkAbilityXml?> GetTalkAbilityAsync(this IBcCamera cam, TimeSpan? timeout = null, CancellationToken ct = default)
+    {
+        var reply = await cam.SendCommandAsync(BcConstants.MsgIdTalkAbility, extension: ChannelExt(cam),
+            replyTimeout: timeout, ct: ct).ConfigureAwait(false);
+        var el = reply?.Xml?.RawElement("TalkAbility");
+        return el == null ? null : TalkAbilityXml.Parse(el);
+    }
 }
