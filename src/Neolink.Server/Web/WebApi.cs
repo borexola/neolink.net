@@ -124,8 +124,11 @@ public static class WebApi
             // running from the build output; published output has them physically in wwwroot).
             builder.WebHost.UseStaticWebAssets();
             builder.Services.AddRazorComponents().AddInteractiveServerComponents();
-            // The UI's camera-list fetches run server-side (Blazor Server circuits)
-            builder.Services.AddSingleton(_ => new HttpClient { Timeout = TimeSpan.FromSeconds(5) });
+            // The UI's camera-list fetches run server-side (Blazor Server circuits).
+            // 15s, not snappier: first-open capability discovery probes the camera
+            // for optional features and silent probes legitimately take seconds —
+            // a shorter client timeout aborts the request mid-probe.
+            builder.Services.AddSingleton(_ => new HttpClient { Timeout = TimeSpan.FromSeconds(15) });
             // Circuits must talk to THIS server via loopback, never back out through
             // a reverse proxy's public URL (TLS/hairpin failures behind HAProxy etc.).
             builder.Services.AddSingleton(new Neolink.WebClient.LocalApiInfo(LoopbackBase(bindAddr, port)));
@@ -498,6 +501,13 @@ public static class WebApi
             {
                 return await action(cam.Control, ctx.RequestAborted);
             }
+            catch (OperationCanceledException) when (ctx.RequestAborted.IsCancellationRequested)
+            {
+                // The client gave up (panel closed, page navigated, HTTP timeout) —
+                // nobody is listening for this response. Swallowing it here keeps
+                // an aborted request from surfacing as an unhandled exception.
+                return Results.StatusCode(499); // nginx's "client closed request"
+            }
             catch (CameraOfflineException)
             {
                 return Results.Json(new { error = "camera offline (reconnecting)" }, statusCode: 503);
@@ -776,7 +786,10 @@ public static class WebApi
                 eventsAvailable = cam.SupportsEvents,
                 continuous = RecordingConfig.ContinuousEnabled && s.Continuous,
                 continuousAvailable = RecordingConfig.ContinuousEnabled,
-                eventTypes = s.EventTypes,
+                // Always the EFFECTIVE list (never null): unset means the default
+                // set, which excludes the opt-in perimeter labels — the UI chips
+                // must show those as off until the user ticks them.
+                eventTypes = (IEnumerable<string>?)s.EventTypes ?? CameraRecordingSettings.DefaultLabels,
                 knownTypes = CameraRecordingSettings.KnownLabels,
                 // Per-camera retention overrides (null = default) + the server defaults
                 // so the UI can label what "default" currently means.

@@ -44,6 +44,9 @@ public sealed class CameraService : ILiveCameraSource
     {
         "people", "person", "face", "vehicle", "car", "dog_cat", "animal", "pet",
         "package", "visitor", "doorbell",
+        // Perimeter protection (line/zone crossing) token spellings seen or expected
+        "crossline", "cross_line", "tripwire", "intrude", "intrusion", "region",
+        "perimeter", "linger", "loiter", "loitering",
     };
     private readonly HashSet<string> _reportedAiTypes = new(StringComparer.Ordinal);
     private volatile IBcCamera? _live;
@@ -210,7 +213,8 @@ public sealed class CameraService : ILiveCameraSource
     private async Task<bool> StreamOnceAsync(CancellationToken ct, Action onFrame)
     {
         Log.Info($"{Tag}: connecting to {_config.Host}:{_config.Port}");
-        await using IBcCamera camera = await BcCamera.ConnectAsync(_config.Host, _config.Port, _config.ChannelId, ct).ConfigureAwait(false);
+        await using IBcCamera camera = await BcCamera.ConnectAsync(_config.Host, _config.Port, _config.ChannelId, ct,
+            tag: Tag).ConfigureAwait(false);
 
         Log.Info($"{Tag}: logging in as '{_config.Username}'");
         await camera.LoginAsync(_config.Username, _config.Password, ct).ConfigureAwait(false);

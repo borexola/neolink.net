@@ -348,8 +348,12 @@ public sealed class EventRecorder
                     Log.Info($"{_camera}: event escalated (+{string.Join("+", fresh)})");
                 }
             }
-            else
+            else if (active)
             {
+                // Arm the post-roll ONLY on the active→quiet transition. Cameras
+                // repeat all-clear pushes while idle, and re-arming on every one
+                // kept events open until the MaxClipSeconds hard stop (the
+                // suspicious wall of exactly-max-length clips in busy setups).
                 active = false;
                 quietUntil = DateTime.UtcNow.AddSeconds(_cfg.PostSeconds);
             }
@@ -460,6 +464,11 @@ public sealed class EventRecorder
             "dog_cat" or "animal" or "pet" => "animal",
             "package" => "package",
             "visitor" or "doorbell" => "doorbell", // video doorbells: the button was pressed
+            // Perimeter protection (smart events configured in the Reolink app).
+            // Token spellings vary by firmware; extend as captures come in.
+            "crossline" or "cross_line" or "tripwire" => "line-crossing",
+            "intrude" or "intrusion" or "region" or "perimeter" => "intrusion",
+            "linger" or "loiter" or "loitering" => "loitering",
             _ => t,
         }).Distinct().ToList();
         return labels.Count > 0 ? labels : new List<string> { "motion" };

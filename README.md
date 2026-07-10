@@ -545,6 +545,34 @@ from our side):
   snapshots** — the camera is off the network on purpose. It still records
   PIR events to its own SD card, as it does with the official app.
 
+## Perimeter protection (line/zone crossing)
+
+If you configured **perimeter protection** in the Reolink app (line crossing,
+intrusion/zone, loitering), those smart alerts can drive events INSTEAD of the
+plain person/vehicle/animal detections — no need for non-detection zones.
+
+The perimeter labels are **opt-in and recorded only after you enable them**: in
+the camera's panel (⚙) → *Event types*, tick `line-crossing` / `intrusion` /
+`loitering` (and untick the standard detections if you want crossings ONLY).
+Until then an untouched setup records exactly what it always did — a crossing
+still shows up as plain motion+person. Once enabled, perimeter events appear in
+the strip with their own 🚧/🚷/🕒 icons.
+
+Confirmed working against real hardware (Reolink Elite WiFi): newer firmware
+nests the perimeter verdict in a `smartAiTypeList` inside the alarm push — rule
+type (`crossline` / `intrusion` / `loitering`), the zone/line index, and the
+object class that tripped it — and Neolink maps all of it to event labels.
+Older firmware variants that put the token in `AItype` or the status list are
+handled too.
+
+If your model still doesn't produce these events, run a short capture: set the
+environment variable **`NEOLINK_DEBUG_ALARMS=1`** (docker:
+`-e NEOLINK_DEBUG_ALARMS=1`) and trip the line once. Every alarm/smart-event
+push is then logged **with its full raw XML at the normal Info level** — no need
+for `NEOLINK_LOG=debug` and its per-packet flood. Grab the
+`alarm push <AlarmEventList …>` lines from around the crossing and open an
+issue with them so the mapping can be extended.
+
 ## Web UI notes
 
 - **H.265 in the browser**: sub streams are H.264 and play everywhere. Main streams on
@@ -560,6 +588,16 @@ from our side):
   with TLS it just works; on a plain `http://lan-ip` page the mic button reports that
   HTTPS is required. The mic button only appears on cameras that advertise talk
   support (and only while maximized or in quick view).
+
+## Versioning & releases
+
+The app's version lives in one place — `<Version>` in
+`src/Neolink.Server/Neolink.Server.csproj` — and shows up everywhere: the
+startup log, `neolink.net --version`, `/api/features`, and the bottom of the
+web UI's sidebar. **Releasing = pushing a git tag**: tag `vX.Y.Z` and the
+docker workflow builds the multi-arch images with that exact version baked in
+(`-p:Version` from the tag), so every release increments the reported version
+without a code change. Untagged builds report the csproj version.
 
 ## Self-tests & development
 

@@ -41,16 +41,22 @@ public sealed class BcCamera : IBcCamera
     public byte ChannelId => _channelId;
     public DeviceInfoXml? DeviceInfo { get; private set; }
 
-    private BcCamera(BcConnection conn, byte channelId)
+    // Log tag: with several cameras every one is usually channel 0, so a bare
+    // "ch0" is ambiguous in captures — callers pass the camera name instead.
+    private readonly string _logTag;
+
+    private BcCamera(BcConnection conn, byte channelId, string? tag)
     {
         _conn = conn;
         _channelId = channelId;
+        _logTag = tag ?? $"ch{channelId}";
     }
 
-    public static async Task<BcCamera> ConnectAsync(string host, int port, byte channelId, CancellationToken ct)
+    public static async Task<BcCamera> ConnectAsync(string host, int port, byte channelId, CancellationToken ct,
+        string? tag = null)
     {
         var conn = await BcConnection.ConnectAsync(host, port, TimeSpan.FromSeconds(10), ct).ConfigureAwait(false);
-        return new BcCamera(conn, channelId);
+        return new BcCamera(conn, channelId, tag);
     }
 
     private ushort NewMessageNum() => (ushort)Interlocked.Increment(ref _messageNum);
@@ -277,17 +283,23 @@ public sealed class BcCamera : IBcCamera
                 // Some firmware variants push different XML on the motion channel
                 // (doorbell/visitor pushes among the suspects) — surface the first
                 // one seen so the mapping can be extended from a real sample.
-                if (msg.Xml != null && !_oddMotionPushLogged)
+                if (msg.Xml != null && (!_oddMotionPushLogged || Log.AlarmXml))
                 {
                     _oddMotionPushLogged = true;
                     var raw = Encoding.UTF8.GetString(msg.Xml.Serialize()).Replace('\r', ' ').Replace('\n', ' ');
-                    Log.Info($"BC ch{_channelId}: motion-channel push without AlarmEventList — " +
+                    Log.Info($"BC {_logTag}: motion-channel push without AlarmEventList — " +
                              $"raw: {(raw.Length > 400 ? raw[..400] + "…" : raw)} (please report if this " +
                              "coincides with a doorbell press)");
                 }
                 continue;
             }
-            Log.Debug($"BC ch{_channelId}: alarm push {list.ToString(SaveOptions.DisableFormatting)}");
+            // NEOLINK_DEBUG_ALARMS=1 elevates the full push XML to Info — the
+            // capture mode for mapping new firmware dialects without the
+            // media-packet flood of NEOLINK_LOG=debug.
+            if (Log.AlarmXml)
+                Log.Info($"BC {_logTag}: alarm push {list.ToString(SaveOptions.DisableFormatting)}");
+            else
+                Log.Debug($"BC {_logTag}: alarm push {list.ToString(SaveOptions.DisableFormatting)}");
             foreach (var ev in list.Elements("AlarmEvent"))
             {
                 if (uint.TryParse(ev.Element("channelId")?.Value.Trim(), out var ch) && ch != _channelId)
@@ -318,8 +330,37 @@ public sealed class BcCamera : IBcCamera
         foreach (var t in status.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries))
         {
             var token = t.Trim().ToLowerInvariant();
-            if (token is "visitor" or "doorbell" && !aiTypes.Contains(token))
+            // Detection tokens that firmware puts INSIDE the status list: doorbell
+            // presses (captured: "MD,visitor") and, expected in the same style,
+            // the perimeter-protection smart events.
+            if (token is "visitor" or "doorbell"
+                    or "crossline" or "cross_line" or "tripwire"
+                    or "intrude" or "intrusion" or "region" or "perimeter"
+                    or "linger" or "loiter" or "loitering"
+                && !aiTypes.Contains(token))
                 aiTypes.Add(token);
+        }
+
+        // Perimeter protection on newer firmware nests its verdicts in a
+        // smartAiTypeList (captured from a real camera, 2026-07-09):
+        //   <smartAiTypeList><smartAiType><type>intrusion</type><index>1</index>
+        //     <subList><index>0</index><type>people</type></subList></smartAiType>
+        //     <pts>…</pts><frameIndex>…</frameIndex></smartAiTypeList>
+        // type = the tripped rule (crossline/intrusion/loitering), index = which
+        // of the user's zones/lines, subList = the object class that tripped it.
+        // Collecting every <type> under the list captures rule AND object tokens;
+        // these pushes can arrive with status "none", so without this fold a
+        // loitering alert would read as an all-clear.
+        foreach (var smartList in ev.Elements()
+                     .Where(e => e.Name.LocalName.Equals("smartAiTypeList", StringComparison.OrdinalIgnoreCase)))
+        {
+            foreach (var typeEl in smartList.Descendants()
+                         .Where(d => d.Name.LocalName.Equals("type", StringComparison.OrdinalIgnoreCase)))
+            {
+                var token = typeEl.Value.Trim().ToLowerInvariant();
+                if (token is not ("" or "none") && !aiTypes.Contains(token))
+                    aiTypes.Add(token);
+            }
         }
         return new MotionPush(status, aiTypes);
     }
@@ -337,8 +378,46 @@ public sealed class BcCamera : IBcCamera
             WatchStatusIdAsync(BcConstants.MsgIdFloodlightStatusList, "FloodlightStatusList",
                 el => ParseStatusList(el, _channelId) is { } on ? new FloodlightStatusPush(on) : null, onEvent, ct),
             WatchStatusIdAsync(BcConstants.MsgIdBatteryInfoList, "BatteryList",
-                el => ParseBatteryList(el, _channelId), onEvent, ct)
+                el => ParseBatteryList(el, _channelId), onEvent, ct),
+            WatchSmartAiEventsAsync(ct)
         ).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Capture aid for perimeter protection: newer firmware pushes smart events
+    /// (yoloWorldEventList, msg 600) whose XML shape has not been mapped yet.
+    /// The first push per connection is logged in full at Info so a user tripping
+    /// their line-crossing/intrusion zone can report the exact wire format.
+    /// </summary>
+    private async Task WatchSmartAiEventsAsync(CancellationToken ct)
+    {
+        using var sub = _conn.Subscribe(BcConstants.MsgIdSmartAiEventList);
+        bool logged = false;
+        while (!ct.IsCancellationRequested)
+        {
+            BcMessage msg;
+            try
+            {
+                msg = await sub.Messages.ReadAsync(ct).ConfigureAwait(false);
+            }
+            catch (ChannelClosedException)
+            {
+                return; // connection closed
+            }
+            if (msg.Xml == null) continue;
+            var raw = Encoding.UTF8.GetString(msg.Xml.Serialize()).Replace('\r', ' ').Replace('\n', ' ');
+            if (!logged || Log.AlarmXml)
+            {
+                logged = true;
+                Log.Info($"BC {_logTag}: smart-event push (msg 600) — raw: " +
+                         $"{(raw.Length > 500 ? raw[..500] + "…" : raw)} (if this coincides with a " +
+                         "perimeter/line-crossing alert, please report it so it can be mapped to events)");
+            }
+            else
+            {
+                Log.Debug($"BC {_logTag}: smart-event push {(raw.Length > 500 ? raw[..500] + "…" : raw)}");
+            }
+        }
     }
 
     private async Task WatchStatusIdAsync(uint msgId, string elementName,
@@ -364,7 +443,7 @@ public sealed class BcCamera : IBcCamera
             if (el == null) continue;
             if (parse(el) is { } push)
             {
-                Log.Debug($"BC ch{_channelId}: status push {el.ToString(SaveOptions.DisableFormatting)}");
+                Log.Debug($"BC {_logTag}: status push {el.ToString(SaveOptions.DisableFormatting)}");
                 onEvent(push);
             }
         }

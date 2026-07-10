@@ -130,6 +130,10 @@ public sealed record ApiEvent(string Id, string Camera, DateTime Start, DateTime
         ("animal", "🐾", "Animal"),
         ("package", "📦", "Package"),
         ("doorbell", "🔔", "Doorbell"),
+        // Perimeter protection (line/zone crossing configured in the Reolink app)
+        ("line-crossing", "🚧", "Line crossing"),
+        ("intrusion", "🚷", "Intrusion"),
+        ("loitering", "🕒", "Loitering"),
         ("motion", "👁", "Motion"),
     };
 

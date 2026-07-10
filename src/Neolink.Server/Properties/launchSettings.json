@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "Neolink.Server": {
+      "commandName": "Project",
+      "environmentVariables": {
+        "NEOLINK_DEBUG_ALARMS": "0"
+      }
+    }
+  }
+}

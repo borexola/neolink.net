@@ -47,6 +47,7 @@ public static class BcConstants
     public const uint MsgIdSetZoomFocus = 295;
     public const uint MsgIdNetInfo = 464;
     public const uint MsgIdSirenStatusList = 547;
+    public const uint MsgIdSmartAiEventList = 600; // "yoloWorldEventList" pushes on newer firmware
     public const uint MsgIdSleepStatus = 623;
 
     // Message classes. The class dictates the header size:

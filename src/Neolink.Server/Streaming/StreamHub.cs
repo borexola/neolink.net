@@ -97,8 +97,13 @@ public sealed class StreamHub : IStreamHub, IMediaSink
         _lastWall = wallNow;
         _videoRtpTs = unchecked(_videoRtpTs + (uint)((ulong)deltaUs * 90 / 1000));
 
-        // Learn codec parameters from the stream
+        // Learn codec parameters from the stream. Parameter sets ride keyframes,
+        // so once they are known, P-frames skip the full-buffer NAL scan — that's
+        // the hub's per-frame hot path across every stream.
         bool paramsUpdated = false;
+        bool needParams = frame.Keyframe || Sps == null || Pps == null
+            || (frame.Codec == VideoCodec.H265 && Vps == null);
+        if (needParams)
         foreach (var nal in H26x.SplitNals(frame.Data))
         {
             var span = nal.Span;

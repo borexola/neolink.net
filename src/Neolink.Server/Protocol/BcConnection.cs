@@ -71,7 +71,11 @@ public sealed class BcConnection : IAsyncDisposable
             while (!ct.IsCancellationRequested)
             {
                 var msg = await BcCodec.ReadMessageAsync(_stream, _context, ct).ConfigureAwait(false);
-                Log.Debug($"BC recv: msgId={msg.Meta.MsgId} class=0x{msg.Meta.Class:x4} msgNum={msg.Meta.MsgNum} channel={msg.Meta.ChannelId} stream={msg.Meta.StreamType} response=0x{msg.Meta.ResponseCode:x4}");
+                // Hot path: media arrives as one message per chunk, so guard the
+                // level BEFORE building the string — otherwise every video chunk
+                // pays for an interpolation that Info-level runs then discard.
+                if (Log.Level <= LogLevel.Debug)
+                    Log.Debug($"BC recv: msgId={msg.Meta.MsgId} class=0x{msg.Meta.Class:x4} msgNum={msg.Meta.MsgNum} channel={msg.Meta.ChannelId} stream={msg.Meta.StreamType} response=0x{msg.Meta.ResponseCode:x4}");
                 Channel<BcMessage>? target = null;
                 lock (_subGate)
                 {
@@ -147,7 +151,9 @@ public sealed class BcConnection : IAsyncDisposable
     public async Task SendAsync(BcMessage msg, CancellationToken ct)
     {
         var packet = BcCodec.Serialize(msg, Encryption);
-        Log.Debug($"BC send: msgId={msg.Meta.MsgId} class=0x{msg.Meta.Class:x4} msgNum={msg.Meta.MsgNum} channel={msg.Meta.ChannelId} stream={msg.Meta.StreamType} response=0x{msg.Meta.ResponseCode:x4} bytes={packet.Length}");
+        // Guarded like the read loop: talk audio sends ~30 messages/s.
+        if (Log.Level <= LogLevel.Debug)
+            Log.Debug($"BC send: msgId={msg.Meta.MsgId} class=0x{msg.Meta.Class:x4} msgNum={msg.Meta.MsgNum} channel={msg.Meta.ChannelId} stream={msg.Meta.StreamType} response=0x{msg.Meta.ResponseCode:x4} bytes={packet.Length}");
         await _sendLock.WaitAsync(ct).ConfigureAwait(false);
         try
         {

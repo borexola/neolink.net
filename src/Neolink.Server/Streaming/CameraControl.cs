@@ -126,14 +126,22 @@ public sealed class CameraControl : ICameraControl
 
             // Feature discovery. PTZ is advertised in the Support xml; the rest are
             // probed with their harmless "get" command — a camera without the feature
-            // rejects it (non-200) or stays silent.
+            // rejects it (non-200) or stays silent. The probes run IN PARALLEL:
+            // each uses a distinct message id (the connection routes replies per id,
+            // and the command gate is held, so nothing else interleaves), and run
+            // sequentially the silent ones stack up to 4s each — long enough for the
+            // UI's HTTP timeout to abort the first panel open after a reconnect.
             bool ptz = SupportFlag(support, "ptzMode") || SupportFlag(support, "ptzCfg");
-            bool led = await ProbeAsync(() => camera.GetLedStateAsync(ProbeTimeout, ct)).ConfigureAwait(false);
-            bool pir = await ProbeAsync(() => camera.GetPirStateAsync(ProbeTimeout, ct)).ConfigureAwait(false);
-            bool battery = await ProbeAsync(() => camera.GetBatteryInfoAsync(ProbeTimeout, ct)).ConfigureAwait(false);
-            var talkAbility = await TryAsync(() => camera.GetTalkAbilityAsync(ProbeTimeout, ct)).ConfigureAwait(false);
-            bool talk = talkAbility != null
-                && talkAbility.AudioType.Equals("adpcm", StringComparison.OrdinalIgnoreCase);
+            var ledTask = ProbeAsync(() => camera.GetLedStateAsync(ProbeTimeout, ct));
+            var pirTask = ProbeAsync(() => camera.GetPirStateAsync(ProbeTimeout, ct));
+            var batteryTask = ProbeAsync(() => camera.GetBatteryInfoAsync(ProbeTimeout, ct));
+            var talkTask = TryAsync(() => camera.GetTalkAbilityAsync(ProbeTimeout, ct));
+            await Task.WhenAll(ledTask, pirTask, batteryTask, talkTask).ConfigureAwait(false);
+            bool led = ledTask.Result;
+            bool pir = pirTask.Result;
+            bool battery = batteryTask.Result;
+            bool talk = talkTask.Result != null
+                && talkTask.Result.AudioType.Equals("adpcm", StringComparison.OrdinalIgnoreCase);
 
             _caps = new CameraCapabilities(version, support, new CameraFeatures(ptz, led, pir, battery, talk));
             _capsSession = camera;

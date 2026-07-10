@@ -17,10 +17,28 @@ public sealed record CameraRecordingSettings(bool Events, bool Continuous, List<
     string? RecordStream = null)
 {
     /// <summary>Known detection labels (what the UI offers as event-type filters).</summary>
-    public static readonly string[] KnownLabels = { "person", "vehicle", "animal", "package", "doorbell", "motion" };
+    public static readonly string[] KnownLabels =
+    {
+        "person", "vehicle", "animal", "package", "doorbell",
+        // Perimeter protection (line/zone crossing set up in the Reolink app):
+        // record on these INSTEAD of the plain detections, no non-detection
+        // zones needed — untick person/vehicle and keep these.
+        "line-crossing", "intrusion", "loitering",
+        "motion",
+    };
 
-    /// <summary>A null EventTypes list means every detection type is recorded.</summary>
-    public bool AllowsLabel(string label) => EventTypes == null || EventTypes.Contains(label);
+    /// <summary>
+    /// What records when the user never touched the filter (EventTypes null).
+    /// The perimeter labels are OPT-IN: until ticked they'd only duplicate the
+    /// plain detections (a crossing is also motion+person), so an untouched
+    /// setup keeps recording exactly what it recorded before they existed.
+    /// </summary>
+    public static readonly string[] DefaultLabels =
+        { "person", "vehicle", "animal", "package", "doorbell", "motion" };
+
+    /// <summary>A null EventTypes list means the default set (perimeter labels are opt-in).</summary>
+    public bool AllowsLabel(string label) =>
+        EventTypes != null ? EventTypes.Contains(label) : DefaultLabels.Contains(label);
 }
 
 /// <summary>
