@@ -171,8 +171,11 @@
 
     <main class="stage">
         @* Frigate-style review strip: unreviewed detection events, newest first.
-           Disappears entirely once everything is dismissed (or recording is off). *@
-        @if (_eventsSupported && _events.Any(e => !e.Reviewed))
+           Disappears entirely once everything is dismissed (or recording is off) —
+           and also when the filters hide everything, EXCEPT while the filter
+           editor is open: collapsing mid-edit would strand the user with no way
+           to undo the click that hid the last visible event. *@
+        @if (_eventsSupported && (StripEvents.Any() || _showStripFilter))
         {
             <div class="events-bar" id="events-bar" style="height:@(_stripHeight)px">
                 <div class="events-rail">
@@ -204,7 +207,7 @@
                 <div class="events-bar-scroll">
                     @if (!StripEvents.Any())
                     {
-                        <span class="event-sub">every unreviewed event is hidden by the filters</span>
+                        <span class="event-sub">no unreviewed events match these filters — the strip hides itself when you close the filter editor</span>
                     }
                     @{ int trickleBudget = 8; }
                     @foreach (var ev in StripEvents.Take(30))

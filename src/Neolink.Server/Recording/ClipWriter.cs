@@ -25,13 +25,20 @@ namespace Neolink.Recording;
 /// runs on. When the disk falls behind the budget, recorded frames are dropped
 /// (with a warning) and writing resumes at the next keyframe.
 ///
-/// The live-style init segment declares duration 0 (fine for MSE, where fragments
-/// stream in). A FILE with duration 0 freezes browsers on the first frame — the
-/// element believes the clip is zero-length. So the real duration is patched into
-/// mvhd/tkhd/mdhd when the clip closes, and an mfra random-access index (keyframe
-/// time → moof offset) is appended so external players (VLC, ffmpeg) can open and
-/// seek the file like any ordinary MP4. Finalization happens on the writer thread
-/// after <see cref="Dispose"/>; await <see cref="Completion"/> to observe it.
+/// While recording, the file is a live-style fragmented MP4 (crash-safe: every
+/// flushed fragment is durable). That shape is terrible to SEEK over HTTP,
+/// though: one moof per frame means a browser must range-request its way
+/// through thousands of tiny headers to build an index — instant on localhost,
+/// tens of seconds across a network. So when the clip closes it is finalized
+/// IN PLACE into a classic indexed MP4: a moov with full sample tables (built
+/// from offsets tracked during writing — no data is copied or moved) is
+/// appended, every moof is retyped to a skippable "free" box, and lastly the
+/// fragmented header up front is retired the same way. Players then seek by
+/// byte offset with two or three range requests, like any ordinary MP4. A
+/// crash at any point leaves a playable fragmented file; if the classic
+/// finalize fails, the old fallback (duration patch + mfra keyframe index)
+/// keeps the file usable. Finalization happens on the writer thread after
+/// <see cref="Dispose"/>; await <see cref="Completion"/> to observe it.
 /// </summary>
 public sealed class ClipWriter : IDisposable
 {
@@ -66,7 +73,19 @@ public sealed class ClipWriter : IDisposable
     private long _approxBytes; // cumulative bytes destined for the file (size-cap roll)
     private volatile bool _faulted;
 
-    private readonly record struct QueueItem(byte[] Data, bool Keyframe, ulong DecodeTime);
+    private readonly record struct QueueItem(byte[] Data, bool Keyframe, ulong DecodeTime, byte Track, uint Duration);
+
+    /// <summary>One written sample, tracked for the classic (indexed) finalize:
+    /// where its payload bytes live in the file and how it sits on the timeline.</summary>
+    internal readonly record struct SampleRec(byte Track, bool Keyframe, uint Size, uint Duration,
+        ulong DecodeTime, long Offset);
+
+    /// <summary>What a walk over an old-format (fragmented) file yields — everything
+    /// needed to build the classic index, on disk (refinalize) or in memory
+    /// (<see cref="VirtualMp4"/> serving). FragEnd is where the fragments stop:
+    /// the legacy mfra index, a truncated tail, or end of file.</summary>
+    internal readonly record struct FragmentedScan(byte[] Init, InitLayout Layout,
+        List<SampleRec> Samples, int AudioRate, long FragEnd);
 
     private ClipWriter(string path, VideoCodec codec, byte[] init, int audioRate)
     {
@@ -165,7 +184,8 @@ public sealed class ClipWriter : IDisposable
         _prevAudioTs = aac.RtpTs;
         _haveAudioTs = true;
         Enqueue(FMp4.BuildFragment(_sequence++, (ulong)_audioDecodeTime, FMp4.AacSamplesPerAu, aac.Au,
-            keyframe: true, trackId: FMp4.AudioTrackId), keyframe: false, 0);
+                keyframe: true, trackId: FMp4.AudioTrackId),
+            keyframe: false, (ulong)_audioDecodeTime, (byte)FMp4.AudioTrackId, FMp4.AacSamplesPerAu);
     }
 
     private void FlushPending(uint totalDuration)
@@ -174,7 +194,8 @@ public sealed class ClipWriter : IDisposable
         uint per = Math.Clamp(totalDuration / (uint)_pending.Count, 900u, 45_000u); // 10..500ms per frame
         foreach (var (sample, key) in _pending)
         {
-            Enqueue(FMp4.BuildFragment(_sequence++, (ulong)_decodeTime, per, sample, key), key, (ulong)_decodeTime);
+            Enqueue(FMp4.BuildFragment(_sequence++, (ulong)_decodeTime, per, sample, key),
+                key, (ulong)_decodeTime, track: 1, per);
             _decodeTime += per;
         }
         _pending = null;
@@ -185,7 +206,7 @@ public sealed class ClipWriter : IDisposable
     /// is too far behind. Drops start when the budget is exceeded and end at the
     /// first keyframe after the backlog has halved, so the file stays decodable.
     /// </summary>
-    private void Enqueue(byte[] fragment, bool keyframe, ulong decodeTime)
+    private void Enqueue(byte[] fragment, bool keyframe, ulong decodeTime, byte track, uint duration)
     {
         if (_faulted) return;
         long queued = Interlocked.Read(ref _queuedBytes);
@@ -213,7 +234,7 @@ public sealed class ClipWriter : IDisposable
         Interlocked.Add(ref _approxBytes, fragment.Length);
         try
         {
-            _queue.Add(new QueueItem(fragment, keyframe, decodeTime));
+            _queue.Add(new QueueItem(fragment, keyframe, decodeTime, track, duration));
         }
         catch (InvalidOperationException)
         {
@@ -242,6 +263,10 @@ public sealed class ClipWriter : IDisposable
         FileStream? file = null;
         bool failed = false;
         var syncPoints = new List<(ulong Time, long Offset)>();
+        // Per-sample bookkeeping for the classic finalize. Each fragment is one
+        // moof + mdat holding exactly one sample, so the payload's file offset
+        // and size fall out of the fragment head. ~32 bytes per frame in memory.
+        var samples = new List<SampleRec>();
         try
         {
             // Large buffer: fewer, bigger writes are what HDDs want.
@@ -264,9 +289,14 @@ public sealed class ClipWriter : IDisposable
             if (failed) continue;
             try
             {
+                long pos = file!.Position;
                 if (item.Keyframe)
-                    syncPoints.Add((item.DecodeTime, file!.Position));
-                file!.Write(item.Data);
+                    syncPoints.Add((item.DecodeTime, pos));
+                uint moofSize = BinaryPrimitives.ReadUInt32BigEndian(item.Data);
+                samples.Add(new SampleRec(item.Track, item.Keyframe,
+                    (uint)(item.Data.Length - moofSize - 8), item.Duration, item.DecodeTime,
+                    pos + moofSize + 8));
+                file.Write(item.Data);
                 StorageMetrics.AddBytes(item.Data.Length);
             }
             catch (Exception ex)
@@ -281,14 +311,26 @@ public sealed class ClipWriter : IDisposable
         {
             try
             {
-                WriteMfra(file!, syncPoints);
-                PatchDurations(file!, boxes);
+                FinalizeClassic(file!, init, samples);
                 file!.Flush();
                 StorageMetrics.FileCompleted();
             }
             catch (Exception ex)
             {
-                Log.Warn($"{_path}: clip finalize failed: {ex.Message}");
+                // The file is still a valid fragmented MP4 — fall back to the
+                // legacy finalize (duration patch + mfra keyframe index).
+                Log.Warn($"{_path}: classic finalize failed ({ex.Message}); keeping fragmented layout");
+                try
+                {
+                    WriteMfra(file!, syncPoints);
+                    PatchDurations(file!, boxes);
+                    file!.Flush();
+                    StorageMetrics.FileCompleted();
+                }
+                catch (Exception ex2)
+                {
+                    Log.Warn($"{_path}: clip finalize failed: {ex2.Message}");
+                }
             }
         }
         file?.Dispose();
@@ -317,6 +359,370 @@ public sealed class ClipWriter : IDisposable
                     (uint)Math.Min(uint.MaxValue, (ulong)Volatile.Read(ref _audioDecodeTime) + FMp4.AacSamplesPerAu));
         }
         file.Seek(0, SeekOrigin.End);
+    }
+
+    // ------------------------------------------------------------------ classic finalize
+
+    /// <summary>
+    /// Rewrites the closed file, in place and without moving a single media byte,
+    /// into a classic indexed MP4: appends a moov whose sample tables were
+    /// accumulated during writing, then — as the single commit step — rewrites
+    /// the live header's box head so that ONE "free" box spans everything from
+    /// there to the appended moov (the retired header plus every per-frame
+    /// moof/mdat, whose payloads the new tables point into). Readers thus see
+    /// just ftyp → free → moov and seek by byte offset in two or three range
+    /// requests, instead of crawling thousands of per-frame fragment headers —
+    /// the cause of minute-long timeline seeks over remote links. A crash
+    /// anywhere in here leaves a valid fragmented file behind.
+    /// </summary>
+    private void FinalizeClassic(FileStream file, byte[] init, List<SampleRec> samples)
+    {
+        if (!samples.Any(s => s.Track == 1))
+            throw new InvalidOperationException("no video samples");
+        var layout = AnalyzeInit(init);
+        file.Seek(0, SeekOrigin.End);
+        long moovPos = file.Position;
+        file.Write(BuildClassicMoov(init, layout, samples, _audioRate));
+        CommitFreeSpan(file, layout.MoovOff, moovPos);
+    }
+
+    /// <summary>The commit step: one box head turns the whole fragment region
+    /// into skippable free space (64-bit "largesize" form when it exceeds 4 GB).</summary>
+    private static void CommitFreeSpan(FileStream file, long start, long end)
+    {
+        file.Seek(start, SeekOrigin.Begin);
+        file.Write(FreeHeader(end - start)); // largesize form overwrites retired header content
+    }
+
+    /// <summary>A "free" box head covering <paramref name="len"/> bytes: the usual
+    /// 8-byte form, or the 16-byte 64-bit "largesize" form past 4 GB.</summary>
+    internal static byte[] FreeHeader(long len)
+    {
+        if (len <= uint.MaxValue)
+        {
+            var head = new byte[8];
+            BinaryPrimitives.WriteUInt32BigEndian(head, (uint)len);
+            "free"u8.CopyTo(head.AsSpan(4));
+            return head;
+        }
+        var wide = new byte[16];
+        BinaryPrimitives.WriteUInt32BigEndian(wide, 1);
+        "free"u8.CopyTo(wide.AsSpan(4));
+        BinaryPrimitives.WriteUInt64BigEndian(wide.AsSpan(8), (ulong)len);
+        return wide;
+    }
+
+    /// <summary>
+    /// Upgrades an already-closed fragmented recording (from an older version)
+    /// to the classic indexed layout, in place. Returns false when the file is
+    /// already classic. Only understands this muxer's own single-sample
+    /// fragments; anything unexpected throws before the file is touched.
+    /// (Optional: <see cref="VirtualMp4"/> serves old files seek-fast without
+    /// touching them — this exists for those who want the files themselves
+    /// portable and index-complete.)
+    /// </summary>
+    public static bool RefinalizeClassic(string path)
+    {
+        using var file = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.Read,
+            1 << 20, FileOptions.SequentialScan);
+        if (!IsFragmented(file)) return false; // already finalized (free) or foreign
+        var scan = ScanFragmented(file);
+        file.Seek(0, SeekOrigin.End);
+        long moovPos = file.Position;
+        file.Write(BuildClassicMoov(scan.Init, scan.Layout, scan.Samples, scan.AudioRate));
+        CommitFreeSpan(file, scan.Layout.MoovOff, moovPos);
+        return true;
+    }
+
+    /// <summary>True when the file still has the live moov up front (old format /
+    /// still being recorded), as opposed to the finalized free-span layout.</summary>
+    internal static bool IsFragmented(FileStream file)
+    {
+        Span<byte> head = stackalloc byte[8];
+        file.Seek(0, SeekOrigin.Begin);
+        file.ReadExactly(head);
+        uint ftypLen = BinaryPrimitives.ReadUInt32BigEndian(head);
+        if (!head[4..].SequenceEqual("ftyp"u8)) throw new InvalidOperationException("not an MP4");
+        file.Seek(ftypLen, SeekOrigin.Begin);
+        file.ReadExactly(head);
+        return head[4..].SequenceEqual("moov"u8);
+    }
+
+    /// <summary>
+    /// Walks an old-format file's fragments, reconstructing the same per-sample
+    /// records the live writer tracks. tfhd/tfdt/trun offsets are fixed because
+    /// this muxer always writes the same one-sample fragment shape; anything
+    /// else throws. A truncated tail (crash mid-write, or a file still being
+    /// recorded) simply ends the walk — the scan covers the complete samples.
+    /// The pass is strictly SEQUENTIAL: hopping between the ~18k fragment heads
+    /// of a big segment would be instant on cached flash but minutes of random
+    /// reads on a cold spinning disk, which is where terabyte archives live —
+    /// reading straight through goes at full disk streaming speed instead.
+    /// </summary>
+    internal static FragmentedScan ScanFragmented(FileStream file)
+    {
+        long end = file.Length;
+        long pos = 0; // bytes consumed so far — the stream never seeks backwards
+        file.Seek(0, SeekOrigin.Begin);
+        var skip = new byte[64 * 1024];
+
+        void Discard(long count)
+        {
+            while (count > 0)
+            {
+                int n = file.Read(skip, 0, (int)Math.Min(skip.Length, count));
+                if (n <= 0) throw new EndOfStreamException();
+                pos += n;
+                count -= n;
+            }
+        }
+
+        var boxHead = new byte[8];
+        file.ReadExactly(boxHead);
+        pos += 8;
+        uint ftypLen = BinaryPrimitives.ReadUInt32BigEndian(boxHead);
+        if (!boxHead.AsSpan(4).SequenceEqual("ftyp"u8)) throw new InvalidOperationException("not an MP4");
+
+        // The init segment (ftyp + live moov) is reused verbatim by the builder.
+        var ftypRest = new byte[ftypLen - 8];
+        file.ReadExactly(ftypRest);
+        pos += ftypRest.Length;
+        file.ReadExactly(boxHead);
+        pos += 8;
+        uint moovLen = BinaryPrimitives.ReadUInt32BigEndian(boxHead);
+        var init = new byte[ftypLen + moovLen];
+        BinaryPrimitives.WriteUInt32BigEndian(init, ftypLen);
+        "ftyp"u8.CopyTo(init.AsSpan(4));
+        ftypRest.CopyTo(init.AsSpan(8));
+        boxHead.CopyTo(init.AsSpan((int)ftypLen));
+        file.ReadExactly(init.AsSpan((int)ftypLen + 8));
+        pos += moovLen - 8;
+
+        var layout = AnalyzeInit(init);
+        int audioRate = layout.Traks.Count > 1
+            ? (int)BinaryPrimitives.ReadUInt32BigEndian(init.AsSpan(layout.Traks[1].MdhdOff + 20))
+            : 0;
+
+        var samples = new List<SampleRec>();
+        while (pos + 8 <= end)
+        {
+            long boxStart = pos;
+            file.ReadExactly(boxHead);
+            pos += 8;
+            uint size = BinaryPrimitives.ReadUInt32BigEndian(boxHead);
+            var type = Encoding.ASCII.GetString(boxHead, 4, 4);
+            if (size < 8 || boxStart + size > end) { pos = boxStart; break; } // truncated tail
+            if (type == "mfra") { pos = boxStart; break; } // legacy index; not media
+            if (type == "moof")
+            {
+                var moof = new byte[size];
+                boxHead.CopyTo(moof, 0);
+                file.ReadExactly(moof.AsSpan(8));
+                pos += size - 8;
+                byte track = 0; bool key = false; uint dur = 0, sampleSize = 0, dataOff = 0; ulong dt = 0;
+                foreach (var (t1, s1, l1) in Boxes(moof, 8, moof.Length))
+                {
+                    if (t1 != "traf") continue;
+                    foreach (var (t2, s2, l2) in Boxes(moof, s1 + 8, s1 + l1))
+                    {
+                        switch (t2)
+                        {
+                            case "tfhd": track = moof[s2 + 15]; break;
+                            case "tfdt": dt = BinaryPrimitives.ReadUInt64BigEndian(moof.AsSpan(s2 + 12)); break;
+                            case "trun":
+                                if (BinaryPrimitives.ReadUInt32BigEndian(moof.AsSpan(s2 + 12)) != 1)
+                                    throw new InvalidOperationException("not a single-sample fragment");
+                                dataOff = BinaryPrimitives.ReadUInt32BigEndian(moof.AsSpan(s2 + 16));
+                                key = BinaryPrimitives.ReadUInt32BigEndian(moof.AsSpan(s2 + 20)) == 0x02000000u;
+                                dur = BinaryPrimitives.ReadUInt32BigEndian(moof.AsSpan(s2 + 24));
+                                sampleSize = BinaryPrimitives.ReadUInt32BigEndian(moof.AsSpan(s2 + 28));
+                                break;
+                        }
+                    }
+                }
+                if (track == 0 || sampleSize == 0)
+                    throw new InvalidOperationException("unexpected fragment layout");
+                samples.Add(new SampleRec(track, key, sampleSize, dur, dt, boxStart + dataOff));
+            }
+            else
+            {
+                Discard(size - 8); // mdat payload (or any stray box): stream past it
+            }
+        }
+        if (!samples.Any(s => s.Track == 1))
+            throw new InvalidOperationException("no video samples");
+        return new FragmentedScan(init, layout, samples, audioRate, pos);
+    }
+
+    internal static byte[] BuildClassicMoov(byte[] init, InitLayout layout, List<SampleRec> samples, int audioRate)
+    {
+        var video = samples.Where(s => s.Track == 1).ToList();
+        var audio = samples.Where(s => s.Track == FMp4.AudioTrackId).ToList();
+
+        static ulong TotalTicks(List<SampleRec> s) => s.Count == 0 ? 0 : s[^1].DecodeTime + s[^1].Duration;
+        ulong videoTicks = TotalTicks(video);
+        ulong audioTicks = TotalTicks(audio);
+        uint videoMs = (uint)Math.Min(uint.MaxValue, videoTicks * 1000 / FMp4.Timescale);
+        uint audioMs = audioRate > 0 ? (uint)Math.Min(uint.MaxValue, audioTicks * 1000 / (ulong)audioRate) : 0;
+        uint movieMs = Math.Max(videoMs, audioMs);
+
+        // mvhd: the init's own copy, with the real duration dropped in.
+        var mvhd = init.AsSpan(layout.MvhdOff, layout.MvhdLen).ToArray();
+        BinaryPrimitives.WriteUInt32BigEndian(mvhd.AsSpan(24), movieMs);
+
+        // Each trak: everything through the stsd entry is reused verbatim from
+        // the init (tkhd/mdhd/hdlr/codec config), then the four empty live
+        // tables are replaced by the real ones. The tables are the tail of
+        // stbl/minf/mdia/trak alike, so each ancestor just grows by the
+        // difference.
+        var traks = new List<byte[]>();
+        for (int i = 0; i < layout.Traks.Count; i++)
+        {
+            bool isVideo = i == 0;
+            var t = layout.Traks[i];
+            var tables = BuildSampleTables(isVideo ? video : audio, isVideo);
+            int headLen = t.StsdEnd - t.Start;
+            var trak = new byte[headLen + tables.Length];
+            init.AsSpan(t.Start, headLen).CopyTo(trak);
+            tables.CopyTo(trak.AsSpan(headLen));
+            int grow = tables.Length - (t.Len - headLen);
+            foreach (int off in new[] { 0, t.MdiaOff - t.Start, t.MinfOff - t.Start, t.StblOff - t.Start })
+            {
+                uint size = BinaryPrimitives.ReadUInt32BigEndian(trak.AsSpan(off));
+                BinaryPrimitives.WriteUInt32BigEndian(trak.AsSpan(off), (uint)(size + grow));
+            }
+            BinaryPrimitives.WriteUInt32BigEndian(trak.AsSpan(t.TkhdOff - t.Start + 28), isVideo ? videoMs : audioMs);
+            BinaryPrimitives.WriteUInt32BigEndian(trak.AsSpan(t.MdhdOff - t.Start + 24),
+                (uint)Math.Min(uint.MaxValue, isVideo ? videoTicks : audioTicks));
+            traks.Add(trak);
+        }
+
+        var moov = new byte[8 + mvhd.Length + traks.Sum(t => t.Length)];
+        BinaryPrimitives.WriteUInt32BigEndian(moov, (uint)moov.Length);
+        "moov"u8.CopyTo(moov.AsSpan(4));
+        int pos = 8;
+        mvhd.CopyTo(moov.AsSpan(pos)); pos += mvhd.Length;
+        foreach (var t in traks) { t.CopyTo(moov.AsSpan(pos)); pos += t.Length; }
+        return moov;
+    }
+
+    /// <summary>The real stts/stss/stsc/stsz/stco tables for one track, replacing
+    /// the empty placeholders the live init segment carries.</summary>
+    private static byte[] BuildSampleTables(List<SampleRec> s, bool video)
+    {
+        var w = new Mp4Writer();
+        using (w.FullBox("stts", 0, 0))
+        {
+            // Run-length durations. A sample lasts until the NEXT one's decode
+            // time, so drop-gaps keep the wall clock; the last sample uses its
+            // nominal duration.
+            var runs = new List<(uint Delta, uint Count)>();
+            for (int i = 0; i < s.Count; i++)
+            {
+                uint delta = i + 1 < s.Count
+                    ? (uint)Math.Max(1, (long)(s[i + 1].DecodeTime - s[i].DecodeTime))
+                    : Math.Max(1u, s[i].Duration);
+                if (runs.Count > 0 && runs[^1].Delta == delta)
+                    runs[^1] = (delta, runs[^1].Count + 1);
+                else
+                    runs.Add((delta, 1));
+            }
+            w.U32((uint)runs.Count);
+            foreach (var (delta, count) in runs) { w.U32(count); w.U32(delta); }
+        }
+        if (video)
+        {
+            using (w.FullBox("stss", 0, 0))
+            {
+                var keys = new List<uint>();
+                for (int i = 0; i < s.Count; i++)
+                    if (s[i].Keyframe) keys.Add((uint)i + 1);
+                w.U32((uint)keys.Count);
+                foreach (var k in keys) w.U32(k);
+            }
+        }
+        using (w.FullBox("stsc", 0, 0))
+        {
+            // Every chunk holds exactly one sample (each lives in its own mdat).
+            w.U32(s.Count == 0 ? 0u : 1u);
+            if (s.Count > 0) { w.U32(1); w.U32(1); w.U32(1); }
+        }
+        using (w.FullBox("stsz", 0, 0))
+        {
+            w.U32(0);
+            w.U32((uint)s.Count);
+            foreach (var x in s) w.U32(x.Size);
+        }
+        bool wide = s.Count > 0 && s[^1].Offset > uint.MaxValue;
+        using (w.FullBox(wide ? "co64" : "stco", 0, 0))
+        {
+            w.U32((uint)s.Count);
+            foreach (var x in s)
+            {
+                if (wide) w.U64((ulong)x.Offset);
+                else w.U32((uint)x.Offset);
+            }
+        }
+        return w.ToArray();
+    }
+
+    internal sealed record TrakLayout(int Start, int Len, int TkhdOff, int MdhdOff, int MdiaOff,
+        int MinfOff, int StblOff, int StsdEnd);
+    internal sealed record InitLayout(int MoovOff, int MvhdOff, int MvhdLen, List<TrakLayout> Traks);
+
+    /// <summary>Locates the init-segment boxes the classic moov reuses or replaces.</summary>
+    private static InitLayout AnalyzeInit(byte[] init)
+    {
+        int moovOff = -1, mvhdOff = -1, mvhdLen = 0;
+        var traks = new List<TrakLayout>();
+
+        foreach (var (type, start, len) in Boxes(init, 0, init.Length))
+        {
+            if (type != "moov") continue;
+            moovOff = start;
+            foreach (var (t2, s2, l2) in Boxes(init, start + 8, start + len))
+            {
+                if (t2 == "mvhd") { mvhdOff = s2; mvhdLen = l2; }
+                if (t2 != "trak") continue;
+                int tkhd = -1, mdhd = -1, mdia = -1, minf = -1, stbl = -1, stsdEnd = -1;
+                foreach (var (t3, s3, l3) in Boxes(init, s2 + 8, s2 + l2))
+                {
+                    if (t3 == "tkhd") tkhd = s3;
+                    if (t3 != "mdia") continue;
+                    mdia = s3;
+                    foreach (var (t4, s4, l4) in Boxes(init, s3 + 8, s3 + l3))
+                    {
+                        if (t4 == "mdhd") mdhd = s4;
+                        if (t4 != "minf") continue;
+                        minf = s4;
+                        foreach (var (t5, s5, l5) in Boxes(init, s4 + 8, s4 + l4))
+                        {
+                            if (t5 != "stbl") continue;
+                            stbl = s5;
+                            foreach (var (t6, s6, l6) in Boxes(init, s5 + 8, s5 + l5))
+                                if (t6 == "stsd") stsdEnd = s6 + l6;
+                        }
+                    }
+                }
+                if (tkhd < 0 || mdhd < 0 || mdia < 0 || minf < 0 || stbl < 0 || stsdEnd < 0)
+                    throw new InvalidOperationException("unexpected init-segment layout");
+                traks.Add(new TrakLayout(s2, l2, tkhd, mdhd, mdia, minf, stbl, stsdEnd));
+            }
+        }
+        if (moovOff < 0 || mvhdOff < 0 || traks.Count == 0)
+            throw new InvalidOperationException("unexpected init-segment layout");
+        return new InitLayout(moovOff, mvhdOff, mvhdLen, traks);
+    }
+
+    private static IEnumerable<(string Type, int Start, int Len)> Boxes(byte[] b, int pos, int end)
+    {
+        while (pos + 8 <= end)
+        {
+            uint size = BinaryPrimitives.ReadUInt32BigEndian(b.AsSpan(pos));
+            if (size < 8 || pos + size > (uint)end) yield break;
+            yield return (Encoding.ASCII.GetString(b, pos + 4, 4), pos, (int)size);
+            pos += (int)size;
+        }
     }
 
     /// <summary>
