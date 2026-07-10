@@ -28,11 +28,20 @@ public static class Log
     /// </summary>
     public static Action<LogLevel, string>? Tap;
 
+    /// <summary>
+    /// Capture mode (NEOLINK_DEBUG_ALARMS=1): logs every camera alarm/smart-event
+    /// push with its FULL raw XML at Info, without the media-packet flood a full
+    /// debug level brings. Used to map new firmware dialects (doorbell presses,
+    /// perimeter/line-crossing alerts) from user reports.
+    /// </summary>
+    public static bool AlarmXml;
+
     static Log()
     {
         var env = Environment.GetEnvironmentVariable("NEOLINK_LOG");
         if (!string.IsNullOrWhiteSpace(env) && Enum.TryParse<LogLevel>(env, true, out var lvl))
             Level = lvl;
+        AlarmXml = Environment.GetEnvironmentVariable("NEOLINK_DEBUG_ALARMS") is "1" or "true" or "yes";
     }
 
     public static void Trace(string msg) => Write(LogLevel.Trace, msg);

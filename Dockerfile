@@ -22,7 +22,11 @@ WORKDIR /src
 # which bricks the web UI (page loads, but the interactive circuit never starts).
 COPY Neolink.sln nuget.config* ./
 COPY src/ src/
-RUN dotnet publish src/Neolink.Server/Neolink.Server.csproj -c Release -o /app
+# VERSION: release builds pass the git tag (docker.yml) so the app reports it;
+# unset (local builds) falls back to the <Version> in the csproj.
+ARG VERSION=
+RUN dotnet publish src/Neolink.Server/Neolink.Server.csproj -c Release -o /app \
+    ${VERSION:+-p:Version=$VERSION}
 
 # Fail the image build outright if the UI's interactivity script is missing.
 RUN test -f /app/wwwroot/_framework/blazor.web.js

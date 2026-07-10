@@ -309,6 +309,16 @@ html, body {
     padding-top: 10px;
 }
 
+/* Server version, always visible at the sidebar bottom */
+.sidebar-version {
+    display: block;
+    margin-top: 4px;
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    color: color-mix(in srgb, var(--muted) 70%, transparent);
+    font-variant-numeric: tabular-nums;
+}
+
 /* Signed-in user + sign-out, pinned at the sidebar bottom */
 .sidebar-user {
     display: flex;

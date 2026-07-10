@@ -522,27 +522,39 @@
     /// Points every included camera's player at the footage under the cursor and
     /// measures how far the slowest healthy player is behind it — the feedback
     /// signal for the adaptive clock (broken media reports -1 and is ignored).
+    /// One batched interop call per tick: this runs twice a second while playing,
+    /// so per-camera round trips would multiply with the wall size.
     /// </summary>
     private async Task SyncVideosAsync()
     {
-        double maxLag = 0;
+        var entries = new List<object>();
         foreach (var cam in Included)
         {
             var seg = SegmentAt(cam.Name);
             if (seg == null)
             {
                 _noFootage.Add(cam.Name);
-                await JS.InvokeVoidAsync("neolink.tlSync", VideoId(cam.Name), null!, 0d, false, 1);
+                entries.Add(new { id = VideoId(cam.Name), url = (string?)null, offset = 0d, playing = false, rate = 1 });
             }
             else
             {
                 _noFootage.Remove(cam.Name);
-                var lag = await JS.InvokeAsync<double>("neolink.tlSync",
-                    VideoId(cam.Name), seg.Url, _t - seg.Start, _playing, _speed);
-                if (lag > maxLag) maxLag = lag;
+                entries.Add(new
+                {
+                    id = VideoId(cam.Name),
+                    url = (string?)seg.Url,
+                    offset = _t - seg.Start,
+                    playing = _playing,
+                    rate = _speed,
+                });
             }
         }
-        _maxLag = maxLag;
+        if (entries.Count == 0)
+        {
+            _maxLag = 0;
+            return;
+        }
+        _maxLag = await JS.InvokeAsync<double>("neolink.tlSyncAll", entries);
     }
 
     // ------------------------------------------------------------ actions

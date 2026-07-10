@@ -790,6 +790,18 @@
         // Points a <video> at a recording segment and keeps it at the wanted
         // offset. Tolerance while playing avoids constant reseeks (the video
         // advances on its own); paused scrubbing snaps tightly.
+        // Batched sync: one interop call per clock tick instead of one per
+        // camera. entries = [{id, url, offset, playing, rate}]; returns the
+        // worst HEALTHY lag across all players (broken media excluded).
+        tlSyncAll(entries) {
+            let maxLag = 0;
+            for (const e of entries || []) {
+                const lag = this.tlSync(e.id, e.url, e.offset, e.playing, e.rate);
+                if (lag > maxLag) maxLag = lag;
+            }
+            return maxLag;
+        },
+
         // Returns the video's LAG: how many seconds the picture is behind the
         // timeline cursor (0 = keeping up / paused, -1 = broken media). Blazor
         // uses the worst healthy lag as feedback to slow the cursor down when

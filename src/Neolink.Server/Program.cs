@@ -1,6 +1,7 @@
 ﻿// Copyright (c) 2026 Oluwabori Olaleye
 // Licensed under the GNU Affero General Public License v3.0; see the LICENSE file
 // in the repository root.
+using System.Reflection;
 using Neolink;
 using Neolink.Config;
 using Neolink.Mqtt;
@@ -10,7 +11,13 @@ using Neolink.Rtsp;
 using Neolink.Streaming;
 using Neolink.Web;
 
-const string Version = "0.6.0";
+// Single source of truth: <Version> in Neolink.Server.csproj. Release builds
+// override it with the git tag (docker.yml passes -p:Version), so the reported
+// version increments with every release without touching code. The build may
+// append "+<commit>" to the informational version — not for human eyes.
+string Version = Assembly.GetExecutingAssembly()
+    .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+    .InformationalVersion.Split('+')[0] ?? "0.0.0";
 
 var argList = args.ToList();
 string? command = null;

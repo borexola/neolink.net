@@ -276,6 +276,64 @@ public static class SelfTest
             var press = BcCamera.ParseAlarmEvent(pressXml);
             Assert(press.Active, "captured press is active");
             AssertEq(string.Join(",", Recording.EventRecorder.LabelsOf(press)), "doorbell");
+
+            // Perimeter protection (app-side line/zone crossing): tokens map to
+            // dedicated labels so they can be filtered independently of the plain
+            // person/vehicle detections; spellings tolerated in AItype AND status.
+            AssertEq(string.Join(",", Recording.EventRecorder.LabelsOf(
+                new MotionPush("MD", new[] { "crossline" }))), "line-crossing");
+            AssertEq(string.Join(",", Recording.EventRecorder.LabelsOf(
+                new MotionPush("MD", new[] { "intrude", "people" })).OrderBy(x => x)),
+                "intrusion,person");
+            var cross = BcCamera.ParseAlarmEvent(System.Xml.Linq.XElement.Parse(
+                "<AlarmEvent version=\"1.1\"><channelId>0</channelId><status>MD,crossline</status>" +
+                "<AItype>none</AItype></AlarmEvent>"));
+            AssertEq(string.Join(",", Recording.EventRecorder.LabelsOf(cross)), "line-crossing");
+
+            // Captured from a real Reolink Elite WiFi (Driveway, 2026-07-09): newer
+            // firmware nests perimeter verdicts in smartAiTypeList — rule type +
+            // zone index + the object class that tripped it.
+            var intrusion = BcCamera.ParseAlarmEvent(System.Xml.Linq.XElement.Parse(
+                "<AlarmEvent version=\"1.1\"><channelId>0</channelId><status>MD</status>" +
+                "<AItype>people</AItype><recording>0</recording><timeStamp>0</timeStamp>" +
+                "<smartAiTypeList><smartAiType><type>intrusion</type><index>1</index>" +
+                "<subList><index>0</index><type>people</type></subList></smartAiType>" +
+                "<pts>15210169395</pts><frameIndex>121231</frameIndex></smartAiTypeList></AlarmEvent>"));
+            Assert(intrusion.Active, "captured intrusion is active");
+            AssertEq(string.Join(",", Recording.EventRecorder.LabelsOf(intrusion).OrderBy(x => x)),
+                "intrusion,person");
+
+            // Smart pushes can arrive with status/AItype both "none" — the nested
+            // verdict alone must keep them active (a loitering alert is not an
+            // all-clear).
+            var loiter = BcCamera.ParseAlarmEvent(System.Xml.Linq.XElement.Parse(
+                "<AlarmEvent version=\"1.1\"><channelId>0</channelId><status>none</status>" +
+                "<AItype>none</AItype><recording>0</recording><timeStamp>0</timeStamp>" +
+                "<smartAiTypeList><smartAiType><type>loitering</type><index>1</index>" +
+                "<subList><index>0</index><type>people</type></subList></smartAiType>" +
+                "<pts>15221690925</pts><frameIndex>121323</frameIndex></smartAiTypeList></AlarmEvent>"));
+            Assert(loiter.Active, "smart verdict with status=none stays active");
+            AssertEq(string.Join(",", Recording.EventRecorder.LabelsOf(loiter).OrderBy(x => x)),
+                "loitering,person");
+
+            // An empty <smartAiTypeList /> rides along on many pushes — no effect.
+            var emptySmart = BcCamera.ParseAlarmEvent(System.Xml.Linq.XElement.Parse(
+                "<AlarmEvent version=\"1.1\"><channelId>0</channelId><status>none</status>" +
+                "<AItype>none</AItype><smartAiTypeList /></AlarmEvent>"));
+            Assert(!emptySmart.Active, "empty smart list is not a detection");
+
+            // Perimeter labels are OPT-IN: an untouched filter (null) records the
+            // classic detections but not the new labels — nobody's recordings
+            // change until they tick the chips.
+            var untouched = new Recording.CameraRecordingSettings(Events: true, Continuous: false, EventTypes: null);
+            Assert(untouched.AllowsLabel("person") && untouched.AllowsLabel("motion"),
+                "default filter records classic detections");
+            Assert(!untouched.AllowsLabel("line-crossing") && !untouched.AllowsLabel("intrusion")
+                && !untouched.AllowsLabel("loitering"), "perimeter labels are opt-in");
+            var optedIn = new Recording.CameraRecordingSettings(Events: true, Continuous: false,
+                EventTypes: new List<string> { "line-crossing", "intrusion" });
+            Assert(optedIn.AllowsLabel("line-crossing") && !optedIn.AllowsLabel("person"),
+                "explicit filter is exact");
         });
 
         Test("status push parsing (unsolicited camera broadcasts)", () =>

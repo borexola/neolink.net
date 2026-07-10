@@ -166,6 +166,10 @@
             {
                 <span>Neolink.NET web client</span>
             }
+            @if (!string.IsNullOrEmpty(_version))
+            {
+                <span class="sidebar-version" title="Neolink.NET server version">v@(_version)</span>
+            }
         </div>
     </aside>
 
@@ -1076,7 +1080,8 @@
     private string _pwEditPass = "";
 
     // Review-strip filters (persisted with the view settings, per user when logged in)
-    private static readonly string[] StripTypes = { "person", "vehicle", "animal", "package", "motion" };
+    private static readonly string[] StripTypes =
+        { "person", "vehicle", "animal", "package", "doorbell", "line-crossing", "intrusion", "motion" };
     private HashSet<string> _hiddenTypes = new(StringComparer.OrdinalIgnoreCase);
     private HashSet<string> _hiddenCams = new(StringComparer.OrdinalIgnoreCase);
     private bool _showStripFilter;
@@ -1782,6 +1787,9 @@
         "animal" => "🐾",
         "package" => "📦",
         "doorbell" => "🔔",
+        "line-crossing" => "🚧",
+        "intrusion" => "🚷",
+        "loitering" => "🕒",
         "motion" => "👁",
         _ => "•",
     };
