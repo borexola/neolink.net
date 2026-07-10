@@ -4,6 +4,37 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
+## 0.8.2 — unreleased
+
+### Changed
+
+- Timeline: playback starts automatically when the page opens and after
+  switching days — previously the day sat paused until Play was pressed,
+  which made the tiles look frozen. Pause is one click away as before.
+
+### Fixed
+
+- **Seeking recorded footage no longer takes forever** — two halves, no
+  migration required:
+  - New recordings: when a segment or event clip closes, it is finalized in
+    place into a classic indexed MP4 (one moov with full sample tables)
+    instead of remaining a per-frame-fragmented stream. Browsers previously
+    had to crawl thousands of tiny fragment headers with range requests to
+    build a seek index — barely noticeable on localhost, minutes over a
+    remote link. No media bytes are rewritten, and a crash mid-recording
+    still leaves a playable fragmented file.
+  - Existing footage (and the segment currently being recorded): served
+    through an on-the-fly index — the server synthesizes the same classic
+    moov in memory (one sequential header scan, ~20 ms for a 256 MB segment,
+    cached) and presents the file byte-mapped as a classic MP4. Terabyte
+    archives are never modified (files stay bit-identical) and read-only
+    storage works. Jumping into a 256 MB segment now lands in ~100 ms in the
+    timeline either way, at a handful of range requests.
+- The review strip no longer occupies the top of the live view when the strip
+  filters hide every pending event — it collapses like it does with nothing to
+  review, except while the filter editor is open (so filters can be adjusted
+  back).
+
 ## 0.8.0 — unreleased
 
 ### New

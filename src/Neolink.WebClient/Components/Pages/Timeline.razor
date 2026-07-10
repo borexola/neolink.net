@@ -375,6 +375,10 @@
         _t = _date == DateTime.Today
             ? Math.Max(0, (DateTime.Now - _date).TotalSeconds - 30)
             : DaySeconds / 2;
+        // Autoplay: the day starts rolling as soon as it loads (first visit and
+        // day changes alike) — pause is one click away, dead-stopped tiles that
+        // LOOK broken were the common first impression.
+        _playing = true;
         await SyncVideosAsync();
     }
 

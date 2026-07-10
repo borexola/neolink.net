@@ -95,6 +95,28 @@ public static class WebApi
         List<string>? ScheduleDays = null, string? ScheduleStart = null, string? ScheduleEnd = null,
         bool? ScheduleEnabled = null);
     private sealed record CredentialsRequest(string? Username, string? Password);
+
+    /// <summary>
+    /// Serves a recording segment or event clip. Old-format (fragmented) files —
+    /// pre-upgrade archives and the segment currently being recorded — are
+    /// presented through <see cref="VirtualMp4"/> with a classic seek index
+    /// synthesized in memory, so jumping around them costs a couple of range
+    /// requests instead of a crawl over thousands of per-frame fragment headers.
+    /// Files that don't parse as our own fragmented shape fall back to plain
+    /// file serving, the pre-existing behavior.
+    /// </summary>
+    private static IResult ServeMp4(string path)
+    {
+        try
+        {
+            return Results.Stream(VirtualMp4.Open(path), "video/mp4", enableRangeProcessing: true);
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"Recordings: no virtual index for {Path.GetFileName(path)} ({Log.Flatten(ex)}); serving raw");
+            return Results.File(path, "video/mp4", enableRangeProcessing: true);
+        }
+    }
     private sealed record PasswordRequest(string? Password);
     private sealed record AdminUiSettings(double? TrickleSpeed, string? StateDir, bool? ResetAdminPassword,
         bool? Talk = null);
@@ -719,7 +741,7 @@ public static class WebApi
                 var path = events.ArtifactPath(id, "clip.mp4");
                 return path == null
                     ? Results.Json(new { error = "no clip for this event" }, statusCode: 404)
-                    : Results.File(path, "video/mp4", enableRangeProcessing: true);
+                    : ServeMp4(path);
             });
 
             app.MapGet("/api/events/{id}/thumb", (string id) =>
@@ -736,7 +758,7 @@ public static class WebApi
                 var path = events.ArtifactPath(id, "preview.mp4");
                 return path == null
                     ? Results.Json(new { error = "no preview for this event" }, statusCode: 404)
-                    : Results.File(path, "video/mp4", enableRangeProcessing: true);
+                    : ServeMp4(path);
             });
 
             app.MapPost("/api/events/{id}/review", (string id, ReviewRequest req, HttpContext ctx) =>
@@ -910,7 +932,7 @@ public static class WebApi
                 var path = cam == null ? null : events.SegmentPath(cam.Name, date, file);
                 return path == null
                     ? Results.Json(new { error = "no such recording" }, statusCode: 404)
-                    : Results.File(path, "video/mp4", enableRangeProcessing: true);
+                    : ServeMp4(path);
             });
         }
 
