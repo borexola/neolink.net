@@ -784,7 +784,7 @@ public static class SelfTest
             }
         });
 
-        Test("clip writer produces a playable fmp4 structure", () =>
+        Test("clip writer finalizes a seekable classic MP4", () =>
         {
             var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
             Directory.CreateDirectory(dir);
@@ -849,30 +849,153 @@ public static class SelfTest
                 var bytes = File.ReadAllBytes(path);
                 Assert(bytes.Length > 200, "file has content");
                 AssertEq(Encoding.ASCII.GetString(bytes, 4, 4), "ftyp");
-                Assert(bytes.Length >= 16, "has boxes");
-                // moov must follow, and at least one moof/mdat pair must exist
-                var text = Encoding.ASCII.GetString(bytes);
-                Assert(text.Contains("moov"), "init segment present");
-                Assert(text.Contains("moof") && text.Contains("mdat"), "fragments present");
 
-                // The closed file must carry a real duration: browsers trust mvhd,
-                // and duration 0 freezes the <video> on the first frame.
-                static uint DurationAfterTag(byte[] data, string tag, int offsetFromTag)
+                // The closed file is finalized into a CLASSIC indexed MP4 of
+                // exactly three boxes: ftyp, one free box spanning the retired
+                // live header plus every per-frame fragment, and a moov with
+                // real sample tables. Players then reach the index in a single
+                // skip and seek by byte offset over HTTP.
+                static List<(string Type, int Start, int Len)> TopBoxes(byte[] b)
                 {
-                    int i = Encoding.ASCII.GetString(data).IndexOf(tag, StringComparison.Ordinal);
-                    Assert(i > 0, $"{tag} box present");
-                    return System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(
-                        data.AsSpan(i + offsetFromTag));
+                    var list = new List<(string, int, int)>();
+                    int pos = 0;
+                    while (pos + 8 <= b.Length)
+                    {
+                        uint size = System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(b.AsSpan(pos));
+                        if (size < 8 || pos + size > (uint)b.Length) break;
+                        list.Add((Encoding.ASCII.GetString(b, pos + 4, 4), pos, (int)size));
+                        pos += (int)size;
+                    }
+                    return list;
                 }
-                Assert(DurationAfterTag(bytes, "mvhd", 20) > 0, "mvhd duration patched (ms)");
-                Assert(DurationAfterTag(bytes, "tkhd", 24) > 0, "tkhd duration patched (ms)");
-                Assert(DurationAfterTag(bytes, "mdhd", 20) > 0, "mdhd duration patched (90kHz)");
+                var boxes = TopBoxes(bytes);
+                Assert(boxes.Sum(b => b.Len) == bytes.Length, "box sizes cover the whole file");
+                AssertEq(boxes.Count, 3);
+                AssertEq(boxes[0].Type, "ftyp");
+                AssertEq(boxes[1].Type, "free"); // header + fragments, one skippable span
+                AssertEq(boxes[2].Type, "moov"); // the classic index, last box
 
-                // The seek index players use: mfra at the end, mfro trailer pointing at it.
-                uint mfraSize = System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(bytes.AsSpan(bytes.Length - 4));
-                Assert(mfraSize > 24 && mfraSize < bytes.Length, "mfro trailer carries mfra size");
-                AssertEq(Encoding.ASCII.GetString(bytes, bytes.Length - (int)mfraSize + 4, 4), "mfra");
-                Assert(text.Contains("tfra"), "tfra keyframe index present");
+                int moov = boxes[^1].Start;
+                var tail = Encoding.ASCII.GetString(bytes, moov, bytes.Length - moov);
+                uint U32At(int pos) => System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(bytes.AsSpan(pos));
+                uint AfterTag(string tag, int offsetFromTag) =>
+                    U32At(moov + tail.IndexOf(tag, StringComparison.Ordinal) + offsetFromTag);
+
+                // 7 frames × 3000 ticks: mvhd carries ms, mdhd 90 kHz ticks.
+                AssertEq(AfterTag("mvhd", 20), 21000u * 1000 / 90000);
+                AssertEq(AfterTag("mdhd", 20), 21000u);
+                Assert(AfterTag("tkhd", 24) > 0, "tkhd duration set");
+
+                // Sample tables: 7 samples, keyframes 1 and 7, offsets that land
+                // exactly on the length-prefixed NAL data inside the old mdats.
+                // (Offsets are tag-relative: box start + 4.)
+                AssertEq(AfterTag("stsz", 12), 7u);     // sample count
+                AssertEq(AfterTag("stss", 8), 2u);      // two keyframes
+                AssertEq(AfterTag("stss", 12), 1u);
+                AssertEq(AfterTag("stss", 16), 7u);
+                AssertEq(AfterTag("stco", 8), 7u);      // one chunk per sample
+                uint firstSample = AfterTag("stco", 12);
+                AssertEq(U32At((int)firstSample), 40u); // 4-byte NAL length prefix
+                AssertEq(bytes[firstSample + 4], (byte)0x65); // ... of the IDR NAL
+                Assert(!tail.Contains("mfra") && !tail.Contains("mvex"),
+                    "classic moov carries no fragmented leftovers");
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+        });
+
+        Test("virtual classic index serves old fragmented recordings untouched", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                // Compose a file exactly as the OLD writer left them: live init,
+                // one moof+mdat per frame, mfra trailer. This is what upgraded
+                // installs have on disk, terabytes of it — it must serve fast
+                // without any migration touching it.
+                var sps = new byte[] { 0x67, 0x42, 0xE0, 0x1F, 0xA0 };
+                var pps = new byte[] { 0x68, 0xCE, 0x38, 0x80 };
+                var init = FMp4.BuildInit(VideoCodec.H264, sps, pps, null, 640, 360);
+                var path = Path.Combine(dir, "old.mp4");
+                using (var fs = File.Create(path))
+                {
+                    fs.Write(init);
+                    ulong dt = 0;
+                    for (int i = 0; i < 10; i++)
+                    {
+                        bool key = i % 5 == 0;
+                        var sample = new byte[24];
+                        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(sample, 20);
+                        sample[4] = key ? (byte)0x65 : (byte)0x41;
+                        fs.Write(FMp4.BuildFragment((uint)(i + 1), dt, 3000, sample, key));
+                        dt += 3000;
+                    }
+                    var mfra = new byte[16]; // legacy trailer: the scan must stop here
+                    System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(mfra, 16);
+                    Encoding.ASCII.GetBytes("mfra").CopyTo(mfra, 4);
+                    fs.Write(mfra);
+                }
+                var original = File.ReadAllBytes(path);
+
+                byte[] served;
+                using (var v = Recording.VirtualMp4.Open(path))
+                {
+                    served = new byte[v.Length];
+                    v.ReadExactly(served);
+
+                    // The virtual view is the classic 3-box shape; the legacy
+                    // mfra trailer is not part of it.
+                    int pos = 0, moovStart = 0;
+                    var types = new List<string>();
+                    while (pos + 8 <= served.Length)
+                    {
+                        uint size = System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(served.AsSpan(pos));
+                        types.Add(Encoding.ASCII.GetString(served, pos + 4, 4));
+                        moovStart = pos;
+                        pos += (int)size;
+                    }
+                    AssertEq(pos, served.Length);
+                    AssertEq(string.Join(",", types), "ftyp,free,moov");
+
+                    // Sample tables land byte-exact on the original media data.
+                    var tail = Encoding.ASCII.GetString(served, served.Length - 2048, 2048);
+                    int tailBase = served.Length - 2048;
+                    uint After(string tag, int off) => System.Buffers.Binary.BinaryPrimitives
+                        .ReadUInt32BigEndian(served.AsSpan(tailBase + tail.IndexOf(tag, StringComparison.Ordinal) + off));
+                    AssertEq(After("stsz", 12), 10u);
+                    AssertEq(After("stss", 8), 2u);
+                    AssertEq(After("stss", 16), 6u); // second keyframe = sample 6
+                    uint firstSample = After("stco", 12);
+                    AssertEq(System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(
+                        original.AsSpan((int)firstSample)), 20u); // NAL length prefix on disk
+
+                    // Ranged reads must match the full view, including across the
+                    // patched header (starts at 28, after ftyp) and the
+                    // disk→moov boundary.
+                    Span<byte> slice = stackalloc byte[64];
+                    foreach (long at in new long[] { 0, 24, moovStart - 32, served.LongLength - 100 })
+                    {
+                        long a = Math.Clamp(at, 0, v.Length - slice.Length);
+                        v.Seek(a, SeekOrigin.Begin);
+                        v.ReadExactly(slice);
+                        Assert(slice.SequenceEqual(served.AsSpan((int)a, slice.Length)),
+                            $"ranged read at {a} matches the full view");
+                    }
+                }
+
+                // Serving synthesized the index in memory only — the archive
+                // file is bit-identical afterwards.
+                Assert(File.ReadAllBytes(path).AsSpan().SequenceEqual(original),
+                    "the on-disk file is untouched");
+
+                // The optional on-disk upgrade still works, once.
+                Assert(Recording.ClipWriter.RefinalizeClassic(path), "refinalize converts in place");
+                Assert(!Recording.ClipWriter.RefinalizeClassic(path), "second run is a no-op");
+                using (var raw = Recording.VirtualMp4.Open(path))
+                    AssertEq(raw.Length, new FileInfo(path).Length); // classic → served raw
             }
             finally
             {
@@ -945,17 +1068,20 @@ public static class SelfTest
                         list.Add(i);
                     return list;
                 }
-                AssertEq(IndicesOf(text, "tkhd").Count, 2);
+                // Two tkhd in the retired fragmented header + two in the classic
+                // moov; trex only ever existed up front (no mvex in the index).
+                AssertEq(IndicesOf(text, "tkhd").Count, 4);
                 AssertEq(IndicesOf(text, "trex").Count, 2);
 
-                // Both media headers carry a real duration after finalization —
-                // video in 90 kHz ticks, audio in sample-rate ticks (2 AUs = 2048).
+                // The classic moov's media headers (the LAST two mdhd) carry real
+                // durations — video in 90 kHz ticks, audio in sample-rate ticks
+                // (2 AUs = 2048).
                 var mdhds = IndicesOf(text, "mdhd");
-                AssertEq(mdhds.Count, 2);
+                AssertEq(mdhds.Count, 4);
                 uint DurAt(int mdhd) => System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(
                     bytes.AsSpan(mdhd + 20));
-                Assert(DurAt(mdhds[0]) > 0, "video mdhd duration patched");
-                AssertEq(DurAt(mdhds[1]), 2048u);
+                Assert(DurAt(mdhds[2]) > 0, "video mdhd duration set");
+                AssertEq(DurAt(mdhds[3]), 2048u);
             }
             finally
             {
