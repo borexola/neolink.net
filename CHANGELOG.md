@@ -4,7 +4,44 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
-## 0.7.0 — unreleased
+## 0.8.0 — unreleased
+
+### New
+
+- **Per-camera capture schedule (beta, opt-in)**: switch *Scheduled capture*
+  on in camera settings → *Recording* to choose the days of the week and the
+  time of day that camera records events — day chips plus a from/until window
+  that can span midnight (e.g. 22:00–06:00 for nights-only). Applies to all
+  selected event types; anything arriving outside the schedule is discarded.
+  Off by default (capture at all times), and switching it off keeps the
+  schedule for later instead of deleting it.
+- **Home Assistant: every detection type is now a sensor**: package,
+  line-crossing, intrusion and loitering join the motion/person/vehicle/animal
+  binary sensors. They are announced on their first detection, so cameras
+  without those features don't grow dead entities.
+- **Home Assistant: "Visitor" doorbell sensor**: the doorbell press now also
+  pulses a binary sensor that HA clears by itself a few seconds later — the
+  existing *event* entity keeps the press history but always displays the last
+  press, which read as a button stuck "pressed" on dashboards. Repeated
+  "visitor" pushes while the chime rings no longer count as extra presses.
+
+### Fixed
+
+- Timeline playback shows a buffering spinner while a video is still loading
+  under the cursor, instead of looking frozen with no indication.
+- The timeline's play button no longer looks like the previous/next-day
+  arrows: day navigation uses thin chevrons, play/pause is a solid accent
+  pill with a filled glyph.
+- On phones, a video tile's controls no longer overflow off the right edge of
+  the screen: the camera name shrinks to an ellipsis and the buttons compact,
+  so every icon stays reachable.
+
+### Changed
+
+- The server version moved from the sidebar's footer to the right edge of the
+  top toolbar, so it stays visible with the sidebar collapsed.
+
+## 0.7.0
 
 ### New
 

@@ -282,10 +282,12 @@ public sealed class EventRecorder
             }
             if (!push.Active) continue; // stray all-clear with no open event
 
-            // Runtime switches (web UI): events off, or every label of this push
-            // filtered out by the camera's event-type selection → discard silently.
+            // Runtime switches (web UI): events off, outside the camera's capture
+            // schedule, or every label of this push filtered out by the camera's
+            // event-type selection → discard silently.
             var settings = _settings.Get(_camera);
             if (!settings.Events) continue;
+            if (!settings.ScheduleAllows(DateTime.Now)) continue; // schedules are wall-clock local
             var labels = LabelsOf(push).Where(settings.AllowsLabel).ToList();
             if (labels.Count == 0) continue;
 

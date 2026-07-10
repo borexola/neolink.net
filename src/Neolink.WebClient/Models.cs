@@ -77,13 +77,18 @@ public sealed record ApiAuthToken(string Token, string User, bool Admin);
 /// <summary>GET /api/users — one account row.</summary>
 public sealed record ApiUserInfo(string Name, bool Admin);
 
-/// <summary>GET/POST /api/cameras/{name}/recording — runtime recording switches.</summary>
+/// <summary>GET/POST /api/cameras/{name}/recording — runtime recording switches.
+/// The capture schedule arrives in effective form: ScheduleDays is the full day
+/// list (never null in practice), Schedule times are "HH:mm" or "" (= midnight).
+/// It only applies while ScheduleEnabled (opt-in; off = capture always).</summary>
 public sealed record ApiRecordingSettings(bool Events, bool Continuous,
     List<string>? EventTypes, List<string>? KnownTypes, bool ContinuousAvailable = false,
     int? EventRetentionDays = null, int? ContinuousRetentionDays = null,
     int DefaultEventRetentionDays = 7, int DefaultContinuousRetentionDays = 7,
     bool EventsAvailable = true, string? RecordStream = null,
-    string? DefaultRecordStream = null, List<string>? AvailableStreams = null)
+    string? DefaultRecordStream = null, List<string>? AvailableStreams = null,
+    List<string>? ScheduleDays = null, string? ScheduleStart = null, string? ScheduleEnd = null,
+    bool ScheduleEnabled = false)
 {
     /// <summary>null EventTypes = every detection type is recorded.</summary>
     public bool TypeEnabled(string label) => EventTypes == null || EventTypes.Contains(label);
@@ -191,6 +196,11 @@ public static class UiIcon
             "battery" => "<rect x=\"1\" y=\"6\" width=\"18\" height=\"12\" rx=\"2\"/><line x1=\"23\" y1=\"11\" x2=\"23\" y2=\"13\"/>",
             "bolt" => "<polygon points=\"13 2 3 14 12 14 11 22 21 10 12 10 13 2\"/>",
             "moon" => "<path d=\"M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z\"/>",
+            // Transport controls are FILLED so they read as playback, not navigation.
+            "play" => "<polygon points=\"6 4 20 12 6 20 6 4\" fill=\"currentColor\"/>",
+            "pause" => "<rect x=\"5\" y=\"4\" width=\"5\" height=\"16\" rx=\"1\" fill=\"currentColor\"/><rect x=\"14\" y=\"4\" width=\"5\" height=\"16\" rx=\"1\" fill=\"currentColor\"/>",
+            "chev-left" => "<polyline points=\"15 18 9 12 15 6\"/>",
+            "chev-right" => "<polyline points=\"9 18 15 12 9 6\"/>",
             _ => "",
         };
         return new MarkupString(

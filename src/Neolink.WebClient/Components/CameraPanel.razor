@@ -235,9 +235,51 @@
                         filter on what arrives: disabled types are discarded and the camera's own settings
                         are never changed.
                     </div>
+                    <div class="control-row">
+                        <span>Scheduled capture <span class="beta-tag" title="Scheduled capture is new — report anything odd">BETA</span></span>
+                        <button class="chip @(_recording.ScheduleEnabled ? "" : "chip-off")"
+                                title="@(_recording.ScheduleEnabled ? "Events are captured only inside the schedule below — click to capture at all times" : "Events are captured at all times — click to restrict capture to a schedule")"
+                                @onclick="() => SetRecordingAsync(scheduleEnabled: !_recording.ScheduleEnabled)">
+                            @(_recording.ScheduleEnabled ? "on" : "off")
+                        </button>
+                    </div>
+                    @if (_recording.ScheduleEnabled)
+                    {
+                        <div class="sched">
+                            <div class="sched-days">
+                                @foreach (var d in WeekDayTokens)
+                                {
+                                    var day = d;
+                                    <button class="chip sched-day @(DayEnabled(day) ? "" : "chip-off")"
+                                            title="@(DayEnabled(day) ? $"Capturing on {DayName(day)} — click to skip this day" : $"Skipping {DayName(day)} — click to capture")"
+                                            @onclick="() => ToggleScheduleDayAsync(day)">@DayLabel(day)</button>
+                                }
+                            </div>
+                            <div class="sched-times">
+                                <label class="sched-time">from
+                                    <input type="time" value="@(_recording.ScheduleStart ?? "")"
+                                           title="Capture from this time of day (blank = midnight)"
+                                           @onchange="e => SetScheduleTimeAsync(start: (string?)e.Value)" />
+                                </label>
+                                <label class="sched-time">until
+                                    <input type="time" value="@(_recording.ScheduleEnd ?? "")"
+                                           title="Capture until this time of day (blank = midnight). Earlier than “from” spans midnight."
+                                           @onchange="e => SetScheduleTimeAsync(end: (string?)e.Value)" />
+                                </label>
+                                @if (HasTimeWindow)
+                                {
+                                    <button class="chip" title="Clear the time window — capture at any hour"
+                                            @onclick='() => SetScheduleTimeAsync(start: "", end: "")'>all day</button>
+                                }
+                            </div>
+                            <div class="event-sub">@ScheduleSummary</div>
+                        </div>
+                    }
                 }
                 @if (_recording.ContinuousAvailable)
                 {
+                    @* Hairline between the event-based half above and 24/7 below. *@
+                    <div class="campanel-divider"></div>
                     <div class="control-row">
                         <span>Continuous (24/7)</span>
                         <button class="chip @(_recording.Continuous ? "" : "chip-off")"
@@ -419,9 +461,15 @@
     };
 
     private async Task SetRecordingAsync(bool? events = null, bool? continuous = null, List<string>? eventTypes = null,
-        int? eventRetentionDays = null, int? continuousRetentionDays = null, string? recordStream = null)
+        int? eventRetentionDays = null, int? continuousRetentionDays = null, string? recordStream = null,
+        List<string>? scheduleDays = null, string? scheduleStart = null, string? scheduleEnd = null,
+        bool? scheduleEnabled = null)
     {
-        object body = new { events, continuous, eventTypes, eventRetentionDays, continuousRetentionDays, recordStream };
+        object body = new
+        {
+            events, continuous, eventTypes, eventRetentionDays, continuousRetentionDays, recordStream,
+            scheduleDays, scheduleStart, scheduleEnd, scheduleEnabled,
+        };
         if (await PostAsync("recording", body))
             _recording = await GetAsync<ApiRecordingSettings>("recording");
     }
@@ -453,6 +501,79 @@
         var types = (_recording.EventTypes ?? _recording.KnownTypes ?? new List<string>()).ToList();
         if (!types.Remove(label)) types.Add(label);
         return SetRecordingAsync(eventTypes: types);
+    }
+
+    // ------------------------------------------------------------ capture schedule
+
+    private static readonly string[] WeekDayTokens = { "mon", "tue", "wed", "thu", "fri", "sat", "sun" };
+
+    private bool DayEnabled(string day) =>
+        _recording?.ScheduleDays is not { Count: > 0 } days || days.Contains(day);
+
+    private static string DayLabel(string day) => char.ToUpperInvariant(day[0]) + day[1..];
+    private static string DayName(string day) => day switch
+    {
+        "mon" => "Mondays", "tue" => "Tuesdays", "wed" => "Wednesdays", "thu" => "Thursdays",
+        "fri" => "Fridays", "sat" => "Saturdays", _ => "Sundays",
+    };
+
+    private static int MinutesOf(string? hhmm) =>
+        hhmm is { Length: >= 5 }
+        && int.TryParse(hhmm.AsSpan(0, 2), out var h) && int.TryParse(hhmm.AsSpan(3, 2), out var m)
+            ? h * 60 + m
+            : 0;
+
+    private bool HasTimeWindow =>
+        _recording != null && MinutesOf(_recording.ScheduleStart) != MinutesOf(_recording.ScheduleEnd);
+
+    private async Task ToggleScheduleDayAsync(string day)
+    {
+        if (_recording == null) return;
+        var days = _recording.ScheduleDays is { Count: > 0 } d ? d.ToList() : WeekDayTokens.ToList();
+        if (!days.Remove(day)) days.Add(day);
+        if (days.Count == 0)
+        {
+            // No days = capture nothing, which is what the events switch is for.
+            _status = "At least one day stays selected — to stop capturing entirely, turn off detection events.";
+            return;
+        }
+        await SetRecordingAsync(scheduleDays: days);
+    }
+
+    /// <summary>Time inputs post only the field that changed (null = leave alone).</summary>
+    private Task SetScheduleTimeAsync(string? start = null, string? end = null) =>
+        SetRecordingAsync(scheduleStart: Hhmm(start), scheduleEnd: Hhmm(end));
+
+    /// <summary>Browsers may report "HH:mm:ss" — the API wants strict HH:mm ("" clears).</summary>
+    private static string? Hhmm(string? raw) =>
+        raw is { Length: > 5 } ? raw[..5] : raw;
+
+    private string ScheduleSummary
+    {
+        get
+        {
+            if (_recording == null) return "";
+            var days = _recording.ScheduleDays;
+            string dayPart;
+            if (days is not { Count: > 0 } || days.Count >= 7)
+                dayPart = "every day";
+            else
+            {
+                var ordered = WeekDayTokens.Where(days.Contains).ToList();
+                dayPart = string.Join(", ", ordered) switch
+                {
+                    "mon, tue, wed, thu, fri" => "on weekdays",
+                    "sat, sun" => "at weekends",
+                    _ => "on " + string.Join(", ", ordered.Select(DayLabel)),
+                };
+            }
+            if (!HasTimeWindow) return $"Capturing events all day, {dayPart}.";
+            int s = MinutesOf(_recording.ScheduleStart), e = MinutesOf(_recording.ScheduleEnd);
+            string from = s == 0 ? "midnight" : _recording.ScheduleStart!;
+            string until = e == 0 ? "midnight" : _recording.ScheduleEnd!;
+            string wrap = s > e && e != 0 ? " (overnight)" : "";
+            return $"Capturing events {from}–{until}{wrap}, {dayPart}. Anything outside is discarded.";
+        }
     }
 
     private async Task RebootAsync()

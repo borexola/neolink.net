@@ -15,13 +15,16 @@
     <div class="toolbar tl-toolbar">
         <a class="tool-btn" href="" title="Back to live view">‹ Live</a>
         <span class="tool-label">TIMELINE</span>
-        <button class="tool-btn" title="Previous day" @onclick="() => ChangeDayAsync(-1)">◀</button>
+        @* Day navigation uses thin chevrons; the transport control below is a solid
+           accent pill with a filled glyph, so the two can't be mistaken for each other. *@
+        <button class="tool-btn tl-daynav" title="Previous day" @onclick="() => ChangeDayAsync(-1)">@UiIcon.Render("chev-left", 16)</button>
         <span class="tl-date">@_date.ToString("ddd, d MMMM yyyy")</span>
-        <button class="tool-btn" title="Next day" disabled="@(_date >= DateTime.Today)"
-                @onclick="() => ChangeDayAsync(1)">▶</button>
+        <button class="tool-btn tl-daynav" title="Next day" disabled="@(_date >= DateTime.Today)"
+                @onclick="() => ChangeDayAsync(1)">@UiIcon.Render("chev-right", 16)</button>
         <span class="tool-sep"></span>
-        <button class="tool-btn @(_playing ? "active" : "")" @onclick="TogglePlayAsync">
-            @(_playing ? "❚❚" : "▶") <span class="tool-name">@(_playing ? "Pause" : "Play")</span>
+        <button class="tl-play @(_playing ? "playing" : "")"
+                title="@(_playing ? "Pause playback" : "Play the day from the cursor")" @onclick="TogglePlayAsync">
+            @UiIcon.Render(_playing ? "pause" : "play", 14) <span class="tool-name">@(_playing ? "Pause" : "Play")</span>
         </button>
         @* Fast playback for skimming a day; the choice sticks (localStorage). *@
         @foreach (var s in SpeedOptions)

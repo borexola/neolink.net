@@ -86,9 +86,14 @@ public static class WebApi
         uint? Framerate, uint? Bitrate);
     private sealed record ReviewRequest(bool? Reviewed);
     /// <summary>Retention fields: null = unchanged, negative = back to the server default, 0 = keep forever.
-    /// RecordStream: null = unchanged, "" = back to the server default, else a served stream kind.</summary>
+    /// RecordStream: null = unchanged, "" = back to the server default, else a served stream kind.
+    /// Capture schedule: applied only while ScheduleEnabled; ScheduleDays null = unchanged,
+    /// empty or all seven = every day; ScheduleStart/ScheduleEnd null = unchanged,
+    /// "" = midnight (both cleared = all day).</summary>
     private sealed record RecordingSettingsRequest(bool? Events, bool? Continuous, List<string>? EventTypes,
-        int? EventRetentionDays = null, int? ContinuousRetentionDays = null, string? RecordStream = null);
+        int? EventRetentionDays = null, int? ContinuousRetentionDays = null, string? RecordStream = null,
+        List<string>? ScheduleDays = null, string? ScheduleStart = null, string? ScheduleEnd = null,
+        bool? ScheduleEnabled = null);
     private sealed record CredentialsRequest(string? Username, string? Password);
     private sealed record PasswordRequest(string? Password);
     private sealed record AdminUiSettings(double? TrickleSpeed, string? StateDir, bool? ResetAdminPassword,
@@ -802,6 +807,13 @@ public static class WebApi
                 recordStream = s.RecordStream,
                 defaultRecordStream = DefaultRecordKind(cam),
                 availableStreams = cam.Streams.Select(x => x.Kind).ToList(),
+                // Capture schedule, always in effective form: the day list is never
+                // null (the UI chips render it directly) and "" means midnight.
+                // It only takes effect while scheduleEnabled (opt-in).
+                scheduleEnabled = s.ScheduleEnabled,
+                scheduleDays = (IEnumerable<string>?)s.ScheduleDays ?? CameraRecordingSettings.WeekDays,
+                scheduleStart = s.ScheduleStart ?? "",
+                scheduleEnd = s.ScheduleEnd ?? "",
             };
 
             app.MapGet("/api/cameras/{name}/recording", (string name, HttpContext ctx) =>
@@ -843,6 +855,19 @@ public static class WebApi
                     {
                         error = $"recordStream must be one of: {string.Join(", ", cam.Streams.Select(s => s.Kind))}",
                     }, statusCode: 400);
+                // Capture schedule: unknown day tokens are dropped; an empty or
+                // complete day list stores as null (= every day). Times must be
+                // HH:mm — anything else (including "") clears to midnight.
+                List<string>? schedDays = null;
+                if (req.ScheduleDays != null)
+                {
+                    schedDays = req.ScheduleDays.Select(d => d.Trim().ToLowerInvariant())
+                        .Where(CameraRecordingSettings.WeekDays.Contains).Distinct().ToList();
+                    if (schedDays.Count == 0 || schedDays.Count == CameraRecordingSettings.WeekDays.Length)
+                        schedDays = null;
+                }
+                static string? SchedTime(string? v) =>
+                    v != null && CameraRecordingSettings.ParseMinutes(v) is int m && m > 0 ? v : null;
                 var updated = recordingSettings.Update(cam.Name, req.Events, continuous,
                     types, setEventTypes: req.EventTypes != null,
                     eventRetentionDays: Retention(req.EventRetentionDays),
@@ -850,7 +875,11 @@ public static class WebApi
                     continuousRetentionDays: Retention(req.ContinuousRetentionDays),
                     setContinuousRetention: req.ContinuousRetentionDays != null,
                     recordStream: req.RecordStream is { Length: > 0 } v ? v : null,
-                    setRecordStream: req.RecordStream != null);
+                    setRecordStream: req.RecordStream != null,
+                    scheduleDays: schedDays, setScheduleDays: req.ScheduleDays != null,
+                    scheduleStart: SchedTime(req.ScheduleStart), setScheduleStart: req.ScheduleStart != null,
+                    scheduleEnd: SchedTime(req.ScheduleEnd), setScheduleEnd: req.ScheduleEnd != null,
+                    scheduleEnabled: req.ScheduleEnabled);
                 return Results.Json(ShapeSettings(cam, updated));
             });
         }

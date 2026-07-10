@@ -309,14 +309,15 @@ html, body {
     padding-top: 10px;
 }
 
-/* Server version, always visible at the sidebar bottom */
-.sidebar-version {
-    display: block;
-    margin-top: 4px;
+/* Server version, pinned to the toolbar's right edge */
+.toolbar-version {
+    margin-left: auto;
+    padding-left: 10px;
     font-size: 10px;
     letter-spacing: 0.06em;
     color: color-mix(in srgb, var(--muted) 70%, transparent);
     font-variant-numeric: tabular-nums;
+    white-space: nowrap;
 }
 
 /* Signed-in user + sign-out, pinned at the sidebar bottom */
@@ -1090,6 +1091,35 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 
     .tile-bar { opacity: 1; } /* no hover on touch: keep controls visible */
 
+    /* Phones: every tile control must stay on-screen. The camera name is the
+       only flexible item — it shrinks to an ellipsis — while the buttons and
+       the stream picker compact instead of being pushed off the right edge. */
+    .tile-bar { gap: 4px; padding: 4px 6px; }
+
+    .tile-name {
+        flex: 0 1 auto;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .tile-bar select {
+        min-width: 0;
+        max-width: 72px;
+        font-size: 11px;
+        padding: 2px 4px;
+    }
+
+    .tile-bar .icon-btn {
+        min-width: 30px;
+        min-height: 30px;
+        padding: 4px;
+        flex: 0 0 auto;
+    }
+
+    .cam-rec-badge { letter-spacing: 0.5px; padding: 1px 5px; }
+
     /* Phones: the toolbar scrolls sideways instead of stacking into a wall */
     .toolbar {
         flex-wrap: nowrap;
@@ -1110,7 +1140,7 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 
 /* Touch devices, any width: finger-sized targets and no hover-only affordances */
 @media (pointer: coarse) {
-    .tool-btn, .tool-select { min-height: 40px; }
+    .tool-btn, .tool-select, .tl-play { min-height: 40px; }
     .icon-btn { min-width: 36px; min-height: 36px; }
     .chip { min-height: 32px; padding: 5px 13px; }
     .zoom-hud { display: flex; } /* no hover on touch: keep the zoom pill visible */
@@ -1828,6 +1858,38 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 .tl-toolbar { flex: 0 0 auto; }
 .tl-date { font-size: 13px; font-weight: 600; min-width: 150px; text-align: center; }
 
+/* Day-selector chevrons stay quiet so the transport control can stand out */
+.tl-daynav { color: var(--muted); }
+.tl-daynav:hover:not(:disabled) { color: var(--text); }
+.tl-daynav:disabled { opacity: 0.35; cursor: default; }
+
+/* The play/pause transport: a solid accent pill with a filled glyph — nothing
+   like the thin date chevrons, so the two can't be confused again. */
+.tl-play {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    min-height: 32px;
+    padding: 5px 16px;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    background: var(--accent);
+    color: #0a1424;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.tl-play:hover { filter: brightness(1.12); }
+
+.tl-play.playing {
+    background: var(--accent-soft);
+    border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+    color: var(--accent);
+}
+
 .tl-clock {
     margin-left: auto;
     font-size: 15px;
@@ -1999,6 +2061,30 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     justify-content: center;
     color: var(--muted);
     font-size: 13px;
+}
+
+/* Buffering veil: JS (tlSync) toggles .tl-loading while the player has no
+   decodable picture under the cursor. The fade-in delay keeps ordinary quick
+   seeks spinner-free — only genuinely slow loads surface it. */
+.tl-tile.tl-loading::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 26px;
+    height: 26px;
+    margin: -13px 0 0 -13px;
+    border-radius: 50%;
+    border: 3px solid rgba(255, 255, 255, 0.18);
+    border-top-color: var(--accent);
+    opacity: 0;
+    animation:
+        tl-busy-in 0.15s ease 0.35s forwards,
+        reconnect-spin 0.9s linear infinite;
+}
+
+@keyframes tl-busy-in {
+    to { opacity: 1; }
 }
 
 .event-player-foot {
@@ -2654,6 +2740,58 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 
 .ret-input:focus { border-color: var(--accent); }
 .ret-input::placeholder { color: var(--muted); }
+
+/* Full-bleed hairline splitting a campanel section into halves (event-based
+   recording above, continuous below) */
+.campanel-divider {
+    border-top: 1px solid var(--line);
+    margin: 10px -12px;
+}
+
+/* Capture schedule (camera panel → RECORDING): day chips + a time window,
+   shown only while the "Scheduled capture" switch is on */
+.sched {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 8px;
+    min-width: 0;
+    padding: 2px 0 4px;
+}
+
+.sched-days { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+
+.sched-day {
+    min-width: 42px;
+    justify-content: center;
+    text-align: center;
+    padding-left: 0;
+    padding-right: 0;
+}
+
+.sched-times { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+
+.sched-time {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--muted);
+}
+
+.sched-time input[type="time"] {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 4px 6px;
+    font-size: 12px;
+    color-scheme: dark;
+}
+
+.sched-time input[type="time"]:focus { border-color: var(--accent); outline: none; }
+
+.sched .event-sub { text-align: right; }
 
 .control-row select {
     background: var(--bg);
