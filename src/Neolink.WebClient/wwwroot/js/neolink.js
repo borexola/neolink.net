@@ -809,8 +809,15 @@
         tlSync(videoId, url, offset, playing, rate) {
             const v = document.getElementById(videoId);
             if (!v) return 0;
+            // Busy veil: while the player has no decodable picture under the
+            // cursor (first load, a seek into an unbuffered range, a stalled
+            // fetch), the tile carries .tl-loading and CSS shows a spinner —
+            // otherwise a slow segment just looks frozen.
+            const tile = v.closest('.tl-tile');
+            const busy = (b) => { if (tile) tile.classList.toggle('tl-loading', b); };
             v.muted = true;
             if (!url) {
+                busy(false);
                 delete v.dataset.tlUrl;
                 if (v.getAttribute('src')) { v.removeAttribute('src'); try { v.load(); } catch { } }
                 return 0;
@@ -837,7 +844,10 @@
             } catch { }
             if (playing) { if (v.paused) v.play().catch(() => { }); }
             else if (!v.paused) v.pause();
-            if (v.error) return -1; // dead media must not hold the timeline hostage
+            if (v.error) { busy(false); return -1; } // dead media must not hold the timeline hostage
+            // Playing needs future data to keep moving; a paused scrub only needs
+            // the current frame to be showing something.
+            busy(v.seeking || v.readyState < (playing ? 3 : 2));
             return playing ? Math.max(0, offset - (v.currentTime || 0)) : 0;
         },
 

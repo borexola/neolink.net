@@ -166,10 +166,6 @@
             {
                 <span>Neolink.NET web client</span>
             }
-            @if (!string.IsNullOrEmpty(_version))
-            {
-                <span class="sidebar-version" title="Neolink.NET server version">v@(_version)</span>
-            }
         </div>
     </aside>
 
@@ -356,6 +352,11 @@
 
             <span class="tool-sep"></span>
             <a class="tool-btn" href="monitor" title="Server & browser resource usage, live">@UiIcon.Render("activity", 14) <span class="tool-name">Monitor</span></a>
+
+            @if (!string.IsNullOrEmpty(_version))
+            {
+                <span class="toolbar-version" title="Neolink.NET server version">v@(_version)</span>
+            }
         </div>
 
         @if (_showLayouts)

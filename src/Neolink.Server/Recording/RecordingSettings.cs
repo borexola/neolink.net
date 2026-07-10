@@ -10,11 +10,18 @@ namespace Neolink.Recording;
 /// consistent snapshot. Retention overrides are per recording type: null = use
 /// the server-wide default, 0 = keep forever, otherwise days. RecordStream picks
 /// which stream is taped ("mainStream"/"subStream"/"externStream"; null = the
-/// server default from the recording config).
+/// server default from the recording config). The capture schedule gates event
+/// recording by local wall-clock time, but ONLY while ScheduleEnabled — the
+/// explicit opt-in keeps "capture always" the safe default and lets a schedule
+/// be switched off without losing it. ScheduleDays lists the enabled days
+/// ("mon".."sun", null = every day) and ScheduleStart/ScheduleEnd bound the
+/// time of day ("HH:mm"; null = midnight, so both null = all day).
 /// </summary>
 public sealed record CameraRecordingSettings(bool Events, bool Continuous, List<string>? EventTypes,
     int? EventRetentionDays = null, int? ContinuousRetentionDays = null,
-    string? RecordStream = null)
+    string? RecordStream = null,
+    List<string>? ScheduleDays = null, string? ScheduleStart = null, string? ScheduleEnd = null,
+    bool ScheduleEnabled = false)
 {
     /// <summary>Known detection labels (what the UI offers as event-type filters).</summary>
     public static readonly string[] KnownLabels =
@@ -39,6 +46,43 @@ public sealed record CameraRecordingSettings(bool Events, bool Continuous, List<
     /// <summary>A null EventTypes list means the default set (perimeter labels are opt-in).</summary>
     public bool AllowsLabel(string label) =>
         EventTypes != null ? EventTypes.Contains(label) : DefaultLabels.Contains(label);
+
+    /// <summary>Capture-schedule day tokens, in display order.</summary>
+    public static readonly string[] WeekDays = { "mon", "tue", "wed", "thu", "fri", "sat", "sun" };
+
+    /// <summary>
+    /// True when the capture schedule admits events at this LOCAL wall-clock
+    /// instant; always true while the schedule is switched off (the default).
+    /// Start > end wraps past midnight (22:00–06:00); the day check applies
+    /// to the day the event actually occurs on, so the small hours of an
+    /// overnight window belong to the following day. Start inclusive, end
+    /// exclusive; a degenerate window (start == end) means all day.
+    /// </summary>
+    public bool ScheduleAllows(DateTime local)
+    {
+        if (!ScheduleEnabled) return true;
+        if (ScheduleDays is { Count: > 0 } days && !days.Contains(DayToken(local.DayOfWeek)))
+            return false;
+        int s = ParseMinutes(ScheduleStart) ?? 0, e = ParseMinutes(ScheduleEnd) ?? 0;
+        if (s == e) return true;
+        int t = local.Hour * 60 + local.Minute;
+        return s < e ? t >= s && t < e : t >= s || t < e;
+    }
+
+    public static string DayToken(DayOfWeek day) => day switch
+    {
+        DayOfWeek.Monday => "mon",
+        DayOfWeek.Tuesday => "tue",
+        DayOfWeek.Wednesday => "wed",
+        DayOfWeek.Thursday => "thu",
+        DayOfWeek.Friday => "fri",
+        DayOfWeek.Saturday => "sat",
+        _ => "sun",
+    };
+
+    /// <summary>"HH:mm" → minutes since midnight; null on anything else.</summary>
+    public static int? ParseMinutes(string? hhmm) =>
+        TimeOnly.TryParseExact(hhmm, "HH\\:mm", out var t) ? t.Hour * 60 + t.Minute : null;
 }
 
 /// <summary>
@@ -123,7 +167,11 @@ public sealed class RecordingSettings
         List<string>? eventTypes, bool setEventTypes,
         int? eventRetentionDays = null, bool setEventRetention = false,
         int? continuousRetentionDays = null, bool setContinuousRetention = false,
-        string? recordStream = null, bool setRecordStream = false)
+        string? recordStream = null, bool setRecordStream = false,
+        List<string>? scheduleDays = null, bool setScheduleDays = false,
+        string? scheduleStart = null, bool setScheduleStart = false,
+        string? scheduleEnd = null, bool setScheduleEnd = false,
+        bool? scheduleEnabled = null)
     {
         lock (_gate)
         {
@@ -136,7 +184,11 @@ public sealed class RecordingSettings
                 setEventTypes ? eventTypes : cur.EventTypes,
                 setEventRetention ? eventRetentionDays : cur.EventRetentionDays,
                 setContinuousRetention ? continuousRetentionDays : cur.ContinuousRetentionDays,
-                setRecordStream ? recordStream : cur.RecordStream);
+                setRecordStream ? recordStream : cur.RecordStream,
+                setScheduleDays ? scheduleDays : cur.ScheduleDays,
+                setScheduleStart ? scheduleStart : cur.ScheduleStart,
+                setScheduleEnd ? scheduleEnd : cur.ScheduleEnd,
+                scheduleEnabled ?? cur.ScheduleEnabled);
             _cameras[camera] = next;
             SaveLocked();
             return next;

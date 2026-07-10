@@ -336,6 +336,59 @@ public static class SelfTest
                 "explicit filter is exact");
         });
 
+        Test("capture schedule (per-camera day/time gate on events)", () =>
+        {
+            // 2026-07-06 is a Monday; the week runs Mon 6th .. Sun 12th.
+            var untouched = new Recording.CameraRecordingSettings(Events: true, Continuous: false, EventTypes: null);
+            Assert(untouched.ScheduleAllows(new DateTime(2026, 7, 12, 3, 30, 0)),
+                "untouched schedule captures any day, any hour");
+
+            // The schedule is opt-in: while switched off, a configured window is
+            // dormant and everything captures — turning it off must never mean
+            // "capture nothing" or silently keep filtering.
+            var dormant = new Recording.CameraRecordingSettings(true, false, null,
+                ScheduleDays: new List<string> { "mon" }, ScheduleStart: "08:00", ScheduleEnd: "09:00",
+                ScheduleEnabled: false);
+            Assert(dormant.ScheduleAllows(new DateTime(2026, 7, 12, 3, 30, 0)),
+                "disabled schedule captures everything despite a stored window");
+
+            var weekdays = new Recording.CameraRecordingSettings(true, false, null,
+                ScheduleDays: new List<string> { "mon", "tue", "wed", "thu", "fri" }, ScheduleEnabled: true);
+            Assert(weekdays.ScheduleAllows(new DateTime(2026, 7, 10, 12, 0, 0)), "Friday passes a weekday filter");
+            Assert(!weekdays.ScheduleAllows(new DateTime(2026, 7, 11, 12, 0, 0)), "Saturday is discarded");
+
+            var office = new Recording.CameraRecordingSettings(true, false, null,
+                ScheduleStart: "08:00", ScheduleEnd: "18:00", ScheduleEnabled: true);
+            Assert(office.ScheduleAllows(new DateTime(2026, 7, 6, 8, 0, 0)), "window start is inclusive");
+            Assert(!office.ScheduleAllows(new DateTime(2026, 7, 6, 18, 0, 0)), "window end is exclusive");
+            Assert(!office.ScheduleAllows(new DateTime(2026, 7, 6, 3, 0, 0)), "before the window is discarded");
+
+            // A window past midnight (nights-only) wraps; the day filter applies
+            // to the day the event lands on, so 01:00 needs Saturday enabled.
+            var nights = new Recording.CameraRecordingSettings(true, false, null,
+                ScheduleDays: new List<string> { "fri", "sat" }, ScheduleStart: "22:00", ScheduleEnd: "06:00",
+                ScheduleEnabled: true);
+            Assert(nights.ScheduleAllows(new DateTime(2026, 7, 10, 23, 30, 0)), "overnight window before midnight");
+            Assert(nights.ScheduleAllows(new DateTime(2026, 7, 11, 1, 0, 0)), "overnight window after midnight");
+            Assert(!nights.ScheduleAllows(new DateTime(2026, 7, 10, 12, 0, 0)), "midday outside an overnight window");
+
+            // One-sided windows: a lone start runs to midnight, a lone end from it.
+            var fromSix = new Recording.CameraRecordingSettings(true, false, null,
+                ScheduleStart: "06:00", ScheduleEnabled: true);
+            Assert(!fromSix.ScheduleAllows(new DateTime(2026, 7, 6, 5, 0, 0)), "lone start: small hours excluded");
+            Assert(fromSix.ScheduleAllows(new DateTime(2026, 7, 6, 23, 59, 0)), "lone start: runs to midnight");
+            var untilTen = new Recording.CameraRecordingSettings(true, false, null,
+                ScheduleEnd: "22:00", ScheduleEnabled: true);
+            Assert(untilTen.ScheduleAllows(new DateTime(2026, 7, 6, 0, 0, 0)), "lone end: starts at midnight");
+            Assert(!untilTen.ScheduleAllows(new DateTime(2026, 7, 6, 23, 0, 0)), "lone end: late evening excluded");
+
+            AssertEq(Recording.CameraRecordingSettings.ParseMinutes("07:45") ?? -1, 7 * 60 + 45);
+            Assert(Recording.CameraRecordingSettings.ParseMinutes("7:45") == null
+                && Recording.CameraRecordingSettings.ParseMinutes("nope") == null
+                && Recording.CameraRecordingSettings.ParseMinutes(null) == null,
+                "only strict HH:mm parses");
+        });
+
         Test("status push parsing (unsolicited camera broadcasts)", () =>
         {
             // msg 464 NetInfo — the inner fields are from a real Wi-Fi camera
