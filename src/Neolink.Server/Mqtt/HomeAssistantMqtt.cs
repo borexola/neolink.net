@@ -46,6 +46,16 @@ public sealed class HomeAssistantMqtt
     /// <summary>How long a detection stays "on" after the last alarm push for it.</summary>
     private static readonly TimeSpan MotionOffDelay = TimeSpan.FromSeconds(20);
 
+    /// <summary>Discovery JSON must OMIT unset fields: Home Assistant validates
+    /// every key it sees, and an explicit null ("icon": null) fails that
+    /// validation — the whole entity is then discarded with only an HA-side log
+    /// to show for it. Configs here are anonymous objects whose optional members
+    /// default to null, so every discovery publish must serialize with this.</summary>
+    internal static readonly JsonSerializerOptions DiscoveryJson = new()
+    {
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+    };
+
     /// <summary>Every detection label that gets a binary sensor. The classic four
     /// are announced on every camera; the smart labels (package + the perimeter
     /// events set up in the Reolink app) announce lazily on their first push, so
@@ -249,7 +259,7 @@ public sealed class HomeAssistantMqtt
                 availability_mode = "all",
             };
             await PublishAsync($"{_cfg.DiscoveryPrefix}/sensor/neolink_server/{s.Key}/config",
-                JsonSerializer.Serialize(config), ct).ConfigureAwait(false);
+                JsonSerializer.Serialize(config, DiscoveryJson), ct).ConfigureAwait(false);
         }
         await PublishAsync(ServerTopic("started"), Web.SystemMonitor.Started.ToString("o"), ct)
             .ConfigureAwait(false);
@@ -437,7 +447,7 @@ internal sealed class CameraBridge
     {
         if (!_hub.Config.Discovery) return Task.CompletedTask;
         var topic = $"{_hub.Config.DiscoveryPrefix}/{component}/neolink_{Id}/{objectId}/config";
-        return _hub.PublishAsync(topic, JsonSerializer.Serialize(config), ct);
+        return _hub.PublishAsync(topic, JsonSerializer.Serialize(config, HomeAssistantMqtt.DiscoveryJson), ct);
     }
 
     /// <summary>The device block shared by every entity so HA groups them under one device.</summary>
