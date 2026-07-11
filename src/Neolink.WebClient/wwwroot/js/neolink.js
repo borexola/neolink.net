@@ -360,6 +360,9 @@
 
     // ---------- timeline page (recorded footage scrubbing) ----------
     const scrubs = {};
+    const zooms = {};      // per-element zoom/hover/pinch handler registries
+    let tlKeyHandler = null;
+    let tlPinching = false; // two-finger zoom in progress: scrubbing must yield
 
     // ---------- monitor page (browser-side FPS/heap sampling state) ----------
     const perf = { raf: 0, frames: 0, windowStart: 0, fps: 0 };
@@ -815,6 +818,23 @@
             // otherwise a slow segment just looks frozen.
             const tile = v.closest('.tl-tile');
             const busy = (b) => { if (tile) tile.classList.toggle('tl-loading', b); };
+            // The sync loop only ticks while playing, so a seek issued on PAUSE
+            // (snapping the frame to the cursor) would strand the veil at
+            // whatever state this call left it in. The media element's own
+            // events keep it truthful between syncs instead.
+            if (!v.dataset.tlBusyHook) {
+                v.dataset.tlBusyHook = '1';
+                const settle = () => {
+                    const t2 = v.closest('.tl-tile');
+                    if (!t2) return;
+                    const playing = v.dataset.tlPlaying === '1';
+                    t2.classList.toggle('tl-loading', !!v.dataset.tlUrl && !v.error
+                        && (v.seeking || v.readyState < (playing ? 3 : 2)));
+                };
+                for (const ev of ['seeking', 'waiting', 'seeked', 'canplay', 'playing', 'loadeddata'])
+                    v.addEventListener(ev, settle);
+            }
+            v.dataset.tlPlaying = playing ? '1' : '0';
             v.muted = true;
             if (!url) {
                 busy(false);
@@ -833,7 +853,9 @@
                 // playback rate — widen the drift tolerance accordingly or fast
                 // playback degrades into a seek-storm. (The adaptive clock keeps
                 // real lag below this while playing; seeks stay exceptional.)
-                const tolerance = playing ? Math.max(1.5, r * 0.75) : 0.35;
+                // Paused is the precision path: 0.05 s so the 0.1 s keyboard
+                // nudges land on a genuinely different picture.
+                const tolerance = playing ? Math.max(1.5, r * 0.75) : 0.05;
                 if (Math.abs(v.currentTime - offset) > tolerance) v.currentTime = offset;
             }
             // AFTER the src/load branch: load() resets playbackRate to the default,
@@ -859,6 +881,7 @@
             if (!el) return;
             let lastSent = 0;
             const send = (e, final) => {
+                if (tlPinching) return; // two-finger zoom owns the gesture
                 const now = performance.now();
                 if (!final && now - lastSent < 70) return;
                 lastSent = now;
@@ -868,6 +891,7 @@
             };
             const down = (e) => {
                 if (e.button !== 0 && e.pointerType === 'mouse') return;
+                if (e.target.closest('.tl-overview')) return; // the day strip pans, never scrubs
                 e.preventDefault();
                 try { el.setPointerCapture(e.pointerId); } catch { }
                 send(e, false);
@@ -886,6 +910,167 @@
         tlScrubDispose(elemId) {
             const s = scrubs[elemId];
             if (s) { s.el.removeEventListener('pointerdown', s.down); delete scrubs[elemId]; }
+        },
+
+        // Fine-seek interactions on the lane strip: wheel/pinch zoom around the
+        // pointer, a JS-local hover time bubble (zero server round-trips while
+        // the mouse moves), and drag-to-pan on the day-overview strip.
+        tlZoomInit(elemId, dotnetRef) {
+            this.tlZoomDispose(elemId);
+            const el = document.getElementById(elemId);
+            if (!el) return;
+            const st = { el, handlers: [] };
+            const on = (target, ev, fn, opts) => {
+                target.addEventListener(ev, fn, opts);
+                st.handlers.push([target, ev, fn, opts]);
+            };
+            const fracAt = (clientX) => {
+                const r = el.getBoundingClientRect();
+                return Math.min(1, Math.max(0, (clientX - r.left) / r.width));
+            };
+
+            // Hover: a hairline + time bubble under the mouse. Mapped through the
+            // data-vs/data-vspan window attributes Blazor keeps fresh, so it stays
+            // correct at any zoom without a single interop call.
+            const hover = document.createElement('div');
+            hover.className = 'tl-hover';
+            hover.innerHTML = '<div class="tl-hover-line"></div><div class="tl-hover-time"></div>';
+            el.appendChild(hover);
+            const bubble = hover.querySelector('.tl-hover-time');
+            on(el, 'pointermove', (e) => {
+                if (e.pointerType !== 'mouse' || e.target.closest('.tl-overview')) { hover.style.display = 'none'; return; }
+                const f = fracAt(e.clientX);
+                const vs = parseFloat(el.dataset.vs || '0');
+                const span = parseFloat(el.dataset.vspan || '86400');
+                let sec = Math.max(0, Math.min(86399.9, vs + f * span));
+                const pad = (v) => String(v).padStart(2, '0');
+                let text = `${pad(Math.floor(sec / 3600))}:${pad(Math.floor(sec / 60) % 60)}:${pad(Math.floor(sec % 60))}`;
+                if (span <= 900) text += '.' + Math.floor((sec % 1) * 10); // tenths once zoomed tight
+                bubble.textContent = text;
+                hover.style.left = (f * 100) + '%';
+                // Keep the bubble on-screen near the right edge.
+                bubble.style.transform = f > 0.92 ? 'translateX(calc(-100% - 6px))' : '';
+                hover.style.display = 'block';
+            });
+            on(el, 'pointerleave', () => { hover.style.display = 'none'; });
+
+            // Wheel: zoom around the pointer; Shift+wheel pans the window.
+            let lastWheel = 0;
+            on(el, 'wheel', (e) => {
+                e.preventDefault();
+                const now = performance.now();
+                if (now - lastWheel < 40) return;
+                lastWheel = now;
+                if (e.shiftKey)
+                    dotnetRef.invokeMethodAsync('OnTimelinePan', (e.deltaY || e.deltaX) > 0 ? 1 : -1);
+                else
+                    dotnetRef.invokeMethodAsync('OnTimelineZoom', fracAt(e.clientX), e.deltaY > 0 ? 1.3 : 0.75);
+            }, { passive: false });
+
+            on(el, 'dblclick', () => dotnetRef.invokeMethodAsync('OnTimelineKey', 'zoom:reset'));
+
+            // Pinch: two touch pointers zoom around their midpoint. Capture-phase
+            // listeners see both pointers even while the scrub handler holds one;
+            // the shared tlPinching flag makes scrubbing yield for the duration.
+            const touches = new Map();
+            let pinchBase = null;
+            on(el, 'pointerdown', (e) => {
+                if (e.pointerType !== 'touch') return;
+                touches.set(e.pointerId, e.clientX);
+                if (touches.size === 2) { tlPinching = true; pinchBase = null; }
+            }, true);
+            on(el, 'pointermove', (e) => {
+                if (!touches.has(e.pointerId)) return;
+                touches.set(e.pointerId, e.clientX);
+                if (touches.size !== 2) return;
+                const [a, b] = [...touches.values()];
+                const dist = Math.abs(a - b);
+                if (pinchBase == null) { pinchBase = dist; return; }
+                if (dist > 20 && Math.abs(dist - pinchBase) > 12) {
+                    dotnetRef.invokeMethodAsync('OnTimelineZoom', fracAt((a + b) / 2), pinchBase / dist);
+                    pinchBase = dist;
+                }
+            }, true);
+            const lift = (e) => {
+                touches.delete(e.pointerId);
+                pinchBase = null;
+                if (touches.size < 2) tlPinching = false;
+            };
+            on(el, 'pointerup', lift, true);
+            on(el, 'pointercancel', lift, true);
+
+            // Day-overview strip: drag to move the zoomed view window.
+            const ov = el.querySelector('.tl-overview');
+            if (ov) {
+                const seek = (e) => {
+                    const r = ov.getBoundingClientRect();
+                    dotnetRef.invokeMethodAsync('OnOverviewSeek',
+                        Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)));
+                };
+                on(ov, 'pointerdown', (e) => {
+                    e.stopPropagation();
+                    try { ov.setPointerCapture(e.pointerId); } catch { }
+                    seek(e);
+                    let last = 0;
+                    const move = (ev) => {
+                        const n = performance.now();
+                        if (n - last > 60) { last = n; seek(ev); }
+                    };
+                    const up = () => {
+                        ov.removeEventListener('pointermove', move);
+                        ov.removeEventListener('pointerup', up);
+                    };
+                    ov.addEventListener('pointermove', move);
+                    ov.addEventListener('pointerup', up);
+                });
+            }
+            zooms[elemId] = st;
+        },
+        tlZoomDispose(elemId) {
+            const st = zooms[elemId];
+            if (!st) return;
+            for (const [t, ev, fn, opts] of st.handlers) t.removeEventListener(ev, fn, opts);
+            st.el.querySelector('.tl-hover')?.remove();
+            delete zooms[elemId];
+        },
+
+        // NLE-style keyboard transport for the timeline page. Ignores keystrokes
+        // aimed at form fields, and Alt/Meta chords stay with the browser.
+        tlKeysInit(dotnetRef) {
+            this.tlKeysDispose();
+            tlKeyHandler = (e) => {
+                const t = e.target;
+                if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+                if (e.altKey || e.metaKey) return;
+                let action = null;
+                switch (e.key) {
+                    case ' ': case 'k': case 'K': action = 'playpause'; break;
+                    case 'ArrowLeft': action = 'step:' + (e.ctrlKey ? -0.1 : e.shiftKey ? -10 : -1); break;
+                    case 'ArrowRight': action = 'step:' + (e.ctrlKey ? 0.1 : e.shiftKey ? 10 : 1); break;
+                    case 'j': case 'J': action = 'step:-10'; break;
+                    case 'l': case 'L': action = 'step:10'; break;
+                    case ',': action = 'step:-0.1'; break;
+                    case '.': action = 'step:0.1'; break;
+                    case '[': action = 'event:-1'; break;
+                    case ']': action = 'event:1'; break;
+                    case '+': case '=': action = 'zoom:in'; break;
+                    case '-': case '_': action = 'zoom:out'; break;
+                    case '0': action = 'zoom:reset'; break;
+                    case 't': case 'T': action = 'clock'; break;
+                }
+                if (!action) return;
+                e.preventDefault();
+                dotnetRef.invokeMethodAsync('OnTimelineKey', action).catch(() => { });
+            };
+            document.addEventListener('keydown', tlKeyHandler);
+        },
+        tlKeysDispose() {
+            if (tlKeyHandler) { document.removeEventListener('keydown', tlKeyHandler); tlKeyHandler = null; }
+        },
+
+        focusEl(id) {
+            const el = document.getElementById(id);
+            if (el) { el.focus(); el.select?.(); }
         },
 
         attach(videoId, wsUrl) {

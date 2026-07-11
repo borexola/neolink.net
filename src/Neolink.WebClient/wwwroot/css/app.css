@@ -1898,6 +1898,83 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     color: var(--accent);
 }
 
+.tl-clock-btn { cursor: text; border-radius: 6px; padding: 1px 6px; }
+.tl-clock-btn:hover { background: var(--accent-soft); }
+
+/* The clock swapped for direct input: type 16:39:12, Enter, you're there. */
+.tl-clock-edit {
+    margin-left: auto;
+    width: 108px;
+    background: var(--bg);
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    color: var(--accent);
+    font-size: 15px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+    padding: 1px 6px;
+    outline: none;
+}
+
+/* Fine-step transport buttons: compact, tabular, clearly a cluster */
+.tl-step {
+    min-width: 34px;
+    padding: 5px 8px;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+}
+
+.tl-zoom-chip { font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.tl-keys-btn { min-width: 30px; font-weight: 700; color: var(--muted); }
+.tl-keys-btn:hover, .tl-keys-btn.active { color: var(--accent); }
+
+/* Keyboard cheat-sheet popover */
+.tl-keys-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 70;
+    background: rgba(0, 0, 0, 0.35);
+}
+
+.tl-keys-panel {
+    position: absolute;
+    top: 62px;
+    right: 16px;
+    width: min(360px, calc(100vw - 24px));
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 14px 16px;
+    box-shadow: var(--shadow);
+}
+
+.tl-keys-title {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 11px;
+    letter-spacing: 2px;
+    color: var(--muted);
+    margin-bottom: 10px;
+}
+
+.tl-keys-grid {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 7px 14px;
+    font-size: 12px;
+}
+
+.tl-keys-grid span:nth-child(odd) {
+    color: var(--accent);
+    font-family: Consolas, "Cascadia Mono", monospace;
+    white-space: nowrap;
+}
+
+.tl-keys-hint { margin-top: 10px; }
+
 /* Adaptive playback: shown while the clock is held back for lagging streams */
 .tl-lag {
     font-size: 10px;
@@ -1949,6 +2026,49 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     user-select: none;
 }
 
+/* The whole day at a glance while the lanes are zoomed: footage blocks, the
+   red cursor and the draggable view-window rectangle. */
+.tl-overview {
+    position: relative;
+    height: 16px;
+    margin-bottom: 4px;
+    background: color-mix(in srgb, var(--panel) 70%, transparent);
+    border-radius: 4px;
+    overflow: hidden;
+    cursor: grab;
+}
+
+.tl-ov-cov {
+    position: absolute;
+    top: 5px;
+    height: 6px;
+    background: #35507e;
+    border-radius: 2px;
+    pointer-events: none;
+}
+
+.tl-ov-win {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    min-width: 3px;
+    background: var(--accent-soft);
+    border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+    border-radius: 4px;
+    pointer-events: none;
+}
+
+.tl-ov-cursor {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: var(--err);
+    pointer-events: none;
+}
+
+.tl-name-head { height: 46px; } /* overview strip + ruler */
+
 .tl-ruler { position: relative; height: 26px; }
 
 .tl-tick {
@@ -1960,6 +2080,47 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     color: var(--muted);
     padding-left: 3px;
     pointer-events: none;
+    white-space: nowrap;
+}
+
+.tl-tick-minor {
+    position: absolute;
+    bottom: 0;
+    height: 6px;
+    border-left: 1px solid color-mix(in srgb, var(--line) 55%, transparent);
+    pointer-events: none;
+}
+
+/* JS-owned hover readout: a hairline plus a time bubble under the mouse */
+.tl-hover {
+    position: absolute;
+    top: 20px;
+    bottom: 0;
+    display: none;
+    pointer-events: none;
+    z-index: 4;
+}
+
+.tl-hover-line {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: color-mix(in srgb, var(--text) 30%, transparent);
+}
+
+.tl-hover-time {
+    position: absolute;
+    top: 2px;
+    left: 4px;
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    padding: 0 4px;
+    border-radius: 3px;
+    white-space: nowrap;
 }
 
 .tl-lane {
@@ -1991,7 +2152,7 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 
 .tl-cursor {
     position: absolute;
-    top: 0;
+    top: 20px; /* below the day-overview strip, which has its own mini cursor */
     bottom: 0;
     width: 2px;
     background: var(--err);
