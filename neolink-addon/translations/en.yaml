@@ -1,0 +1,21 @@
+configuration:
+  cameras:
+    name: Cameras
+    description: >-
+      Your Reolink cameras. Each entry needs a name (used in stream URLs and
+      entity names), the camera's IP address, and its account. Set always_on
+      for a battery camera you want streaming around the clock (it will drain
+      the battery — pair it with solar/USB power). Leave the list empty to
+      manage cameras directly in config.json instead.
+  auto_mqtt:
+    name: Automatic MQTT setup
+    description: >-
+      Wire the connection to Home Assistant's Mosquitto broker add-on
+      automatically at every start. Turn off only if you run your own broker
+      (configure it in config.json or the web UI).
+  log_verbose:
+    name: Verbose logging
+    description: Debug-level logs. Only useful when chasing a problem.
+network:
+  8654/tcp: RTSP server (VLC, Frigate, other NVRs)
+  8655/tcp: Web UI + HTTP API

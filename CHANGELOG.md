@@ -28,6 +28,15 @@ in the README). Paste the matching section below into the GitHub release.
   schedule (explicit intent beats detection rules) but respects the
   per-camera events switch.
 
+- **Home Assistant add-on** — Neolink.NET now installs as a native add-on on
+  Home Assistant OS/Supervised: add the repository (one-click badge in the
+  README), install, list your cameras in the add-on's Configuration tab,
+  start. The MQTT connection to the Mosquitto broker add-on is wired
+  automatically at every start, recordings land on the media share so clips
+  appear in HA's media browser, and the web UI opens straight from the add-on
+  page. Prebuilt amd64/aarch64 add-on images ship from the same release
+  workflow; the plain-Docker route is unchanged.
+
 - **Per-camera recording status in Home Assistant**: every recording-capable
   camera now carries a `Recording` binary sensor that is ON while the server
   is actually writing its footage — an event clip (camera detection or
@@ -38,6 +47,14 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Changed
 
+- **All detection sensors appear in Home Assistant immediately** — package,
+  line crossing, intrusion and loitering used to be announced only after
+  their first detection, so a freshly connected camera showed just the core
+  four (motion/person/vehicle/animal) and automations for the smart types
+  couldn't be built until one had already fired. Every detection type now
+  gets its binary sensor up front; types the camera never pushes simply stay
+  Clear. (The doorbell press event still appears on the first ring — a dead
+  doorbell trigger on non-doorbell cameras would be worse than a late one.)
 - Phone tile chrome slims down: the camera name now floats translucently over
   the tile's top-right corner instead of occupying the bottom bar, and the
   recording indicators shrink to a blinking dot — no more `REC` label (the

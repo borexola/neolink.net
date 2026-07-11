@@ -97,6 +97,27 @@ The cameras are unmodified and no Reolink NVR is required.
 - A crash in one camera's pipeline can never take down other cameras or the process
 - Zero native dependencies, zero NuGet packages — builds fully offline
 
+## Quick start (Home Assistant add-on)
+
+Running Home Assistant OS (or Supervised)? Neolink.NET installs as a native
+add-on — no Docker commands, no YAML files:
+
+[![Add repository to my Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fborexola%2Fneolink.net)
+
+1. Click the badge (or Settings → Add-ons → Add-on Store → ⋮ → Repositories →
+   add `https://github.com/borexola/neolink.net`), then install **Neolink.NET**.
+2. Add your cameras in the add-on's *Configuration* tab (name, IP, account).
+3. Start it and click **OPEN WEB UI**.
+
+If the **Mosquitto broker** add-on is installed, the MQTT connection is wired
+up automatically at every start — cameras appear as Home Assistant devices with
+no further setup. Recordings land in `/media/neolink`, so clips show up in HA's
+media browser. Full details in the add-on's Documentation tab
+([neolink-addon/DOCS.md](neolink-addon/DOCS.md)).
+
+Running Home Assistant in a plain container (no Supervisor)? Use the Docker
+route below — everything works the same, including the MQTT integration.
+
 ## Quick start (Docker — recommended)
 
 Prebuilt multi-arch images (`linux/amd64` + `linux/arm64`) are published to GitHub
@@ -462,7 +483,7 @@ in exchange you get an integration light enough to leave running forever.
 | Entity | Type | Notes |
 |---|---|---|
 | Motion / Person / Vehicle / Animal | `binary_sensor` | From the camera's alarm pushes (AI labels need Smart Detection enabled in the Reolink app) |
-| Package / Line crossing / Intrusion / Loitering | `binary_sensor` | Announced on their first detection, so cameras without these features don't grow dead entities |
+| Package / Line crossing / Intrusion / Loitering | `binary_sensor` | Created up front like the core four, so automations can be built before the first event — they stay **Clear** until the camera pushes one (smart/perimeter detection must be configured in the Reolink app for that to ever happen) |
 | Doorbell | `event` | Video doorbells: every button press publishes an MQTT event (`event_type: press`, `device_class: doorbell`) — the natural trigger for ring automations |
 | Visitor | `binary_sensor` | Momentary doorbell-press pulse; HA clears it itself after a few seconds |
 | Record on demand | `switch` | **Record a clip on demand from HA**, regardless of what the camera detects — one clip, stops by itself; see below (appears when the server records events for this camera) |

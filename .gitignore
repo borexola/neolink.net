@@ -21,3 +21,6 @@ src/Neolink/
 
 # local docker test images (docker save output)
 neolink-*.tar
+
+# editor/backup leftovers
+*.bak

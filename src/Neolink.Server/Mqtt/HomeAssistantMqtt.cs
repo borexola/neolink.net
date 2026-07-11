@@ -16,9 +16,9 @@ namespace Neolink.Mqtt;
 /// Discovery convention so entities appear automatically.
 ///
 /// Per camera it publishes (all retained, so HA repopulates after a restart):
-///   • binary_sensor: motion, person, vehicle, animal   (from the alarm pushes)
-///   • binary_sensor: package, line crossing, intrusion,
-///                    loitering                          (lazily, on first detection)
+///   • binary_sensor: motion, person, vehicle, animal,
+///                    package, line crossing, intrusion,
+///                    loitering                          (from the alarm pushes)
 ///   • binary_sensor: siren                              (from the status pushes)
 ///   • event:         doorbell press                     (video doorbells; not retained)
 ///   • binary_sensor: visitor                            (doorbell press pulse; HA
@@ -64,13 +64,13 @@ public sealed class HomeAssistantMqtt
         DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
     };
 
-    /// <summary>Every detection label that gets a binary sensor. The classic four
-    /// are announced on every camera; the smart labels (package + the perimeter
-    /// events set up in the Reolink app) announce lazily on their first push, so
-    /// cameras without those features never grow dead entities in HA.</summary>
+    /// <summary>Every detection label that gets a binary sensor — ALL announced up
+    /// front on every Baichuan camera, so automations can be written in HA before
+    /// the first package/perimeter event ever fires. A type the camera never
+    /// pushes (feature absent, or not configured in the Reolink app) simply stays
+    /// Clear — visible-but-idle beats invisible-until-it-happens.</summary>
     internal static readonly string[] DetectionLabels =
         { "motion", "person", "vehicle", "animal", "package", "line-crossing", "intrusion", "loitering" };
-    internal static readonly string[] CoreLabels = { "motion", "person", "vehicle", "animal" };
 
     private readonly MqttConfig _cfg;
     private readonly string _version;
@@ -334,8 +334,6 @@ internal sealed class CameraBridge
     private readonly string _base;      // {baseTopic}/{id}
     private readonly Dictionary<string, DateTime> _activeUntil = new();
     private readonly HashSet<string> _sensorOn = new();
-    /// <summary>Smart detection labels seen at least once (announced lazily).</summary>
-    private readonly HashSet<string> _smartAnnounced = new();
 
     private bool _featuresAnnounced;
     private bool _doorbellAnnounced;
@@ -440,9 +438,10 @@ internal sealed class CameraBridge
             return;
         }
 
-        // Detection sensors and reboot exist on every Baichuan camera — announce
-        // immediately (plus any lazily-discovered smart labels seen so far).
-        var labels = HomeAssistantMqtt.CoreLabels.Concat(_smartAnnounced).ToList();
+        // Every detection sensor announces immediately — package and the
+        // perimeter types included — so they exist in HA before their first
+        // event ever fires. Types the camera never pushes just stay Clear.
+        var labels = HomeAssistantMqtt.DetectionLabels;
         foreach (var label in labels)
             await AnnounceEntityAsync("binary_sensor", label, BinarySensorConfig(label), ct).ConfigureAwait(false);
         await AnnounceEntityAsync("button", "reboot", ButtonConfig("Reboot", "reboot", "restart"), ct).ConfigureAwait(false);
@@ -725,13 +724,7 @@ internal sealed class CameraBridge
             _activeUntil["motion"] = now + HomeAssistantMqtt.OffDelay;
             foreach (var l in labels)
                 if (Array.IndexOf(HomeAssistantMqtt.DetectionLabels, l) >= 0)
-                {
                     _activeUntil[l] = now + HomeAssistantMqtt.OffDelay;
-                    // Smart labels announce on first sight (retained state follows
-                    // right after, so HA shows a value as soon as the entity exists).
-                    if (Array.IndexOf(HomeAssistantMqtt.CoreLabels, l) < 0 && _smartAnnounced.Add(l))
-                        _ = AnnounceEntityAsync("binary_sensor", l, BinarySensorConfig(l), CancellationToken.None);
-                }
         }
         else
         {
