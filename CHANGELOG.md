@@ -38,6 +38,14 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Changed
 
+- **All detection sensors appear in Home Assistant immediately** — package,
+  line crossing, intrusion and loitering used to be announced only after
+  their first detection, so a freshly connected camera showed just the core
+  four (motion/person/vehicle/animal) and automations for the smart types
+  couldn't be built until one had already fired. Every detection type now
+  gets its binary sensor up front; types the camera never pushes simply stay
+  Clear. (The doorbell press event still appears on the first ring — a dead
+  doorbell trigger on non-doorbell cameras would be worse than a late one.)
 - Phone tile chrome slims down: the camera name now floats translucently over
   the tile's top-right corner instead of occupying the bottom bar, and the
   recording indicators shrink to a blinking dot — no more `REC` label (the
