@@ -1089,8 +1089,6 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     /* Freeform windows assume a mouse; keep them usable but scrollable */
     .grid.mode-free { overflow: auto; }
 
-    .tile-bar { opacity: 1; } /* no hover on touch: keep controls visible */
-
     /* Phones: every tile control must stay on-screen. The camera name is the
        only flexible item — it shrinks to an ellipsis — while the buttons and
        the stream picker compact instead of being pushed off the right edge. */
@@ -1140,11 +1138,29 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 
 /* Touch devices, any width: finger-sized targets and no hover-only affordances */
 @media (pointer: coarse) {
+    /* Hover-revealed controls must be ALWAYS visible on touch — and gated on
+       pointer type, not viewport width: a phone in landscape is wider than the
+       phone breakpoint, and WebKit turns any content-revealing :hover into a
+       "first tap hovers, second tap clicks" trap (the two-taps-to-minimize bug). */
+    .tile-bar { opacity: 1; }
+
     .tool-btn, .tool-select, .tl-play { min-height: 40px; }
     .icon-btn { min-width: 36px; min-height: 36px; }
     .chip { min-height: 32px; padding: 5px 13px; }
-    .zoom-hud { display: flex; } /* no hover on touch: keep the zoom pill visible */
+    .zoom-hud { display: flex; } /* no hover on touch: JS fades it when idle instead */
     .zoom-hud:not(:is(.zoom-on *, :fullscreen *)) { display: none; }
+
+    /* Compact + translucent on phones: less video real estate stolen while shown */
+    .zoom-hud {
+        padding: 5px 4px;
+        gap: 2px;
+        right: 6px;
+        opacity: 0.8;
+    }
+    .zoom-hud.hud-idle { opacity: 0; }
+
+    /* Two fingers on a zoomable surface must pinch, never scroll/browser-zoom */
+    .zoom-on, .quick-view-media, .event-player-media { touch-action: none; }
 }
 
 /* ---------- camera settings dialog ---------- */
@@ -1865,6 +1881,14 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     border: 1px solid var(--line);
     border-radius: 999px;
     backdrop-filter: blur(6px);
+    transition: opacity 0.35s ease;
+}
+
+/* Touch: JS fades the pill after a moment of stillness so it stops covering
+   the picture — any tap on the video (or a pinch) brings it back. */
+.zoom-hud.hud-idle {
+    opacity: 0;
+    pointer-events: none;
 }
 
 .zoom-on:hover .zoom-hud,

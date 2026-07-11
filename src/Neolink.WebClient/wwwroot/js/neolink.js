@@ -30,9 +30,23 @@
             this.lastMsgAt = 0;
             this.msgCount = 0;
             this.onPlaying = () => { this.video.dataset.live = '1'; };
-            this.onWaiting = () => this.jumpGap();
+            this.onWaiting = () => { this.diag.stall++; this.jumpGap(); };
             video.addEventListener('playing', this.onPlaying);
             video.addEventListener('waiting', this.onWaiting);
+            // Playback-health counters, reported to the console every 30 s when
+            // anything notable happened. Gap-hops mean footage never REACHED the
+            // browser (the server or the network dropped it) — the one signal
+            // that separates "server can't keep up" from "this device can't".
+            this.diag = { resync: 0, hop: 0, stall: 0 };
+            this.diagTimer = setInterval(() => {
+                const d = this.diag;
+                if (d.resync || d.hop || d.stall) {
+                    const path = decodeURIComponent((this.wsUrl.split('path=')[1] || this.wsUrl).split('&')[0]);
+                    console.info(`[neolink] live ${path}: last 30s — ${d.hop} skip(s) over footage that never arrived `
+                        + `(server/network drops), ${d.resync} live-edge resync(s) (player fell behind), ${d.stall} stall(s)`);
+                }
+                this.diag = { resync: 0, hop: 0, stall: 0 };
+            }, 30_000);
             this.connect();
         }
 
@@ -79,7 +93,18 @@
 
         setup(meta) {
             this.teardownMse();
-            if (!('MediaSource' in window) || !MediaSource.isTypeSupported(meta.mime)) {
+            // iPhone Safari has NO classic MediaSource: since iOS 17.1 Apple
+            // ships ManagedMediaSource instead — near drop-in, but it must be
+            // detected and used explicitly or live view dies with a misleading
+            // "codec not supported" for every codec.
+            const MS = window.ManagedMediaSource || window.MediaSource;
+            if (!MS) {
+                this.setStatus('⚠ this browser has no Media Source support — live view needs Safari 17.1+/iOS 17.1+ or any Chromium/Firefox');
+                this.alive = false;
+                try { this.ws.close(); } catch { }
+                return;
+            }
+            if (!MS.isTypeSupported(meta.mime)) {
                 // Codec not playable in this browser (typically H.265 without HW support).
                 this.setStatus('⚠ ' + meta.codec + ' not supported by this browser — try the sub stream');
                 this.alive = false;
@@ -92,7 +117,20 @@
             if (meta.audio) this.video.dataset.audio = '1';
             else delete this.video.dataset.audio;
             window.neolink.audioSync();
-            this.ms = new MediaSource();
+            this.ms = new MS();
+            this.mms = false;
+            this.msStreaming = true;
+            if (window.ManagedMediaSource && this.ms instanceof window.ManagedMediaSource) {
+                // Apple's contract: remote playback (AirPlay) must be off for a
+                // ManagedMediaSource-backed element, or sourceopen never fires;
+                // and the source signals when it wants data flowing. Appending
+                // against its wishes (thermals, battery) makes iOS stutter, so
+                // deliveries queue up while it says stop.
+                this.mms = true;
+                this.video.disableRemotePlayback = true;
+                this.ms.addEventListener('startstreaming', () => { this.msStreaming = true; this.pump(); });
+                this.ms.addEventListener('endstreaming', () => { this.msStreaming = false; });
+            }
             this.video.src = URL.createObjectURL(this.ms);
             this.ms.addEventListener('sourceopen', () => {
                 if (!this.ms) return;
@@ -116,10 +154,28 @@
                 }
             } catch { }
 
-            const next = this.queue.shift();
-            if (next) {
+            // Append the whole backlog in ONE buffer (fragments are self-contained
+            // moof/mdat pairs, so concatenation is valid MSE input). Per-frame
+            // appends are cheap on Chromium but expensive on Safari — at 25 fps
+            // the per-append overhead alone made iPhones stutter and fall behind.
+            if (this.queue.length && this.msStreaming) {
+                let take = 0, bytes = 0;
+                while (take < this.queue.length && bytes < 1_500_000) {
+                    bytes += this.queue[take].byteLength;
+                    take++;
+                }
+                let buf;
+                if (take === 1) {
+                    buf = this.queue.shift();
+                } else {
+                    const parts = this.queue.splice(0, take);
+                    const joined = new Uint8Array(bytes);
+                    let off = 0;
+                    for (const p of parts) { joined.set(new Uint8Array(p), off); off += p.byteLength; }
+                    buf = joined;
+                }
                 try {
-                    this.sb.appendBuffer(next);
+                    this.sb.appendBuffer(buf);
                 } catch {
                     // QuotaExceeded or detached buffer: force a clean reconnect
                     try { this.ws.close(); } catch { }
@@ -157,11 +213,20 @@
                 const inLast = t >= b.start(last) - 0.01;
                 if (!inLast) return; // behind a gap: jumpGap handles it
 
+                // Backgrounded (phone locked, app switched): the element barely
+                // advances by design — chasing now means pointless seeks, and the
+                // first pump after returning does one clean resync instead.
+                if (document.hidden) return;
+
+                // Safari's pipeline visibly janks on higher playback rates, so the
+                // ManagedMediaSource path drifts back more softly.
+                const chase = this.mms ? 1.05 : 1.1;
                 if (ahead > this.latencyTarget + 5) {
+                    this.diag.resync++;
                     this.video.currentTime = end - this.latencyTarget; // hard resync
                     this.video.playbackRate = 1.0;
                 } else if (ahead > this.latencyTarget + 1) {
-                    this.video.playbackRate = 1.1;  // drift back gently, invisibly
+                    this.video.playbackRate = chase;  // drift back gently, invisibly
                 } else if (this.video.playbackRate !== 1.0) {
                     this.video.playbackRate = 1.0;
                 }
@@ -176,6 +241,7 @@
                 const t = this.video.currentTime;
                 for (let i = 0; i < b.length; i++) {
                     if (b.start(i) > t + 0.01 && b.start(i) - t < 10) {
+                        this.diag.hop++;
                         this.video.currentTime = b.start(i) + 0.05;
                         return;
                     }
@@ -205,6 +271,7 @@
         destroy() {
             this.alive = false;
             clearTimeout(this.timer);
+            clearInterval(this.diagTimer);
             this.video.removeEventListener('playing', this.onPlaying);
             this.video.removeEventListener('waiting', this.onWaiting);
             try { this.ws && this.ws.close(); } catch { }
@@ -676,6 +743,7 @@
                     v.controls = st.z <= 1;
                 const badge = box.querySelector('[data-zoom-badge]');
                 if (badge) badge.textContent = Math.round(st.z * 100) + '%';
+                hudWake(box); // zoom activity keeps the touch HUD visible
             };
             // Rescale keeping the container point (px,py) fixed on screen.
             const zoomAt = (box, factor, px, py) => {
@@ -688,6 +756,27 @@
                 apply(box);
             };
             const reset = (box) => { const st = stOf(box); st.z = 1; st.tx = 0; st.ty = 0; apply(box); };
+
+            // On touch screens the HUD pill sits ON the video and blocks the
+            // picture — fade it out after a moment of stillness; any tap on the
+            // surface (or any zoom activity) brings it back. Desktop keeps the
+            // hover behavior and never fades.
+            const coarse = () => matchMedia('(pointer: coarse)').matches;
+            const hudSeen = new WeakMap(); // hud element -> last activity (ms)
+            const hudWake = (box) => {
+                if (!coarse() || !box) return;
+                const hud = box.querySelector('.zoom-hud');
+                if (!hud) return;
+                hud.classList.remove('hud-idle');
+                hudSeen.set(hud, performance.now());
+            };
+            setInterval(() => {
+                if (!coarse()) return;
+                for (const hud of document.querySelectorAll('.zoom-hud:not(.hud-idle)')) {
+                    const seen = hudSeen.get(hud) ?? (hudSeen.set(hud, performance.now()), performance.now());
+                    if (performance.now() - seen > 2400) hud.classList.add('hud-idle');
+                }
+            }, 800);
             // Layout changed under us (unmaximized, left fullscreen): back to 1:1.
             this._zoomSweep = () => [...zoomedBoxes]
                 .forEach(b => { if (!b.isConnected || !eligible(b)) reset(b); });
@@ -714,10 +803,29 @@
             }, { capture: true });
 
             // Drag pans while zoomed; the click on release is swallowed so the
-            // tile doesn't react to it.
+            // tile doesn't react to it. Two touch pointers on the same surface
+            // PINCH instead — the natural phone gesture, so the HUD buttons are
+            // a convenience there, not the only way in.
             const pan = { box: null, moved: false, x: 0, y: 0 };
+            const pinch = { box: null, d: 0, pts: new Map() };
+            const pinchDist = () => {
+                const [a, b] = [...pinch.pts.values()];
+                return Math.hypot(a.x - b.x, a.y - b.y);
+            };
             document.addEventListener('pointerdown', (e) => {
                 const box = boxOf(e.target);
+                if (e.pointerType === 'touch' && eligible(box)) {
+                    hudWake(box); // a tap always resurfaces the faded HUD
+                    pinch.pts.set(e.pointerId, { x: e.clientX, y: e.clientY, box });
+                    if (pinch.pts.size === 2) {
+                        const boxes = [...pinch.pts.values()].map(p => p.box);
+                        if (boxes[0] === boxes[1]) {
+                            pinch.box = box;
+                            pinch.d = pinchDist();
+                            pan.box = null; // the second finger turns a pan into a pinch
+                        }
+                    }
+                }
                 if (!eligible(box) || stOf(box).z <= 1) return;
                 if (e.target.closest('.tile-bar, .zoom-hud, button, select')) return;
                 pan.box = box; pan.moved = false; pan.x = e.clientX; pan.y = e.clientY;
@@ -726,6 +834,23 @@
                 if (box instanceof HTMLElement) box.draggable = false;
             }, { capture: true });
             document.addEventListener('pointermove', (e) => {
+                if (pinch.box && pinch.pts.has(e.pointerId)) {
+                    const p = pinch.pts.get(e.pointerId);
+                    p.x = e.clientX; p.y = e.clientY;
+                    if (pinch.pts.size === 2) {
+                        e.preventDefault();
+                        const d = pinchDist();
+                        if (pinch.d > 0 && d > 0) {
+                            const [a, b] = [...pinch.pts.values()];
+                            const r = pinch.box.getBoundingClientRect();
+                            zoomAt(pinch.box, d / pinch.d,
+                                (a.x + b.x) / 2 - r.left, (a.y + b.y) / 2 - r.top);
+                            hudWake(pinch.box);
+                        }
+                        pinch.d = d;
+                        return;
+                    }
+                }
                 if (!pan.box) return;
                 const dx = e.clientX - pan.x, dy = e.clientY - pan.y;
                 if (!pan.moved && Math.hypot(dx, dy) < 4) return; // still just a click
@@ -736,7 +861,12 @@
                 pan.x = e.clientX; pan.y = e.clientY;
                 apply(pan.box);
             }, { capture: true });
-            const panEnd = () => { pan.box?.classList.remove('zoom-panning'); pan.box = null; };
+            const panEnd = (e) => {
+                pinch.pts.delete(e.pointerId);
+                if (pinch.pts.size < 2) pinch.box = null;
+                pan.box?.classList.remove('zoom-panning');
+                pan.box = null;
+            };
             document.addEventListener('pointerup', panEnd, { capture: true });
             document.addEventListener('pointercancel', panEnd, { capture: true });
             document.addEventListener('click', (e) => {
@@ -1073,6 +1203,12 @@
             if (el) { el.focus(); el.select?.(); }
         },
 
+        // Touch-first device? Drives server-side choices like the quick view
+        // defaulting to the lighter sub stream on phones.
+        isCoarse() {
+            return matchMedia('(pointer: coarse)').matches;
+        },
+
         attach(videoId, wsUrl) {
             this.detach(videoId);
             const video = document.getElementById(videoId);
@@ -1101,7 +1237,25 @@
                 return;
             }
             const el = document.getElementById(elementId);
-            if (el?.requestFullscreen) el.requestFullscreen().catch(() => { });
+            if (!el) return;
+            if (el.requestFullscreen) {
+                el.requestFullscreen().catch(() => { });
+                return;
+            }
+            if (el.webkitRequestFullscreen) { // older WebKit (iPad)
+                try { el.webkitRequestFullscreen(); } catch { }
+                return;
+            }
+            // iPhone: no element fullscreen exists AT ALL — only the <video>
+            // itself, through WebKit's native player. When it closes, bridge its
+            // proprietary event to a normal fullscreenchange so the existing
+            // fsWatch/glyph logic sees the exit like any other browser.
+            const v = el.querySelector('video');
+            if (v?.webkitEnterFullscreen) {
+                v.addEventListener('webkitendfullscreen',
+                    () => document.dispatchEvent(new Event('fullscreenchange')), { once: true });
+                try { v.webkitEnterFullscreen(); } catch { }
+            }
         },
         exitFullscreen() {
             if (document.fullscreenElement) document.exitFullscreen().catch(() => { });

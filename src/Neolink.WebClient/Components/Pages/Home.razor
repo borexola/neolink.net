@@ -1058,6 +1058,8 @@
 
     // Quick view: temporary pop-up player opened from the sidebar (⛶)
     private ViewSlot? _quickView;
+    /// <summary>Touch-first device (phone/tablet): drives stream defaults.</summary>
+    private bool _coarsePointer;
     private string? _quickAttached;
     private const string QuickVideoId = "vid-quick";
 
@@ -1139,6 +1141,7 @@
     {
         if (firstRender)
         {
+            try { _coarsePointer = await JS.InvokeAsync<bool>("neolink.isCoarse"); } catch { }
             await LoadPersistedAsync();
             _loaded = true;
             await RefreshAuthAsync();
@@ -2352,9 +2355,14 @@
     /// (Putting a camera on a tile is drag-and-drop or the tile's right-click menu.)</summary>
     private void OpenCameraMain(ApiCamera cam)
     {
-        var main = cam.Streams.FirstOrDefault(s => s.Kind == "mainStream");
+        // Phones open the SUB stream: a 1440p+ main stream decoded on a phone
+        // screen is what made previews stutter on iOS, and the panel can't show
+        // those pixels anyway. The sidebar's Main chip still opens Main explicitly.
+        var preferred = _coarsePointer ? "subStream" : "mainStream";
+        var pick = cam.Streams.FirstOrDefault(s => s.Kind == preferred)
+            ?? cam.Streams.FirstOrDefault(s => s.Kind == "mainStream");
         _sidebarOpen = false; // mobile drawer: close after picking
-        Nav.NavigateTo(main != null ? StreamUrl(cam.Name, main.Kind) : CameraUrl(cam.Name));
+        Nav.NavigateTo(pick != null ? StreamUrl(cam.Name, pick.Kind) : CameraUrl(cam.Name));
     }
 
     private static string CamHeadTitle(ApiCamera cam) =>
@@ -2669,11 +2677,14 @@
     /// <summary>
     /// A maximized card deserves the pixels: a sub-stream card switches to the
     /// camera's main stream when it serves one. The previous choice is remembered
-    /// so restoring the view puts the sub stream back.
+    /// so restoring the view puts the sub stream back. Phones skip the upgrade —
+    /// a 1440p+ main stream is more than a phone screen shows and enough to make
+    /// iOS playback stutter; the tile's stream picker still offers Main.
     /// </summary>
     private void AutoMainStream(int index)
     {
         _maxPrevKind = _maxPrevPath = _maxPrevCamera = _maxSetKind = null;
+        if (_coarsePointer) return;
         var slot = _slots[index];
         var cam = _cameras.FirstOrDefault(c => c.Name == slot.Camera);
         var main = cam?.Streams.FirstOrDefault(s => s.Kind == "mainStream");
@@ -2723,7 +2734,13 @@
     /// <summary>Temporary pop-up player for one camera — the layout underneath is untouched.</summary>
     private void OpenQuickView(ApiCamera cam)
     {
-        var s = cam.Streams.FirstOrDefault(x => x.Kind == "mainStream") ?? DefaultStream(cam);
+        // Phones default to the sub stream: a 1440p+ main stream decoded into a
+        // small popup is what made iOS previews stutter, and the popup can't
+        // show that many pixels anyway. The stream picker still offers Main.
+        var preferred = _coarsePointer ? "subStream" : "mainStream";
+        var s = cam.Streams.FirstOrDefault(x => x.Kind == preferred)
+            ?? cam.Streams.FirstOrDefault(x => x.Kind == "mainStream")
+            ?? DefaultStream(cam);
         if (s == null) return;
         _quickView = new ViewSlot { Camera = cam.Name, Kind = s.Kind, Path = s.Path };
         _sidebarOpen = false;

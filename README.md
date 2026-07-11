@@ -616,6 +616,54 @@ python3 tools/fake_camera.py /path/to/rust-repo/crates/core/src/bcmedia/samples 
 ffprobe -rtsp_transport tcp rtsp://127.0.0.1:8654/testcam
 ```
 
+### Testing uncommitted changes on a real server (local Docker image)
+
+To try work-in-progress on a production-like box **without pushing anything to
+GitHub**: build an image straight from your working tree, carry it over as a
+tar, and load it there. The Dockerfile copies `src/` as-is, so uncommitted
+edits are included.
+
+On the dev machine (repo root):
+
+```bash
+# a distinctive version string makes the test build unmistakable in the UI
+docker build -t neolink.net:0.8.3-mytest --build-arg VERSION=0.8.3-mytest .
+
+# sanity check, then export the image to a portable file
+docker run --rm --entrypoint dotnet neolink.net:0.8.3-mytest neolink.net.dll --version
+docker save neolink.net:0.8.3-mytest -o neolink.net-0.8.3-mytest.tar
+```
+
+On the server (after copying the tar over):
+
+```bash
+docker load -i neolink.net-0.8.3-mytest.tar
+
+# replace the previous test container if one exists — a plain `docker start`
+# later would silently resurrect the OLD image, so remove it outright
+docker stop neolink-test && docker rm neolink-test
+
+docker run -d --name neolink-test \
+  --restart unless-stopped \
+  -p 8654:8654 -p 8655:8655 \
+  -e TZ=Europe/London \
+  -v /srv/neolink/config:/config \
+  -v /srv/neolink/recordings:/recordings \
+  neolink.net:0.8.3-mytest
+```
+
+Notes:
+
+- The config mounted at `/config/config.json` must use **container paths**
+  (e.g. `"path": "/recordings"`), matching the volume mounts.
+- Config and recordings live in the host mounts, so stopping/removing the
+  container never touches them.
+- Confirm which build is live at the top toolbar of the web UI — it shows the
+  exact version string you baked in.
+- Old test images pile up; reclaim disk with `docker rmi neolink.net:<old-tag>`.
+- The image is built for the dev machine's Docker platform (typically
+  linux/amd64). For an ARM server, add `--platform linux/arm64` to the build.
+
 ### Project layout
 
 ```

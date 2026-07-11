@@ -40,6 +40,21 @@ in the README). Paste the matching section below into the GitHub release.
   the Save/Restart buttons live in a pinned footer with the unsaved-changes
   notice — no more scrolling to find out whether edits were written. Save
   errors and status also surface in the footer, always visible.
+- **Mobile viewing polish**:
+  - Pinch-to-zoom on any zoomable video surface (maximized tile, theater,
+    quick view, fullscreen) — the HUD pill is now a convenience, not the only
+    way in.
+  - The zoom pill no longer squats over the picture on phones: it is smaller,
+    translucent, and fades away after a moment — tap the video to bring it
+    back.
+  - Phones no longer get force-fed the main stream: tapping a camera opens its
+    SUB stream, and maximizing a tile skips the automatic sub→main upgrade on
+    touch devices — decoding 1440p+ into a phone screen is what made previews
+    stutter on iPhones. Main remains one tap away in every stream picker.
+  - Smoother live playback on iOS: media appends are batched (Safari's
+    per-append cost at per-frame granularity starved the decoder), the player
+    honors ManagedMediaSource's streaming hints, catch-up is gentler on
+    Safari's pipeline, and no seeking happens while the app is backgrounded.
 
 ### Fixed
 
@@ -54,6 +69,27 @@ in the README). Paste the matching section below into the GitHub release.
   appeared at all. Every discovery publish now omits unset fields entirely,
   and the fixed build heals HA on its next connect by overwriting the
   retained configs with valid ones — no HA-side action needed.
+- **iOS: minimizing a maximized camera no longer needs two taps.** WebKit
+  turns any content-revealing :hover into "first tap hovers, second tap
+  clicks", and the tile controls' always-visible override was gated on
+  viewport width — a phone held in landscape missed it. It is now gated on
+  pointer type (touch), which is what the rule actually meant.
+- **iOS: the fullscreen button works.** iPhones have no element-fullscreen API
+  at all; the button now falls back to WebKit's native video fullscreen
+  (webkitEnterFullscreen) and bridges its exit event so the UI notices, same
+  as any other browser.
+- Live players now log a per-stream health line to the browser console
+  (every 30 s, only when something happened): skips over footage that never
+  arrived (server/network drops) vs live-edge resyncs vs stalls — the
+  distinction that tells you WHERE playback problems come from.
+- **Live view on iPhone/Safari**: Safari on iPhone has no classic MediaSource —
+  since iOS 17.1 Apple ships ManagedMediaSource instead — so every stream
+  failed with a misleading "codec not supported" message (even plain H.264).
+  The player now detects and uses ManagedMediaSource where that's what the
+  browser offers, following Apple's contract (remote playback disabled,
+  streaming hints drive the buffer pump). Browsers with neither API get an
+  honest message; a genuine codec gap (H.265 without hardware decode) still
+  suggests the sub stream.
 - The timeline's buffering spinner no longer lingers after pausing: the veil
   now follows the video element's own events, so it clears the moment the
   paused frame is ready (and appears instantly on a genuine mid-stream stall).
