@@ -219,6 +219,8 @@ public sealed class NeolinkConfig
                 case "discoveryprefix": mqtt.DiscoveryPrefix = prop.Value.GetString() ?? mqtt.DiscoveryPrefix; break;
                 case "keepalive": mqtt.KeepAliveSeconds = prop.Value.GetInt32(); break;
                 case "tls" or "ssl": mqtt.Tls = prop.Value.GetBoolean(); break;
+                case "statsinterval" or "statsintervalseconds":
+                    mqtt.StatsIntervalSeconds = prop.Value.GetInt32(); break;
                 default:
                     Log.Warn($"Config: ignoring unknown mqtt option '{prop.Name}'");
                     break;
@@ -287,6 +289,7 @@ public sealed class NeolinkConfig
                 DiscoveryPrefix = MiniToml.GetString(mqtt, "discovery_prefix") ?? "homeassistant",
                 KeepAliveSeconds = (int)(MiniToml.GetInt(mqtt, "keepalive") ?? 30),
                 Tls = MiniToml.GetBool(mqtt, "tls") ?? false,
+                StatsIntervalSeconds = (int)(MiniToml.GetInt(mqtt, "stats_interval") ?? 60),
             };
         }
 
@@ -482,6 +485,8 @@ public sealed class NeolinkConfig
                 throw new FormatException("mqtt.keepalive must be 5..3600");
             if (string.IsNullOrWhiteSpace(Mqtt.BaseTopic))
                 throw new FormatException("mqtt.base_topic must not be empty");
+            if (Mqtt.StatsIntervalSeconds is not 0 and (< 5 or > 86400))
+                throw new FormatException("mqtt.stats_interval must be 0 (off) or 5..86400 seconds");
         }
     }
 
@@ -555,6 +560,11 @@ public sealed class MqttConfig
     public int KeepAliveSeconds { get; set; } = 30;
     /// <summary>Connect with TLS (broker port is usually 8883). Certificates are not validated.</summary>
     public bool Tls { get; set; }
+    /// <summary>How often the server publishes its own health (CPU, memory, disk,
+    /// viewers, …) as sensors on a "Neolink.NET Server" device in Home Assistant.
+    /// 60 s covers dashboards comfortably; lower it for near-live gauges.
+    /// 0 disables the server device entirely.</summary>
+    public int StatsIntervalSeconds { get; set; } = 60;
 }
 
 /// <summary>Event recording settings ("recording" in the config).</summary>

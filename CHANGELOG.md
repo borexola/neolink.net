@@ -8,6 +8,14 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### New
 
+- **The server reports itself to Home Assistant**: alongside the cameras, MQTT
+  discovery now creates a "Neolink.NET Server" device carrying the monitor
+  page's vitals — CPU, memory, storage free/used, recordings size, recording
+  write rate, viewers, cameras online/recording and the start time. Published
+  every `mqtt.stats_interval` seconds (default 60, minimum 5, 0 turns the
+  device off) — the cadence is also editable in the web UI's server settings
+  under *MQTT / Home Assistant*.
+
 - **Timeline precision controls** — frame-level review without leaving the
   browser:
   - *Zoom*: scroll or pinch on the lanes to zoom from the full 24 h down to a
@@ -25,6 +33,13 @@ in the README). Paste the matching section below into the GitHub release.
     button shows the cheat sheet.
   - *Slow motion*: ¼× and ½× join the playback speeds.
   - The clock is clickable: type 16:39:12 and you're there.
+
+### Changed
+
+- Server settings panel: the header now carries a live "● N unsaved" badge and
+  the Save/Restart buttons live in a pinned footer with the unsaved-changes
+  notice — no more scrolling to find out whether edits were written. Save
+  errors and status also surface in the footer, always visible.
 
 ### Fixed
 

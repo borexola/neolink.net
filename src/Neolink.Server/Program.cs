@@ -312,13 +312,30 @@ foreach (var cam in config.Cameras)
         motionTargets.Add((primaryService, cam.Name, recorderSink));
 }
 
+// Resource sampler: feeds the UI's monitor page AND the server's own Home
+// Assistant device — created whenever either consumer runs. ViewerCount
+// deliberately excludes the server's own recorder subscriptions — "viewers"
+// means humans/externals watching, not us taping.
+SystemMonitor? monitor = null;
+if (config.WebPort > 0 || config.Mqtt is { StatsIntervalSeconds: > 0 })
+{
+    monitor = new SystemMonitor(
+        diskProbePath: eventStore?.Root ?? stateDir,
+        recordingsRoot: eventStore?.Root,
+        viewerCount: () => webCameras.Sum(c => c.Streams.Sum(s => s.Hub.ViewerCount)),
+        recordingCameras: () => webCameras.Count(c => c.ContinuousActive?.Invoke() == true),
+        cameraStates: () => webCameras.Select(c => (c.Name, c.Control.Online)));
+    var mon = monitor;
+    tasks.Add(Task.Run(() => mon.RunAsync(shutdown.Token)));
+}
+
 // MQTT / Home Assistant bridge (single connection for all cameras), then wire
 // motion: the camera's alarm push goes to the recorder and/or the bridge. The
 // alarm-push listener only runs when a MotionSink is set, so this also enables
 // motion for MQTT-only setups (recording off).
 if (config.Mqtt is { } mqttCfg)
 {
-    mqtt = new HomeAssistantMqtt(mqttCfg, webCameras, Version);
+    mqtt = new HomeAssistantMqtt(mqttCfg, webCameras, Version) { Monitor = monitor };
     tasks.Add(Task.Run(() => mqtt.RunAsync(shutdown.Token)));
 }
 foreach (var (primary, name, recorderSink) in motionTargets)
@@ -351,17 +368,6 @@ if (config.WebPort > 0)
     // Daily best-effort check for newer releases (feeds the UI's update banner).
     var updates = new UpdateChecker(Version);
     tasks.Add(Task.Run(() => updates.RunAsync(shutdown.Token)));
-
-    // Resource sampler for the UI's monitor page (CPU/RAM/disk/viewers over time).
-    // ViewerCount deliberately excludes the server's own recorder subscriptions —
-    // "viewers" means humans/externals watching, not us taping.
-    var monitor = new SystemMonitor(
-        diskProbePath: eventStore?.Root ?? stateDir,
-        recordingsRoot: eventStore?.Root,
-        viewerCount: () => webCameras.Sum(c => c.Streams.Sum(s => s.Hub.ViewerCount)),
-        recordingCameras: () => webCameras.Count(c => c.ContinuousActive?.Invoke() == true),
-        cameraStates: () => webCameras.Select(c => (c.Name, c.Control.Online)));
-    tasks.Add(Task.Run(() => monitor.RunAsync(shutdown.Token)));
 
     var webOptions = new WebApiOptions
     {

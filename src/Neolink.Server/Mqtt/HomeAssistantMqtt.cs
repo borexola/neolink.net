@@ -31,6 +31,11 @@ namespace Neolink.Mqtt;
 ///   • button:        reboot, and PTZ steps              (per capability)
 ///   • camera:        latest snapshot                    (when the camera supports it)
 ///
+/// The SERVER also reports itself: a "Neolink.NET Server" device with health
+/// sensors straight off the monitor page (CPU, memory, disk, recordings size,
+/// write rate, viewers, cameras online/recording, start time), published every
+/// mqtt.stats_interval seconds (default 60; 0 turns the device off).
+///
 /// Availability is two-level (HA marks entities unavailable when either is off):
 /// a bridge-wide Last-Will topic and a per-camera online topic. Commands from HA
 /// arrive on ".../{entity}/set" and are executed through <see cref="ICameraControl"/>.
@@ -86,11 +91,21 @@ public sealed class HomeAssistantMqtt
     internal string Version => _version;
     internal string AvailabilityTopic => _availabilityTopic;
 
+    /// <summary>Resource sampler feeding the server's own HA device; when null
+    /// (or stats_interval is 0) the server device is not announced.</summary>
+    public Web.SystemMonitor? Monitor { get; init; }
+
+    private bool ServerStatsEnabled => Monitor != null && _cfg.StatsIntervalSeconds > 0;
+
     public async Task RunAsync(CancellationToken ct)
     {
         Log.Info($"MQTT: Home Assistant bridge enabled → {_cfg.Broker}:{_cfg.Port} " +
-                 $"(base topic '{_cfg.BaseTopic}'{(_cfg.Discovery ? ", discovery on" : "")})");
+                 $"(base topic '{_cfg.BaseTopic}'{(_cfg.Discovery ? ", discovery on" : "")}" +
+                 $"{(ServerStatsEnabled ? $", server health every {_cfg.StatsIntervalSeconds}s" : "")})");
         var refresh = Task.Run(() => RefreshLoopAsync(ct), CancellationToken.None);
+        var stats = ServerStatsEnabled
+            ? Task.Run(() => ServerStatsLoopAsync(ct), CancellationToken.None)
+            : Task.CompletedTask;
         try
         {
             await _client.RunAsync(ct).ConfigureAwait(false);
@@ -98,6 +113,7 @@ public sealed class HomeAssistantMqtt
         finally
         {
             try { await refresh.ConfigureAwait(false); } catch { }
+            try { await stats.ConfigureAwait(false); } catch { }
         }
     }
 
@@ -137,6 +153,11 @@ public sealed class HomeAssistantMqtt
         await _client.SubscribeAsync(subs, CancellationToken.None).ConfigureAwait(false);
         foreach (var cam in _cameras.Values)
             await cam.AnnounceAsync(CancellationToken.None).ConfigureAwait(false);
+        if (ServerStatsEnabled)
+        {
+            await AnnounceServerAsync(CancellationToken.None).ConfigureAwait(false);
+            await PublishServerStatsAsync(CancellationToken.None).ConfigureAwait(false);
+        }
     }
 
     private void OnMessage(string topic, byte[] payload)
@@ -148,6 +169,117 @@ public sealed class HomeAssistantMqtt
         if (rest.Length != 3 || rest[2] != "set") return;
         if (!_cameras.TryGetValue(rest[0], out var cam)) return;
         _ = cam.HandleCommandAsync(rest[1], System.Text.Encoding.UTF8.GetString(payload));
+    }
+
+    // ------------------------------------------------------------------ server health device
+
+    /// <summary>The server's own sensors: key (topic leaf), display name, unit,
+    /// device class, icon, and whether HA should file it under diagnostics.
+    /// Internal so the self-tests can pin the contract.</summary>
+    internal static readonly (string Key, string Name, string? Unit, string? DeviceClass, string? Icon, bool Diagnostic)[]
+        ServerSensors =
+    {
+        ("cpu", "CPU usage", "%", null, "mdi:cpu-64-bit", false),
+        ("memory", "Memory", "MB", null, "mdi:memory", false),
+        ("disk_free", "Storage free", "GB", null, "mdi:harddisk", false),
+        ("disk_used_pct", "Storage used", "%", null, "mdi:harddisk", false),
+        ("recordings_size", "Recordings size", "GB", null, "mdi:filmstrip-box-multiple", false),
+        ("write_rate", "Recording write rate", "MB/s", null, "mdi:content-save-move", false),
+        ("viewers", "Viewers", null, null, "mdi:eye", false),
+        ("cameras_online", "Cameras online", null, null, "mdi:cctv", false),
+        ("cameras_recording", "Cameras recording", null, null, "mdi:record-rec", false),
+        ("started", "Started", null, "timestamp", null, true),
+    };
+
+    /// <summary>One monitor sample → the state payloads to publish. Sensors whose
+    /// source is unavailable (no disk volume, recording off) are simply absent.
+    /// Internal/static so the self-tests can verify values and skip rules.</summary>
+    internal static List<(string Key, string Value)> ServerStatePayloads(Web.SystemSample s, int camerasOnline)
+    {
+        const double MB = 1024.0 * 1024.0, GB = MB * 1024.0;
+        var list = new List<(string, string)>
+        {
+            ("cpu", s.CpuPercent.ToString("0.#")),
+            ("memory", (s.WorkingSetBytes / MB).ToString("0")),
+            ("write_rate", s.StorageMbPerSec.ToString("0.##")),
+            ("viewers", s.Viewers.ToString()),
+            ("cameras_online", camerasOnline.ToString()),
+            ("cameras_recording", s.RecordingCameras.ToString()),
+        };
+        if (s.DiskTotalBytes > 0)
+        {
+            list.Add(("disk_free", (s.DiskFreeBytes / GB).ToString("0.#")));
+            list.Add(("disk_used_pct",
+                ((1 - (double)s.DiskFreeBytes / s.DiskTotalBytes) * 100).ToString("0.#")));
+        }
+        if (s.RecordingsBytes >= 0)
+            list.Add(("recordings_size", (s.RecordingsBytes / GB).ToString("0.##")));
+        return list;
+    }
+
+    private string ServerTopic(string key) => $"{_cfg.BaseTopic}/server/{key}";
+
+    private object ServerDevice() => new
+    {
+        identifiers = new[] { "neolink_server" },
+        name = "Neolink.NET Server",
+        manufacturer = "Neolink.NET",
+        model = "Camera bridge / NVR",
+        sw_version = _version,
+    };
+
+    private async Task AnnounceServerAsync(CancellationToken ct)
+    {
+        if (!_cfg.Discovery) return;
+        foreach (var s in ServerSensors)
+        {
+            var config = new
+            {
+                name = s.Name,
+                unique_id = $"neolink_server_{s.Key}",
+                state_topic = ServerTopic(s.Key),
+                unit_of_measurement = s.Unit,
+                device_class = s.DeviceClass,
+                // Numeric gauges chart as measurements; the timestamp doesn't.
+                state_class = s.DeviceClass == "timestamp" ? null : "measurement",
+                icon = s.Icon,
+                entity_category = s.Diagnostic ? "diagnostic" : null,
+                device = ServerDevice(),
+                availability = new object[] { new { topic = _availabilityTopic } },
+                availability_mode = "all",
+            };
+            await PublishAsync($"{_cfg.DiscoveryPrefix}/sensor/neolink_server/{s.Key}/config",
+                JsonSerializer.Serialize(config), ct).ConfigureAwait(false);
+        }
+        await PublishAsync(ServerTopic("started"), Web.SystemMonitor.Started.ToString("o"), ct)
+            .ConfigureAwait(false);
+    }
+
+    private async Task PublishServerStatsAsync(CancellationToken ct)
+    {
+        if (Monitor?.Latest() is not { } sample) return;
+        int online = _cameras.Values.Count(c => c.Online);
+        foreach (var (key, value) in ServerStatePayloads(sample, online))
+            await PublishAsync(ServerTopic(key), value, ct).ConfigureAwait(false);
+    }
+
+    private async Task ServerStatsLoopAsync(CancellationToken ct)
+    {
+        var interval = TimeSpan.FromSeconds(Math.Clamp(_cfg.StatsIntervalSeconds, 5, 86400));
+        while (!ct.IsCancellationRequested)
+        {
+            try { await Task.Delay(interval, ct).ConfigureAwait(false); }
+            catch (OperationCanceledException) { return; }
+            if (!_client.IsConnected) continue;
+            try
+            {
+                await PublishServerStatsAsync(ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Log.Debug($"MQTT: server stats publish failed: {Log.Flatten(ex)}");
+            }
+        }
     }
 
     private async Task RefreshLoopAsync(CancellationToken ct)
@@ -199,6 +331,9 @@ internal sealed class CameraBridge
     private bool _lastOnline;
 
     public string Id { get; }
+
+    /// <summary>Live camera reachability (feeds the server device's online count).</summary>
+    internal bool Online => _control.Online;
 
     public CameraBridge(WebCameraInfo cam, HomeAssistantMqtt hub)
     {

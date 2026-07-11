@@ -57,7 +57,8 @@
   // Optional: publish to MQTT for Home Assistant (auto-discovery). Remove to disable.
   // HA creates a device per camera with motion/person/vehicle/animal sensors,
   // battery, night-vision, floodlight, PIR, reboot + PTZ buttons and a snapshot,
-  // depending on what each camera supports.
+  // depending on what each camera supports — plus a "Neolink.NET Server" device
+  // with the server's own health (CPU, memory, disk, viewers, ...).
   // "mqtt": {
   //   "broker": "192.168.1.10",        // MQTT broker host (often the HA / Mosquitto box)
   //   "port": 1883,                    // 8883 with "tls": true
@@ -68,7 +69,9 @@
   //   "discovery": true,               // publish HA discovery config
   //   "discovery_prefix": "homeassistant",  // must match HA's MQTT integration
   //   "keepalive": 30,
-  //   "tls": false
+  //   "tls": false,
+  //   "stats_interval": 60             // server health publish cadence in seconds
+  //                                    // (0 = off, minimum 5; editable in the web UI)
   // },
 
   // Optional: password-protect the RTSP server. Remove entries for open access.
