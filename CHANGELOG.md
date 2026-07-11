@@ -4,7 +4,39 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
-## 0.8.2 — unreleased
+## 0.8.3 — unreleased
+
+### New
+
+- **Timeline precision controls** — frame-level review without leaving the
+  browser:
+  - *Zoom*: scroll or pinch on the lanes to zoom from the full 24 h down to a
+    one-minute window (double-click, the zoom chip or `0` resets; Shift+scroll
+    pans). The ruler adapts from hours down to seconds as you go.
+  - *Day overview*: a slim always-visible strip of the whole day above the
+    lanes — drag its highlighted window to move the zoomed view.
+  - *Hover readout*: a hairline with the exact time (tenths when zoomed tight)
+    follows the mouse across the lanes.
+  - *Transport cluster*: previous/next event hop, −10s/−1s/+1s/+10s around
+    play/pause, with 0.1 s nudges for near-frame stepping (paused seeks now
+    land within 0.05 s).
+  - *Keyboard*: Space/K play-pause, ←/→ step (Shift 10 s, Ctrl 0.1 s), J/L,
+    ,/. nudge, [/] event hop, +/−/0 zoom, T to type an exact time — the `?`
+    button shows the cheat sheet.
+  - *Slow motion*: ¼× and ½× join the playback speeds.
+  - The clock is clickable: type 16:39:12 and you're there.
+
+### Fixed
+
+- The timeline's buffering spinner no longer lingers after pausing: the veil
+  now follows the video element's own events, so it clears the moment the
+  paused frame is ready (and appears instantly on a genuine mid-stream stall).
+- Content-free smart-event pushes (an empty `yoloWorldEventList`, sent
+  constantly by some firmware) no longer land in the Info log on every
+  reconnect — the capture aid only surfaces msg-600 payloads that actually
+  carry data. `NEOLINK_DEBUG_ALARMS=1` still logs everything.
+
+## 0.8.2
 
 ### Changed
 
@@ -35,7 +67,7 @@ in the README). Paste the matching section below into the GitHub release.
   review, except while the filter editor is open (so filters can be adjusted
   back).
 
-## 0.8.0 — unreleased
+## 0.8.0
 
 ### New
 

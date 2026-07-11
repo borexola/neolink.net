@@ -386,8 +386,10 @@ public sealed class BcCamera : IBcCamera
     /// <summary>
     /// Capture aid for perimeter protection: newer firmware pushes smart events
     /// (yoloWorldEventList, msg 600) whose XML shape has not been mapped yet.
-    /// The first push per connection is logged in full at Info so a user tripping
-    /// their line-crossing/intrusion zone can report the exact wire format.
+    /// The first push per connection WITH ACTUAL CONTENT is logged in full at
+    /// Info so a user tripping their line-crossing/intrusion zone can report
+    /// the exact wire format. Empty lists (&lt;yoloWorldEventList /&gt;) ride
+    /// along constantly on some firmware and say nothing — those stay at Debug.
     /// </summary>
     private async Task WatchSmartAiEventsAsync(CancellationToken ct)
     {
@@ -406,7 +408,8 @@ public sealed class BcCamera : IBcCamera
             }
             if (msg.Xml == null) continue;
             var raw = Encoding.UTF8.GetString(msg.Xml.Serialize()).Replace('\r', ' ').Replace('\n', ' ');
-            if (!logged || Log.AlarmXml)
+            bool hasContent = msg.Xml.Raw.Any(e => e.HasElements);
+            if (hasContent && (!logged || Log.AlarmXml))
             {
                 logged = true;
                 Log.Info($"BC {_logTag}: smart-event push (msg 600) — raw: " +

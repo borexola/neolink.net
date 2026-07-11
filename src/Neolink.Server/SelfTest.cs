@@ -322,6 +322,13 @@ public static class SelfTest
                 "<AItype>none</AItype><smartAiTypeList /></AlarmEvent>"));
             Assert(!emptySmart.Active, "empty smart list is not a detection");
 
+            // Content-free msg-600 pushes (<yoloWorldEventList />) must not reach
+            // the Info log — the capture aid only surfaces payloads with substance.
+            var emptyYolo = Bc.Xml.BcXmlBody.TryParse(Encoding.UTF8.GetBytes(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?><body><yoloWorldEventList version=\"1.1\" /></body>"));
+            Assert(emptyYolo != null && emptyYolo.Raw.Count > 0 && !emptyYolo.Raw.Any(e => e.HasElements),
+                "empty yoloWorldEventList counts as content-free");
+
             // Perimeter labels are OPT-IN: an untouched filter (null) records the
             // classic detections but not the new labels — nobody's recordings
             // change until they tick the chips.

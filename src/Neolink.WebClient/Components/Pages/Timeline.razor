@@ -15,33 +15,78 @@
     <div class="toolbar tl-toolbar">
         <a class="tool-btn" href="" title="Back to live view">‹ Live</a>
         <span class="tool-label">TIMELINE</span>
-        @* Day navigation uses thin chevrons; the transport control below is a solid
-           accent pill with a filled glyph, so the two can't be mistaken for each other. *@
+        @* Day navigation uses thin chevrons; the transport cluster below uses a solid
+           accent pill and filled glyphs, so the two can't be mistaken for each other. *@
         <button class="tool-btn tl-daynav" title="Previous day" @onclick="() => ChangeDayAsync(-1)">@UiIcon.Render("chev-left", 16)</button>
         <span class="tl-date">@_date.ToString("ddd, d MMMM yyyy")</span>
         <button class="tool-btn tl-daynav" title="Next day" disabled="@(_date >= DateTime.Today)"
                 @onclick="() => ChangeDayAsync(1)">@UiIcon.Render("chev-right", 16)</button>
         <span class="tool-sep"></span>
+        @* Precision transport: event hops, coarse and fine steps around play/pause.
+           Every control names its keyboard twin — the fastest way to learn them. *@
+        <button class="tool-btn tl-step" title="Previous event   —   [" @onclick="() => JumpEventAsync(-1)">@UiIcon.Render("skip-back", 13)</button>
+        <button class="tool-btn tl-step" title="Back 10 seconds   —   J or Shift+←" @onclick="() => StepAsync(-10)">−10s</button>
+        <button class="tool-btn tl-step" title="Back 1 second   —   ←   (Ctrl+← or , for 0.1 s)" @onclick="() => StepAsync(-1)">−1s</button>
         <button class="tl-play @(_playing ? "playing" : "")"
-                title="@(_playing ? "Pause playback" : "Play the day from the cursor")" @onclick="TogglePlayAsync">
+                title="@(_playing ? "Pause — Space or K" : "Play — Space or K")" @onclick="TogglePlayAsync">
             @UiIcon.Render(_playing ? "pause" : "play", 14) <span class="tool-name">@(_playing ? "Pause" : "Play")</span>
         </button>
-        @* Fast playback for skimming a day; the choice sticks (localStorage). *@
+        <button class="tool-btn tl-step" title="Forward 1 second   —   →   (Ctrl+→ or . for 0.1 s)" @onclick="() => StepAsync(1)">+1s</button>
+        <button class="tool-btn tl-step" title="Forward 10 seconds   —   L or Shift+→" @onclick="() => StepAsync(10)">+10s</button>
+        <button class="tool-btn tl-step" title="Next event   —   ]" @onclick="() => JumpEventAsync(1)">@UiIcon.Render("skip-fwd", 13)</button>
+        @* Slow motion through fast skim; the choice sticks (localStorage). *@
         @foreach (var s in SpeedOptions)
         {
             var sp = s;
             <button class="chip tl-speed @(_speed == sp ? "chip-active" : "")"
-                    title="Play at @(sp)× speed (beta)" @onclick="() => SetSpeedAsync(sp)">@(sp)×</button>
+                    title="Play at @SpeedLabel(sp) speed (beta)" @onclick="() => SetSpeedAsync(sp)">@SpeedLabel(sp)</button>
         }
         <span class="beta-tag" title="Fast playback is new — expect rough edges and report anything odd">BETA</span>
         @if (Lagging)
         {
-            <span class="tl-lag" title="The streams can't sustain @(_speed)× right now (server delivery or browser decoding is the limit) — the timeline slows down until they catch up">
+            <span class="tl-lag" title="The streams can't sustain @SpeedLabel(_speed) right now (server delivery or browser decoding is the limit) — the timeline slows down until they catch up">
                 ⏳ catching up…
             </span>
         }
-        <span class="tl-clock">@TimeText(_t)</span>
+        <button class="tool-btn tl-keys-btn @(_showKeys ? "active" : "")" title="Keyboard shortcuts"
+                @onclick="() => _showKeys = !_showKeys">?</button>
+        <button class="chip tl-zoom-chip @(Zoomed ? "chip-active" : "chip-off")"
+                title="@(Zoomed ? "Zoomed in — click (or press 0) to see the whole day again" : "Scroll or pinch on the timeline to zoom in for fine seeking")"
+                @onclick="ResetZoomAsync">@UiIcon.Render("zoom", 12) @SpanLabel(_viewSpan)</button>
+        @if (_editClock)
+        {
+            <input id="tl-clock-edit" class="tl-clock-edit" value="@TimeText(_t)" spellcheck="false"
+                   placeholder="HH:mm:ss" @onchange="ClockEditedAsync" @onblur="() => _editClock = false" />
+        }
+        else
+        {
+            <span class="tl-clock tl-clock-btn" role="button" title="Click (or press T) to type an exact time"
+                  @onclick="OpenClockEdit">@TimeText(_t)</span>
+        }
     </div>
+
+    @if (_showKeys)
+    {
+        <div class="tl-keys-backdrop" @onclick="() => _showKeys = false">
+            <div class="tl-keys-panel" @onclick:stopPropagation="true">
+                <div class="tl-keys-title">
+                    <span>KEYBOARD SHORTCUTS</span>
+                    <button class="icon-btn" title="Close" @onclick="() => _showKeys = false">✕</button>
+                </div>
+                <div class="tl-keys-grid">
+                    <span>Space · K</span><span>Play / pause</span>
+                    <span>← →</span><span>Step 1 s &nbsp;(Shift: 10 s, Ctrl: 0.1 s)</span>
+                    <span>J · L</span><span>Back / forward 10 s</span>
+                    <span>, · .</span><span>Nudge 0.1 s — frame-level review</span>
+                    <span>[ · ]</span><span>Previous / next event</span>
+                    <span>scroll</span><span>Zoom in/out around the mouse (Shift: pan)</span>
+                    <span>+ − 0</span><span>Zoom in / out / whole day</span>
+                    <span>T</span><span>Jump to an exact time</span>
+                </div>
+                <div class="event-sub tl-keys-hint">Drag the thin day strip above the lanes to move the zoomed view. Double-click the lanes to zoom back out.</div>
+            </div>
+        </div>
+    }
 
     @if (_error != null)
     {
@@ -80,17 +125,45 @@
         {
         <div class="tl-board">
             <div class="tl-names">
-                <div class="tl-name"></div>
+                <div class="tl-name tl-name-head"></div>
                 @foreach (var cam in Included)
                 {
                     <div class="tl-name" title="@cam.Name">@cam.Name</div>
                 }
             </div>
-            <div class="tl-lanes" id="tl-scrub">
-                <div class="tl-ruler">
-                    @for (int h = 0; h <= 24; h += 3)
+            @* data-vs/data-vspan let the JS hover bubble map pixels → time locally,
+               with zero server round-trips while the mouse moves. *@
+            <div class="tl-lanes" id="tl-scrub" data-vs="@_viewStart" data-vspan="@_viewSpan">
+                @* The whole day at a glance, always: footage blocks, the red cursor,
+                   and — when zoomed — the draggable view-window rectangle. *@
+                <div class="tl-overview">
+                    @foreach (var cam in Included)
                     {
-                        <span class="tl-tick" style="left:@Pct(h * 3600.0)">@($"{h:00}")</span>
+                        @if (_cov.TryGetValue(cam.Name, out var ovSegs))
+                        {
+                            @foreach (var s in ovSegs)
+                            {
+                                <div class="tl-ov-cov" style="left:@DayPct(s.Start); width:@DayPct(s.Span)"></div>
+                            }
+                        }
+                    }
+                    <div class="tl-ov-cursor" style="left:@DayPct(_t)"></div>
+                    @if (Zoomed)
+                    {
+                        <div class="tl-ov-win" style="left:@DayPct(_viewStart); width:@DayPct(_viewSpan)"></div>
+                    }
+                </div>
+                <div class="tl-ruler">
+                    @foreach (var (t, label) in RulerTicks())
+                    {
+                        @if (label != null)
+                        {
+                            <span class="tl-tick" style="left:@Pct(t)">@label</span>
+                        }
+                        else
+                        {
+                            <span class="tl-tick-minor" style="left:@Pct(t)"></span>
+                        }
                     }
                 </div>
                 @foreach (var cam in Included)
@@ -100,22 +173,31 @@
                         {
                             @foreach (var s in segs)
                             {
-                                <div class="tl-cov" style="left:@Pct(s.Start); width:@Pct(s.Span)"></div>
+                                @if (InView(s.Start, s.Start + s.Span))
+                                {
+                                    <div class="tl-cov" style="left:@Pct(s.Start); width:@W(s.Span)"></div>
+                                }
                             }
                         }
                         @if (_marks.TryGetValue(cam.Name, out var marks))
                         {
                             @foreach (var m in marks)
                             {
-                                <div class="tl-ev" title="@m.Title"
-                                     style="left:@Pct(m.Start); width:@Pct(Math.Max(m.End - m.Start, 40)); background:@m.Color"></div>
+                                @if (InView(m.Start, m.End))
+                                {
+                                    <div class="tl-ev" title="@m.Title"
+                                         style="left:@Pct(m.Start); width:@WMark(m.End - m.Start); background:@m.Color"></div>
+                                }
                             }
                         }
                     </div>
                 }
-                <div class="tl-cursor" style="left:@Pct(_t)">
-                    <span class="tl-cursor-time">@TimeText(_t)</span>
-                </div>
+                @if (InView(_t, _t))
+                {
+                    <div class="tl-cursor" style="left:@Pct(_t)">
+                        <span class="tl-cursor-time">@TimeText(_t)</span>
+                    </div>
+                }
             </div>
         </div>
 
@@ -173,11 +255,88 @@
     private sealed class Prefs
     {
         public List<string> Included { get; set; } = new();
-        public int Speed { get; set; } = 1;
+        public double Speed { get; set; } = 1;
     }
 
-    private static readonly int[] SpeedOptions = { 1, 2, 4, 8, 16 };
-    private int _speed = 1;
+    // 0.25/0.5 are slow motion — fine review of a fast moment; the rest skim.
+    private static readonly double[] SpeedOptions = { 0.25, 0.5, 1, 2, 4, 8, 16 };
+    private double _speed = 1;
+
+    private static string SpeedLabel(double sp) => sp switch
+    {
+        0.25 => "¼×",
+        0.5 => "½×",
+        _ => $"{sp:0.#}×",
+    };
+
+    // ------------------------------------------------------------ zoomable view window
+    //
+    // The lanes show [_viewStart, _viewStart + _viewSpan] seconds of the day.
+    // At the full 24 h a pixel is ~a minute of footage — zooming to the 60 s
+    // floor makes a pixel ~50 ms, which is what turns scrubbing from "roughly
+    // there" into frame-level seeking.
+
+    private const double MinSpan = 60;
+    private double _viewStart;
+    private double _viewSpan = DaySeconds;
+    private bool _showKeys;
+    private bool _editClock;
+    private bool _focusClock;
+
+    private bool Zoomed => _viewSpan < DaySeconds - 1;
+
+    private string Pct(double seconds) =>
+        $"{(seconds - _viewStart) / _viewSpan * 100:0.####}%";
+
+    /// <summary>Width of an exact span within the view window.</summary>
+    private string W(double span) => $"{span / _viewSpan * 100:0.####}%";
+
+    /// <summary>Event-mark width: never thinner than ~2px worth of the window.</summary>
+    private string WMark(double span) => W(Math.Max(span, _viewSpan * 0.0018));
+
+    /// <summary>Position on the full-day overview strip (never windowed).</summary>
+    private static string DayPct(double seconds) => $"{seconds / DaySeconds * 100:0.###}%";
+
+    private bool InView(double start, double end) =>
+        end >= _viewStart && start <= _viewStart + _viewSpan;
+
+    private static string SpanLabel(double span) => span switch
+    {
+        >= DaySeconds - 1 => "24 h",
+        >= 3600 => $"{span / 3600:0.#} h",
+        >= 60 => $"{span / 60:0.#} m",
+        _ => $"{span:0} s",
+    };
+
+    /// <summary>
+    /// Adaptive ruler: pick the largest step that yields ≲16 labeled ticks for
+    /// the current window, with unlabeled minor ticks between them. Labels grow
+    /// detail as the window shrinks (hours → minutes → seconds).
+    /// </summary>
+    private IEnumerable<(double T, string? Label)> RulerTicks()
+    {
+        // Smallest step that still fits ≲16 labels (the array is descending).
+        double[] steps = { 10800, 7200, 3600, 1800, 900, 600, 300, 120, 60, 30, 10, 5, 2, 1 };
+        double major = steps.LastOrDefault(s => _viewSpan / s <= 16, 10800);
+        int perMajor = major >= 60 ? 4 : 5;
+        double minor = major / perMajor;
+        long from = (long)Math.Ceiling(_viewStart / minor);
+        long to = (long)Math.Floor((_viewStart + _viewSpan) / minor);
+        for (long k = from; k <= to; k++)
+        {
+            double t = k * minor;
+            bool isMajor = k % perMajor == 0;
+            yield return (t, isMajor ? TickLabel(t, major) : null);
+        }
+    }
+
+    private static string TickLabel(double t, double major)
+    {
+        var ts = TimeSpan.FromSeconds(t);
+        return major >= 3600 ? $"{(int)ts.TotalHours:00}"
+            : major >= 60 ? $"{(int)ts.TotalHours:00}:{ts.Minutes:00}"
+            : $"{(int)ts.TotalHours:00}:{ts.Minutes:00}:{ts.Seconds:00}";
+    }
 
     // Adaptive playback: when the slowest healthy video falls behind the cursor
     // (server can't serve segments fast enough, or the browser can't decode this
@@ -220,7 +379,7 @@
                 if (json != null && JsonSerializer.Deserialize<Prefs>(json) is { } p)
                 {
                     _included = new HashSet<string>(p.Included, StringComparer.OrdinalIgnoreCase);
-                    _speed = SpeedOptions.Contains(p.Speed) ? p.Speed : 1;
+                    _speed = SpeedOptions.Contains(p.Speed) ? p.Speed : 1d;
                 }
             }
             catch { }
@@ -230,24 +389,34 @@
             await LoadDayAsync();
 
             _selfRef = DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("neolink.tlKeysInit", _selfRef);
             _ = ClockLoopAsync();
             _booted = true;
             StateHasChanged();
             return;
         }
 
-        // The lane strip only exists while cameras are selected; (re)hook the
-        // scrub handler whenever it (re)appears.
         if (!_booted || _selfRef == null) return;
+
+        if (_focusClock)
+        {
+            _focusClock = false;
+            await JS.InvokeVoidAsync("neolink.focusEl", "tl-clock-edit");
+        }
+
+        // The lane strip only exists while cameras are selected; (re)hook the
+        // scrub + zoom/hover handlers whenever it (re)appears.
         if (Included.Any() && !_scrubInit)
         {
             _scrubInit = true;
             await JS.InvokeVoidAsync("neolink.tlScrubInit", "tl-scrub", _selfRef);
+            await JS.InvokeVoidAsync("neolink.tlZoomInit", "tl-scrub", _selfRef);
         }
         else if (!Included.Any() && _scrubInit)
         {
             _scrubInit = false;
             await JS.InvokeVoidAsync("neolink.tlScrubDispose", "tl-scrub");
+            await JS.InvokeVoidAsync("neolink.tlZoomDispose", "tl-scrub");
         }
     }
 
@@ -451,10 +620,83 @@
     {
         await InvokeAsync(async () =>
         {
-            _t = Math.Clamp(fraction, 0, 1) * DaySeconds;
+            // The lane strip shows the view window, so a drag fraction maps
+            // through it — zoomed in, the same pixel distance seeks far finer.
+            _t = _viewStart + Math.Clamp(fraction, 0, 1) * _viewSpan;
             await SyncVideosAsync();
             StateHasChanged();
         });
+    }
+
+    /// <summary>Wheel/pinch zoom: the instant under the pointer stays put.</summary>
+    [JSInvokable]
+    public async Task OnTimelineZoom(double frac, double factor)
+    {
+        await InvokeAsync(() =>
+        {
+            double anchor = _viewStart + Math.Clamp(frac, 0, 1) * _viewSpan;
+            _viewSpan = Math.Clamp(_viewSpan * factor, MinSpan, DaySeconds);
+            _viewStart = Math.Clamp(anchor - Math.Clamp(frac, 0, 1) * _viewSpan, 0, DaySeconds - _viewSpan);
+            StateHasChanged();
+        });
+    }
+
+    [JSInvokable]
+    public async Task OnTimelinePan(int dir)
+    {
+        await InvokeAsync(() =>
+        {
+            _viewStart = Math.Clamp(_viewStart + dir * _viewSpan * 0.2, 0, DaySeconds - _viewSpan);
+            StateHasChanged();
+        });
+    }
+
+    /// <summary>Dragging the day-overview strip moves the zoomed window (a viewport
+    /// control — the cursor stays where it is).</summary>
+    [JSInvokable]
+    public async Task OnOverviewSeek(double frac)
+    {
+        await InvokeAsync(() =>
+        {
+            if (!Zoomed) return;
+            _viewStart = Math.Clamp(frac * DaySeconds - _viewSpan / 2, 0, DaySeconds - _viewSpan);
+            StateHasChanged();
+        });
+    }
+
+    [JSInvokable]
+    public async Task OnTimelineKey(string action)
+    {
+        await InvokeAsync(async () =>
+        {
+            var parts = action.Split(':');
+            switch (parts[0])
+            {
+                case "playpause":
+                    await TogglePlayAsync();
+                    break;
+                case "step" when double.TryParse(parts[1], System.Globalization.CultureInfo.InvariantCulture, out var s):
+                    await StepAsync(s);
+                    break;
+                case "event":
+                    await JumpEventAsync(parts[1] == "-1" ? -1 : 1);
+                    break;
+                case "zoom":
+                    if (parts[1] == "reset") await ResetZoomAsync();
+                    else await OnTimelineZoom(CursorFrac(), parts[1] == "in" ? 0.6 : 1.7);
+                    break;
+                case "clock":
+                    OpenClockEdit();
+                    break;
+            }
+            StateHasChanged();
+        });
+    }
+
+    private double CursorFrac()
+    {
+        double f = (_t - _viewStart) / _viewSpan;
+        return f is >= 0 and <= 1 ? f : 0.5;
     }
 
     private async Task TogglePlayAsync()
@@ -464,7 +706,74 @@
         await SyncVideosAsync();
     }
 
-    private async Task SetSpeedAsync(int speed)
+    /// <summary>Nudge the cursor and keep it on screen. Fine steps (0.1 s) pair
+    /// with the tight paused seek tolerance for near-frame-level review.</summary>
+    private async Task StepAsync(double seconds)
+    {
+        _t = Math.Clamp(_t + seconds, 0, DaySeconds - 0.05);
+        EnsureCursorVisible();
+        await SyncVideosAsync();
+        StateHasChanged();
+    }
+
+    /// <summary>Snap to the previous/next detection across the included cameras —
+    /// the fastest way to review a day: [ and ] hop from incident to incident.</summary>
+    private async Task JumpEventAsync(int dir)
+    {
+        var starts = Included
+            .SelectMany(c => _marks.TryGetValue(c.Name, out var m) ? m : (IEnumerable<Mark>)Array.Empty<Mark>())
+            .Select(m => m.Start)
+            .OrderBy(s => s);
+        double? target = dir > 0
+            ? starts.Where(s => s > _t + 0.25).Cast<double?>().FirstOrDefault()
+            : starts.Where(s => s < _t - 0.25).Cast<double?>().LastOrDefault();
+        if (target == null) return;
+        _t = target.Value;
+        EnsureCursorVisible(center: true);
+        await SyncVideosAsync();
+        StateHasChanged();
+    }
+
+    private async Task ResetZoomAsync()
+    {
+        _viewStart = 0;
+        _viewSpan = DaySeconds;
+        await Task.CompletedTask;
+        StateHasChanged();
+    }
+
+    /// <summary>Keeps the cursor inside the zoomed window after steps and jumps.</summary>
+    private void EnsureCursorVisible(bool center = false)
+    {
+        if (!Zoomed) return;
+        if (center)
+            _viewStart = _t - _viewSpan / 2;
+        else if (_t < _viewStart || _t > _viewStart + _viewSpan)
+            _viewStart = _t - _viewSpan * 0.2;
+        else
+            return;
+        _viewStart = Math.Clamp(_viewStart, 0, DaySeconds - _viewSpan);
+    }
+
+    private void OpenClockEdit()
+    {
+        _editClock = true;
+        _focusClock = true;
+    }
+
+    /// <summary>"16:39" or "16:39:12" → jump straight there.</summary>
+    private async Task ClockEditedAsync(ChangeEventArgs e)
+    {
+        _editClock = false;
+        if (!TimeSpan.TryParse((string?)e.Value, System.Globalization.CultureInfo.InvariantCulture, out var ts)
+            || ts < TimeSpan.Zero || ts >= TimeSpan.FromDays(1))
+            return;
+        _t = ts.TotalSeconds;
+        EnsureCursorVisible(center: true);
+        await SyncVideosAsync();
+    }
+
+    private async Task SetSpeedAsync(double speed)
     {
         _speed = speed;
         await SavePrefsAsync();
@@ -501,6 +810,12 @@
                     _t = DaySeconds - 1;
                     _playing = false;
                 }
+                // Zoomed playback follows the cursor — but ONLY when it just
+                // walked up to the window's right edge. A cursor far outside the
+                // window means the user deliberately zoomed elsewhere; stealing
+                // the view back would fight them.
+                if (Zoomed && _t > _viewStart + _viewSpan * 0.85 && _t < _viewStart + _viewSpan * 1.5)
+                    _viewStart = Math.Clamp(_t - _viewSpan * 0.15, 0, DaySeconds - _viewSpan);
                 await InvokeAsync(async () =>
                 {
                     await SyncVideosAsync();
@@ -601,16 +916,18 @@
         return n <= 1 ? 1 : (int)Math.Ceiling(Math.Sqrt(n));
     }
 
-    private static string Pct(double seconds) =>
-        $"{seconds / DaySeconds * 100:0.###}%";
-
     private static string TimeText(double t) =>
         TimeSpan.FromSeconds(Math.Clamp(t, 0, DaySeconds - 1)).ToString(@"hh\:mm\:ss");
 
     public async ValueTask DisposeAsync()
     {
         _clock?.Dispose();
-        try { await JS.InvokeVoidAsync("neolink.tlScrubDispose", "tl-scrub"); }
+        try
+        {
+            await JS.InvokeVoidAsync("neolink.tlScrubDispose", "tl-scrub");
+            await JS.InvokeVoidAsync("neolink.tlZoomDispose", "tl-scrub");
+            await JS.InvokeVoidAsync("neolink.tlKeysDispose");
+        }
         catch { /* circuit already gone */ }
         _selfRef?.Dispose();
     }
