@@ -34,6 +34,10 @@ namespace Neolink.Mqtt;
 ///   • binary_sensor: recording — ON while the server is writing this camera's
 ///                    footage (an event clip, whatever triggered it, or a
 ///                    continuous segment)
+///   • sensor:        last event — the id of the newest detection event,
+///                    published (retained) the instant the event starts, so a
+///                    motion automation can deep-link to the exact clip via
+///                    {web-ui}/events?event={id}
 ///   • select:        night vision (auto/on/off)         (IR-capable cameras)
 ///   • light:         floodlight                         (cameras with a spotlight)
 ///   • button:        reboot, and PTZ steps              (per capability)
@@ -366,6 +370,26 @@ internal sealed class CameraBridge
         {
             rec.OnDemandChanged += session => _ = PublishRecordStateAsync(session != null);
             rec.RecordingChanged += on => _ = PublishRecordingStateAsync(force: false);
+            rec.EventStarted += ev => _ = PublishLastEventAsync(ev);
+        }
+    }
+
+    /// <summary>The new event's id lands (retained) the instant the event starts —
+    /// together with the motion trigger — so an automation can build a link to the
+    /// exact clip: {web-ui}/events?event={{ states('sensor.X_last_event') }}.</summary>
+    private async Task PublishLastEventAsync(EventRecord ev)
+    {
+        try
+        {
+            await _hub.PublishAsync(StateTopic("last_event"), ev.Id, CancellationToken.None)
+                .ConfigureAwait(false);
+            await _hub.PublishAsync(StateTopic("last_event/attr"),
+                JsonSerializer.Serialize(new { labels = ev.Labels, started = ev.StartUtc }),
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        catch
+        {
+            // Broker unreachable — the next event republishes; the topic is retained.
         }
     }
 
@@ -453,6 +477,9 @@ internal sealed class CameraBridge
             await AnnounceEntityAsync("switch", "record", RecordSwitchConfig(), ct).ConfigureAwait(false);
             await _hub.PublishAsync(StateTopic("record"), recorder.OnDemand != null ? "ON" : "OFF", ct)
                 .ConfigureAwait(false);
+            // Last event id: state is retained, so HA has the most recent id even
+            // across restarts — no state publish needed here.
+            await AnnounceEntityAsync("sensor", "last_event", LastEventConfig(), ct).ConfigureAwait(false);
         }
 
         // Recording status: is footage for this camera being written right now
@@ -653,6 +680,23 @@ internal sealed class CameraBridge
             await _hub.PublishAsync(StateTopic("record"), rec.OnDemand != null ? "ON" : "OFF",
                 CancellationToken.None).ConfigureAwait(false);
     }
+
+    /// <summary>The id of the camera's most recent detection event, updated the
+    /// moment the event starts. Made for notification deep links: append the
+    /// state to "{web-ui}/events?event=" and the tap opens that exact clip.
+    /// Labels and start time ride along as attributes.</summary>
+    private object LastEventConfig() => new
+    {
+        name = "Last event",
+        unique_id = $"neolink_{Id}_last_event",
+        state_topic = StateTopic("last_event"),
+        json_attributes_topic = StateTopic("last_event/attr"),
+        icon = "mdi:motion-play-outline",
+        entity_category = "diagnostic",
+        device = Device(),
+        availability = Availability(),
+        availability_mode = "all",
+    };
 
     private object RecordingSensorConfig() => new
     {

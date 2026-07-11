@@ -2,6 +2,15 @@
 (function () {
     'use strict';
 
+    // Has anyone actually touched this page yet? A clip that auto-opens from a
+    // deep link on a FULL page load (notification tap) starts muted — nobody
+    // asked for audio, and unmuted autoplay is usually blocked anyway. Any real
+    // interaction before playback (clicking an event row) keeps sound on.
+    let userGestureSeen = false;
+    for (const evt of ['pointerdown', 'keydown', 'touchstart'])
+        window.addEventListener(evt, () => { userGestureSeen = true; },
+            { once: true, capture: true, passive: true });
+
     // Latency tuning: like VLC, keep a jitter buffer between the live edge and the
     // playhead. Cameras deliver video anywhere from per-frame to whole multi-second
     // GOP batches, so the cushion adapts to the observed delivery cadence: it must
@@ -492,7 +501,12 @@
                     v.removeEventListener('loadedmetadata', onMeta);
                     try { if (at > 0 && at < v.duration) v.currentTime = at; } catch { }
                     v.defaultPlaybackRate = v.playbackRate = rate;
-                    v.play().catch(() => { });
+                    // Fresh full-page load (notification deep link): start muted
+                    // by design. Otherwise autoplay policy can still veto sound —
+                    // retry muted so the clip starts either way; the user can
+                    // unmute on the controls.
+                    if (!userGestureSeen) v.muted = true;
+                    v.play().catch(() => { v.muted = true; v.play().catch(() => { }); });
                 };
                 v.addEventListener('loadedmetadata', onMeta);
                 try { v.load(); } catch { }

@@ -236,7 +236,7 @@
                         are never changed.
                     </div>
                     <div class="control-row">
-                        <span>Scheduled capture <span class="beta-tag" title="Scheduled capture is new — report anything odd">BETA</span></span>
+                        <span>Scheduled capture</span>
                         <button class="chip @(_recording.ScheduleEnabled ? "" : "chip-off")"
                                 title="@(_recording.ScheduleEnabled ? "Events are captured only inside the schedule below — click to capture at all times" : "Events are captured at all times — click to restrict capture to a schedule")"
                                 @onclick="() => SetRecordingAsync(scheduleEnabled: !_recording.ScheduleEnabled)">

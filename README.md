@@ -51,7 +51,7 @@ The cameras are unmodified and no Reolink NVR is required.
   rules), a speaker button on the tile/quick-view unmutes; event clips and 24/7
   recordings carry the audio track too. ADPCM-only cameras play audio via RTSP only
   (browsers can't decode raw PCM in MP4)
-- **Two-way talk (beta, opt-in)** for cameras with a speaker (doorbells, floodlight
+- **Two-way talk (opt-in)** for cameras with a speaker (doorbells, floodlight
   cams): a mic button on the maximized tile / quick view streams your microphone to
   the camera — the browser's PCM is resampled and ADPCM-encoded server-side, no
   plugins. Disabled by default; enable it in *Server settings → Web UI* (or
@@ -556,6 +556,54 @@ Neolink speaks MQTT 3.1.1 directly, keeping the zero-dependency build.
 > Plain MQTT (port 1883) is unencrypted. For a LAN broker that's typical; enable
 > `tls` (port 8883) if the broker is remote.
 
+### Tap a phone alert straight to the footage
+
+The web UI's **Events page is deep-linkable**: `…/events/{camera}` opens filtered
+to that camera with its newest clip already playing. Point a Home Assistant
+notification's tap action at it and a "motion detected" push takes you one tap
+from the alert to the recording (and a **Go live** button is right there to jump
+to the feed):
+
+```yaml
+automation:
+  - alias: Notify on driveway motion
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.driveway_motion   # a Neolink camera sensor
+        to: "on"
+    action:
+      - service: notify.mobile_app_your_phone
+        data:
+          title: Driveway motion
+          message: Motion detected on the driveway
+          data:
+            # HA companion app: tapping the notification opens this URL
+            clickAction: https://neolink.example.com/events/Driveway
+```
+
+Plain `/events` (no camera) opens the full recent-events list. And when you know
+the exact event — its `id` from `GET /api/events` — `/events?event={id}` opens
+and plays that specific clip, even one older than the recent list (the page
+jumps to its day). All forms require the web UI to be reachable from the phone —
+usually via your reverse proxy.
+
+**Linking to the exact event from HA**: with MQTT enabled, every camera that
+records events gets a **Last event** sensor (e.g.
+`sensor.driveway_last_event`) whose state is the newest event's id — published
+the instant the event starts, alongside the motion trigger, so it is already
+current inside the automation that the motion fired. Point the tap action at
+the exact clip:
+
+```yaml
+          data:
+            clickAction: >-
+              https://neolink.example.com/events?event={{ states('sensor.driveway_last_event') }}
+```
+
+(You can also trigger the automation on the Last event sensor itself — a state
+change *is* a new recording, and `trigger.to_state.state` is the id.) Clips
+that auto-open from such a link start muted; tap the speaker to unmute.
+
 ## Using with Frigate
 
 ```yaml
@@ -646,7 +694,7 @@ issue with them so the mapping can be extended.
   the sub stream. This is a browser limitation — the RTSP side serves H.265 fine.
 - **Latency** adapts to the camera: ~1 s for cameras that deliver per-frame, more for
   cameras that batch whole GOPs (the buffer must cover the delivery gap).
-- **Two-way talk is a beta feature and off by default**: enable it in
+- **Two-way talk is off by default**: enable it in
   *Server settings → Web UI → Two-way talk* (writes `"ui": { "talk": true }` to the
   config; applies after a restart). It also needs a secure context — browsers only
   allow microphone capture over HTTPS (or on `localhost`). Behind a reverse proxy

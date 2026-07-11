@@ -1157,6 +1157,15 @@ public static class SelfTest
             Assert(!chk.IsNewer("v0.6.0"), "same version is not an update");
             Assert(!chk.IsNewer("0.5.9"), "older version is not an update");
             Assert(!chk.IsNewer("not-a-version"), "junk tag ignored");
+
+            // Suffixed builds (test tars, prereleases) compare by their numeric
+            // prefix — a 0.8.5-events-test box must NOT be offered 0.8.4 as an
+            // "update" (the regression: the suffix failed to parse, the running
+            // version fell back to 0.0, and every release looked newer).
+            var test = new Web.UpdateChecker("0.8.5-events-test");
+            Assert(!test.IsNewer("v0.8.4"), "release older than a test build's base is not an update");
+            Assert(!test.IsNewer("v0.8.5"), "the test build's own base release is not an update");
+            Assert(test.IsNewer("v0.8.6"), "a genuinely newer release still is");
         });
 
         Test("web api: auth gate, token transports, endpoint contracts", () =>
@@ -1166,11 +1175,22 @@ public static class SelfTest
             // seam merges keep touching: the auth middleware and the JSON shapes.
             var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
             Directory.CreateDirectory(dir);
+
+            // One event staged on disk before the store loads: the /api/events
+            // list and the single-event deep-link lookup have something to find.
+            const string evId = "apicam~2026-01-05~101112-sf01";
+            var evDir = Path.Combine(dir, "recordings", "apicam", "2026-01-05", "detections", "101112-sf01");
+            Directory.CreateDirectory(evDir);
+            File.WriteAllText(Path.Combine(evDir, "event.json"),
+                $$"""{"id":"{{evId}}","camera":"apicam","startUtc":"2026-01-05T10:11:12Z","endUtc":"2026-01-05T10:11:30Z","labels":["person"]}""");
+
             using var cts = new CancellationTokenSource();
             Task? server = null;
             try
             {
                 int port = FreeTcpPort();
+                var store = new Recording.EventStore(Path.Combine(dir, "recordings"));
+                store.Load(); // index the staged event, as Program does at startup
                 var hub = new Streaming.StreamHub("apicam");
                 var cam = new Web.WebCameraInfo("apicam",
                     new List<Web.WebStreamInfo> { new("mainStream", "/apicam/mainStream", hub) },
@@ -1183,7 +1203,7 @@ public static class SelfTest
                     Cameras = new[] { cam },
                     Users = new Dictionary<string, string>(),
                     RtspPort = 8654,
-                    Events = new Recording.EventStore(Path.Combine(dir, "recordings")),
+                    Events = store,
                     RecordingSettings = new Recording.RecordingSettings(dir),
                     UserStore = new Web.UserStore(dir),
                     Version = "0.0.0-selftest",
@@ -1274,8 +1294,16 @@ public static class SelfTest
                 Assert(rec.GetProperty("events").GetBoolean(), "recording switch persisted via API");
                 Assert(rec.TryGetProperty("continuous", out _), "continuous switch exposed");
 
-                // Recorded-events listing responds (empty store).
-                AssertEq(GetJson(http, $"/api/events{tokenQ}").GetArrayLength(), 0);
+                // Recorded-events listing sees the staged event, and the
+                // single-event lookup (notification deep links) round-trips.
+                var evList = GetJson(http, $"/api/events{tokenQ}");
+                AssertEq(evList.GetArrayLength(), 1);
+                AssertEq(evList[0].GetProperty("id").GetString()!, evId);
+                var one = GetJson(http, $"/api/events/{Uri.EscapeDataString(evId)}{tokenQ}");
+                AssertEq(one.GetProperty("id").GetString()!, evId);
+                AssertEq(one.GetProperty("camera").GetString()!, "apicam");
+                Assert(!one.GetProperty("hasClip").GetBoolean(), "staged event has no clip");
+                AssertEq((int)http.GetAsync($"/api/events/nope{tokenQ}").Result.StatusCode, 404);
             }
             finally
             {

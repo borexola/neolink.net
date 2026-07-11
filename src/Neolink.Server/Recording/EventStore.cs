@@ -172,6 +172,26 @@ public sealed class EventStore
         }
     }
 
+    /// <summary>
+    /// Every local day ("yyyy-MM-dd") that holds any recorded content — detection
+    /// events or continuous footage, for any camera — newest first. Feeds the
+    /// timeline's calendar so days with footage can be highlighted at a glance.
+    /// </summary>
+    public List<string> ListContentDays()
+    {
+        var days = new HashSet<string>(StringComparer.Ordinal);
+        if (Directory.Exists(_root))
+        {
+            foreach (var camDir in Directory.EnumerateDirectories(_root))
+                foreach (var dayDir in Directory.EnumerateDirectories(camDir))
+                {
+                    var name = Path.GetFileName(dayDir)!;
+                    if (IsDayName(name)) days.Add(name);
+                }
+        }
+        return days.OrderByDescending(d => d).ToList();
+    }
+
     // ------------------------------------------------------------------ continuous recordings
 
     /// <summary>Path for a new continuous-recording segment starting now (creates the day dir).</summary>

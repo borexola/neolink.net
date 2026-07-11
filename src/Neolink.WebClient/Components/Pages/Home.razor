@@ -345,8 +345,7 @@
             @if (_eventsSupported)
             {
                 <span class="tool-sep"></span>
-                <button class="tool-btn @(_showEventsPanel ? "active" : "")" title="Event history"
-                        @onclick="() => _showEventsPanel = !_showEventsPanel">@UiIcon.Render("clock", 14) <span class="tool-name">Events</span></button>
+                <a class="tool-btn" href="events" title="Recent detection events">@UiIcon.Render("clock", 14) <span class="tool-name">Events</span></a>
                 @if (_continuousSupported)
                 {
                     <a class="tool-btn" href="timeline" title="Scrub recorded footage across all cameras">@UiIcon.Render("film", 14) <span class="tool-name">Timeline</span></a>
@@ -807,7 +806,7 @@
                         @AdminField("State directory (accounts/settings)", "ui.stateDir", "text")
                         @AdminToggle("Allow admin-password reset on login", "ui.resetAdminPassword")
                         <div class="control-row">
-                            <span>Two-way talk <span class="beta-tag">BETA</span></span>
+                            <span>Two-way talk</span>
                             <button class="chip @(AdminBool("ui.talk") ? "" : "chip-off")"
                                     @onclick=@(() => _adminEdits["ui.talk"] = (!AdminBool("ui.talk")).ToString().ToLowerInvariant())>
                                 @(AdminBool("ui.talk") ? "on" : "off")</button>
@@ -888,93 +887,6 @@
                     </div>
                 </div>
             }
-        </aside>
-    }
-
-    @if (_showEventsPanel)
-    {
-        <div class="backdrop panel-backdrop" @onclick="() => _showEventsPanel = false"></div>
-        <aside class="campanel events-panel" role="dialog" aria-label="Event history">
-            <div class="campanel-head events-head">
-                <span class="events-head-title">@UiIcon.Render("clock", 14) Events
-                    <span class="event-day-count">@PanelEvents.Count()</span>
-                </span>
-                <span class="events-head-sub">@(_eventsDate is { } d0 ? d0.ToString("ddd, d MMM yyyy") : "last 24 hours")</span>
-                <span class="tile-spacer"></span>
-                <select class="event-filter" @bind="_eventCameraFilter" title="Filter by camera">
-                    <option value="">all cameras</option>
-                    @foreach (var c in _cameras)
-                    {
-                        <option value="@c.Name">@c.Name</option>
-                    }
-                </select>
-                <button class="chip @(_eventsUnreviewedOnly ? "chip-active" : "chip-off")" title="Only show unreviewed events"
-                        @onclick="() => _eventsUnreviewedOnly = !_eventsUnreviewedOnly">unreviewed</button>
-                <input class="event-filter event-date-input" type="date" title="Jump to a specific day"
-                       max="@DateTime.Today.ToString("yyyy-MM-dd")"
-                       value="@(_eventsDate?.ToString("yyyy-MM-dd") ?? "")"
-                       @onchange="e => SetEventsDateAsync((string?)e.Value)" />
-                @if (_eventsDate != null)
-                {
-                    <button class="chip" title="Back to the rolling last 24 hours"
-                            @onclick="() => SetEventsDateAsync(null)">↺ 24h</button>
-                }
-                <button class="icon-btn" title="Close" @onclick="() => _showEventsPanel = false">✕</button>
-            </div>
-
-            <div class="events-panel-scroll">
-                @if (_eventsDateLoading)
-                {
-                    <div class="notice">Loading @(_eventsDate?.ToString("d MMM"))…</div>
-                }
-                else if (!PanelEvents.Any())
-                {
-                    <div class="notice">
-                        @(_eventsUnreviewedOnly ? "Nothing awaiting review — all clear."
-                            : _eventsDate != null ? "No events on this day."
-                            : "No events in the last 24 hours.")
-                    </div>
-                }
-                @foreach (var day in PanelEvents.GroupBy(e => e.Start.ToLocalTime().Date))
-                {
-                    <div class="campanel-section events-day">
-                        <div class="campanel-section-title events-day-head">
-                            @DayLabel(day.Key) <span class="event-day-count">@day.Count()</span>
-                        </div>
-                        @foreach (var ev in day)
-                        {
-                            <div class="event-row @(ev.Reviewed ? "reviewed" : "")" @key="ev.Id"
-                                 title="Click to play" @onclick="() => OpenEvent(ev)">
-                                <div class="event-row-thumb">
-                                    @if (ev.HasThumb)
-                                    {
-                                        <img src="@EventArtifactUrl(ev, "thumb")" loading="lazy" alt="" />
-                                    }
-                                    else
-                                    {
-                                        <span class="event-thumb-icon">@ev.Icon</span>
-                                    }
-                                    <span class="event-row-dur">@DurationText(ev)</span>
-                                    @if (ev.Ongoing)
-                                    {
-                                        <span class="event-live">● REC</span>
-                                    }
-                                </div>
-                                <div class="event-row-main">
-                                    <span class="event-title">@ev.Icon @ev.Title</span>
-                                    <span class="event-sub">@ev.Camera · @ev.Start.ToLocalTime().ToString("HH:mm:ss")</span>
-                                </div>
-                                @if (!ev.Reviewed)
-                                {
-                                    <span class="event-new-dot" title="Unreviewed"></span>
-                                    <button class="icon-btn" title="Dismiss (mark reviewed)"
-                                            @onclick="() => DismissAsync(ev)" @onclick:stopPropagation="true">✕</button>
-                                }
-                            </div>
-                        }
-                    </div>
-                }
-            </div>
         </aside>
     }
 
@@ -1115,9 +1027,6 @@
     private string? _adminStatus;
     private bool _confirmRestart;
     private readonly Dictionary<string, string> _adminEdits = new();
-    private bool _showEventsPanel;
-    private string _eventCameraFilter = "";
-    private bool _eventsUnreviewedOnly;
     private ApiEvent? _playEvent;
 
     // Web-UI authentication (enabled once the first account exists server-side)
@@ -1154,11 +1063,6 @@
     private int _stripHeight = 160;
     private bool _secWarnDismissed;
     private DotNetObjectReference<Home>? _selfRef;
-
-    // Events panel: rolling last-24h by default, or one server-fetched calendar day
-    private DateTime? _eventsDate;
-    private List<ApiEvent> _eventsForDate = new();
-    private bool _eventsDateLoading;
 
     protected override void OnInitialized() => EnsureSlots();
 
@@ -2051,59 +1955,6 @@
 
     // ------------------------------------------------------------ recorded events
 
-    /// <summary>
-    /// What the events panel shows: the rolling last 24 hours (from the regular
-    /// poll) or, when a date is picked, that server-fetched calendar day.
-    /// </summary>
-    private IEnumerable<ApiEvent> PanelEvents
-    {
-        get
-        {
-            var source = _eventsDate == null
-                ? _events.Where(e => e.Start >= DateTime.UtcNow.AddHours(-24))
-                : _eventsForDate.AsEnumerable();
-            return source
-                .Where(e => _eventCameraFilter.Length == 0 || e.Camera == _eventCameraFilter)
-                .Where(e => !_eventsUnreviewedOnly || !e.Reviewed)
-                .OrderByDescending(e => e.Start);
-        }
-    }
-
-    /// <summary>Blank/invalid input returns to the rolling 24-hour view.</summary>
-    private async Task SetEventsDateAsync(string? raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw) || !DateTime.TryParse(raw, out var day))
-        {
-            _eventsDate = null;
-            _eventsForDate = new List<ApiEvent>();
-            return;
-        }
-        _eventsDate = day.Date;
-        await LoadEventsForDateAsync();
-    }
-
-    private async Task LoadEventsForDateAsync()
-    {
-        if (_eventsDate is not { } day) return;
-        _eventsDateLoading = true;
-        try
-        {
-            using var res = await Http.SendAsync(ApiRequest(HttpMethod.Get,
-                $"/api/events?limit=1000&date={day:yyyy-MM-dd}"));
-            _eventsForDate = res.IsSuccessStatusCode
-                ? await res.Content.ReadFromJsonAsync<List<ApiEvent>>() ?? new List<ApiEvent>()
-                : new List<ApiEvent>();
-        }
-        catch
-        {
-            _eventsForDate = new List<ApiEvent>();
-        }
-        finally
-        {
-            _eventsDateLoading = false;
-        }
-    }
-
     private string EventArtifactUrl(ApiEvent ev, string kind) =>
         $"{_server.TrimEnd('/')}/api/events/{Uri.EscapeDataString(ev.Id)}/{kind}{TokenQuery('?')}";
 
@@ -2225,8 +2076,6 @@
         if (!await PostEventReviewAsync(ev, reviewed: true)) return;
         int i = _events.FindIndex(e => e.Id == ev.Id);
         if (i >= 0) _events[i] = _events[i] with { Reviewed = true };
-        int j = _eventsForDate.FindIndex(e => e.Id == ev.Id);
-        if (j >= 0) _eventsForDate[j] = _eventsForDate[j] with { Reviewed = true };
         if (_playEvent?.Id == ev.Id) _playEvent = _playEvent with { Reviewed = true };
     }
 
@@ -2280,11 +2129,6 @@
             : span.TotalHours < 24 ? $"{(int)span.TotalHours}h ago"
             : $"{(int)span.TotalDays}d ago";
     }
-
-    private static string DayLabel(DateTime day) =>
-        day == DateTime.Now.Date ? "TODAY"
-        : day == DateTime.Now.Date.AddDays(-1) ? "YESTERDAY"
-        : day.ToString("dddd, d MMMM").ToUpperInvariant();
 
     private static string DurationText(ApiEvent ev) =>
         ev.Ongoing ? "recording…"

@@ -13,57 +13,114 @@
 
 <div class="tl-page">
     <div class="toolbar tl-toolbar">
-        <a class="tool-btn" href="" title="Back to live view">‹ Live</a>
+        <a class="tool-btn" href="" title="Back to live view">@UiIcon.Render("chev-left", 16) <span class="tool-name">Live</span></a>
         <span class="tool-label">TIMELINE</span>
-        @* Day navigation uses thin chevrons; the transport cluster below uses a solid
-           accent pill and filled glyphs, so the two can't be mistaken for each other. *@
-        <button class="tool-btn tl-daynav" title="Previous day" @onclick="() => ChangeDayAsync(-1)">@UiIcon.Render("chev-left", 16)</button>
-        <span class="tl-date">@_date.ToString("ddd, d MMMM yyyy")</span>
-        <button class="tool-btn tl-daynav" title="Next day" disabled="@(_date >= DateTime.Today)"
-                @onclick="() => ChangeDayAsync(1)">@UiIcon.Render("chev-right", 16)</button>
-        <span class="tool-sep"></span>
-        @* Precision transport: event hops, coarse and fine steps around play/pause.
-           Every control names its keyboard twin — the fastest way to learn them. *@
-        <button class="tool-btn tl-step" title="Previous event   —   [" @onclick="() => JumpEventAsync(-1)">@UiIcon.Render("skip-back", 13)</button>
-        <button class="tool-btn tl-step" title="Back 10 seconds   —   J or Shift+←" @onclick="() => StepAsync(-10)">−10s</button>
-        <button class="tool-btn tl-step" title="Back 1 second   —   ←   (Ctrl+← or , for 0.1 s)" @onclick="() => StepAsync(-1)">−1s</button>
-        <button class="tl-play @(_playing ? "playing" : "")"
-                title="@(_playing ? "Pause — Space or K" : "Play — Space or K")" @onclick="TogglePlayAsync">
-            @UiIcon.Render(_playing ? "pause" : "play", 14) <span class="tool-name">@(_playing ? "Pause" : "Play")</span>
-        </button>
-        <button class="tool-btn tl-step" title="Forward 1 second   —   →   (Ctrl+→ or . for 0.1 s)" @onclick="() => StepAsync(1)">+1s</button>
-        <button class="tool-btn tl-step" title="Forward 10 seconds   —   L or Shift+→" @onclick="() => StepAsync(10)">+10s</button>
-        <button class="tool-btn tl-step" title="Next event   —   ]" @onclick="() => JumpEventAsync(1)">@UiIcon.Render("skip-fwd", 13)</button>
-        @* Slow motion through fast skim; the choice sticks (localStorage). *@
-        @foreach (var s in SpeedOptions)
-        {
-            var sp = s;
-            <button class="chip tl-speed @(_speed == sp ? "chip-active" : "")"
-                    title="Play at @SpeedLabel(sp) speed (beta)" @onclick="() => SetSpeedAsync(sp)">@SpeedLabel(sp)</button>
-        }
-        <span class="beta-tag" title="Fast playback is new — expect rough edges and report anything odd">BETA</span>
+
+        @* --- Date group: prev/next day flanking a calendar-dropdown button. --- *@
+        <div class="tl-group tl-date-group">
+            <button class="tool-btn tl-daynav" title="Previous day" @onclick="() => ChangeDayAsync(-1)">@UiIcon.Render("chev-left", 16)</button>
+            <button class="tool-btn tl-date-btn @(_showCalendar ? "active" : "")"
+                    title="Pick a day — days with footage are highlighted"
+                    @onclick="ToggleCalendarAsync">
+                @UiIcon.Render("calendar", 13) <span class="tl-date-text">@_date.ToString("ddd, d MMM yyyy")</span> @UiIcon.Render("chev-down", 12)
+            </button>
+            <button class="tool-btn tl-daynav" title="Next day" disabled="@(_date >= DateTime.Today)"
+                    @onclick="() => ChangeDayAsync(1)">@UiIcon.Render("chev-right", 16)</button>
+        </div>
+
+        @* --- Transport group: event hops + coarse/fine steps around play/pause.
+           Every control names its keyboard twin — the fastest way to learn them. --- *@
+        <div class="tl-group tl-transport">
+            <button class="tool-btn tl-step" title="Previous event   —   [" @onclick="() => JumpEventAsync(-1)">@UiIcon.Render("skip-back", 13)</button>
+            <button class="tool-btn tl-step" title="Back 10 seconds   —   J or Shift+←" @onclick="() => StepAsync(-10)">−10s</button>
+            <button class="tool-btn tl-step" title="Back 1 second   —   ←   (Ctrl+← or , for 0.1 s)" @onclick="() => StepAsync(-1)">−1s</button>
+            <button class="tl-play @(_playing ? "playing" : "")"
+                    title="@(_playing ? "Pause — Space or K" : "Play — Space or K")" @onclick="TogglePlayAsync">
+                @UiIcon.Render(_playing ? "pause" : "play", 14) <span class="tool-name">@(_playing ? "Pause" : "Play")</span>
+            </button>
+            <button class="tool-btn tl-step" title="Forward 1 second   —   →   (Ctrl+→ or . for 0.1 s)" @onclick="() => StepAsync(1)">+1s</button>
+            <button class="tool-btn tl-step" title="Forward 10 seconds   —   L or Shift+→" @onclick="() => StepAsync(10)">+10s</button>
+            <button class="tool-btn tl-step" title="Next event   —   ]" @onclick="() => JumpEventAsync(1)">@UiIcon.Render("skip-fwd", 13)</button>
+        </div>
+
+        @* --- Speed group: slow motion through fast skim; the choice sticks. --- *@
+        <div class="tl-group tl-speed-group">
+            @foreach (var s in SpeedOptions)
+            {
+                var sp = s;
+                <button class="chip tl-speed @(_speed == sp ? "chip-active" : "")"
+                        title="Play at @SpeedLabel(sp) speed" @onclick="() => SetSpeedAsync(sp)">@SpeedLabel(sp)</button>
+            }
+        </div>
+
         @if (Lagging)
         {
             <span class="tl-lag" title="The streams can't sustain @SpeedLabel(_speed) right now (server delivery or browser decoding is the limit) — the timeline slows down until they catch up">
                 ⏳ catching up…
             </span>
         }
-        <button class="tool-btn tl-keys-btn @(_showKeys ? "active" : "")" title="Keyboard shortcuts"
-                @onclick="() => _showKeys = !_showKeys">?</button>
-        <button class="chip tl-zoom-chip @(Zoomed ? "chip-active" : "chip-off")"
-                title="@(Zoomed ? "Zoomed in — click (or press 0) to see the whole day again" : "Scroll or pinch on the timeline to zoom in for fine seeking")"
-                @onclick="ResetZoomAsync">@UiIcon.Render("zoom", 12) @SpanLabel(_viewSpan)</button>
-        @if (_editClock)
-        {
-            <input id="tl-clock-edit" class="tl-clock-edit" value="@TimeText(_t)" spellcheck="false"
-                   placeholder="HH:mm:ss" @onchange="ClockEditedAsync" @onblur="() => _editClock = false" />
-        }
-        else
-        {
-            <span class="tl-clock tl-clock-btn" role="button" title="Click (or press T) to type an exact time"
-                  @onclick="OpenClockEdit">@TimeText(_t)</span>
-        }
+
+        <span class="tool-spacer"></span>
+
+        @* --- View group: clock, zoom, keyboard help. --- *@
+        <div class="tl-group tl-view-group">
+            @if (_editClock)
+            {
+                <input id="tl-clock-edit" class="tl-clock-edit" value="@TimeText(_t)" spellcheck="false"
+                       placeholder="HH:mm:ss" @onchange="ClockEditedAsync" @onblur="() => _editClock = false" />
+            }
+            else
+            {
+                <span class="tl-clock tl-clock-btn" role="button" title="Click (or press T) to type an exact time"
+                      @onclick="OpenClockEdit">@TimeText(_t)</span>
+            }
+            <button class="chip tl-zoom-chip @(Zoomed ? "chip-active" : "chip-off")"
+                    title="@(Zoomed ? "Zoomed in — click (or press 0) to see the whole day again" : "Scroll or pinch on the timeline to zoom in for fine seeking")"
+                    @onclick="ResetZoomAsync">@UiIcon.Render("zoom", 12) @SpanLabel(_viewSpan)</button>
+            <button class="tool-btn tl-keys-btn @(_showKeys ? "active" : "")" title="Keyboard shortcuts"
+                    @onclick="() => _showKeys = !_showKeys">?</button>
+        </div>
     </div>
+
+    @if (_showCalendar)
+    {
+        <div class="tl-cal-backdrop" @onclick="() => _showCalendar = false"></div>
+        <div class="tl-cal" @onclick:stopPropagation="true">
+            <div class="tl-cal-head">
+                <button class="tool-btn tl-daynav" title="Previous month" @onclick="() => ShiftMonth(-1)">@UiIcon.Render("chev-left", 15)</button>
+                <span class="tl-cal-month">@_calMonth.ToString("MMMM yyyy")</span>
+                <button class="tool-btn tl-daynav" title="Next month"
+                        disabled="@(_calMonth >= new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1))"
+                        @onclick="() => ShiftMonth(1)">@UiIcon.Render("chev-right", 15)</button>
+            </div>
+            <div class="tl-cal-grid">
+                @foreach (var d in new[] { "Mo", "Tu", "We", "Th", "Fr", "Sa", "Su" })
+                {
+                    <span class="tl-cal-dow">@d</span>
+                }
+                @foreach (var cell in CalendarCells())
+                {
+                    @if (cell is { } day)
+                    {
+                        bool hasFootage = _contentDays.Contains(day);
+                        bool isFuture = day > DateTime.Today;
+                        <button class="tl-cal-day @(day == _date ? "sel" : "") @(hasFootage ? "has" : "") @(day == DateTime.Today ? "today" : "")"
+                                disabled="@isFuture"
+                                title="@(hasFootage ? "Footage on this day" : isFuture ? "" : "No footage")"
+                                @onclick="() => PickDayAsync(day)">@day.Day</button>
+                    }
+                    else
+                    {
+                        <span class="tl-cal-day empty"></span>
+                    }
+                }
+            </div>
+            <div class="tl-cal-foot">
+                <span class="tl-cal-legend"><span class="tl-cal-dot"></span> has footage</span>
+                <button class="chip" @onclick="() => PickDayAsync(DateTime.Today)">Today</button>
+            </div>
+        </div>
+    }
 
     @if (_showKeys)
     {
@@ -245,6 +302,11 @@
     private DateTime _lastTick;
     private bool _scrubInit;
     private bool _booted;
+
+    // Calendar date-picker: days that hold footage are highlighted at a glance.
+    private bool _showCalendar;
+    private DateTime _calMonth = new(DateTime.Today.Year, DateTime.Today.Month, 1);
+    private readonly HashSet<DateTime> _contentDays = new();
 
     /// <summary>One recording segment: seconds-of-day start, span and playback URL.</summary>
     private sealed record Seg(double Start, double Span, string Url);
@@ -888,6 +950,56 @@
         if (next > DateTime.Today) return;
         _date = next;
         await LoadDayAsync();
+    }
+
+    // ------------------------------------------------------------ calendar picker
+
+    /// <summary>Loads the set of days that hold footage (once) and opens the calendar on the current month.</summary>
+    private async Task ToggleCalendarAsync()
+    {
+        if (_showCalendar) { _showCalendar = false; return; }
+        _calMonth = new DateTime(_date.Year, _date.Month, 1);
+        await LoadContentDaysAsync();
+        _showCalendar = true;
+    }
+
+    private async Task LoadContentDaysAsync()
+    {
+        try
+        {
+            var days = await GetJsonAsync<List<string>>("/api/events/days");
+            _contentDays.Clear();
+            if (days != null)
+                foreach (var s in days)
+                    if (DateTime.TryParseExact(s, "yyyy-MM-dd", null,
+                            System.Globalization.DateTimeStyles.None, out var d))
+                        _contentDays.Add(d.Date);
+        }
+        catch { /* highlighting is a nicety; the picker still works without it */ }
+    }
+
+    private void ShiftMonth(int months)
+    {
+        var next = _calMonth.AddMonths(months);
+        var thisMonth = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+        _calMonth = next > thisMonth ? thisMonth : next;
+    }
+
+    private async Task PickDayAsync(DateTime day)
+    {
+        _showCalendar = false;
+        if (day > DateTime.Today || day.Date == _date) return;
+        _date = day.Date;
+        await LoadDayAsync();
+    }
+
+    /// <summary>Month grid, Monday-first: leading blanks (null) then each day of the month.</summary>
+    private IEnumerable<DateTime?> CalendarCells()
+    {
+        int lead = ((int)_calMonth.DayOfWeek + 6) % 7; // Mon=0 … Sun=6
+        for (int i = 0; i < lead; i++) yield return null;
+        int days = DateTime.DaysInMonth(_calMonth.Year, _calMonth.Month);
+        for (int d = 1; d <= days; d++) yield return new DateTime(_calMonth.Year, _calMonth.Month, d);
     }
 
     private async Task ToggleCameraAsync(string name)
