@@ -845,6 +845,26 @@ video[data-live="1"] ~ .tile-status { display: none; }
     text-shadow: 0 1px 3px #000;
 }
 
+/* Phones: the camera name floats translucent over the feed's top-right corner
+   instead of occupying the crowded bottom bar. Ghosted on purpose — it must
+   label the tile without blocking the picture. Enabled in the coarse block. */
+.tile-name-float {
+    display: none;
+    position: absolute;
+    top: 6px;
+    right: 10px;
+    z-index: 5;
+    max-width: 65%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.5);
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
+    pointer-events: none;
+}
+
 .tile-spacer { flex: 1; }
 
 .tile-bar select {
@@ -1225,6 +1245,21 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
        container degraded WebKit's tap→click synthesis for the tile-bar buttons
        (maximize/minimize taking seconds to register on iOS). */
     .zoom-on video, .quick-view-media video, .event-player-media video { touch-action: none; }
+
+    /* The camera name leaves the bottom bar for the translucent top-right float. */
+    .tile-name-float { display: block; }
+    .tile-bar .tile-name { display: none; }
+
+    /* Recording indicators shrink to a blinking dot — the labels are dead
+       weight at phone tile sizes (the clip chip keeps its countdown). */
+    .tile-bar .cam-rec-badge {
+        border: none;
+        background: none;
+        padding: 0;
+        font-size: 13px;
+    }
+    .tile-bar .cam-rec-badge .rec-text { display: none; }
+    .clip-overlay-word { display: none; }
 }
 
 /* ---------- camera settings dialog ---------- */

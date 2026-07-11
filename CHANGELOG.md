@@ -10,11 +10,11 @@ in the README). Paste the matching section below into the GitHub release.
 
 - **On-demand clip recording** — record a camera on command, regardless of
   what it detects. Two triggers, one shared session per camera:
-  - *Web UI*: maximize a camera (or open `/cameras/{name}`) and press the new
-    ⏺ record button in its toolbar. While recording, a red `REC` chip with a
+  - *Web UI*: every camera tile's toolbar carries a ⏺ record button (next to
+    the mic in the maximized view). While recording, a red chip with a
     countdown sits on the video wherever the tile is shown — including for
-    recordings started from Home Assistant — and clicking it (or the button)
-    stops early. `POST /api/cameras/{name}/record` for scripts.
+    recordings started from Home Assistant — and clicking it (or the button
+    again) stops early. `POST /api/cameras/{name}/record` for scripts.
   - *Home Assistant*: a `Record on demand` switch per camera (cameras the
     server records events for); `ON`/`OFF` on `{base}/{camera}/record/set`
     works for non-HA consumers too. Typical use: "record while the door is
@@ -35,6 +35,13 @@ in the README). Paste the matching section below into the GitHub release.
   named *Record on demand* so it can't be mistaken for a recording master
   switch next to a camera that already records continuously (setups that saw
   the earlier `Record` name keep their entity id — same discovery unique id).
+
+### Changed
+
+- Phone tile chrome slims down: the camera name now floats translucently over
+  the tile's top-right corner instead of occupying the bottom bar, and the
+  recording indicators shrink to a blinking dot — no more `REC` label (the
+  on-demand chip keeps its countdown).
 
 ## 0.8.3
 

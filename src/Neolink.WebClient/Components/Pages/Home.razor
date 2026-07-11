@@ -467,11 +467,15 @@
                         @* no autoplay: the JS player starts playback once its jitter buffer is filled *@
                         <video id="vid-@index" muted playsinline></video>
                         <div class="tile-status">connecting…</div>
+                        @* Phones: the camera name floats translucent over the feed's top-right
+                           corner instead of sitting in the crowded bottom bar (CSS gates it). *@
+                        <span class="tile-name-float">@slot.Camera</span>
                         <div class="tile-bar" @onclick:stopPropagation="true" @ondblclick:stopPropagation="true">
                             <span class="tile-name">@slot.Camera</span>
                             @if (camera is { Recording: true })
                             {
-                                <span class="cam-rec-badge" title="Recording 24/7 to disk">● REC</span>
+                                @* Phones show only the blinking dot (CSS hides .rec-text). *@
+                                <span class="cam-rec-badge" title="Recording 24/7 to disk"><span class="rec-dot">●</span><span class="rec-text"> REC</span></span>
                             }
                             @if (camera != null && camera.Streams.Count > 1)
                             {
@@ -485,8 +489,10 @@
                             <span class="tile-spacer"></span>
                             @* JS-owned (neolink.audioInit): shown only when the stream has audio *@
                             <button type="button" class="icon-btn" data-audio-toggle style="display:none"></button>
-                            @if (_maxIndex == index && camera?.OnDemand != null)
+                            @if (camera?.OnDemand != null)
                             {
+                                @* On every tile, not just the maximized one — recording on
+                                   demand shouldn't require blowing the camera up first. *@
                                 <button class="icon-btn clip-btn @(ClipActive(camera.Name) ? "clip-live" : "")"
                                         title="@(ClipActive(camera.Name) ? "Stop clip recording" : $"Record a clip (stops by itself after {ClipMaxLabel(camera)})")"
                                         @onclick="() => ToggleClipAsync(camera)">@UiIcon.Render("rec", 14)</button>
@@ -514,7 +520,7 @@
                                  @onclick="() => ToggleClipAsync(camera!)"
                                  @onclick:stopPropagation="true" @ondblclick:stopPropagation="true">
                                 <span class="clip-overlay-dot"></span>
-                                <span class="clip-overlay-label">REC @ClipCountdown(slot.Camera!)</span>
+                                <span class="clip-overlay-label"><span class="clip-overlay-word">REC </span>@ClipCountdown(camera.Name)</span>
                             </div>
                         }
                         @if (_maxIndex == index && TalkActive(slot.Camera!))

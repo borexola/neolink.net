@@ -495,9 +495,9 @@ capture) or when you switch it OFF early. The trigger deliberately ignores the
 camera's event-type filter and capture schedule (it is explicit intent, not a
 detection) but respects the per-camera events on/off switch.
 
-The same recording can be started from the web UI: maximize a camera (or open
-`/cameras/{name}`) and press the **⏺ record button** in its toolbar. A red
-`REC` chip with a countdown sits on the video for as long as the clip records —
+The same recording can be started from the web UI: press the **⏺ record
+button** in any camera tile's toolbar (it sits next to the mic on the
+maximized view). A red chip with a countdown sits on the video for as long as the clip records —
 whichever side started it, the web UI and the HA switch always show the same
 state. A "record while the door is open" automation:
 
