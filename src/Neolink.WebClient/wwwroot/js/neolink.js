@@ -222,7 +222,10 @@
                 // ManagedMediaSource path drifts back more softly.
                 const chase = this.mms ? 1.05 : 1.1;
                 if (ahead > this.latencyTarget + 5) {
-                    this.diag.resync++;
+                    // Resyncs while WE paused the tile (hidden behind a maximized
+                    // one) are just housekeeping that keeps the buffer near-live —
+                    // not a health signal.
+                    if (!this.video.dataset.bgPaused) this.diag.resync++;
                     this.video.currentTime = end - this.latencyTarget; // hard resync
                     this.video.playbackRate = 1.0;
                 } else if (ahead > this.latencyTarget + 1) {
@@ -1207,6 +1210,26 @@
         // defaulting to the lighter sub stream on phones.
         isCoarse() {
             return matchMedia('(pointer: coarse)').matches;
+        },
+
+        // While a tile is maximized on a TOUCH device, the hidden tiles pause:
+        // N video decoders running behind the one you're watching is what made
+        // phones mushy (taps included). Their streams keep flowing, so restore
+        // resumes near-live immediately. Desktop keeps everything running —
+        // it has the headroom, and restore stays literally instant there.
+        maxSync() {
+            const maxed = matchMedia('(pointer: coarse)').matches
+                && !!document.querySelector('.grid.has-max');
+            for (const v of document.querySelectorAll('.grid .tile video')) {
+                const hidden = maxed && !v.closest('.tile')?.classList.contains('maxed');
+                if (hidden && !v.paused) {
+                    v.dataset.bgPaused = '1';
+                    try { v.pause(); } catch { }
+                } else if (!hidden && v.dataset.bgPaused) {
+                    delete v.dataset.bgPaused;
+                    try { v.play().catch(() => { }); } catch { }
+                }
+            }
         },
 
         attach(videoId, wsUrl) {

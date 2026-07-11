@@ -1159,8 +1159,11 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     }
     .zoom-hud.hud-idle { opacity: 0; }
 
-    /* Two fingers on a zoomable surface must pinch, never scroll/browser-zoom */
-    .zoom-on, .quick-view-media, .event-player-media { touch-action: none; }
+    /* Two fingers on the PICTURE must pinch, never scroll/browser-zoom.
+       Scoped to the video element only: putting touch-action:none on the whole
+       container degraded WebKit's tap→click synthesis for the tile-bar buttons
+       (maximize/minimize taking seconds to register on iOS). */
+    .zoom-on video, .quick-view-media video, .event-player-media video { touch-action: none; }
 }
 
 /* ---------- camera settings dialog ---------- */

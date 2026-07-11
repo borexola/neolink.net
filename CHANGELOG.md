@@ -55,6 +55,10 @@ in the README). Paste the matching section below into the GitHub release.
     per-append cost at per-frame granularity starved the decoder), the player
     honors ManagedMediaSource's streaming hints, catch-up is gentler on
     Safari's pipeline, and no seeking happens while the app is backgrounded.
+  - While a camera is maximized on a touch device, the hidden tiles pause
+    instead of decoding invisibly in the background — that hidden load is what
+    made phones feel mushy. Their streams keep flowing, so restoring resumes
+    them near-live instantly; desktop keeps everything running as before.
 
 ### Fixed
 
@@ -69,6 +73,11 @@ in the README). Paste the matching section below into the GitHub release.
   appeared at all. Every discovery publish now omits unset fields entirely,
   and the fixed build heals HA on its next connect by overwriting the
   retained configs with valid ones — no HA-side action needed.
+- **iOS: maximize/minimize buttons respond on the first tap, immediately.**
+  `touch-action: none` had been applied to the whole maximized tile for
+  pinch-zoom, which degrades WebKit's tap→click synthesis for the buttons
+  inside it (taps took seconds to register). It is now scoped to the video
+  element only — pinch is unaffected, buttons get native tap semantics back.
 - **iOS: minimizing a maximized camera no longer needs two taps.** WebKit
   turns any content-revealing :hover into "first tap hovers, second tap
   clicks", and the tile controls' always-visible override was gated on

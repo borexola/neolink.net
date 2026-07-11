@@ -1159,6 +1159,8 @@
         // Digital zoom (theater/fullscreen/quick view). Re-invoked per render so
         // zoom resets when a surface stops being zoomable (e.g. un-maximized).
         await JS.InvokeVoidAsync("neolink.zoomInit");
+        // Phones: pause the hidden tiles while one is maximized (resume on restore).
+        await JS.InvokeVoidAsync("neolink.maxSync");
         // Speaker toggles: re-sync glyphs/visibility after every render.
         await JS.InvokeVoidAsync("neolink.audioInit");
         // Esc closes the event player / quick view pop-ups (and the tile menu).
