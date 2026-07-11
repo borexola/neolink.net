@@ -97,6 +97,27 @@ The cameras are unmodified and no Reolink NVR is required.
 - A crash in one camera's pipeline can never take down other cameras or the process
 - Zero native dependencies, zero NuGet packages — builds fully offline
 
+## Quick start (Home Assistant add-on)
+
+Running Home Assistant OS (or Supervised)? Neolink.NET installs as a native
+add-on — no Docker commands, no YAML files:
+
+[![Add repository to my Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fborexola%2Fneolink.net)
+
+1. Click the badge (or Settings → Add-ons → Add-on Store → ⋮ → Repositories →
+   add `https://github.com/borexola/neolink.net`), then install **Neolink.NET**.
+2. Add your cameras in the add-on's *Configuration* tab (name, IP, account).
+3. Start it and click **OPEN WEB UI**.
+
+If the **Mosquitto broker** add-on is installed, the MQTT connection is wired
+up automatically at every start — cameras appear as Home Assistant devices with
+no further setup. Recordings land in `/media/neolink`, so clips show up in HA's
+media browser. Full details in the add-on's Documentation tab
+([neolink-addon/DOCS.md](neolink-addon/DOCS.md)).
+
+Running Home Assistant in a plain container (no Supervisor)? Use the Docker
+route below — everything works the same, including the MQTT integration.
+
 ## Quick start (Docker — recommended)
 
 Prebuilt multi-arch images (`linux/amd64` + `linux/arm64`) are published to GitHub

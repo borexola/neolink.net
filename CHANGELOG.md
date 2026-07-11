@@ -28,6 +28,15 @@ in the README). Paste the matching section below into the GitHub release.
   schedule (explicit intent beats detection rules) but respects the
   per-camera events switch.
 
+- **Home Assistant add-on** — Neolink.NET now installs as a native add-on on
+  Home Assistant OS/Supervised: add the repository (one-click badge in the
+  README), install, list your cameras in the add-on's Configuration tab,
+  start. The MQTT connection to the Mosquitto broker add-on is wired
+  automatically at every start, recordings land on the media share so clips
+  appear in HA's media browser, and the web UI opens straight from the add-on
+  page. Prebuilt amd64/aarch64 add-on images ship from the same release
+  workflow; the plain-Docker route is unchanged.
+
 - **Per-camera recording status in Home Assistant**: every recording-capable
   camera now carries a `Recording` binary sensor that is ON while the server
   is actually writing its footage — an event clip (camera detection or

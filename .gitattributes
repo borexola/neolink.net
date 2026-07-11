@@ -3,6 +3,9 @@
 ###############################################################################
 * text=auto
 
+# Shell scripts run inside Linux containers — a CRLF checkout breaks them.
+*.sh text eol=lf
+
 ###############################################################################
 # Set default behavior for command prompt diff.
 #

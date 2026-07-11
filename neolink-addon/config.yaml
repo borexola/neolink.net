@@ -1,0 +1,52 @@
+# Home Assistant add-on manifest for Neolink.NET.
+#
+# RELEASING: bump `version` to match the vX.Y.Z tag being cut — the Supervisor
+# pulls ghcr.io/borexola/neolink.net-addon-{arch}:<version>, which the docker
+# workflow publishes on every tag. Version here ≠ tag ⇒ users see no update.
+name: Neolink.NET
+version: "0.8.4"
+slug: neolink
+description: >-
+  Reolink camera bridge — live RTSP restreaming, a full web UI with recording
+  and timeline review, and native Home Assistant entities over MQTT.
+url: https://github.com/borexola/neolink.net
+arch:
+  - amd64
+  - aarch64
+image: ghcr.io/borexola/neolink.net-addon-{arch}
+startup: services
+boot: auto
+# The Supervisor API is used once at startup to fetch the Mosquitto broker's
+# connection details (services: mqtt), so MQTT needs zero manual configuration.
+hassio_api: true
+services:
+  - mqtt:want
+map:
+  # /config inside the container — where config.json and the UI state live.
+  - addon_config:rw
+  # Recordings land in /media/neolink, so clips show up in HA's media browser.
+  # NAS shares added under Settings → System → Storage appear in here too
+  # (usage "Media" → /media/<name>) or under /share (usage "Share").
+  - media:rw
+  - share:rw
+ports:
+  8654/tcp: 8654
+  8655/tcp: 8655
+ports_description:
+  8654/tcp: RTSP server (VLC, Frigate, other NVRs)
+  8655/tcp: Web UI + HTTP API
+webui: http://[HOST]:[PORT:8655]
+watchdog: tcp://[HOST]:[PORT:8655]
+options:
+  cameras: []
+  auto_mqtt: true
+  log_verbose: false
+schema:
+  cameras:
+    - name: str
+      address: str
+      username: str
+      password: password?
+      always_on: bool?
+  auto_mqtt: bool
+  log_verbose: bool
