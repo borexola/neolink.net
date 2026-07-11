@@ -8,6 +8,18 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### New
 
+- **Trigger recording from Home Assistant** — a `Record` switch per camera
+  (cameras the server records events for). While ON, the server holds a
+  recording open regardless of what the camera detects — most Reolink
+  firmwares can't be told to record, but Neolink is the recorder, so it
+  doesn't need their cooperation. Pre-roll included, clips roll at
+  `max_clip_seconds`, retention applies, and the footage shows in the
+  timeline/review strip labeled **External**. The trigger bypasses the
+  event-type filter and capture schedule (explicit intent beats detection
+  rules) but respects the per-camera events switch. `ON`/`OFF` on
+  `{base}/{camera}/record/set` works for non-HA consumers too.
+  Typical use: "record while the door is open".
+
 - **The server reports itself to Home Assistant**: alongside the cameras, MQTT
   discovery now creates a "Neolink.NET Server" device carrying the monitor
   page's vitals — CPU, memory, storage free/used, recordings size, recording

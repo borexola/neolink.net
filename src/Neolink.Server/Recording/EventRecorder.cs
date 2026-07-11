@@ -284,12 +284,22 @@ public sealed class EventRecorder
 
             // Runtime switches (web UI): events off, outside the camera's capture
             // schedule, or every label of this push filtered out by the camera's
-            // event-type selection → discard silently.
+            // event-type selection → discard silently. External pushes (the HA
+            // "Record" switch) are explicit user intent: only the master events
+            // switch can veto them — no schedule, no type filter.
             var settings = _settings.Get(_camera);
             if (!settings.Events) continue;
-            if (!settings.ScheduleAllows(DateTime.Now)) continue; // schedules are wall-clock local
-            var labels = LabelsOf(push).Where(settings.AllowsLabel).ToList();
-            if (labels.Count == 0) continue;
+            List<string> labels;
+            if (push.External)
+            {
+                labels = LabelsOf(push);
+            }
+            else
+            {
+                if (!settings.ScheduleAllows(DateTime.Now)) continue; // schedules are wall-clock local
+                labels = LabelsOf(push).Where(settings.AllowsLabel).ToList();
+                if (labels.Count == 0) continue;
+            }
 
             try
             {
@@ -338,7 +348,10 @@ public sealed class EventRecorder
             {
                 // Filtered-out detection types don't extend the event either —
                 // as far as recording is concerned, they never happened.
-                var allowed = LabelsOf(push).Where(_settings.Get(_camera).AllowsLabel).ToList();
+                // External holds always extend: the switch is still on.
+                var allowed = push.External
+                    ? LabelsOf(push)
+                    : LabelsOf(push).Where(_settings.Get(_camera).AllowsLabel).ToList();
                 if (allowed.Count == 0) continue;
                 active = true;
                 var fresh = allowed.Where(l => !rec.Labels.Contains(l)).ToList();

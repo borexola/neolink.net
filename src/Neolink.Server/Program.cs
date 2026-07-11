@@ -336,7 +336,6 @@ if (config.WebPort > 0 || config.Mqtt is { StatsIntervalSeconds: > 0 })
 if (config.Mqtt is { } mqttCfg)
 {
     mqtt = new HomeAssistantMqtt(mqttCfg, webCameras, Version) { Monitor = monitor };
-    tasks.Add(Task.Run(() => mqtt.RunAsync(shutdown.Token)));
 }
 foreach (var (primary, name, recorderSink) in motionTargets)
 {
@@ -351,7 +350,15 @@ foreach (var (primary, name, recorderSink) in motionTargets)
     // bridge; the listener only runs when the sink is set.
     if (bridge != null)
         primary.StatusSink = push => bridge.OnStatus(name, push);
+    // The reverse direction: HA's "Record" switch injects synthetic pushes into
+    // the recorder, holding a recording open with no camera detection involved.
+    if (bridge != null && recorderSink != null)
+        bridge.SetRecordTrigger(name, recorderSink);
 }
+// Start the bridge only after the record triggers are wired, so the first
+// discovery announce already carries the Record switches.
+if (mqtt is { } bridgeToRun)
+    tasks.Add(Task.Run(() => bridgeToRun.RunAsync(shutdown.Token)));
 
 // Web API (camera list + fMP4 live streams for browsers); guarded like the cameras.
 if (config.WebPort > 0)

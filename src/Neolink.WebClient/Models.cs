@@ -139,6 +139,8 @@ public sealed record ApiEvent(string Id, string Camera, DateTime Start, DateTime
         ("line-crossing", "🚧", "Line crossing"),
         ("intrusion", "🚷", "Intrusion"),
         ("loitering", "🕒", "Loitering"),
+        // Recording held open from outside (the Home Assistant "Record" switch).
+        ("external", "⏺", "External"),
         ("motion", "👁", "Motion"),
     };
 
@@ -157,6 +159,8 @@ public sealed record ApiEvent(string Id, string Camera, DateTime Start, DateTime
             if (names.Count == 0) names.Add("Motion");
             // A lone doorbell event is a button press, not a detection.
             if (names.Count == 1 && names[0] == "Doorbell") return "Doorbell pressed";
+            // A lone external event was commanded (HA's Record switch), not detected.
+            if (names.Count == 1 && names[0] == "External") return "Externally triggered";
             return string.Join(" + ", names) + " detected";
         }
     }
