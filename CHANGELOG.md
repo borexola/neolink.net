@@ -43,6 +43,17 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Fixed
 
+- **Camera sensors going "Unavailable" in Home Assistant, and the missing
+  "Neolink.NET Server" device** — one bug: discovery configs were serialized
+  with explicit nulls for unset fields ("icon": null on the motion/person/
+  vehicle/animal sensors, "device_class": null on PTZ buttons,
+  "unit_of_measurement": null on the server sensors). HA rejects such configs
+  and silently drops the entity. Existing camera entities coasted on their
+  previously-retained configs until the next HA restart replayed the poisoned
+  ones — then they flipped to Unavailable; the brand-new server device never
+  appeared at all. Every discovery publish now omits unset fields entirely,
+  and the fixed build heals HA on its next connect by overwriting the
+  retained configs with valid ones — no HA-side action needed.
 - The timeline's buffering spinner no longer lingers after pausing: the veil
   now follows the video element's own events, so it clears the moment the
   paused frame is ready (and appears instantly on a genuine mid-stream stall).

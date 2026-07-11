@@ -776,6 +776,15 @@ public static class SelfTest
             var keys = Mqtt.HomeAssistantMqtt.ServerStatePayloads(headless, 0).Select(p => p.Key).ToList();
             Assert(!keys.Contains("disk_free") && !keys.Contains("disk_used_pct")
                 && !keys.Contains("recordings_size"), "unavailable sources are absent, not zero");
+
+            // Discovery JSON must OMIT unset fields: HA validates every key it
+            // sees, rejects explicit nulls ("icon": null) and silently drops the
+            // entity — the reason a config built with optional members must go
+            // through the null-stripping serializer.
+            var json = System.Text.Json.JsonSerializer.Serialize(
+                new { name = "X", icon = (string?)null, unit_of_measurement = (string?)null },
+                Mqtt.HomeAssistantMqtt.DiscoveryJson);
+            AssertEq(json, "{\"name\":\"X\"}");
         });
 
         Test("config editor: read-modify-write with validation", () =>
