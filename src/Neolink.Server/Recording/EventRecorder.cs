@@ -94,6 +94,11 @@ public sealed class EventRecorder
     /// bridge mirrors it into the camera's "Recording" status sensor.</summary>
     public event Action<bool>? RecordingChanged;
 
+    /// <summary>Fires the moment a detection event is created, before any media
+    /// work — the MQTT bridge forwards the id to HA so an automation firing on
+    /// the same trigger can deep-link to the exact clip (/events?event={id}).</summary>
+    public event Action<EventRecord>? EventStarted;
+
     // ------------------------------------------------------------------ on-demand recording
 
     /// <summary>A running user-commanded recording (web UI record button / HA Record switch).</summary>
@@ -442,6 +447,7 @@ public sealed class EventRecorder
         var rec = _store.Create(_camera,
             DateTime.UtcNow - TimeSpan.FromSeconds(_cfg.PreSeconds), initialLabels);
         Log.Info($"{_camera}: ⚡ event started ({string.Join("+", rec.Labels)})");
+        EventStarted?.Invoke(rec); // id out first: HA sees it with the trigger
         _eventActive = true;
         RecordingChanged?.Invoke(true);
         try

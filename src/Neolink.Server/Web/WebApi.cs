@@ -71,7 +71,7 @@ public sealed class WebApiOptions
 ///   POST/PUT .../settings/stream            — change an encode profile (needs http_address)
 ///   GET/POST .../led /pir; POST .../ptz /reboot; GET .../battery — camera control
 ///   GET /api/events[?camera=&amp;reviewed=&amp;limit=] — recorded detection events (when enabled)
-///   GET /api/events/{id}/clip /thumb        — event artifacts; POST .../review to (un)dismiss
+///   GET /api/events/{id}[/clip /thumb]      — one event / its artifacts; POST .../review to (un)dismiss
 ///   GET/POST /api/cameras/{name}/recording  — per-camera recording switches + event-type filter
 ///   POST /api/cameras/{name}/record         — start/stop an on-demand clip (one clip, auto-capped)
 ///   GET /api/recordings/{camera}[/{date}[/{file}]] — browse/play continuous footage
@@ -793,6 +793,20 @@ public static class WebApi
                 return Results.Json(events.List(camera, reviewed, limit ?? 200, day).Select(Shape));
             });
 
+            // Days that hold any footage (events or continuous) — the timeline's
+            // calendar highlights these. Literal "days" beats the {id} routes.
+            app.MapGet("/api/events/days", () => Results.Json(events.ListContentDays()));
+
+            // Single-event lookup: notification deep links (/events?event={id})
+            // resolve the exact event even after it ages out of the 24h list.
+            app.MapGet("/api/events/{id}", (string id) =>
+            {
+                var rec = events.Find(id);
+                return rec == null
+                    ? Results.Json(new { error = "unknown event" }, statusCode: 404)
+                    : Results.Json(Shape(rec));
+            });
+
             app.MapGet("/api/events/{id}/clip", (string id) =>
             {
                 var path = events.ArtifactPath(id, "clip.mp4");
@@ -1109,7 +1123,7 @@ public static class WebApi
                 ctx.Response.StatusCode = 403;
                 await ctx.Response.WriteAsJsonAsync(new
                 {
-                    error = "two-way talk is a beta feature — enable it in Server settings (ui.talk)",
+                    error = "two-way talk is disabled — enable it in Server settings (ui.talk)",
                 });
                 return;
             }

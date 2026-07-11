@@ -4,6 +4,63 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
+## 0.8.5
+
+### New
+
+- **Dedicated Events page (`/events`)** — recent detection events now have their
+  own full page instead of only a pop-up, built for the phone-notification flow:
+  a Home Assistant "motion detected" push can deep-link straight to
+  **`/events/{camera}`**, which pre-filters to that camera and opens its newest
+  clip on arrival — one tap from the alert to the footage. A recent-events list
+  (thumbnails, camera, time, filters for camera / day / unreviewed) sits beside
+  the player on desktop and stacks on phones. Every event and the header carry a
+  one-tap **Go live** jump to that camera's feed, and an Events ⇄ Live toggle
+  switches between reviewing and watching. The old pop-up is replaced; the live
+  view's ambient event strip is unchanged.
+
+- **Timeline calendar date-picker**: the date now opens a month calendar with
+  **days that hold footage highlighted** (a dot under the number), so you can
+  see at a glance which days have recordings and jump straight to one — no more
+  clicking through empty days. Month navigation, a Today shortcut, and future
+  days disabled. Backed by a new `GET /api/events/days` endpoint.
+
+- **Deep link to one exact event**: `/events?event={id}` opens the Events page
+  with that clip already selected and playing — even for events older than the
+  recent list (the page jumps to their day). Event ids come from
+  `GET /api/events`; backed by a new `GET /api/events/{id}` lookup. Per-camera
+  links (`/events/{camera}`) now always land on that camera's most recent event,
+  even when the last 24 hours were quiet.
+
+- **"Last event" sensor in Home Assistant**: cameras that record events get an
+  MQTT sensor whose state is the newest event's id, published (retained) the
+  instant the event starts — at the same moment as the motion trigger. A
+  notification automation can point its tap action at
+  `…/events?event={{ states('sensor.<cam>_last_event') }}` for true one-tap
+  alert-to-clip. Labels and start time ride along as attributes.
+
+- **Deep-linked clips start muted on a fresh page load**: when the Events page
+  auto-opens a clip on a full navigation (a notification tap), playback begins
+  muted — no surprise audio, and no autoplay-blocked freeze. Clicking an event
+  yourself keeps sound on as before.
+
+### Changed
+
+- **Beta tags retired**: two-way talk, timeline fast playback and scheduled
+  capture have proven themselves — the BETA pills and wording are gone. (Talk
+  remains opt-in via `ui.talk`, unchanged.)
+- **Timeline toolbar tidied**: the controls are grouped into labelled clusters
+  (date · transport · speed · view) inside subtle pills instead of one long run
+  of buttons, and the clock/zoom/help settle at the right edge — easier to scan
+  and it wraps by group on narrow screens.
+
+### Fixed
+
+- Suffixed builds (test images, prereleases like `0.8.5-events-test`) no longer
+  see every published release as an "update" — the version comparison now uses
+  the numeric prefix instead of silently falling back to 0.0 when the suffix
+  didn't parse.
+
 ## 0.8.4
 
 ### New

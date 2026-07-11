@@ -210,6 +210,8 @@ public static class UiIcon
             "pause" => "<rect x=\"5\" y=\"4\" width=\"5\" height=\"16\" rx=\"1\" fill=\"currentColor\"/><rect x=\"14\" y=\"4\" width=\"5\" height=\"16\" rx=\"1\" fill=\"currentColor\"/>",
             "chev-left" => "<polyline points=\"15 18 9 12 15 6\"/>",
             "chev-right" => "<polyline points=\"9 18 15 12 9 6\"/>",
+            "chev-down" => "<polyline points=\"6 9 12 15 18 9\"/>",
+            "calendar" => "<rect x=\"3\" y=\"4\" width=\"18\" height=\"18\" rx=\"2\"/><line x1=\"16\" y1=\"2\" x2=\"16\" y2=\"6\"/><line x1=\"8\" y1=\"2\" x2=\"8\" y2=\"6\"/><line x1=\"3\" y1=\"10\" x2=\"21\" y2=\"10\"/>",
             "skip-back" => "<polygon points=\"19 20 9 12 19 4 19 20\" fill=\"currentColor\"/><line x1=\"5\" y1=\"19\" x2=\"5\" y2=\"5\"/>",
             "skip-fwd" => "<polygon points=\"5 4 15 12 5 20 5 4\" fill=\"currentColor\"/><line x1=\"19\" y1=\"5\" x2=\"19\" y2=\"19\"/>",
             "zoom" => "<circle cx=\"11\" cy=\"11\" r=\"7\"/><line x1=\"21\" y1=\"21\" x2=\"16\" y2=\"16\"/>",

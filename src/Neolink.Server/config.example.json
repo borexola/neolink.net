@@ -32,7 +32,7 @@
     // Playback speed of the ambient clip previews in the review strip.
     "trickle_speed": 4,
 
-    // BETA: two-way talk — a mic button on talk-capable cameras (doorbells etc.)
+    // Two-way talk — a mic button on talk-capable cameras (doorbells etc.)
     // streams your microphone to the camera's speaker. Off by default; can also
     // be toggled from the web UI (Server settings → Web UI). Browsers only allow
     // microphone access on HTTPS or localhost pages.

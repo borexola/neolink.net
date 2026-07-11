@@ -907,21 +907,6 @@ video[data-live="1"] ~ .tile-status { display: none; }
 body.is-fullscreen .fs-enter { display: none; }
 body.is-fullscreen .fs-exit { display: inline-flex; }
 
-/* Small pill marking a feature as beta (settings toggles) */
-.beta-tag {
-    display: inline-block;
-    margin-left: 6px;
-    padding: 1px 6px;
-    font-size: 9px;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    border-radius: 999px;
-    color: var(--accent);
-    border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
-    background: var(--accent-soft);
-    vertical-align: 1px;
-}
-
 /* Two-way talk mic: pulses red while the mic is live, dimmed while connecting */
 .talk-btn.talk-live {
     color: #fff;
@@ -1923,6 +1908,138 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     outline: none;
 }
 
+/* ---------- dedicated Events page (/events) ---------- */
+/* Master–detail: a scrollable recent-events list beside the selected clip.
+   Deep-linkable (/events/{camera}) so a phone push notification lands here. */
+.ev-page {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    height: 100dvh;
+    background: var(--bg);
+}
+
+.ev-toolbar { flex: 0 0 auto; }
+
+/* Events ⇄ Live segmented toggle in the toolbar */
+.ev-switch {
+    display: inline-flex;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    overflow: hidden;
+    background: var(--panel-2);
+}
+.ev-switch-opt {
+    padding: 4px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--muted);
+    text-decoration: none;
+    cursor: pointer;
+}
+.ev-switch-opt.active { background: var(--accent); color: #fff; }
+.ev-switch-opt:not(.active):hover { color: var(--fg); }
+
+.ev-body {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    gap: 14px;
+    padding: 14px;
+}
+
+/* The list: fixed-width column on desktop, full width on phones */
+.ev-list {
+    flex: 0 0 400px;
+    min-width: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-right: 4px;
+}
+
+.ev-day { margin-bottom: 6px; }
+.ev-day-head {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--bg);
+    padding: 8px 4px 4px;
+    font-size: 10px;
+    letter-spacing: 1.5px;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.ev-list .event-row.selected {
+    background: var(--accent-soft);
+    outline: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.ev-row-live { flex: 0 0 auto; color: var(--muted); }
+.ev-row-live:hover { color: var(--accent); }
+
+/* The detail pane: the selected event's clip + transport */
+.ev-detail {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 12px;
+    overflow: hidden;
+}
+
+.ev-detail .event-player-media { flex: 1; min-height: 0; }
+.ev-detail #ev-video {
+    display: block;
+    width: 100%;
+    height: 100%;
+    max-height: calc(100vh - 220px);
+    object-fit: contain;
+    background: #000;
+    outline: none;
+}
+
+.ev-back { display: none; } /* only shown when the list is hidden (phones) */
+.ev-golive { flex: 0 0 auto; align-self: center; white-space: nowrap; }
+
+.ev-detail-empty {
+    margin: auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    color: var(--muted);
+    font-size: 13px;
+}
+.ev-detail-empty-icon { opacity: 0.5; }
+
+/* Phones: single column. The list fills the screen; picking an event slides the
+   detail over it (the ‹ back button returns to the list). */
+@media (max-width: 760px) {
+    .ev-body { padding: 8px; gap: 0; }
+    .ev-list { flex: 1 1 auto; padding-right: 0; }
+    .ev-list .event-row-thumb { width: 108px; }
+    .ev-list .ev-row-live { display: none; } /* the detail's Go-live is enough */
+    .ev-detail { display: none; }             /* hidden until an event is picked */
+
+    .ev-page.has-selection .ev-list { display: none; }
+    .ev-page.has-selection .ev-detail {
+        display: flex;
+        border: none;
+        border-radius: 0;
+        padding: 8px;
+    }
+    .ev-detail .ev-back { display: inline-flex; }
+    .ev-detail #ev-video { max-height: calc(100dvh - 200px); }
+}
+
 /* Quick view: temporary pop-up live player (sidebar ⛶) — the layout underneath
    is untouched; closing it simply returns to whatever was on screen. */
 .quick-view {
@@ -2032,13 +2149,119 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     overflow: hidden;
 }
 
-.tl-toolbar { flex: 0 0 auto; }
-.tl-date { font-size: 13px; font-weight: 600; min-width: 150px; text-align: center; }
+.tl-toolbar { flex: 0 0 auto; gap: 8px; }
+
+/* Related controls cluster inside a subtle pill so the toolbar reads as a few
+   groups (date · transport · speed · view) instead of one long button run. */
+.tl-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 2px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--panel-2) 60%, transparent);
+    border: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+}
+.tl-group .tool-btn, .tl-group .chip { border: none; }
+
+/* Pushes the view group (clock/zoom/help) to the right edge */
+.tool-spacer { flex: 1 1 auto; }
+
+/* The calendar-dropdown date button: the day, flanked by prev/next chevrons */
+.tl-date-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 5px 10px;
+}
+.tl-date-btn .tl-date-text { font-variant-numeric: tabular-nums; }
+.tl-date-btn.active { color: var(--accent); background: var(--accent-soft); }
 
 /* Day-selector chevrons stay quiet so the transport control can stand out */
 .tl-daynav { color: var(--muted); }
 .tl-daynav:hover:not(:disabled) { color: var(--text); }
 .tl-daynav:disabled { opacity: 0.35; cursor: default; }
+
+/* ---- calendar popover: pick a day, footage days highlighted ---- */
+.tl-cal-backdrop { position: fixed; inset: 0; z-index: 60; }
+.tl-cal {
+    position: absolute;
+    top: 46px;
+    left: 12px;
+    z-index: 61;
+    width: 272px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
+    padding: 10px;
+    animation: talk-overlay-in 0.14s ease;
+}
+.tl-cal-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+}
+.tl-cal-month { font-size: 13px; font-weight: 700; }
+.tl-cal-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 2px;
+}
+.tl-cal-dow {
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--muted);
+    text-align: center;
+    padding-bottom: 4px;
+}
+.tl-cal-day {
+    position: relative;
+    aspect-ratio: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: none;
+    color: var(--text);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    border-radius: 8px;
+    cursor: pointer;
+}
+.tl-cal-day.empty { cursor: default; }
+.tl-cal-day:disabled { color: color-mix(in srgb, var(--muted) 45%, transparent); cursor: default; }
+.tl-cal-day:not(:disabled):hover { background: var(--accent-soft); }
+/* A dot under the number marks days that hold footage — visible at a glance */
+.tl-cal-day.has::after {
+    content: "";
+    position: absolute;
+    bottom: 3px;
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: var(--accent);
+}
+.tl-cal-day.today { outline: 1px solid color-mix(in srgb, var(--muted) 55%, transparent); }
+.tl-cal-day.sel {
+    background: var(--accent);
+    color: #0a1424;
+    font-weight: 700;
+}
+.tl-cal-day.sel.has::after { background: #0a1424; }
+.tl-cal-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--line);
+}
+.tl-cal-legend { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); }
+.tl-cal-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
 
 /* The play/pause transport: a solid accent pill with a filled glyph — nothing
    like the thin date chevrons, so the two can't be confused again. */
@@ -2068,7 +2291,6 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 }
 
 .tl-clock {
-    margin-left: auto;
     font-size: 15px;
     font-weight: 700;
     font-variant-numeric: tabular-nums;
@@ -2080,7 +2302,6 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 
 /* The clock swapped for direct input: type 16:39:12, Enter, you're there. */
 .tl-clock-edit {
-    margin-left: auto;
     width: 108px;
     background: var(--bg);
     border: 1px solid var(--accent);

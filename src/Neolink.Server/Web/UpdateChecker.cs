@@ -23,7 +23,12 @@ public sealed class UpdateChecker
 
     public UpdateChecker(string currentVersion)
     {
-        System.Version.TryParse(currentVersion, out var v);
+        // Only the numeric prefix counts: "0.8.5-events-test" compares as 0.8.5.
+        // System.Version can't parse suffixed versions, and falling back to 0.0
+        // made every test build see every release as an "update" (a downgrade
+        // banner on 0.8.5-test when 0.8.4 was the latest release).
+        var numeric = currentVersion.Split('-', '+')[0];
+        System.Version.TryParse(numeric, out var v);
         _current = v ?? new System.Version(0, 0);
     }
 
