@@ -83,6 +83,131 @@ public sealed class EventRecorder
     /// <summary>Called from the camera connection for every alarm push (any thread).</summary>
     public void OnMotion(MotionPush push) => _pushes.Writer.TryWrite(push);
 
+    // ------------------------------------------------------------------ recording status
+
+    private volatile bool _eventActive;
+
+    /// <summary>True while an event (camera detection or on-demand) is being captured.</summary>
+    public bool EventInProgress => _eventActive;
+
+    /// <summary>Fires when event capture starts (true) / ends (false) — the MQTT
+    /// bridge mirrors it into the camera's "Recording" status sensor.</summary>
+    public event Action<bool>? RecordingChanged;
+
+    // ------------------------------------------------------------------ on-demand recording
+
+    /// <summary>A running user-commanded recording (web UI record button / HA Record switch).</summary>
+    public sealed record OnDemandSession(DateTime StartedUtc, DateTime EndsUtc)
+    {
+        public double RemainingSeconds => Math.Max(0, (EndsUtc - DateTime.UtcNow).TotalSeconds);
+    }
+
+    private readonly object _onDemandGate = new();
+    private CancellationTokenSource? _onDemandStop;
+    private volatile OnDemandSession? _onDemand;
+
+    /// <summary>Fires on start (the session) and on end (null), whatever the trigger
+    /// path — the MQTT bridge mirrors this onto the HA switch state.</summary>
+    public event Action<OnDemandSession?>? OnDemandChanged;
+
+    /// <summary>The on-demand recording in progress, if any.</summary>
+    public OnDemandSession? OnDemand => _onDemand;
+
+    /// <summary>On-demand capture needs the camera's master events switch on —
+    /// the event loop discards every push, external or not, while it is off.</summary>
+    public bool OnDemandAvailable => _settings.Get(_camera).Events;
+
+    /// <summary>The cap every on-demand session runs to (recording.max_clip_seconds).</summary>
+    public int OnDemandMaxSeconds => _cfg.MaxClipSeconds;
+
+    /// <summary>
+    /// Starts a user-commanded recording: synthetic "external" pushes open a normal
+    /// event right away and keep it alive, so the clip machinery, labels, retention
+    /// and HA event flow all behave exactly as for a camera detection. The session
+    /// stops itself so ONE clip lands at ~MaxClipSeconds total (see the loop).
+    /// Returns false when a session is already running or events are switched off.
+    /// </summary>
+    public bool StartOnDemand()
+    {
+        if (!OnDemandAvailable) return false;
+        CancellationTokenSource cts;
+        OnDemandSession session;
+        lock (_onDemandGate)
+        {
+            if (_onDemand != null) return false;
+            cts = new CancellationTokenSource();
+            _onDemandStop = cts;
+            var now = DateTime.UtcNow;
+            session = new OnDemandSession(now, now.AddSeconds(_cfg.MaxClipSeconds));
+            _onDemand = session;
+        }
+        Log.Info($"{_camera}: ⏺ on-demand recording started (up to {_cfg.MaxClipSeconds}s)");
+        OnDemandChanged?.Invoke(session);
+        _ = Task.Run(() => OnDemandLoopAsync(session, cts));
+        return true;
+    }
+
+    /// <summary>Ends the running session early; the event still gets its normal
+    /// post-roll. Returns false when nothing was running.</summary>
+    public bool StopOnDemand()
+    {
+        CancellationTokenSource? cts;
+        lock (_onDemandGate)
+        {
+            cts = _onDemandStop;
+            _onDemandStop = null;
+            if (cts != null) _onDemand = null; // state reads as "off" immediately
+        }
+        if (cts == null) return false;
+        cts.Cancel();
+        return true;
+    }
+
+    private async Task OnDemandLoopAsync(OnDemandSession session, CancellationTokenSource cts)
+    {
+        // Stop pulsing early enough that the post-roll closes the event just under
+        // the MaxClipSeconds hard stop. Pulsing right up to the cap would let the
+        // recorder cut the event at the cap while pulses keep coming — which would
+        // open a second event and produce a surprise extra clip.
+        var pulseUntil = session.StartedUtc.AddSeconds(
+            Math.Max(2, _cfg.MaxClipSeconds - _cfg.PostSeconds - 2));
+        bool stopped = false;
+        try
+        {
+            while (DateTime.UtcNow < pulseUntil)
+            {
+                OnMotion(new MotionPush("MD", new[] { "external" }, External: true));
+                await Task.Delay(TimeSpan.FromSeconds(3), cts.Token).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            stopped = true;
+        }
+        // One explicit all-clear arms the post-roll now instead of at quiet-timeout.
+        OnMotion(new MotionPush("none", Array.Empty<string>(), External: true));
+        if (!stopped)
+        {
+            // Ride out the post-roll: footage is still being written, so the UI
+            // indicator (driven by this session) must stay on until the cap.
+            var tail = session.EndsUtc - DateTime.UtcNow;
+            if (tail > TimeSpan.Zero)
+            {
+                try { await Task.Delay(tail, cts.Token).ConfigureAwait(false); }
+                catch (OperationCanceledException) { stopped = true; }
+            }
+        }
+        lock (_onDemandGate)
+        {
+            _onDemand = null;
+            if (ReferenceEquals(_onDemandStop, cts)) _onDemandStop = null;
+        }
+        cts.Dispose();
+        Log.Info($"{_camera}: on-demand recording {(stopped ? "stopped" : "reached its cap")} " +
+                 $"({(DateTime.UtcNow - session.StartedUtc).TotalSeconds:0}s)");
+        OnDemandChanged?.Invoke(null);
+    }
+
     public async Task RunAsync(CancellationToken ct)
     {
         Log.Info($"{_camera}: event recording enabled ({_hub.Name}, pre={_cfg.PreSeconds}s, post={_cfg.PostSeconds}s" +
@@ -284,12 +409,22 @@ public sealed class EventRecorder
 
             // Runtime switches (web UI): events off, outside the camera's capture
             // schedule, or every label of this push filtered out by the camera's
-            // event-type selection → discard silently.
+            // event-type selection → discard silently. External pushes (the HA
+            // "Record" switch) are explicit user intent: only the master events
+            // switch can veto them — no schedule, no type filter.
             var settings = _settings.Get(_camera);
             if (!settings.Events) continue;
-            if (!settings.ScheduleAllows(DateTime.Now)) continue; // schedules are wall-clock local
-            var labels = LabelsOf(push).Where(settings.AllowsLabel).ToList();
-            if (labels.Count == 0) continue;
+            List<string> labels;
+            if (push.External)
+            {
+                labels = LabelsOf(push);
+            }
+            else
+            {
+                if (!settings.ScheduleAllows(DateTime.Now)) continue; // schedules are wall-clock local
+                labels = LabelsOf(push).Where(settings.AllowsLabel).ToList();
+                if (labels.Count == 0) continue;
+            }
 
             try
             {
@@ -307,7 +442,21 @@ public sealed class EventRecorder
         var rec = _store.Create(_camera,
             DateTime.UtcNow - TimeSpan.FromSeconds(_cfg.PreSeconds), initialLabels);
         Log.Info($"{_camera}: ⚡ event started ({string.Join("+", rec.Labels)})");
+        _eventActive = true;
+        RecordingChanged?.Invoke(true);
+        try
+        {
+            await RunEventCoreAsync(rec, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _eventActive = false;
+            RecordingChanged?.Invoke(false);
+        }
+    }
 
+    private async Task RunEventCoreAsync(EventRecord rec, CancellationToken ct)
+    {
         StartClip(rec);
         var thumbTask = CaptureThumbAsync(rec, ct);
 
@@ -338,7 +487,10 @@ public sealed class EventRecorder
             {
                 // Filtered-out detection types don't extend the event either —
                 // as far as recording is concerned, they never happened.
-                var allowed = LabelsOf(push).Where(_settings.Get(_camera).AllowsLabel).ToList();
+                // External holds always extend: the switch is still on.
+                var allowed = push.External
+                    ? LabelsOf(push)
+                    : LabelsOf(push).Where(_settings.Get(_camera).AllowsLabel).ToList();
                 if (allowed.Count == 0) continue;
                 active = true;
                 var fresh = allowed.Where(l => !rec.Labels.Contains(l)).ToList();

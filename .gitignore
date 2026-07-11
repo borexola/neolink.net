@@ -4,6 +4,9 @@ obj/
 *.user
 publish/
 
+# Local test images exported with `docker save` (see the README's developer note)
+/neolink.net-*.tar
+
 # Real camera credentials live in config.json — never commit it.
 # Copy config.example.json to config.json to get started.
 config.json
@@ -15,3 +18,6 @@ src/Neolink/
 
 /src/Neolink.Server/users.json
 /src/Neolink.Server/settings.json
+
+# local docker test images (docker save output)
+neolink-*.tar

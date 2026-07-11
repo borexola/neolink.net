@@ -249,6 +249,7 @@ foreach (var cam in config.Cameras)
     if (webStreams.Count == 0)
         throw new InvalidOperationException($"camera '{cam.Name}' has no streams");
     Action<MotionPush>? recorderSink = null;
+    EventRecorder? eventRecorder = null;
     ContinuousRecorder? continuousRecorder = null;
 
     // Recording: alarm pushes ride the primary connection; event clips and
@@ -283,6 +284,7 @@ foreach (var cam in config.Cameras)
                 var recorder = new EventRecorder(cam.Name, recordStream.Hub, control, eventStore,
                     config.Recording, recordingSettings, previewStream?.Hub, hubsByKind);
                 recorderSink = recorder.OnMotion;
+                eventRecorder = recorder;
                 tasks.Add(Task.Run(() => recorder.RunAsync(shutdown.Token)));
             }
 
@@ -307,7 +309,10 @@ foreach (var cam in config.Cameras)
         Battery: battery == null ? null : () => battery.Battery,
         // Asleep = every stream of the camera is parked on purpose (battery doze),
         // as opposed to offline-because-unreachable.
-        Asleep: sleepers.Count == 0 ? null : () => sleepers.All(s => s.Parked)));
+        Asleep: sleepers.Count == 0 ? null : () => sleepers.All(s => s.Parked))
+        // The recorder rides along so the web API and the MQTT bridge share one
+        // on-demand recording session per camera (UI button ≡ HA Record switch).
+        { EventRecorder = eventRecorder });
     if (primaryService != null)
         motionTargets.Add((primaryService, cam.Name, recorderSink));
 }
@@ -336,7 +341,6 @@ if (config.WebPort > 0 || config.Mqtt is { StatsIntervalSeconds: > 0 })
 if (config.Mqtt is { } mqttCfg)
 {
     mqtt = new HomeAssistantMqtt(mqttCfg, webCameras, Version) { Monitor = monitor };
-    tasks.Add(Task.Run(() => mqtt.RunAsync(shutdown.Token)));
 }
 foreach (var (primary, name, recorderSink) in motionTargets)
 {
@@ -352,6 +356,10 @@ foreach (var (primary, name, recorderSink) in motionTargets)
     if (bridge != null)
         primary.StatusSink = push => bridge.OnStatus(name, push);
 }
+// The reverse direction — HA's "Record" switch starting an on-demand recording —
+// needs no wiring here: the bridge reaches the recorder via WebCameraInfo.
+if (mqtt is { } bridgeToRun)
+    tasks.Add(Task.Run(() => bridgeToRun.RunAsync(shutdown.Token)));
 
 // Web API (camera list + fMP4 live streams for browsers); guarded like the cameras.
 if (config.WebPort > 0)

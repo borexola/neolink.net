@@ -26,6 +26,14 @@ namespace Neolink.Mqtt;
 ///   • sensor:        battery                            (battery cameras)
 ///   • sensor:        Wi-Fi signal, diagnostic           (from the status pushes)
 ///   • switch:        PIR sensor                         (PIR cameras)
+///   • switch:        Record on demand — records ONE clip, no camera detection
+///                    involved; stops by itself at recording.max_clip_seconds
+///                    (the switch flips back OFF) or when switched off early.
+///                    Shares its session with the web UI's record button;
+///                    announced when the camera has an event recorder
+///   • binary_sensor: recording — ON while the server is writing this camera's
+///                    footage (an event clip, whatever triggered it, or a
+///                    continuous segment)
 ///   • select:        night vision (auto/on/off)         (IR-capable cameras)
 ///   • light:         floodlight                         (cameras with a spotlight)
 ///   • button:        reboot, and PTZ steps              (per capability)
@@ -332,6 +340,7 @@ internal sealed class CameraBridge
     private bool _featuresAnnounced;
     private bool _doorbellAnnounced;
     private DateTime _lastDoorbellPress = DateTime.MinValue;
+
     private bool _wifiAnnounced, _sirenAnnounced;  // lazily, on the first status push
     private int? _wifiDbm;
     private bool? _sirenOn, _floodlightOn;
@@ -352,6 +361,54 @@ internal sealed class CameraBridge
         _control = cam.Control;
         Id = HomeAssistantMqtt.Sanitize(cam.Name);
         _base = $"{hub.Config.BaseTopic}/{Id}";
+        // The Record switch mirrors the camera's on-demand session, whoever drives
+        // it (this switch, the web UI, the cap auto-stop) — one source of truth.
+        // The Recording sensor mirrors actual capture (any event, any trigger).
+        if (cam.EventRecorder is { } rec)
+        {
+            rec.OnDemandChanged += session => _ = PublishRecordStateAsync(session != null);
+            rec.RecordingChanged += on => _ = PublishRecordingStateAsync(force: false);
+        }
+    }
+
+    private async Task PublishRecordStateAsync(bool on)
+    {
+        try
+        {
+            await _hub.PublishAsync(StateTopic("record"), on ? "ON" : "OFF", CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch
+        {
+            // Broker unreachable right now — the next announce republishes the truth.
+        }
+    }
+
+    /// <summary>Does this camera get a "Recording" status sensor at all?</summary>
+    private bool HasRecordingSensor => _cam.EventRecorder != null || _cam.ContinuousActive != null;
+
+    /// <summary>Footage being written for this camera RIGHT NOW: an event clip
+    /// (camera detection or on-demand) or a continuous (24/7) segment.</summary>
+    private bool RecordingNow =>
+        (_cam.EventRecorder?.EventInProgress ?? false) || (_cam.ContinuousActive?.Invoke() ?? false);
+
+    private bool? _recordingPublished;
+
+    private async Task PublishRecordingStateAsync(bool force)
+    {
+        if (!HasRecordingSensor) return;
+        bool on = RecordingNow;
+        if (!force && _recordingPublished == on) return;
+        _recordingPublished = on;
+        try
+        {
+            await _hub.PublishAsync(StateTopic("recording"), on ? "ON" : "OFF", CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch
+        {
+            // Broker unreachable — the periodic refresh or next announce heals it.
+        }
     }
 
     private string StateTopic(string entity) => $"{_base}/{entity}";
@@ -375,6 +432,11 @@ internal sealed class CameraBridge
             // connectivity sensor is the honest surface (and gives the device an
             // entity, so it actually shows up).
             await AnnounceEntityAsync("binary_sensor", "status", ConnectivityConfig(), ct).ConfigureAwait(false);
+            if (HasRecordingSensor) // continuous (24/7) recording can still run here
+            {
+                await AnnounceEntityAsync("binary_sensor", "recording", RecordingSensorConfig(), ct).ConfigureAwait(false);
+                await PublishRecordingStateAsync(force: true).ConfigureAwait(false);
+            }
             return;
         }
 
@@ -384,6 +446,23 @@ internal sealed class CameraBridge
         foreach (var label in labels)
             await AnnounceEntityAsync("binary_sensor", label, BinarySensorConfig(label), ct).ConfigureAwait(false);
         await AnnounceEntityAsync("button", "reboot", ButtonConfig("Reboot", "reboot", "restart"), ct).ConfigureAwait(false);
+
+        // The Record switch: capture one clip on demand from HA — no camera
+        // detection involved ("record while the door is open").
+        if (_cam.EventRecorder is { } recorder)
+        {
+            await AnnounceEntityAsync("switch", "record", RecordSwitchConfig(), ct).ConfigureAwait(false);
+            await _hub.PublishAsync(StateTopic("record"), recorder.OnDemand != null ? "ON" : "OFF", ct)
+                .ConfigureAwait(false);
+        }
+
+        // Recording status: is footage for this camera being written right now
+        // (event clip — detection or on-demand — or a continuous segment)?
+        if (HasRecordingSensor)
+        {
+            await AnnounceEntityAsync("binary_sensor", "recording", RecordingSensorConfig(), ct).ConfigureAwait(false);
+            await PublishRecordingStateAsync(force: true).ConfigureAwait(false);
+        }
 
         // Publish current detection states so HA doesn't show "unknown".
         foreach (var label in labels)
@@ -535,6 +614,55 @@ internal sealed class CameraBridge
         command_topic = CommandTopic("floodlight"),
         payload_on = "ON",
         payload_off = "OFF",
+        device = Device(),
+        availability = Availability(),
+        availability_mode = "all",
+    };
+
+    // The display name says what it IS — "Record" alone reads like a recording
+    // master switch next to a camera that may already be recording continuously.
+    // unique_id and topics stay "record": existing HA entities keep their
+    // identity (and entity_id) across the rename.
+    private object RecordSwitchConfig() => new
+    {
+        name = "Record on demand",
+        unique_id = $"neolink_{Id}_record",
+        state_topic = StateTopic("record"),
+        command_topic = CommandTopic("record"),
+        payload_on = "ON",
+        payload_off = "OFF",
+        icon = "mdi:record-rec",
+        device = Device(),
+        availability = Availability(),
+        availability_mode = "all",
+    };
+
+    /// <summary>
+    /// The HA "Record" switch drives the camera's shared on-demand session (the
+    /// same one behind the web UI's record button): ON records one clip capped at
+    /// recording.max_clip_seconds — the OnDemandChanged subscription flips the
+    /// switch back OFF when the cap lands — and OFF stops it early. The clip shows
+    /// up in the timeline/review strip labeled "external"; retention applies.
+    /// </summary>
+    private async Task SetRecordAsync(bool on)
+    {
+        if (_cam.EventRecorder is not { } rec) return;
+        bool changed = on ? rec.StartOnDemand() : rec.StopOnDemand();
+        // A no-op command (already running / already off / events disabled) still
+        // gets the truth republished, so HA's optimistic toggle snaps back.
+        if (!changed)
+            await _hub.PublishAsync(StateTopic("record"), rec.OnDemand != null ? "ON" : "OFF",
+                CancellationToken.None).ConfigureAwait(false);
+    }
+
+    private object RecordingSensorConfig() => new
+    {
+        name = "Recording",
+        unique_id = $"neolink_{Id}_recording",
+        state_topic = StateTopic("recording"),
+        payload_on = "ON",
+        payload_off = "OFF",
+        icon = "mdi:record-rec",
         device = Device(),
         availability = Availability(),
         availability_mode = "all",
@@ -783,6 +911,11 @@ internal sealed class CameraBridge
     {
         await PublishSensorEdgesAsync(ct).ConfigureAwait(false); // time out stale detections
         await PublishAvailabilityAsync(ct).ConfigureAwait(false);
+        // Continuous segments start/stop without an event to ride on — the
+        // periodic sweep keeps the Recording sensor honest for them (and heals
+        // a publish that failed mid-outage). Runs regardless of online state:
+        // a camera can go offline mid-event and the OFF still has to land.
+        await PublishRecordingStateAsync(force: false).ConfigureAwait(false);
         if (!_control.Online) return;
 
         // First time online: probe capabilities, then announce the feature entities.
@@ -901,6 +1034,9 @@ internal sealed class CameraBridge
                 case "pir":
                     await _control.SetPirEnabledAsync(payload == "ON", ct).ConfigureAwait(false);
                     await PublishPirAsync(ct).ConfigureAwait(false);
+                    break;
+                case "record":
+                    await SetRecordAsync(payload == "ON").ConfigureAwait(false);
                     break;
                 case "ptz_up" or "ptz_down" or "ptz_left" or "ptz_right" when payload == "PRESS":
                     await PtzStepAsync(entity["ptz_".Length..], ct).ConfigureAwait(false);

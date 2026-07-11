@@ -4,7 +4,46 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
-## 0.8.3 — unreleased
+## 0.8.4 — unreleased
+
+### New
+
+- **On-demand clip recording** — record a camera on command, regardless of
+  what it detects. Two triggers, one shared session per camera:
+  - *Web UI*: every camera tile's toolbar carries a ⏺ record button (next to
+    the mic in the maximized view). While recording, a red chip with a
+    countdown sits on the video wherever the tile is shown — including for
+    recordings started from Home Assistant — and clicking it (or the button
+    again) stops early. `POST /api/cameras/{name}/record` for scripts.
+  - *Home Assistant*: a `Record on demand` switch per camera (cameras the
+    server records events for); `ON`/`OFF` on `{base}/{camera}/record/set`
+    works for non-HA consumers too. Typical use: "record while the door is
+    open".
+  Most Reolink firmwares can't be told to record, but Neolink is the recorder,
+  so it doesn't need their cooperation. Each trigger records **one clip** —
+  pre-roll included — and **stops by itself** at `max_clip_seconds` (the HA
+  switch flips back OFF; retrigger for longer) or when stopped early.
+  Retention applies and the footage shows in the timeline/review strip labeled
+  **External**. The trigger bypasses the event-type filter and capture
+  schedule (explicit intent beats detection rules) but respects the
+  per-camera events switch.
+
+- **Per-camera recording status in Home Assistant**: every recording-capable
+  camera now carries a `Recording` binary sensor that is ON while the server
+  is actually writing its footage — an event clip (camera detection or
+  on-demand) or a continuous segment. The on-demand switch is deliberately
+  named *Record on demand* so it can't be mistaken for a recording master
+  switch next to a camera that already records continuously (setups that saw
+  the earlier `Record` name keep their entity id — same discovery unique id).
+
+### Changed
+
+- Phone tile chrome slims down: the camera name now floats translucently over
+  the tile's top-right corner instead of occupying the bottom bar, and the
+  recording indicators shrink to a blinking dot — no more `REC` label (the
+  on-demand chip keeps its countdown).
+
+## 0.8.3
 
 ### New
 
@@ -40,6 +79,25 @@ in the README). Paste the matching section below into the GitHub release.
   the Save/Restart buttons live in a pinned footer with the unsaved-changes
   notice — no more scrolling to find out whether edits were written. Save
   errors and status also surface in the footer, always visible.
+- **Mobile viewing polish**:
+  - Pinch-to-zoom on any zoomable video surface (maximized tile, theater,
+    quick view, fullscreen) — the HUD pill is now a convenience, not the only
+    way in.
+  - The zoom pill no longer squats over the picture on phones: it is smaller,
+    translucent, and fades away after a moment — tap the video to bring it
+    back.
+  - Phones no longer get force-fed the main stream: tapping a camera opens its
+    SUB stream, and maximizing a tile skips the automatic sub→main upgrade on
+    touch devices — decoding 1440p+ into a phone screen is what made previews
+    stutter on iPhones. Main remains one tap away in every stream picker.
+  - Smoother live playback on iOS: media appends are batched (Safari's
+    per-append cost at per-frame granularity starved the decoder), the player
+    honors ManagedMediaSource's streaming hints, catch-up is gentler on
+    Safari's pipeline, and no seeking happens while the app is backgrounded.
+  - While a camera is maximized on a touch device, the hidden tiles pause
+    instead of decoding invisibly in the background — that hidden load is what
+    made phones feel mushy. Their streams keep flowing, so restoring resumes
+    them near-live instantly; desktop keeps everything running as before.
 
 ### Fixed
 
@@ -54,6 +112,32 @@ in the README). Paste the matching section below into the GitHub release.
   appeared at all. Every discovery publish now omits unset fields entirely,
   and the fixed build heals HA on its next connect by overwriting the
   retained configs with valid ones — no HA-side action needed.
+- **iOS: maximize/minimize buttons respond on the first tap, immediately.**
+  `touch-action: none` had been applied to the whole maximized tile for
+  pinch-zoom, which degrades WebKit's tap→click synthesis for the buttons
+  inside it (taps took seconds to register). It is now scoped to the video
+  element only — pinch is unaffected, buttons get native tap semantics back.
+- **iOS: minimizing a maximized camera no longer needs two taps.** WebKit
+  turns any content-revealing :hover into "first tap hovers, second tap
+  clicks", and the tile controls' always-visible override was gated on
+  viewport width — a phone held in landscape missed it. It is now gated on
+  pointer type (touch), which is what the rule actually meant.
+- **iOS: the fullscreen button works.** iPhones have no element-fullscreen API
+  at all; the button now falls back to WebKit's native video fullscreen
+  (webkitEnterFullscreen) and bridges its exit event so the UI notices, same
+  as any other browser.
+- Live players now log a per-stream health line to the browser console
+  (every 30 s, only when something happened): skips over footage that never
+  arrived (server/network drops) vs live-edge resyncs vs stalls — the
+  distinction that tells you WHERE playback problems come from.
+- **Live view on iPhone/Safari**: Safari on iPhone has no classic MediaSource —
+  since iOS 17.1 Apple ships ManagedMediaSource instead — so every stream
+  failed with a misleading "codec not supported" message (even plain H.264).
+  The player now detects and uses ManagedMediaSource where that's what the
+  browser offers, following Apple's contract (remote playback disabled,
+  streaming hints drive the buffer pump). Browsers with neither API get an
+  honest message; a genuine codec gap (H.265 without hardware decode) still
+  suggests the sub stream.
 - The timeline's buffering spinner no longer lingers after pausing: the veil
   now follows the video element's own events, so it clears the moment the
   paused frame is ready (and appears instantly on a genuine mid-stream stall).

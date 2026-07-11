@@ -26,7 +26,12 @@ public sealed record WebStreamInfo(string Kind, string Path, IStreamHub Hub);
 /// <param name="Asleep">Probe: is the camera intentionally disconnected so it can sleep (battery doze)?</param>
 public sealed record WebCameraInfo(string Name, List<WebStreamInfo> Streams, ICameraControl Control,
     HashSet<string>? PermittedUsers, Func<bool>? ContinuousActive = null, bool SupportsEvents = true,
-    Func<BatteryPush?>? Battery = null, Func<bool>? Asleep = null);
+    Func<BatteryPush?>? Battery = null, Func<bool>? Asleep = null)
+{
+    /// <summary>The camera's event recorder when server-side event recording runs —
+    /// the shared entry point for on-demand clips (web UI button and HA switch).</summary>
+    public EventRecorder? EventRecorder { get; set; }
+}
 
 /// <summary>Everything the web API needs from the host.</summary>
 public sealed class WebApiOptions
@@ -68,6 +73,7 @@ public sealed class WebApiOptions
 ///   GET /api/events[?camera=&amp;reviewed=&amp;limit=] — recorded detection events (when enabled)
 ///   GET /api/events/{id}/clip /thumb        — event artifacts; POST .../review to (un)dismiss
 ///   GET/POST /api/cameras/{name}/recording  — per-camera recording switches + event-type filter
+///   POST /api/cameras/{name}/record         — start/stop an on-demand clip (one clip, auto-capped)
 ///   GET /api/recordings/{camera}[/{date}[/{file}]] — browse/play continuous footage
 ///   /api/auth/* (status/setup/login/reset-admin), /api/users (admin CRUD),
 ///   GET/PUT /api/me/settings — web-UI accounts; once any account exists, every
@@ -82,6 +88,7 @@ public static class WebApi
     private sealed record LedRequest(string? State, string? LightState);
     private sealed record PirRequest(bool? Enabled);
     private sealed record PtzRequest(string? Command, float? Speed);
+    private sealed record RecordOnDemandRequest(bool Active);
     private sealed record StreamSettingsRequest(string? Stream, uint? Width, uint? Height,
         uint? Framerate, uint? Bitrate);
     private sealed record ReviewRequest(bool? Reviewed);
@@ -492,6 +499,17 @@ public static class WebApi
                 battery = c.Battery?.Invoke() is { } b
                     ? new { percent = b.Percent, charging = b.Charging }
                     : null,
+                // On-demand clip capture (record button / HA switch). Null when the
+                // camera has no event recorder or its events switch is off — the
+                // UI hides the button entirely in that case.
+                onDemand = c.EventRecorder is { } rec && rec.OnDemandAvailable
+                    ? new
+                    {
+                        active = rec.OnDemand != null,
+                        remainingSeconds = rec.OnDemand?.RemainingSeconds ?? 0,
+                        maxSeconds = rec.OnDemandMaxSeconds,
+                    }
+                    : null,
                 streams = c.Streams.Select(s => new
                 {
                     kind = s.Kind,
@@ -718,6 +736,31 @@ public static class WebApi
                 await control.RebootAsync(reqCt);
                 return Results.Json(new { ok = true });
             }));
+
+        // On-demand clip capture: start records ONE clip capped at
+        // recording.max_clip_seconds (it stops by itself), stop ends it early.
+        // The same session backs the Home Assistant "Record" switch.
+        app.MapPost("/api/cameras/{name}/record", (string name, RecordOnDemandRequest req, HttpContext ctx) =>
+        {
+            var cam = cameras.FirstOrDefault(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase));
+            if (cam == null)
+                return Results.Json(new { error = $"unknown camera '{name}'" }, statusCode: 404);
+            if (CheckAuth(ctx, cam) is { } denied)
+                return denied;
+            if (cam.EventRecorder is not { } rec)
+                return Results.Json(new { error = "event recording is not available for this camera" }, statusCode: 409);
+            if (req.Active && !rec.OnDemandAvailable)
+                return Results.Json(new { error = "event recording is switched off for this camera" }, statusCode: 409);
+            if (req.Active) rec.StartOnDemand();
+            else rec.StopOnDemand();
+            var od = rec.OnDemand; // idempotent: always answer with the session as it now stands
+            return Results.Json(new
+            {
+                active = od != null,
+                remainingSeconds = od?.RemainingSeconds ?? 0,
+                maxSeconds = rec.OnDemandMaxSeconds,
+            });
+        });
 
         // ------------------------------------------------------------ recorded events
 

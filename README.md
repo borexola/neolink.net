@@ -462,7 +462,11 @@ in exchange you get an integration light enough to leave running forever.
 | Entity | Type | Notes |
 |---|---|---|
 | Motion / Person / Vehicle / Animal | `binary_sensor` | From the camera's alarm pushes (AI labels need Smart Detection enabled in the Reolink app) |
+| Package / Line crossing / Intrusion / Loitering | `binary_sensor` | Announced on their first detection, so cameras without these features don't grow dead entities |
 | Doorbell | `event` | Video doorbells: every button press publishes an MQTT event (`event_type: press`, `device_class: doorbell`) — the natural trigger for ring automations |
+| Visitor | `binary_sensor` | Momentary doorbell-press pulse; HA clears it itself after a few seconds |
+| Record on demand | `switch` | **Record a clip on demand from HA**, regardless of what the camera detects — one clip, stops by itself; see below (appears when the server records events for this camera) |
+| Recording | `binary_sensor` | ON while the server is writing this camera's footage right now — an event clip (detection or on-demand) or a continuous segment |
 | Battery | `sensor` | Battery cameras; charge status + temperature as attributes |
 | Wi-Fi signal | `sensor` | Diagnostic; RSSI in dBm from the camera's own status pushes (Wi-Fi cameras) |
 | Siren | `binary_sensor` | Cameras that report their siren state (appears on the first status push) |
@@ -479,6 +483,46 @@ a retained press would re-ring your automations after every broker restart. The
 entity is announced on the first detected press, so it appears in HA the first
 time someone rings. Presses are also logged and recorded as regular "Doorbell
 pressed" events with pre-roll video.
+
+**On-demand recording (the Record on demand switch).** Most Reolink firmwares cannot be
+told to record on demand — but Neolink is already the recorder, so it doesn't
+need the camera's cooperation. Switching ON records **one clip** for that
+camera exactly as if a detection were running: pre-roll included, retention
+applies, and the footage appears in the timeline and review strip labeled
+**External**. The recording **stops by itself** when the clip reaches
+`max_clip_seconds` (the switch flips back OFF — retrigger it for a longer
+capture) or when you switch it OFF early. The trigger deliberately ignores the
+camera's event-type filter and capture schedule (it is explicit intent, not a
+detection) but respects the per-camera events on/off switch.
+
+The same recording can be started from the web UI: press the **⏺ record
+button** in any camera tile's toolbar (it sits next to the mic on the
+maximized view). A red chip with a countdown sits on the video for as long as the clip records —
+whichever side started it, the web UI and the HA switch always show the same
+state. A "record while the door is open" automation:
+
+```yaml
+automation:
+  - alias: Record garage cam while the door is open
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.garage_door
+    action:
+      - service: >
+          {{ 'switch.turn_on' if trigger.to_state.state == 'on' else 'switch.turn_off' }}
+        target:
+          entity_id: switch.garage_record_on_demand
+```
+
+(Setups that added the camera before the switch was renamed keep their original
+`switch.garage_record` entity id — discovery reuses the same unique id.)
+
+(A door open longer than `max_clip_seconds` ends the clip at the cap; the
+`turn_off` when the door closes is then simply a no-op.)
+
+Non-HA consumers can publish `ON` / `OFF` to `{base_topic}/{camera}/record/set`
+directly, or use the web API: `POST /api/cameras/{name}/record` with
+`{"active": true|false}`.
 
 Availability is two-level: entities show **unavailable** when either the Neolink
 service (a Last-Will topic) or the individual camera goes offline. State and
@@ -615,6 +659,54 @@ python3 tools/fake_camera.py /path/to/rust-repo/crates/core/src/bcmedia/samples 
 # point a config at address = "127.0.0.1:9000", run neolink, then:
 ffprobe -rtsp_transport tcp rtsp://127.0.0.1:8654/testcam
 ```
+
+### Testing uncommitted changes on a real server (local Docker image)
+
+To try work-in-progress on a production-like box **without pushing anything to
+GitHub**: build an image straight from your working tree, carry it over as a
+tar, and load it there. The Dockerfile copies `src/` as-is, so uncommitted
+edits are included.
+
+On the dev machine (repo root):
+
+```bash
+# a distinctive version string makes the test build unmistakable in the UI
+docker build -t neolink.net:0.8.3-mytest --build-arg VERSION=0.8.3-mytest .
+
+# sanity check, then export the image to a portable file
+docker run --rm --entrypoint dotnet neolink.net:0.8.3-mytest neolink.net.dll --version
+docker save neolink.net:0.8.3-mytest -o neolink.net-0.8.3-mytest.tar
+```
+
+On the server (after copying the tar over):
+
+```bash
+docker load -i neolink.net-0.8.3-mytest.tar
+
+# replace the previous test container if one exists — a plain `docker start`
+# later would silently resurrect the OLD image, so remove it outright
+docker stop neolink-test && docker rm neolink-test
+
+docker run -d --name neolink-test \
+  --restart unless-stopped \
+  -p 8654:8654 -p 8655:8655 \
+  -e TZ=Europe/London \
+  -v /srv/neolink/config:/config \
+  -v /srv/neolink/recordings:/recordings \
+  neolink.net:0.8.3-mytest
+```
+
+Notes:
+
+- The config mounted at `/config/config.json` must use **container paths**
+  (e.g. `"path": "/recordings"`), matching the volume mounts.
+- Config and recordings live in the host mounts, so stopping/removing the
+  container never touches them.
+- Confirm which build is live at the top toolbar of the web UI — it shows the
+  exact version string you baked in.
+- Old test images pile up; reclaim disk with `docker rmi neolink.net:<old-tag>`.
+- The image is built for the dev machine's Docker platform (typically
+  linux/amd64). For an ARM server, add `--platform linux/arm64` to the build.
 
 ### Project layout
 

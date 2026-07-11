@@ -845,6 +845,26 @@ video[data-live="1"] ~ .tile-status { display: none; }
     text-shadow: 0 1px 3px #000;
 }
 
+/* Phones: the camera name floats translucent over the feed's top-right corner
+   instead of occupying the crowded bottom bar. Ghosted on purpose — it must
+   label the tile without blocking the picture. Enabled in the coarse block. */
+.tile-name-float {
+    display: none;
+    position: absolute;
+    top: 6px;
+    right: 10px;
+    z-index: 5;
+    max-width: 65%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.5);
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
+    pointer-events: none;
+}
+
 .tile-spacer { flex: 1; }
 
 .tile-bar select {
@@ -1007,6 +1027,67 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     50% { opacity: 0.45; }
 }
 
+/* ---------- on-demand clip recording ---------- */
+/* Tile-bar toggle (maximized view): glows red while its clip records. */
+.clip-btn.clip-live {
+    color: #fff;
+    background: var(--err);
+    animation: talk-pulse 1.6s ease-in-out infinite;
+}
+.clip-btn.clip-live:hover { background: color-mix(in srgb, var(--err) 80%, #000); }
+
+/* The always-on corner chip while a clip records — visible whatever started it
+   (the tile button or HA's Record switch) and wherever the tile is shown. The
+   countdown runs to the automatic stop at max_clip_seconds. */
+.clip-overlay {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    z-index: 6;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 4px 11px 4px 8px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--bg) 74%, transparent);
+    backdrop-filter: blur(6px);
+    border: 1px solid color-mix(in srgb, var(--err) 60%, transparent);
+    color: var(--err);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    user-select: none;
+    pointer-events: none; /* inert on grid tiles: clicks fall through to the tile */
+}
+
+.clip-overlay-dot {
+    flex: 0 0 auto;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--err);
+    animation: clip-dot 1.3s ease-in-out infinite;
+}
+
+@keyframes clip-dot {
+    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 color-mix(in srgb, var(--err) 55%, transparent); }
+    50% { opacity: 0.55; box-shadow: 0 0 0 5px color-mix(in srgb, var(--err) 0%, transparent); }
+}
+
+.clip-overlay-label {
+    font-variant-numeric: tabular-nums; /* steady width — no jitter as digits tick */
+    text-shadow: 0 1px 3px #000;
+    white-space: nowrap;
+}
+
+/* Maximized: the chip doubles as the stop button. */
+.tile.maxed .clip-overlay { pointer-events: auto; cursor: pointer; }
+.tile.maxed .clip-overlay:hover {
+    color: #fff;
+    border-color: var(--err);
+    background: color-mix(in srgb, var(--err) 45%, rgba(0, 0, 0, 0.55));
+}
+
 /* Flat inline icons: behave in text flow AND as flex items */
 .nl-icon {
     display: inline-block;
@@ -1089,8 +1170,6 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     /* Freeform windows assume a mouse; keep them usable but scrollable */
     .grid.mode-free { overflow: auto; }
 
-    .tile-bar { opacity: 1; } /* no hover on touch: keep controls visible */
-
     /* Phones: every tile control must stay on-screen. The camera name is the
        only flexible item — it shrinks to an ellipsis — while the buttons and
        the stream picker compact instead of being pushed off the right edge. */
@@ -1140,11 +1219,47 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 
 /* Touch devices, any width: finger-sized targets and no hover-only affordances */
 @media (pointer: coarse) {
+    /* Hover-revealed controls must be ALWAYS visible on touch — and gated on
+       pointer type, not viewport width: a phone in landscape is wider than the
+       phone breakpoint, and WebKit turns any content-revealing :hover into a
+       "first tap hovers, second tap clicks" trap (the two-taps-to-minimize bug). */
+    .tile-bar { opacity: 1; }
+
     .tool-btn, .tool-select, .tl-play { min-height: 40px; }
     .icon-btn { min-width: 36px; min-height: 36px; }
     .chip { min-height: 32px; padding: 5px 13px; }
-    .zoom-hud { display: flex; } /* no hover on touch: keep the zoom pill visible */
+    .zoom-hud { display: flex; } /* no hover on touch: JS fades it when idle instead */
     .zoom-hud:not(:is(.zoom-on *, :fullscreen *)) { display: none; }
+
+    /* Compact + translucent on phones: less video real estate stolen while shown */
+    .zoom-hud {
+        padding: 5px 4px;
+        gap: 2px;
+        right: 6px;
+        opacity: 0.8;
+    }
+    .zoom-hud.hud-idle { opacity: 0; }
+
+    /* Two fingers on the PICTURE must pinch, never scroll/browser-zoom.
+       Scoped to the video element only: putting touch-action:none on the whole
+       container degraded WebKit's tap→click synthesis for the tile-bar buttons
+       (maximize/minimize taking seconds to register on iOS). */
+    .zoom-on video, .quick-view-media video, .event-player-media video { touch-action: none; }
+
+    /* The camera name leaves the bottom bar for the translucent top-right float. */
+    .tile-name-float { display: block; }
+    .tile-bar .tile-name { display: none; }
+
+    /* Recording indicators shrink to a blinking dot — the labels are dead
+       weight at phone tile sizes (the clip chip keeps its countdown). */
+    .tile-bar .cam-rec-badge {
+        border: none;
+        background: none;
+        padding: 0;
+        font-size: 13px;
+    }
+    .tile-bar .cam-rec-badge .rec-text { display: none; }
+    .clip-overlay-word { display: none; }
 }
 
 /* ---------- camera settings dialog ---------- */
@@ -1865,6 +1980,14 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     border: 1px solid var(--line);
     border-radius: 999px;
     backdrop-filter: blur(6px);
+    transition: opacity 0.35s ease;
+}
+
+/* Touch: JS fades the pill after a moment of stillness so it stops covering
+   the picture — any tap on the video (or a pinch) brings it back. */
+.zoom-hud.hud-idle {
+    opacity: 0;
+    pointer-events: none;
 }
 
 .zoom-on:hover .zoom-hud,

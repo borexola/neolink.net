@@ -81,8 +81,13 @@ public interface IBcCamera : IAsyncDisposable
 /// One alarm push from the camera. Status is the raw detection state ("MD" while
 /// motion is seen, "none" when it stops); AiTypes carries the camera's own AI
 /// classification when it has one ("people", "vehicle", "dog_cat").
+/// External marks a push the CAMERA never sent: an outside system (the Home
+/// Assistant "Record" switch) commanding recording. External pushes bypass the
+/// per-camera event-type filter and capture schedule — they are explicit user
+/// intent, not a detection to be second-guessed — but still respect the master
+/// events on/off switch.
 /// </summary>
-public sealed record MotionPush(string Status, IReadOnlyList<string> AiTypes)
+public sealed record MotionPush(string Status, IReadOnlyList<string> AiTypes, bool External = false)
 {
     /// <summary>True when this push signals active detection (as opposed to all-clear).</summary>
     public bool Active => !string.Equals(Status, "none", StringComparison.OrdinalIgnoreCase) || AiTypes.Count > 0;

@@ -467,11 +467,15 @@
                         @* no autoplay: the JS player starts playback once its jitter buffer is filled *@
                         <video id="vid-@index" muted playsinline></video>
                         <div class="tile-status">connecting…</div>
+                        @* Phones: the camera name floats translucent over the feed's top-right
+                           corner instead of sitting in the crowded bottom bar (CSS gates it). *@
+                        <span class="tile-name-float">@slot.Camera</span>
                         <div class="tile-bar" @onclick:stopPropagation="true" @ondblclick:stopPropagation="true">
                             <span class="tile-name">@slot.Camera</span>
                             @if (camera is { Recording: true })
                             {
-                                <span class="cam-rec-badge" title="Recording 24/7 to disk">● REC</span>
+                                @* Phones show only the blinking dot (CSS hides .rec-text). *@
+                                <span class="cam-rec-badge" title="Recording 24/7 to disk"><span class="rec-dot">●</span><span class="rec-text"> REC</span></span>
                             }
                             @if (camera != null && camera.Streams.Count > 1)
                             {
@@ -485,6 +489,14 @@
                             <span class="tile-spacer"></span>
                             @* JS-owned (neolink.audioInit): shown only when the stream has audio *@
                             <button type="button" class="icon-btn" data-audio-toggle style="display:none"></button>
+                            @if (camera?.OnDemand != null)
+                            {
+                                @* On every tile, not just the maximized one — recording on
+                                   demand shouldn't require blowing the camera up first. *@
+                                <button class="icon-btn clip-btn @(ClipActive(camera.Name) ? "clip-live" : "")"
+                                        title="@(ClipActive(camera.Name) ? "Stop clip recording" : $"Record a clip (stops by itself after {ClipMaxLabel(camera)})")"
+                                        @onclick="() => ToggleClipAsync(camera)">@UiIcon.Render("rec", 14)</button>
+                            }
                             @if (_maxIndex == index && TalkSupported(slot.Camera))
                             {
                                 <button class="icon-btn talk-btn @TalkClass(slot.Camera!)" title="@TalkTitle(slot.Camera!)"
@@ -498,6 +510,19 @@
                             <button class="icon-btn" title="Remove" @onclick="() => CloseSlot(index)">✕</button>
                         </div>
                         @ZoomHud
+                        @if (camera != null && ClipActive(camera.Name))
+                        {
+                            @* Always-on indicator while an on-demand clip records (any trigger:
+                               UI button or HA switch). Counts down to the automatic stop; on the
+                               maximized tile it doubles as the stop button (CSS gates clicks). *@
+                            <div class="clip-overlay" role="button"
+                                 title="Recording a clip — stops by itself; click to stop now"
+                                 @onclick="() => ToggleClipAsync(camera!)"
+                                 @onclick:stopPropagation="true" @ondblclick:stopPropagation="true">
+                                <span class="clip-overlay-dot"></span>
+                                <span class="clip-overlay-label"><span class="clip-overlay-word">REC </span>@ClipCountdown(camera.Name)</span>
+                            </div>
+                        }
                         @if (_maxIndex == index && TalkActive(slot.Camera!))
                         {
                             @* Big on-video indicator while the mic is live — also the stop button. *@
@@ -1058,6 +1083,8 @@
 
     // Quick view: temporary pop-up player opened from the sidebar (⛶)
     private ViewSlot? _quickView;
+    /// <summary>Touch-first device (phone/tablet): drives stream defaults.</summary>
+    private bool _coarsePointer;
     private string? _quickAttached;
     private const string QuickVideoId = "vid-quick";
 
@@ -1139,6 +1166,7 @@
     {
         if (firstRender)
         {
+            try { _coarsePointer = await JS.InvokeAsync<bool>("neolink.isCoarse"); } catch { }
             await LoadPersistedAsync();
             _loaded = true;
             await RefreshAuthAsync();
@@ -1156,6 +1184,8 @@
         // Digital zoom (theater/fullscreen/quick view). Re-invoked per render so
         // zoom resets when a surface stops being zoomable (e.g. un-maximized).
         await JS.InvokeVoidAsync("neolink.zoomInit");
+        // Phones: pause the hidden tiles while one is maximized (resume on restore).
+        await JS.InvokeVoidAsync("neolink.maxSync");
         // Speaker toggles: re-sync glyphs/visibility after every render.
         await JS.InvokeVoidAsync("neolink.audioInit");
         // Esc closes the event player / quick view pop-ups (and the tile menu).
@@ -1886,6 +1916,7 @@
             var cams = await res.Content.ReadFromJsonAsync<List<ApiCamera>>();
             _cameras.Clear();
             if (cams != null) _cameras.AddRange(cams);
+            SyncClipStates();
             _error = null;
             _camerasFetched = true;
             return true;
@@ -1918,6 +1949,104 @@
         await RefreshCamerasAsync();
         await RefreshEventsAsync();
         await SaveAsync();
+    }
+
+    // ------------------------------------------------------------ on-demand clip recording
+
+    /// <summary>Camera → UTC instant its on-demand recording auto-stops. Drives the
+    /// on-video indicator and countdown between polls (the poll re-syncs it, so a
+    /// recording started from Home Assistant shows up here too).</summary>
+    private readonly Dictionary<string, DateTime> _clipEnds = new();
+    private Task? _clipTicker;
+
+    private bool ClipActive(string cameraName) =>
+        _clipEnds.TryGetValue(cameraName, out var end) && end > DateTime.UtcNow;
+
+    private string ClipCountdown(string cameraName)
+    {
+        if (!_clipEnds.TryGetValue(cameraName, out var end)) return "";
+        var left = end - DateTime.UtcNow;
+        if (left < TimeSpan.Zero) left = TimeSpan.Zero;
+        return $"{(int)left.TotalMinutes}:{left.Seconds:00}";
+    }
+
+    private static string ClipMaxLabel(ApiCamera cam) =>
+        cam.OnDemand is { } od && od.MaxSeconds >= 120 && od.MaxSeconds % 60 == 0
+            ? $"{od.MaxSeconds / 60} min"
+            : $"{cam.OnDemand?.MaxSeconds ?? 0}s";
+
+    /// <summary>Adopts the server's view after every camera poll — the server owns
+    /// the session (it also runs it for MQTT triggers), this map only bridges the
+    /// seconds between polls.</summary>
+    private void SyncClipStates()
+    {
+        foreach (var cam in _cameras)
+        {
+            if (cam.OnDemand is { Active: true } od)
+                _clipEnds[cam.Name] = DateTime.UtcNow.AddSeconds(od.RemainingSeconds);
+            else
+                _clipEnds.Remove(cam.Name);
+        }
+        EnsureClipTicker();
+    }
+
+    /// <summary>A 1-second re-render loop while any countdown runs (the regular poll
+    /// is too coarse for a ticking timer). Ends itself when the last one expires.</summary>
+    private void EnsureClipTicker()
+    {
+        if (_clipEnds.Count == 0 || _clipTicker is { IsCompleted: false }) return;
+        _clipTicker = Task.Run(async () =>
+        {
+            try
+            {
+                while (true)
+                {
+                    await Task.Delay(1000);
+                    bool any = false;
+                    await InvokeAsync(() =>
+                    {
+                        // An expired entry means the cap landed: drop it now instead
+                        // of showing a frozen 0:00 until the next poll confirms.
+                        foreach (var done in _clipEnds.Where(kv => kv.Value <= DateTime.UtcNow)
+                                     .Select(kv => kv.Key).ToList())
+                            _clipEnds.Remove(done);
+                        any = _clipEnds.Count > 0;
+                        StateHasChanged();
+                    });
+                    if (!any) break;
+                }
+            }
+            catch
+            {
+                // Circuit gone (page closed) — nothing left to tick for.
+            }
+        });
+    }
+
+    private async Task ToggleClipAsync(ApiCamera cam)
+    {
+        bool start = !ClipActive(cam.Name);
+        // Optimistic flip so the button answers instantly; the response corrects it.
+        if (start && cam.OnDemand is { } od)
+            _clipEnds[cam.Name] = DateTime.UtcNow.AddSeconds(od.MaxSeconds);
+        else
+            _clipEnds.Remove(cam.Name);
+        try
+        {
+            var req = ApiRequest(HttpMethod.Post, $"/api/cameras/{Uri.EscapeDataString(cam.Name)}/record");
+            req.Content = JsonContent.Create(new { active = start });
+            using var res = await Http.SendAsync(req);
+            if (res.IsSuccessStatusCode
+                && await res.Content.ReadFromJsonAsync<ApiOnDemand>() is { } state && state.Active)
+                _clipEnds[cam.Name] = DateTime.UtcNow.AddSeconds(state.RemainingSeconds);
+            else
+                _clipEnds.Remove(cam.Name);
+        }
+        catch
+        {
+            _clipEnds.Remove(cam.Name);
+        }
+        EnsureClipTicker();
     }
 
     // ------------------------------------------------------------ recorded events
@@ -2352,9 +2481,14 @@
     /// (Putting a camera on a tile is drag-and-drop or the tile's right-click menu.)</summary>
     private void OpenCameraMain(ApiCamera cam)
     {
-        var main = cam.Streams.FirstOrDefault(s => s.Kind == "mainStream");
+        // Phones open the SUB stream: a 1440p+ main stream decoded on a phone
+        // screen is what made previews stutter on iOS, and the panel can't show
+        // those pixels anyway. The sidebar's Main chip still opens Main explicitly.
+        var preferred = _coarsePointer ? "subStream" : "mainStream";
+        var pick = cam.Streams.FirstOrDefault(s => s.Kind == preferred)
+            ?? cam.Streams.FirstOrDefault(s => s.Kind == "mainStream");
         _sidebarOpen = false; // mobile drawer: close after picking
-        Nav.NavigateTo(main != null ? StreamUrl(cam.Name, main.Kind) : CameraUrl(cam.Name));
+        Nav.NavigateTo(pick != null ? StreamUrl(cam.Name, pick.Kind) : CameraUrl(cam.Name));
     }
 
     private static string CamHeadTitle(ApiCamera cam) =>
@@ -2669,11 +2803,14 @@
     /// <summary>
     /// A maximized card deserves the pixels: a sub-stream card switches to the
     /// camera's main stream when it serves one. The previous choice is remembered
-    /// so restoring the view puts the sub stream back.
+    /// so restoring the view puts the sub stream back. Phones skip the upgrade —
+    /// a 1440p+ main stream is more than a phone screen shows and enough to make
+    /// iOS playback stutter; the tile's stream picker still offers Main.
     /// </summary>
     private void AutoMainStream(int index)
     {
         _maxPrevKind = _maxPrevPath = _maxPrevCamera = _maxSetKind = null;
+        if (_coarsePointer) return;
         var slot = _slots[index];
         var cam = _cameras.FirstOrDefault(c => c.Name == slot.Camera);
         var main = cam?.Streams.FirstOrDefault(s => s.Kind == "mainStream");
@@ -2723,7 +2860,13 @@
     /// <summary>Temporary pop-up player for one camera — the layout underneath is untouched.</summary>
     private void OpenQuickView(ApiCamera cam)
     {
-        var s = cam.Streams.FirstOrDefault(x => x.Kind == "mainStream") ?? DefaultStream(cam);
+        // Phones default to the sub stream: a 1440p+ main stream decoded into a
+        // small popup is what made iOS previews stutter, and the popup can't
+        // show that many pixels anyway. The stream picker still offers Main.
+        var preferred = _coarsePointer ? "subStream" : "mainStream";
+        var s = cam.Streams.FirstOrDefault(x => x.Kind == preferred)
+            ?? cam.Streams.FirstOrDefault(x => x.Kind == "mainStream")
+            ?? DefaultStream(cam);
         if (s == null) return;
         _quickView = new ViewSlot { Camera = cam.Name, Kind = s.Kind, Path = s.Path };
         _sidebarOpen = false;
