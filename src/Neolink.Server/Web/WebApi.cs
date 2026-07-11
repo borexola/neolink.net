@@ -122,8 +122,11 @@ public static class WebApi
         bool? Talk = null);
     private sealed record AdminRecordingSettings(string? Path, int? RetentionDays, int? PreSeconds,
         int? PostSeconds, int? MaxClipSeconds, string? Stream, int? SegmentMinutes, int? ContinuousRetentionDays);
+    /// <summary>Only the cadence is UI-editable; broker/credentials stay file-only.</summary>
+    private sealed record AdminMqttSettings(int? StatsInterval);
     private sealed record AdminConfigRequest(string? Bind, int? BindPort, int? WebPort, string? WebBind,
-        bool? WebUi, AdminUiSettings? Ui, AdminRecordingSettings? Recording, bool? RemoveRecording);
+        bool? WebUi, AdminUiSettings? Ui, AdminRecordingSettings? Recording, bool? RemoveRecording,
+        AdminMqttSettings? Mqtt = null);
 
     public static async Task RunAsync(WebApiOptions o, CancellationToken ct)
     {
@@ -397,6 +400,17 @@ public static class WebApi
                         if (r.SegmentMinutes != null) ConfigEditor.Set(rec, "segment_minutes", r.SegmentMinutes);
                         if (r.ContinuousRetentionDays != null)
                             ConfigEditor.Set(rec, "continuous_retention_days", r.ContinuousRetentionDays);
+                    }
+
+                    if (req.Mqtt is { StatsInterval: { } statsInterval })
+                    {
+                        // Never conjure a broker-less mqtt section; the knob only
+                        // exists once MQTT is configured in the file.
+                        if (ConfigEditor.TryGetSection(root, "mqtt") is { } mq)
+                            ConfigEditor.Set(mq, "stats_interval", statsInterval);
+                        else
+                            throw new FormatException(
+                                "mqtt is not configured — add the mqtt section (broker etc.) to config.json first");
                     }
                 });
                 Log.Warn($"config.json updated via the web UI by '{SessionName(ctx)}' — restart to apply");

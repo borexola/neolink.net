@@ -745,6 +745,39 @@ public static class SelfTest
             AssertEq(rl[1], (byte)0x02);
         });
 
+        Test("server health sensors for Home Assistant", () =>
+        {
+            var sample = new Web.SystemSample(
+                UnixMs: 0, CpuPercent: 12.34, WorkingSetBytes: 512L * 1024 * 1024,
+                ManagedHeapBytes: 0, AllocMbPerSec: 0, Threads: 0, Handles: 0,
+                DiskTotalBytes: 1000L * 1024 * 1024 * 1024, DiskFreeBytes: 250L * 1024 * 1024 * 1024,
+                RecordingsBytes: 42L * 1024 * 1024 * 1024, Viewers: 3, RecordingCameras: 2,
+                StorageMbPerSec: 7.5, StorageFiles: 0);
+            var payloads = Mqtt.HomeAssistantMqtt.ServerStatePayloads(sample, camerasOnline: 5)
+                .ToDictionary(p => p.Key, p => p.Value);
+            AssertEq(payloads["cpu"], "12.3");
+            AssertEq(payloads["memory"], "512");
+            AssertEq(payloads["disk_free"], "250");
+            AssertEq(payloads["disk_used_pct"], "75");
+            AssertEq(payloads["recordings_size"], "42");
+            AssertEq(payloads["write_rate"], "7.5");
+            AssertEq(payloads["viewers"], "3");
+            AssertEq(payloads["cameras_online"], "5");
+            AssertEq(payloads["cameras_recording"], "2");
+
+            // Every published key has a matching discovery config — the contract
+            // between the state loop and what HA is told to expect.
+            Assert(payloads.Keys.All(k => Mqtt.HomeAssistantMqtt.ServerSensors.Any(s => s.Key == k)),
+                "every payload key has a discovery sensor");
+
+            // Sources that don't exist simply don't publish: no probed volume,
+            // recording disabled — absent beats a misleading zero.
+            var headless = sample with { DiskTotalBytes = 0, RecordingsBytes = -1 };
+            var keys = Mqtt.HomeAssistantMqtt.ServerStatePayloads(headless, 0).Select(p => p.Key).ToList();
+            Assert(!keys.Contains("disk_free") && !keys.Contains("disk_used_pct")
+                && !keys.Contains("recordings_size"), "unavailable sources are absent, not zero");
+        });
+
         Test("config editor: read-modify-write with validation", () =>
         {
             var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");

@@ -1204,6 +1204,60 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     padding: 10px 12px;
 }
 
+/* Server settings: head and foot pinned, only the sections scroll — the
+   unsaved state and the Save/Restart buttons can never leave the screen. */
+.settings-panel { overflow: hidden; }
+
+.settings-panel .campanel-head {
+    position: static;
+    top: auto;
+    padding: 0 0 4px;
+    flex: 0 0 auto;
+}
+
+.settings-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    /* breathing room so focus rings aren't clipped by the scroll edge */
+    padding: 2px;
+    margin: -2px;
+}
+
+.settings-foot {
+    flex: 0 0 auto;
+    border-top: 1px solid var(--line);
+    padding-top: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.settings-foot-btns {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+/* Pending-edits badge in the settings header (hover for the full story) */
+.unsaved-badge {
+    margin-left: 10px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    color: #e8b054;
+    border: 1px solid color-mix(in srgb, #e8b054 40%, transparent);
+    background: color-mix(in srgb, #e8b054 9%, transparent);
+    border-radius: 999px;
+    padding: 2px 9px;
+    white-space: nowrap;
+    cursor: help;
+}
+
 .campanel-section-title {
     font-size: 11px;
     color: var(--muted);

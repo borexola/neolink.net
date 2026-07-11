@@ -73,6 +73,18 @@ public sealed class SystemMonitor
     /// <summary>Uptime/outage history per camera, sampled on the same 2s tick.</summary>
     public CameraAvailability Availability { get; } = new();
 
+    /// <summary>When this server process started (feeds the HA "Started" sensor).</summary>
+    public static DateTimeOffset Started => StartedUtc;
+
+    /// <summary>The most recent sample, if one has been taken yet.</summary>
+    public SystemSample? Latest()
+    {
+        lock (_gate)
+        {
+            return _count == 0 ? null : _ring[(_next - 1 + Capacity) % Capacity];
+        }
+    }
+
     /// <summary>Static facts for the monitor page header (measured once).</summary>
     public object Info() => new
     {

@@ -66,6 +66,11 @@ public static class ConfigEditor
                     segmentMinutes = cfg.Recording.SegmentMinutes,
                     continuousRetentionDays = cfg.Recording.ContinuousRetentionDays,
                 },
+                // Broker/credentials stay file-only; the UI adjusts the cadence.
+                mqtt = cfg.Mqtt == null ? null : new
+                {
+                    statsInterval = cfg.Mqtt.StatsIntervalSeconds,
+                },
             },
         };
     }
@@ -124,6 +129,17 @@ public static class ConfigEditor
     /// <summary>The (possibly differently-spelled) child object for a section, created on demand.</summary>
     public static JsonObject Section(JsonObject root, string key)
     {
+        if (TryGetSection(root, key) is { } existing) return existing;
+        var section = new JsonObject();
+        root[key] = section;
+        return section;
+    }
+
+    /// <summary>Like <see cref="Section"/>, but never creates — for sections that
+    /// are only meaningful with fields the UI doesn't edit (an mqtt block without
+    /// a broker would just fail validation).</summary>
+    public static JsonObject? TryGetSection(JsonObject root, string key)
+    {
         string Normalized(string k) => k.Replace("_", "").Replace("-", "").ToLowerInvariant();
         var target = Normalized(key);
         foreach (var kv in root)
@@ -131,8 +147,6 @@ public static class ConfigEditor
             if (Normalized(kv.Key) == target && kv.Value is JsonObject existing)
                 return existing;
         }
-        var section = new JsonObject();
-        root[key] = section;
-        return section;
+        return null;
     }
 }

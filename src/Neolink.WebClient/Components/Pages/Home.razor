@@ -727,105 +727,140 @@
     @if (_showServerSettings)
     {
         <div class="backdrop panel-backdrop" @onclick="() => _showServerSettings = false"></div>
-        <aside class="campanel auth-panel" role="dialog" aria-label="Server settings">
+        @* Head and foot are pinned; only the sections scroll. The unsaved state
+           lives in BOTH: a badge in the header and the save bar in the footer,
+           so it can never scroll out of sight. *@
+        <aside class="campanel auth-panel settings-panel" role="dialog" aria-label="Server settings">
             <div class="campanel-head">
                 <span class="campanel-title">🛠 SERVER SETTINGS</span>
+                @if (_adminConfig != null && AdminPendingCount is var pend and > 0)
+                {
+                    <span class="unsaved-badge"
+                          title="Nothing is written until you click Save to config.json below. Closing this panel discards the changes.">
+                        ● @pend unsaved
+                    </span>
+                }
                 <span class="tile-spacer"></span>
                 <button class="icon-btn" title="Close" @onclick="() => _showServerSettings = false">✕</button>
             </div>
 
-            @if (_adminError != null)
+            @if (_adminConfig == null)
             {
-                <div class="notice error">@_adminError</div>
-            }
-            else if (_adminConfig == null)
-            {
-                <div class="notice">Loading…</div>
+                @if (_adminError != null)
+                {
+                    <div class="notice error">@_adminError</div>
+                }
+                else
+                {
+                    <div class="notice">Loading…</div>
+                }
             }
             else
             {
-                <div class="notice small">
-                    Editing <code>@_adminConfigPath</code>.
-                    @if (!_adminWritable)
-                    {
-                        <b> Read-only — the file cannot be written (check the mount).</b>
-                    }
-                    Changes are saved to the file and take effect after a restart. Comments in the file are not preserved.
-                </div>
-
-                <div class="campanel-section">
-                    <div class="campanel-section-title">NETWORK</div>
-                    @AdminField("Bind address", "bind", "text")
-                    @AdminField("RTSP port", "bindPort", "number")
-                    @AdminField("Web port", "webPort", "number")
-                    @AdminField("Web bind (blank = same as bind)", "webBind", "text")
-                    @AdminToggle("Serve the web UI", "webUi")
-                </div>
-
-                <div class="campanel-section">
-                    <div class="campanel-section-title">WEB UI</div>
-                    @AdminField("Preview playback speed (×)", "ui.trickleSpeed", "number")
-                    @AdminField("State directory (accounts/settings)", "ui.stateDir", "text")
-                    @AdminToggle("Allow admin-password reset on login", "ui.resetAdminPassword")
-                    <div class="control-row">
-                        <span>Two-way talk <span class="beta-tag">BETA</span></span>
-                        <button class="chip @(AdminBool("ui.talk") ? "" : "chip-off")"
-                                @onclick=@(() => _adminEdits["ui.talk"] = (!AdminBool("ui.talk")).ToString().ToLowerInvariant())>
-                            @(AdminBool("ui.talk") ? "on" : "off")</button>
-                    </div>
+                <div class="settings-body">
                     <div class="notice small">
-                        Streams your microphone to the camera's speaker (doorbells and other
-                        cameras that support talk). Browsers only allow microphone access on
-                        <b>HTTPS</b> or <b>localhost</b> pages — on a plain http:// address the
-                        mic button will report that a secure connection is required.
+                        Editing <code>@_adminConfigPath</code>.
+                        @if (!_adminWritable)
+                        {
+                            <b> Read-only — the file cannot be written (check the mount).</b>
+                        }
+                        Changes are saved to the file and take effect after a restart. Comments in the file are not preserved.
                     </div>
-                </div>
 
-                @if (_adminHasRecording)
-                {
                     <div class="campanel-section">
-                        <div class="campanel-section-title">RECORDING</div>
-                        @AdminField("Storage path", "recording.path", "text")
-                        @AdminField("Event retention (days, 0 = forever)", "recording.retentionDays", "number")
-                        @AdminField("Pre-roll (seconds)", "recording.preSeconds", "number")
-                        @AdminField("Post-roll (seconds)", "recording.postSeconds", "number")
-                        @AdminField("Max clip length (seconds)", "recording.maxClipSeconds", "number")
-                        @AdminField("Record stream (auto|mainStream|subStream)", "recording.stream", "text")
-                        @AdminField("Segment length (minutes)", "recording.segmentMinutes", "number")
-                        @AdminField("Continuous retention (days, blank = event value)", "recording.continuousRetentionDays", "number")
+                        <div class="campanel-section-title">NETWORK</div>
+                        @AdminField("Bind address", "bind", "text")
+                        @AdminField("RTSP port", "bindPort", "number")
+                        @AdminField("Web port", "webPort", "number")
+                        @AdminField("Web bind (blank = same as bind)", "webBind", "text")
+                        @AdminToggle("Serve the web UI", "webUi")
                     </div>
-                }
 
-                @if (_adminStatus != null)
-                {
-                    <div class="notice">@_adminStatus</div>
-                }
-
-                @if (AdminPendingCount is var pending and > 0)
-                {
-                    <div class="notice pending">
-                        @pending unsaved change@(pending == 1 ? "" : "s") — nothing is written until
-                        you click <b>Save to config.json</b>. Closing this panel discards them.
+                    <div class="campanel-section">
+                        <div class="campanel-section-title">WEB UI</div>
+                        @AdminField("Preview playback speed (×)", "ui.trickleSpeed", "number")
+                        @AdminField("State directory (accounts/settings)", "ui.stateDir", "text")
+                        @AdminToggle("Allow admin-password reset on login", "ui.resetAdminPassword")
+                        <div class="control-row">
+                            <span>Two-way talk <span class="beta-tag">BETA</span></span>
+                            <button class="chip @(AdminBool("ui.talk") ? "" : "chip-off")"
+                                    @onclick=@(() => _adminEdits["ui.talk"] = (!AdminBool("ui.talk")).ToString().ToLowerInvariant())>
+                                @(AdminBool("ui.talk") ? "on" : "off")</button>
+                        </div>
+                        <div class="notice small">
+                            Streams your microphone to the camera's speaker (doorbells and other
+                            cameras that support talk). Browsers only allow microphone access on
+                            <b>HTTPS</b> or <b>localhost</b> pages — on a plain http:// address the
+                            mic button will report that a secure connection is required.
+                        </div>
                     </div>
-                }
 
-                <div class="event-player-foot">
-                    <button class="chip @(AdminPendingCount > 0 ? "chip-active" : "")" disabled="@(!_adminWritable)"
-                            @onclick="SaveServerSettingsAsync">Save to config.json</button>
-                    <span class="tile-spacer"></span>
-                    @if (!_confirmRestart)
+                    @if (_adminHasRecording)
                     {
-                        <button class="chip chip-danger" @onclick="() => _confirmRestart = true">Restart service…</button>
+                        <div class="campanel-section">
+                            <div class="campanel-section-title">RECORDING</div>
+                            @AdminField("Storage path", "recording.path", "text")
+                            @AdminField("Event retention (days, 0 = forever)", "recording.retentionDays", "number")
+                            @AdminField("Pre-roll (seconds)", "recording.preSeconds", "number")
+                            @AdminField("Post-roll (seconds)", "recording.postSeconds", "number")
+                            @AdminField("Max clip length (seconds)", "recording.maxClipSeconds", "number")
+                            @AdminField("Record stream (auto|mainStream|subStream)", "recording.stream", "text")
+                            @AdminField("Segment length (minutes)", "recording.segmentMinutes", "number")
+                            @AdminField("Continuous retention (days, blank = event value)", "recording.continuousRetentionDays", "number")
+                        </div>
                     }
-                    else
+
+                    @if (_adminHasMqtt)
                     {
-                        <button class="chip chip-danger" @onclick="RestartServiceAsync">Confirm restart</button>
-                        <button class="chip" @onclick="() => _confirmRestart = false">Cancel</button>
+                        <div class="campanel-section">
+                            <div class="campanel-section-title">MQTT / HOME ASSISTANT</div>
+                            @AdminField("Server health interval (seconds, 0 = off)", "mqtt.statsInterval", "number")
+                            <div class="notice small">
+                                How often the server publishes its own health — CPU, memory, disk,
+                                recording rate, viewers — as a <b>Neolink.NET Server</b> device in
+                                Home Assistant. 60 s suits dashboards; lower it for near-live gauges
+                                (minimum 5). Broker details are edited in the file directly.
+                            </div>
+                        </div>
                     }
+
+                    <div class="notice small">
+                        Restart stops the service; your container/systemd restart policy brings it back within seconds
+                        (needed to apply saved changes). The UI reconnects automatically.
+                    </div>
                 </div>
-                <div class="notice small">
-                    Restart stops the service; your container/systemd restart policy brings it back within seconds
-                    (needed to apply saved changes). The UI reconnects automatically.
+
+                <div class="settings-foot">
+                    @if (_adminError != null)
+                    {
+                        <div class="notice error">@_adminError</div>
+                    }
+                    @if (_adminStatus != null)
+                    {
+                        <div class="notice">@_adminStatus</div>
+                    }
+                    @if (AdminPendingCount is var pending and > 0)
+                    {
+                        <div class="notice pending">
+                            @pending unsaved change@(pending == 1 ? "" : "s") — nothing is written until
+                            you click <b>Save to config.json</b>. Closing this panel discards them.
+                        </div>
+                    }
+                    <div class="settings-foot-btns">
+                        <button class="chip @(AdminPendingCount > 0 ? "chip-active" : "")" disabled="@(!_adminWritable)"
+                                @onclick="SaveServerSettingsAsync">Save to config.json</button>
+                        <span class="tile-spacer"></span>
+                        @if (!_confirmRestart)
+                        {
+                            <button class="chip chip-danger" title="Stop the service so the restart policy brings it back — needed to apply saved changes"
+                                    @onclick="() => _confirmRestart = true">Restart service…</button>
+                        }
+                        else
+                        {
+                            <button class="chip chip-danger" @onclick="RestartServiceAsync">Confirm restart</button>
+                            <button class="chip" @onclick="() => _confirmRestart = false">Cancel</button>
+                        }
+                    </div>
                 </div>
             }
         </aside>
@@ -1580,6 +1615,7 @@
         && _latestVersion != _updateDismissedVersion;
 
     private bool _adminHasRecording;
+    private bool _adminHasMqtt;
 
     private async Task DismissUpdateAsync()
     {
@@ -1610,6 +1646,8 @@
             _adminConfigPath = cfg.Path;
             _adminHasRecording = cfg.Settings.TryGetProperty("recording", out var r)
                 && r.ValueKind == JsonValueKind.Object;
+            _adminHasMqtt = cfg.Settings.TryGetProperty("mqtt", out var m)
+                && m.ValueKind == JsonValueKind.Object;
         }
         catch (Exception ex)
         {
@@ -1687,6 +1725,7 @@
         var payload = new Dictionary<string, object?>();
         var ui = new Dictionary<string, object?>();
         var rec = new Dictionary<string, object?>();
+        var mqtt = new Dictionary<string, object?>();
 
         object? Num(string p) => double.TryParse(AdminValue(p), out var d) ? d : null;
         int? Int(string p) => int.TryParse(AdminValue(p), out var i) ? i : (int?)null;
@@ -1712,10 +1751,12 @@
                 case "recording.stream": rec["stream"] = AdminValue(path); break;
                 case "recording.segmentMinutes": rec["segmentMinutes"] = Int(path); break;
                 case "recording.continuousRetentionDays": rec["continuousRetentionDays"] = Int(path); break;
+                case "mqtt.statsInterval": mqtt["statsInterval"] = Int(path); break;
             }
         }
         if (ui.Count > 0) payload["ui"] = ui;
         if (rec.Count > 0) payload["recording"] = rec;
+        if (mqtt.Count > 0) payload["mqtt"] = mqtt;
         if (payload.Count == 0) { _adminStatus = "No changes to save."; return; }
 
         try
