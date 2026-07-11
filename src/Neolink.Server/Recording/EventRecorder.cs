@@ -83,6 +83,17 @@ public sealed class EventRecorder
     /// <summary>Called from the camera connection for every alarm push (any thread).</summary>
     public void OnMotion(MotionPush push) => _pushes.Writer.TryWrite(push);
 
+    // ------------------------------------------------------------------ recording status
+
+    private volatile bool _eventActive;
+
+    /// <summary>True while an event (camera detection or on-demand) is being captured.</summary>
+    public bool EventInProgress => _eventActive;
+
+    /// <summary>Fires when event capture starts (true) / ends (false) — the MQTT
+    /// bridge mirrors it into the camera's "Recording" status sensor.</summary>
+    public event Action<bool>? RecordingChanged;
+
     // ------------------------------------------------------------------ on-demand recording
 
     /// <summary>A running user-commanded recording (web UI record button / HA Record switch).</summary>
@@ -431,7 +442,21 @@ public sealed class EventRecorder
         var rec = _store.Create(_camera,
             DateTime.UtcNow - TimeSpan.FromSeconds(_cfg.PreSeconds), initialLabels);
         Log.Info($"{_camera}: ⚡ event started ({string.Join("+", rec.Labels)})");
+        _eventActive = true;
+        RecordingChanged?.Invoke(true);
+        try
+        {
+            await RunEventCoreAsync(rec, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _eventActive = false;
+            RecordingChanged?.Invoke(false);
+        }
+    }
 
+    private async Task RunEventCoreAsync(EventRecord rec, CancellationToken ct)
+    {
         StartClip(rec);
         var thumbTask = CaptureThumbAsync(rec, ct);
 

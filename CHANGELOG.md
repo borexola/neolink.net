@@ -4,7 +4,7 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
-## 0.8.3 — unreleased
+## 0.8.4 — unreleased
 
 ### New
 
@@ -15,9 +15,10 @@ in the README). Paste the matching section below into the GitHub release.
     countdown sits on the video wherever the tile is shown — including for
     recordings started from Home Assistant — and clicking it (or the button)
     stops early. `POST /api/cameras/{name}/record` for scripts.
-  - *Home Assistant*: a `Record` switch per camera (cameras the server records
-    events for); `ON`/`OFF` on `{base}/{camera}/record/set` works for non-HA
-    consumers too. Typical use: "record while the door is open".
+  - *Home Assistant*: a `Record on demand` switch per camera (cameras the
+    server records events for); `ON`/`OFF` on `{base}/{camera}/record/set`
+    works for non-HA consumers too. Typical use: "record while the door is
+    open".
   Most Reolink firmwares can't be told to record, but Neolink is the recorder,
   so it doesn't need their cooperation. Each trigger records **one clip** —
   pre-roll included — and **stops by itself** at `max_clip_seconds` (the HA
@@ -26,6 +27,18 @@ in the README). Paste the matching section below into the GitHub release.
   **External**. The trigger bypasses the event-type filter and capture
   schedule (explicit intent beats detection rules) but respects the
   per-camera events switch.
+
+- **Per-camera recording status in Home Assistant**: every recording-capable
+  camera now carries a `Recording` binary sensor that is ON while the server
+  is actually writing its footage — an event clip (camera detection or
+  on-demand) or a continuous segment. The on-demand switch is deliberately
+  named *Record on demand* so it can't be mistaken for a recording master
+  switch next to a camera that already records continuously (setups that saw
+  the earlier `Record` name keep their entity id — same discovery unique id).
+
+## 0.8.3
+
+### New
 
 - **The server reports itself to Home Assistant**: alongside the cameras, MQTT
   discovery now creates a "Neolink.NET Server" device carrying the monitor

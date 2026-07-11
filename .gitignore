@@ -18,3 +18,6 @@ src/Neolink/
 
 /src/Neolink.Server/users.json
 /src/Neolink.Server/settings.json
+
+# local docker test images (docker save output)
+neolink-*.tar
