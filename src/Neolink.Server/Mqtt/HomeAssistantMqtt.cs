@@ -26,9 +26,11 @@ namespace Neolink.Mqtt;
 ///   • sensor:        battery                            (battery cameras)
 ///   • sensor:        Wi-Fi signal, diagnostic           (from the status pushes)
 ///   • switch:        PIR sensor                         (PIR cameras)
-///   • switch:        Record — holds a server-side recording open regardless
-///                    of what the camera detects ("record while the door is
-///                    open"); announced when the camera has an event recorder
+///   • switch:        Record — records ONE clip on demand, no camera detection
+///                    involved; stops by itself at recording.max_clip_seconds
+///                    (the switch flips back OFF) or when switched off early.
+///                    Shares its session with the web UI's record button;
+///                    announced when the camera has an event recorder
 ///   • select:        night vision (auto/on/off)         (IR-capable cameras)
 ///   • light:         floodlight                         (cameras with a spotlight)
 ///   • button:        reboot, and PTZ steps              (per capability)
@@ -135,18 +137,6 @@ public sealed class HomeAssistantMqtt
     {
         if (_cameras.TryGetValue(Sanitize(cameraName), out var cam))
             cam.OnMotion(push);
-    }
-
-    /// <summary>
-    /// Gives a camera's bridge a path INTO its event recorder, enabling the HA
-    /// "Record" switch: hold a server-side recording open on command, no camera
-    /// detection required. Wire before <see cref="RunAsync"/> connects so the
-    /// switch is part of the first discovery announce.
-    /// </summary>
-    public void SetRecordTrigger(string cameraName, Action<MotionPush> recorderSink)
-    {
-        if (_cameras.TryGetValue(Sanitize(cameraName), out var cam))
-            cam.RecordTrigger = recorderSink;
     }
 
     /// <summary>Feeds one camera's status push (Wi-Fi signal, siren, floodlight, ...) into its bridge.</summary>
@@ -348,10 +338,6 @@ internal sealed class CameraBridge
     private bool _doorbellAnnounced;
     private DateTime _lastDoorbellPress = DateTime.MinValue;
 
-    /// <summary>Injects synthetic pushes into this camera's event recorder — the
-    /// HA "Record" switch. Null when the server records nothing for this camera.</summary>
-    internal Action<MotionPush>? RecordTrigger { get; set; }
-    private CancellationTokenSource? _recordHold;
     private bool _wifiAnnounced, _sirenAnnounced;  // lazily, on the first status push
     private int? _wifiDbm;
     private bool? _sirenOn, _floodlightOn;
@@ -372,6 +358,23 @@ internal sealed class CameraBridge
         _control = cam.Control;
         Id = HomeAssistantMqtt.Sanitize(cam.Name);
         _base = $"{hub.Config.BaseTopic}/{Id}";
+        // The Record switch mirrors the camera's on-demand session, whoever drives
+        // it (this switch, the web UI, the cap auto-stop) — one source of truth.
+        if (cam.EventRecorder is { } rec)
+            rec.OnDemandChanged += session => _ = PublishRecordStateAsync(session != null);
+    }
+
+    private async Task PublishRecordStateAsync(bool on)
+    {
+        try
+        {
+            await _hub.PublishAsync(StateTopic("record"), on ? "ON" : "OFF", CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch
+        {
+            // Broker unreachable right now — the next announce republishes the truth.
+        }
     }
 
     private string StateTopic(string entity) => $"{_base}/{entity}";
@@ -405,12 +408,12 @@ internal sealed class CameraBridge
             await AnnounceEntityAsync("binary_sensor", label, BinarySensorConfig(label), ct).ConfigureAwait(false);
         await AnnounceEntityAsync("button", "reboot", ButtonConfig("Reboot", "reboot", "restart"), ct).ConfigureAwait(false);
 
-        // The Record switch: hold a server-side recording open from HA — no
-        // camera detection involved ("record while the door is open").
-        if (RecordTrigger != null)
+        // The Record switch: capture one clip on demand from HA — no camera
+        // detection involved ("record while the door is open").
+        if (_cam.EventRecorder is { } recorder)
         {
             await AnnounceEntityAsync("switch", "record", RecordSwitchConfig(), ct).ConfigureAwait(false);
-            await _hub.PublishAsync(StateTopic("record"), _recordHold != null ? "ON" : "OFF", ct)
+            await _hub.PublishAsync(StateTopic("record"), recorder.OnDemand != null ? "ON" : "OFF", ct)
                 .ConfigureAwait(false);
         }
 
@@ -584,49 +587,21 @@ internal sealed class CameraBridge
     };
 
     /// <summary>
-    /// The HA "Record" switch: while ON, a synthetic detection push is injected
-    /// every few seconds so the event recorder opens an event and keeps it alive
-    /// exactly like a continuous real detection would — clips still roll at
-    /// max_clip_seconds, retention still applies, and the footage shows up in the
-    /// timeline/review strip labeled "external". OFF sends one all-clear and the
-    /// normal post-roll closes the event.
+    /// The HA "Record" switch drives the camera's shared on-demand session (the
+    /// same one behind the web UI's record button): ON records one clip capped at
+    /// recording.max_clip_seconds — the OnDemandChanged subscription flips the
+    /// switch back OFF when the cap lands — and OFF stops it early. The clip shows
+    /// up in the timeline/review strip labeled "external"; retention applies.
     /// </summary>
-    private async Task SetRecordHoldAsync(bool on)
+    private async Task SetRecordAsync(bool on)
     {
-        if (RecordTrigger is not { } trigger) return;
-        if (on)
-        {
-            if (_recordHold != null) return; // already holding
-            var cts = new CancellationTokenSource();
-            _recordHold = cts;
-            await _hub.PublishAsync(StateTopic("record"), "ON", CancellationToken.None).ConfigureAwait(false);
-            Log.Info($"{_cam.Name}: recording held open via Home Assistant");
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    while (!cts.IsCancellationRequested)
-                    {
-                        trigger(new MotionPush("MD", new[] { "external" }, External: true));
-                        await Task.Delay(TimeSpan.FromSeconds(3), cts.Token).ConfigureAwait(false);
-                    }
-                }
-                catch (OperationCanceledException) { }
-            }, CancellationToken.None);
-        }
-        else
-        {
-            var hold = _recordHold;
-            _recordHold = null;
-            if (hold == null) return;
-            hold.Cancel();
-            hold.Dispose();
-            // One explicit all-clear arms the post-roll immediately instead of
-            // waiting for the recorder's quiet-timeout.
-            trigger(new MotionPush("none", Array.Empty<string>(), External: true));
-            await _hub.PublishAsync(StateTopic("record"), "OFF", CancellationToken.None).ConfigureAwait(false);
-            Log.Info($"{_cam.Name}: Home Assistant record hold released");
-        }
+        if (_cam.EventRecorder is not { } rec) return;
+        bool changed = on ? rec.StartOnDemand() : rec.StopOnDemand();
+        // A no-op command (already running / already off / events disabled) still
+        // gets the truth republished, so HA's optimistic toggle snaps back.
+        if (!changed)
+            await _hub.PublishAsync(StateTopic("record"), rec.OnDemand != null ? "ON" : "OFF",
+                CancellationToken.None).ConfigureAwait(false);
     }
 
     private object SwitchConfig(string name, string entity) => new
@@ -992,7 +967,7 @@ internal sealed class CameraBridge
                     await PublishPirAsync(ct).ConfigureAwait(false);
                     break;
                 case "record":
-                    await SetRecordHoldAsync(payload == "ON").ConfigureAwait(false);
+                    await SetRecordAsync(payload == "ON").ConfigureAwait(false);
                     break;
                 case "ptz_up" or "ptz_down" or "ptz_left" or "ptz_right" when payload == "PRESS":
                     await PtzStepAsync(entity["ptz_".Length..], ct).ConfigureAwait(false);

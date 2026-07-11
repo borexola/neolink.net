@@ -19,8 +19,13 @@ public sealed record ApiStream(string Kind, string Path, bool Ready, string? Cod
 }
 
 /// <param name="Recording">24/7 footage is being written for this camera right now.</param>
+/// <param name="OnDemand">On-demand clip capture state; null when the camera can't record events.</param>
 public sealed record ApiCamera(string Name, bool Online, List<ApiStream> Streams, bool Recording = false,
-    bool Asleep = false, ApiBattery? Battery = null);
+    bool Asleep = false, ApiBattery? Battery = null, ApiOnDemand? OnDemand = null);
+
+/// <summary>On-demand clip capture (the tile record button / HA Record switch):
+/// one clip, stopped automatically at MaxSeconds.</summary>
+public sealed record ApiOnDemand(bool Active, double RemainingSeconds, int MaxSeconds);
 
 /// <summary>Battery reading of a battery-powered camera (null on mains-powered ones).</summary>
 public sealed record ApiBattery(int Percent, bool Charging);
@@ -208,6 +213,8 @@ public static class UiIcon
             "skip-back" => "<polygon points=\"19 20 9 12 19 4 19 20\" fill=\"currentColor\"/><line x1=\"5\" y1=\"19\" x2=\"5\" y2=\"5\"/>",
             "skip-fwd" => "<polygon points=\"5 4 15 12 5 20 5 4\" fill=\"currentColor\"/><line x1=\"19\" y1=\"5\" x2=\"19\" y2=\"19\"/>",
             "zoom" => "<circle cx=\"11\" cy=\"11\" r=\"7\"/><line x1=\"21\" y1=\"21\" x2=\"16\" y2=\"16\"/>",
+            // Record: ring with a filled core — the classic ⏺ shape.
+            "rec" => "<circle cx=\"12\" cy=\"12\" r=\"9\"/><circle cx=\"12\" cy=\"12\" r=\"4.5\" fill=\"currentColor\" stroke=\"none\"/>",
             _ => "",
         };
         return new MarkupString(

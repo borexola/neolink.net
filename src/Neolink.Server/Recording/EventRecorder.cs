@@ -83,6 +83,120 @@ public sealed class EventRecorder
     /// <summary>Called from the camera connection for every alarm push (any thread).</summary>
     public void OnMotion(MotionPush push) => _pushes.Writer.TryWrite(push);
 
+    // ------------------------------------------------------------------ on-demand recording
+
+    /// <summary>A running user-commanded recording (web UI record button / HA Record switch).</summary>
+    public sealed record OnDemandSession(DateTime StartedUtc, DateTime EndsUtc)
+    {
+        public double RemainingSeconds => Math.Max(0, (EndsUtc - DateTime.UtcNow).TotalSeconds);
+    }
+
+    private readonly object _onDemandGate = new();
+    private CancellationTokenSource? _onDemandStop;
+    private volatile OnDemandSession? _onDemand;
+
+    /// <summary>Fires on start (the session) and on end (null), whatever the trigger
+    /// path — the MQTT bridge mirrors this onto the HA switch state.</summary>
+    public event Action<OnDemandSession?>? OnDemandChanged;
+
+    /// <summary>The on-demand recording in progress, if any.</summary>
+    public OnDemandSession? OnDemand => _onDemand;
+
+    /// <summary>On-demand capture needs the camera's master events switch on —
+    /// the event loop discards every push, external or not, while it is off.</summary>
+    public bool OnDemandAvailable => _settings.Get(_camera).Events;
+
+    /// <summary>The cap every on-demand session runs to (recording.max_clip_seconds).</summary>
+    public int OnDemandMaxSeconds => _cfg.MaxClipSeconds;
+
+    /// <summary>
+    /// Starts a user-commanded recording: synthetic "external" pushes open a normal
+    /// event right away and keep it alive, so the clip machinery, labels, retention
+    /// and HA event flow all behave exactly as for a camera detection. The session
+    /// stops itself so ONE clip lands at ~MaxClipSeconds total (see the loop).
+    /// Returns false when a session is already running or events are switched off.
+    /// </summary>
+    public bool StartOnDemand()
+    {
+        if (!OnDemandAvailable) return false;
+        CancellationTokenSource cts;
+        OnDemandSession session;
+        lock (_onDemandGate)
+        {
+            if (_onDemand != null) return false;
+            cts = new CancellationTokenSource();
+            _onDemandStop = cts;
+            var now = DateTime.UtcNow;
+            session = new OnDemandSession(now, now.AddSeconds(_cfg.MaxClipSeconds));
+            _onDemand = session;
+        }
+        Log.Info($"{_camera}: ⏺ on-demand recording started (up to {_cfg.MaxClipSeconds}s)");
+        OnDemandChanged?.Invoke(session);
+        _ = Task.Run(() => OnDemandLoopAsync(session, cts));
+        return true;
+    }
+
+    /// <summary>Ends the running session early; the event still gets its normal
+    /// post-roll. Returns false when nothing was running.</summary>
+    public bool StopOnDemand()
+    {
+        CancellationTokenSource? cts;
+        lock (_onDemandGate)
+        {
+            cts = _onDemandStop;
+            _onDemandStop = null;
+            if (cts != null) _onDemand = null; // state reads as "off" immediately
+        }
+        if (cts == null) return false;
+        cts.Cancel();
+        return true;
+    }
+
+    private async Task OnDemandLoopAsync(OnDemandSession session, CancellationTokenSource cts)
+    {
+        // Stop pulsing early enough that the post-roll closes the event just under
+        // the MaxClipSeconds hard stop. Pulsing right up to the cap would let the
+        // recorder cut the event at the cap while pulses keep coming — which would
+        // open a second event and produce a surprise extra clip.
+        var pulseUntil = session.StartedUtc.AddSeconds(
+            Math.Max(2, _cfg.MaxClipSeconds - _cfg.PostSeconds - 2));
+        bool stopped = false;
+        try
+        {
+            while (DateTime.UtcNow < pulseUntil)
+            {
+                OnMotion(new MotionPush("MD", new[] { "external" }, External: true));
+                await Task.Delay(TimeSpan.FromSeconds(3), cts.Token).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            stopped = true;
+        }
+        // One explicit all-clear arms the post-roll now instead of at quiet-timeout.
+        OnMotion(new MotionPush("none", Array.Empty<string>(), External: true));
+        if (!stopped)
+        {
+            // Ride out the post-roll: footage is still being written, so the UI
+            // indicator (driven by this session) must stay on until the cap.
+            var tail = session.EndsUtc - DateTime.UtcNow;
+            if (tail > TimeSpan.Zero)
+            {
+                try { await Task.Delay(tail, cts.Token).ConfigureAwait(false); }
+                catch (OperationCanceledException) { stopped = true; }
+            }
+        }
+        lock (_onDemandGate)
+        {
+            _onDemand = null;
+            if (ReferenceEquals(_onDemandStop, cts)) _onDemandStop = null;
+        }
+        cts.Dispose();
+        Log.Info($"{_camera}: on-demand recording {(stopped ? "stopped" : "reached its cap")} " +
+                 $"({(DateTime.UtcNow - session.StartedUtc).TotalSeconds:0}s)");
+        OnDemandChanged?.Invoke(null);
+    }
+
     public async Task RunAsync(CancellationToken ct)
     {
         Log.Info($"{_camera}: event recording enabled ({_hub.Name}, pre={_cfg.PreSeconds}s, post={_cfg.PostSeconds}s" +

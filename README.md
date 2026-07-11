@@ -465,7 +465,7 @@ in exchange you get an integration light enough to leave running forever.
 | Package / Line crossing / Intrusion / Loitering | `binary_sensor` | Announced on their first detection, so cameras without these features don't grow dead entities |
 | Doorbell | `event` | Video doorbells: every button press publishes an MQTT event (`event_type: press`, `device_class: doorbell`) — the natural trigger for ring automations |
 | Visitor | `binary_sensor` | Momentary doorbell-press pulse; HA clears it itself after a few seconds |
-| Record | `switch` | **Hold a recording open from HA**, regardless of what the camera detects — see below (appears when the server records events for this camera) |
+| Record | `switch` | **Record a clip on demand from HA**, regardless of what the camera detects — one clip, stops by itself; see below (appears when the server records events for this camera) |
 | Battery | `sensor` | Battery cameras; charge status + temperature as attributes |
 | Wi-Fi signal | `sensor` | Diagnostic; RSSI in dBm from the camera's own status pushes (Wi-Fi cameras) |
 | Siren | `binary_sensor` | Cameras that report their siren state (appears on the first status push) |
@@ -483,16 +483,22 @@ entity is announced on the first detected press, so it appears in HA the first
 time someone rings. Presses are also logged and recorded as regular "Doorbell
 pressed" events with pre-roll video.
 
-**Externally triggered recording (the Record switch).** Most Reolink firmwares
-cannot be told to record on demand — but Neolink is already the recorder, so it
-doesn't need the camera's cooperation. While the switch is ON, the server holds
-a recording event open for that camera exactly as if a detection were running
-continuously: pre-roll included, clips roll at `max_clip_seconds`, retention
+**On-demand recording (the Record switch).** Most Reolink firmwares cannot be
+told to record on demand — but Neolink is already the recorder, so it doesn't
+need the camera's cooperation. Switching ON records **one clip** for that
+camera exactly as if a detection were running: pre-roll included, retention
 applies, and the footage appears in the timeline and review strip labeled
-**External**. Turning it OFF ends the event after the normal post-roll. The
-trigger deliberately ignores the camera's event-type filter and capture
-schedule (it is explicit intent, not a detection) but respects the per-camera
-events on/off switch. A "record while the door is open" automation:
+**External**. The recording **stops by itself** when the clip reaches
+`max_clip_seconds` (the switch flips back OFF — retrigger it for a longer
+capture) or when you switch it OFF early. The trigger deliberately ignores the
+camera's event-type filter and capture schedule (it is explicit intent, not a
+detection) but respects the per-camera events on/off switch.
+
+The same recording can be started from the web UI: maximize a camera (or open
+`/cameras/{name}`) and press the **⏺ record button** in its toolbar. A red
+`REC` chip with a countdown sits on the video for as long as the clip records —
+whichever side started it, the web UI and the HA switch always show the same
+state. A "record while the door is open" automation:
 
 ```yaml
 automation:
@@ -507,8 +513,12 @@ automation:
           entity_id: switch.garage_record
 ```
 
+(A door open longer than `max_clip_seconds` ends the clip at the cap; the
+`turn_off` when the door closes is then simply a no-op.)
+
 Non-HA consumers can publish `ON` / `OFF` to `{base_topic}/{camera}/record/set`
-directly.
+directly, or use the web API: `POST /api/cameras/{name}/record` with
+`{"active": true|false}`.
 
 Availability is two-level: entities show **unavailable** when either the Neolink
 service (a Last-Will topic) or the individual camera goes offline. State and

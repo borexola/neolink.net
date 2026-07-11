@@ -8,17 +8,24 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### New
 
-- **Trigger recording from Home Assistant** — a `Record` switch per camera
-  (cameras the server records events for). While ON, the server holds a
-  recording open regardless of what the camera detects — most Reolink
-  firmwares can't be told to record, but Neolink is the recorder, so it
-  doesn't need their cooperation. Pre-roll included, clips roll at
-  `max_clip_seconds`, retention applies, and the footage shows in the
-  timeline/review strip labeled **External**. The trigger bypasses the
-  event-type filter and capture schedule (explicit intent beats detection
-  rules) but respects the per-camera events switch. `ON`/`OFF` on
-  `{base}/{camera}/record/set` works for non-HA consumers too.
-  Typical use: "record while the door is open".
+- **On-demand clip recording** — record a camera on command, regardless of
+  what it detects. Two triggers, one shared session per camera:
+  - *Web UI*: maximize a camera (or open `/cameras/{name}`) and press the new
+    ⏺ record button in its toolbar. While recording, a red `REC` chip with a
+    countdown sits on the video wherever the tile is shown — including for
+    recordings started from Home Assistant — and clicking it (or the button)
+    stops early. `POST /api/cameras/{name}/record` for scripts.
+  - *Home Assistant*: a `Record` switch per camera (cameras the server records
+    events for); `ON`/`OFF` on `{base}/{camera}/record/set` works for non-HA
+    consumers too. Typical use: "record while the door is open".
+  Most Reolink firmwares can't be told to record, but Neolink is the recorder,
+  so it doesn't need their cooperation. Each trigger records **one clip** —
+  pre-roll included — and **stops by itself** at `max_clip_seconds` (the HA
+  switch flips back OFF; retrigger for longer) or when stopped early.
+  Retention applies and the footage shows in the timeline/review strip labeled
+  **External**. The trigger bypasses the event-type filter and capture
+  schedule (explicit intent beats detection rules) but respects the
+  per-camera events switch.
 
 - **The server reports itself to Home Assistant**: alongside the cameras, MQTT
   discovery now creates a "Neolink.NET Server" device carrying the monitor

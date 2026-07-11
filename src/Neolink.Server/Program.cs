@@ -249,6 +249,7 @@ foreach (var cam in config.Cameras)
     if (webStreams.Count == 0)
         throw new InvalidOperationException($"camera '{cam.Name}' has no streams");
     Action<MotionPush>? recorderSink = null;
+    EventRecorder? eventRecorder = null;
     ContinuousRecorder? continuousRecorder = null;
 
     // Recording: alarm pushes ride the primary connection; event clips and
@@ -283,6 +284,7 @@ foreach (var cam in config.Cameras)
                 var recorder = new EventRecorder(cam.Name, recordStream.Hub, control, eventStore,
                     config.Recording, recordingSettings, previewStream?.Hub, hubsByKind);
                 recorderSink = recorder.OnMotion;
+                eventRecorder = recorder;
                 tasks.Add(Task.Run(() => recorder.RunAsync(shutdown.Token)));
             }
 
@@ -307,7 +309,10 @@ foreach (var cam in config.Cameras)
         Battery: battery == null ? null : () => battery.Battery,
         // Asleep = every stream of the camera is parked on purpose (battery doze),
         // as opposed to offline-because-unreachable.
-        Asleep: sleepers.Count == 0 ? null : () => sleepers.All(s => s.Parked)));
+        Asleep: sleepers.Count == 0 ? null : () => sleepers.All(s => s.Parked))
+        // The recorder rides along so the web API and the MQTT bridge share one
+        // on-demand recording session per camera (UI button ≡ HA Record switch).
+        { EventRecorder = eventRecorder });
     if (primaryService != null)
         motionTargets.Add((primaryService, cam.Name, recorderSink));
 }
@@ -350,13 +355,9 @@ foreach (var (primary, name, recorderSink) in motionTargets)
     // bridge; the listener only runs when the sink is set.
     if (bridge != null)
         primary.StatusSink = push => bridge.OnStatus(name, push);
-    // The reverse direction: HA's "Record" switch injects synthetic pushes into
-    // the recorder, holding a recording open with no camera detection involved.
-    if (bridge != null && recorderSink != null)
-        bridge.SetRecordTrigger(name, recorderSink);
 }
-// Start the bridge only after the record triggers are wired, so the first
-// discovery announce already carries the Record switches.
+// The reverse direction — HA's "Record" switch starting an on-demand recording —
+// needs no wiring here: the bridge reaches the recorder via WebCameraInfo.
 if (mqtt is { } bridgeToRun)
     tasks.Add(Task.Run(() => bridgeToRun.RunAsync(shutdown.Token)));
 

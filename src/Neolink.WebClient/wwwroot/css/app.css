@@ -1007,6 +1007,67 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     50% { opacity: 0.45; }
 }
 
+/* ---------- on-demand clip recording ---------- */
+/* Tile-bar toggle (maximized view): glows red while its clip records. */
+.clip-btn.clip-live {
+    color: #fff;
+    background: var(--err);
+    animation: talk-pulse 1.6s ease-in-out infinite;
+}
+.clip-btn.clip-live:hover { background: color-mix(in srgb, var(--err) 80%, #000); }
+
+/* The always-on corner chip while a clip records — visible whatever started it
+   (the tile button or HA's Record switch) and wherever the tile is shown. The
+   countdown runs to the automatic stop at max_clip_seconds. */
+.clip-overlay {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    z-index: 6;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 4px 11px 4px 8px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--bg) 74%, transparent);
+    backdrop-filter: blur(6px);
+    border: 1px solid color-mix(in srgb, var(--err) 60%, transparent);
+    color: var(--err);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    user-select: none;
+    pointer-events: none; /* inert on grid tiles: clicks fall through to the tile */
+}
+
+.clip-overlay-dot {
+    flex: 0 0 auto;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--err);
+    animation: clip-dot 1.3s ease-in-out infinite;
+}
+
+@keyframes clip-dot {
+    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 color-mix(in srgb, var(--err) 55%, transparent); }
+    50% { opacity: 0.55; box-shadow: 0 0 0 5px color-mix(in srgb, var(--err) 0%, transparent); }
+}
+
+.clip-overlay-label {
+    font-variant-numeric: tabular-nums; /* steady width — no jitter as digits tick */
+    text-shadow: 0 1px 3px #000;
+    white-space: nowrap;
+}
+
+/* Maximized: the chip doubles as the stop button. */
+.tile.maxed .clip-overlay { pointer-events: auto; cursor: pointer; }
+.tile.maxed .clip-overlay:hover {
+    color: #fff;
+    border-color: var(--err);
+    background: color-mix(in srgb, var(--err) 45%, rgba(0, 0, 0, 0.55));
+}
+
 /* Flat inline icons: behave in text flow AND as flex items */
 .nl-icon {
     display: inline-block;
