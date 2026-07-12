@@ -333,7 +333,18 @@ public sealed class ClipWriter : IDisposable
                 }
             }
         }
-        file?.Dispose();
+        try
+        {
+            file?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            // Dispose flushes the write buffer — a volume that filled or vanished
+            // can throw HERE, and an unhandled exception on this raw thread would
+            // take down the whole process.
+            _faulted = true;
+            Log.Warn($"{_path}: closing clip file failed: {ex.Message}");
+        }
         _done.TrySetResult();
     }
 

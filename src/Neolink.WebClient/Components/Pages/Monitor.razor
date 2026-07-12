@@ -136,6 +136,30 @@
                 }
             </div>
 
+            @* ---------------- storage tiers ---------------- *@
+            @* Only when split storage is configured — a single-volume install is
+               already covered by the DISK FREE card above. *@
+            @if (_storage.Count > 1)
+            {
+                <div class="mon-section">
+                    <span class="mon-section-title">STORAGE</span>
+                    <span class="mon-section-sub">configured recording locations</span>
+                </div>
+
+                <div class="mon-cards">
+                    @foreach (var loc in _storage)
+                    {
+                        <div class="mon-card">
+                            <span class="mon-card-label">@loc.Label.ToUpperInvariant()</span>
+                            <span class="mon-card-value" style="color:@StorageColor(loc)">
+                                @(loc.Online ? $"{Bytes(loc.FreeBytes)} free" : "offline")
+                            </span>
+                            <span class="mon-card-sub">@loc.Path@(loc.Online && loc.TotalBytes > 0 ? $" · {loc.UsedPercent:0}% of {Bytes(loc.TotalBytes)} used" : "")@(loc.Full ? " · FULL — recording halted" : loc.Warn ? " · getting full" : "")</span>
+                        </div>
+                    }
+                </div>
+            }
+
             @* ---------------- cameras ---------------- *@
             @if (_avail.Count > 0)
             {
@@ -249,6 +273,8 @@
 
     private ApiSystemInfo? _info;
     private List<ApiCamAvail> _avail = new();
+    private List<ApiStorageLocation> _storage = new();
+    private DateTime _storageNext = DateTime.MinValue;
     private readonly List<ApiSystemSample> _samples = new();
     private readonly List<BrowserSample> _browser = new();
     private PeriodicTimer? _timer;
@@ -356,6 +382,25 @@
         {
             _error = _samples.Count == 0 ? $"Cannot reach {ApiBase}: {ex.Message}" : _error;
         }
+        await FetchStorageAsync();
+    }
+
+    /// <summary>Storage-tier capacities (only rendered when split storage is
+    /// configured). Refreshed every ~10s — disks don't fill within a poll tick.</summary>
+    private async Task FetchStorageAsync()
+    {
+        if (DateTime.UtcNow < _storageNext) return;
+        _storageNext = DateTime.UtcNow.AddSeconds(10);
+        try
+        {
+            var req = new HttpRequestMessage(HttpMethod.Get, $"{ApiBase}/api/storage");
+            if (!string.IsNullOrEmpty(_token))
+                req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _token);
+            using var res = await Http.SendAsync(req);
+            if (!res.IsSuccessStatusCode) return; // older server or recording off
+            _storage = await res.Content.ReadFromJsonAsync<List<ApiStorageLocation>>() ?? new();
+        }
+        catch { /* the section just stays hidden */ }
     }
 
     private async Task FetchAuthAsync()
@@ -544,6 +589,11 @@
 
     private string DiskColor() => Last is { DTot: > 0 } s && s.DFree < s.DTot / 10
         ? "var(--err)"
+        : "var(--text)";
+
+    private static string StorageColor(ApiStorageLocation loc) =>
+        loc.Full || !loc.Online ? "var(--err)"
+        : loc.Warn ? "#ffb020"
         : "var(--text)";
 
     public async ValueTask DisposeAsync()

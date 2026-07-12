@@ -48,6 +48,27 @@
             </div>
         }
 
+        @if (_storage is { Full: true })
+        {
+            @* Not dismissible: recording is actually stopped until space is freed. *@
+            <div class="storage-banner storage-banner-full">
+                <span class="sec-banner-text">⛔ @_storage.Label storage is FULL — recording has stopped. Free up space or extend retention/archive settings.</span>
+                <div class="sec-banner-actions">
+                    <a class="chip" href="monitor">Monitor</a>
+                </div>
+            </div>
+        }
+        else if (_storage is { } sw && !_storageWarnDismissed)
+        {
+            <div class="storage-banner">
+                <span class="sec-banner-text">⚠ @sw.Label storage is @sw.UsedPercent.ToString("0")% full — recording stops when it runs out.</span>
+                <div class="sec-banner-actions">
+                    <a class="chip" href="monitor">Monitor</a>
+                    <button class="icon-btn" title="Dismiss for this session" @onclick="DismissStorageWarnAsync">✕</button>
+                </div>
+            </div>
+        }
+
         @if (_showSettings)
         {
             <div class="settings">
@@ -1216,9 +1237,15 @@
             // session — an unsecured server re-warns on every fresh visit.
             _setupDismissed = await JS.InvokeAsync<string?>("neolink.lsGet", SetupDismissKey) == "1";
             _secWarnDismissed = await JS.InvokeAsync<string?>("neolink.ssGet", SecWarnDismissKey) == "1";
+            _storageWarnDismissed = await JS.InvokeAsync<string?>("neolink.ssGet", StorageWarnDismissKey) == "1";
             _mainWarned = await JS.InvokeAsync<string?>("neolink.lsGet", MainWarnKey) == "1";
             _updateDismissedVersion = await JS.InvokeAsync<string?>("neolink.lsGet", "neolink.updateDismissed");
             _playSd = await JS.InvokeAsync<string?>("neolink.lsGet", "neolink.eventSd") == "1";
+            if (double.TryParse(await JS.InvokeAsync<string?>("neolink.lsGet", "neolink.eventSpeed"),
+                    System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out var evSpeed)
+                && PlaybackSpeeds.Contains(evSpeed))
+                _playSpeed = evSpeed;
         }
         catch { }
     }
@@ -1235,6 +1262,20 @@
         // Session-scoped on purpose: hiding a security warning forever defeats it.
         _secWarnDismissed = true;
         await JS.InvokeVoidAsync("neolink.ssSet", SecWarnDismissKey, "1");
+    }
+
+    // ---------------------------------------------------------------- storage banners
+
+    /// <summary>Worst storage tier's state from /api/features; null = healthy.</summary>
+    private ApiStorageState? _storage;
+    private bool _storageWarnDismissed;
+    private string StorageWarnDismissKey => $"neolink.storageWarnDismissed:{_server.TrimEnd('/')}";
+
+    private async Task DismissStorageWarnAsync()
+    {
+        // Session-scoped: a nearly-full disk should re-warn on the next visit.
+        _storageWarnDismissed = true;
+        await JS.InvokeVoidAsync("neolink.ssSet", StorageWarnDismissKey, "1");
     }
 
     // One-time performance nudge, shown the first time the wall holds more than
@@ -2021,6 +2062,7 @@
                 _version = features.Version;
                 _latestVersion = features.LatestVersion;
                 if (!string.IsNullOrEmpty(features.RepoUrl)) _repoUrl = features.RepoUrl;
+                _storage = features.Storage;
             }
         }
         catch
@@ -2075,6 +2117,14 @@
     private async Task SetPlaySpeedAsync(double s)
     {
         _playSpeed = s;
+        // Sticky preference, shared with the Events page ("neolink.eventSpeed"):
+        // the next event opened — here or there — starts at this speed.
+        try
+        {
+            await JS.InvokeVoidAsync("neolink.lsSet", "neolink.eventSpeed",
+                s.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+        catch { }
         await JS.InvokeVoidAsync("neolink.eventPlayer", "event-player-video", PlayerUrl, s);
     }
 
@@ -2085,7 +2135,8 @@
         await JS.InvokeVoidAsync("neolink.eventPlayer", "event-player-video", PlayerUrl, _playSpeed);
     }
 
-    private void OpenEvent(ApiEvent ev) { _playEvent = ev; _playSpeed = 1; }
+    // _playSpeed deliberately survives across events (loaded once per session).
+    private void OpenEvent(ApiEvent ev) => _playEvent = ev;
 
     /// <summary>Closing the player counts as reviewing: the event leaves the top strip.</summary>
     private async Task ClosePlayerAsync()

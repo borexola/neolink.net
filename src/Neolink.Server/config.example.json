@@ -44,6 +44,14 @@
   // Remove this section to disable. In Docker, mount a volume at "path".
   // "recording": {
   //   "path": "/recordings",           // storage directory
+  //   "clips_path": "/clips",          // optional fast tier (SSD): new event clips land here,
+  //                                    // 24/7 footage stays on "path"; unset = everything on "path"
+  //   "archive_path": "/archive",      // optional cold tier: enables per-camera archiving in the
+  //                                    // web UI — expired footage MOVES here instead of being
+  //                                    // deleted. Use a different drive; in Docker, a second volume.
+  //                                    // NOTE (Docker): map a volume at EVERY tier path you set —
+  //                                    // an unmapped path is silently created inside the container
+  //                                    // and that footage is lost when the container is recreated
   //   "retention_days": 7,             // delete events older than this (0 = keep forever)
   //   "pre_seconds": 5,                // video kept from before the detection
   //   "post_seconds": 8,               // quiet time before an event closes

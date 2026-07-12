@@ -231,6 +231,17 @@
             }
             catch { }
             try { _sd = await JS.InvokeAsync<string?>("neolink.lsGet", "neolink.eventSd") == "1"; } catch { }
+            // Playback speed is a sticky preference (shared with the live view's
+            // event popup): pick 2× once and every next event opens at 2×.
+            try
+            {
+                if (double.TryParse(await JS.InvokeAsync<string?>("neolink.lsGet", "neolink.eventSpeed"),
+                        System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture, out var sp)
+                    && Speeds.Contains(sp))
+                    _speed = sp;
+            }
+            catch { }
             try { _origin = await JS.InvokeAsync<string>("neolink.defaultServer"); } catch { }
             if (string.IsNullOrWhiteSpace(_server))
                 _server = _origin;
@@ -425,8 +436,8 @@
 
     private Task SelectAsync(ApiEvent ev)
     {
+        // _speed deliberately survives: the user's last pick applies to every event.
         _selected = ev;
-        _speed = 1;
         if (ev.HasClip) _pendingVideoUrl = PlayerUrl(ev); // attach after the <video> renders
         return Task.CompletedTask;
     }
@@ -434,6 +445,12 @@
     private async Task SetSpeedAsync(double s)
     {
         _speed = s;
+        try
+        {
+            await JS.InvokeVoidAsync("neolink.lsSet", "neolink.eventSpeed",
+                s.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+        catch { }
         if (_selected is { HasClip: true } ev)
             await JS.InvokeVoidAsync("neolink.eventPlayer", "ev-video", PlayerUrl(ev), s);
     }

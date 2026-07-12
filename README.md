@@ -83,6 +83,13 @@ The cameras are unmodified and no Reolink NVR is required.
 - **Battery cameras** (Argus etc.) are auto-detected: charge badge in the sidebar,
   sleep-friendly by default (the camera dozes while nobody watches), `always_on`
   per camera to hold it awake — see [Battery cameras](#battery-cameras-argus-etc)
+- **Tiered storage (optional)**: an SSD tier for fresh event clips and a cold
+  archive tier that expired footage **moves** to instead of being deleted
+  (per camera, per recording type, BETA) — with capacity watching: an amber
+  banner at 90% used, a red banner when a disk is full (recording halts
+  cleanly and auto-resumes), per-location storage cards on the Monitor page,
+  and a live "footage lifecycle" strip in each camera's recording settings —
+  see [Tiered storage](#tiered-storage-optional)
 - Everything persists in browser localStorage: server address, layout, tile
   assignments, window geometry
 - Adaptive jitter buffer that measures each stream's delivery cadence
@@ -392,6 +399,8 @@ config file (in Docker: the `/config` mount), so they survive restarts:
 | Option | Default | Description |
 |---|---|---|
 | `path` | *required* | Storage directory. In Docker, mount a volume here (e.g. `./recordings:/recordings`) |
+| `clips_path` | = `path` | Optional fast tier: new event clips are written here (point it at an SSD for snappy event playback); continuous footage stays on `path` |
+| `archive_path` | *unset* | Optional cold tier: enables per-camera archiving — aged footage is **moved** here instead of deleted. Use a different (bigger/slower) drive; in Docker, map a second volume (e.g. `-v /mnt/bigdisk:/archive`) |
 | `retention_days` | `7` | Events older than this are deleted (`0` = keep forever) |
 | `pre_seconds` | `5` | Video included from before the detection (pre-roll) |
 | `post_seconds` | `8` | Quiet time after the last detection before the event closes |
@@ -412,6 +421,43 @@ versions (events directly under the date folder, continuous under
 startup — directory renames, instant regardless of footage size. Set
 `"record": false` on a camera to start with events off (the UI switch can
 re-enable it).
+
+#### Tiered storage (optional)
+
+Everything works with the single `path` folder — the tiers below are strictly
+opt-in and existing setups keep behaving exactly as before:
+
+- **Fast clips tier** (`clips_path`): point it at an SSD and new event clips
+  land there for instant review scrubbing, while bulky 24/7 footage stays on
+  the big disk.
+- **Archive tier** (`archive_path`): once set, each camera's ⚙ → RECORDING
+  section gains **Archive event clips** and **Archive continuous footage**
+  switches. Retention stays the single clock: when footage reaches the end of
+  its retention window, an enabled type is **moved** to the archive instead of
+  deleted (e.g. "Keep event clips: 30" moves clips to the archive on day 30).
+  One extra knob sets how long the archive keeps footage (blank = forever).
+  The events list and the timeline read archived footage transparently. Use a
+  different drive for the archive — in Docker, map a second volume
+  (e.g. `-v /mnt/bigdisk:/archive` with `"archive_path": "/archive"`;
+  `docker-compose.yml` ships commented examples for both tiers). On the Home
+  Assistant add-on no extra mapping is needed: point `archive_path` at a
+  folder under `/share` or `/media` — NAS shares added in HA under
+  Settings → System → Storage appear there automatically.
+
+Capacity is watched for you: when any configured location climbs past **90%
+used**, the web UI shows an amber warning banner; if one actually runs out of
+space, recording to it halts cleanly (no partial files) with a **red** banner
+until space is freed — recording resumes automatically. When split storage is
+configured, the 📈 Monitor page grows a STORAGE section showing every
+location's free space live.
+
+> ⚠ **Docker: map a volume for every configured tier.** Missing directories
+> are created at startup so recording never blocks — but if a configured
+> container path has no volume behind it, that directory lands in the
+> container's writable layer: footage records fine yet lives inside the
+> container (gone on `docker rm`) and fills the Docker host's disk. If the
+> Monitor's STORAGE section shows a tier with the same capacity as the root
+> disk, that's the sign.
 
 ### Per camera
 
@@ -838,6 +884,14 @@ by channel, nonce-derived AES session keys, binary-mode switching via
   `mainStream`, use `stream: "subStream"` or close the app.
 - **Choppy browser video on Firefox for main streams**: that's H.265 — use the sub
   stream or a Chromium/Safari browser with hardware HEVC.
+- **Configured `clips_path`/`archive_path` but the folders look empty on the
+  host (Docker)**: recording never blocks on a missing directory — Neolink
+  creates it at startup. If no volume is mapped at that container path, the
+  directory is created **inside the container's writable layer**: footage
+  records fine but lives in the container (surviving restarts, destroyed by
+  `docker rm`) and eats the Docker host's disk. Map a volume for every
+  configured tier. The Monitor page's STORAGE section is the tell: tiers on
+  the container layer report the same total/free bytes as the root disk.
 
 ## Compared to the original Rust neolink
 

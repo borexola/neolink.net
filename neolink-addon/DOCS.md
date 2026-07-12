@@ -42,6 +42,24 @@ well as in Neolink's own review strip and timeline. Retention, per-camera
 switches, event-type filters and capture schedules are managed in the web UI
 (camera ⚙ → RECORDING).
 
+### Tiered storage & archiving (BETA)
+
+Two optional extra locations can be added to the `recording` section of
+`config.json` (reachable via the Samba/SSH add-ons — plain JSON edits keep
+the add-on's config merging working):
+
+- `"clips_path"` — a fast tier where new event clips are written (24/7
+  footage stays on the main path).
+- `"archive_path"` — a cold tier that unlocks per-camera **Archive** switches
+  in the web UI (camera ⚙ → RECORDING): footage whose retention expires is
+  *moved* there instead of deleted, and stays playable in Events and the
+  timeline.
+
+Point either at a NAS share added under **Settings → System → Storage**
+(`/media/<name>` or `/share/<name>`) and restart the add-on. The Monitor
+page shows every configured location's free space, and the web UI warns at
+90% used / halts recording cleanly when a disk is actually full.
+
 ### Recording to a NAS
 
 Add the share in Home Assistant first: **Settings → System → Storage → Add

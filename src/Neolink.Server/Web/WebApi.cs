@@ -49,6 +49,10 @@ public sealed class WebApiOptions
     public RecordingSettings? RecordingSettings { get; init; }
     /// <summary>Recording defaults (retention etc.) reported to the UI; null when recording is off.</summary>
     public RecordingConfig? Recording { get; init; }
+    /// <summary>An archive storage tier is configured, so per-camera archiving can be offered.</summary>
+    public bool ArchiveAvailable { get; init; }
+    /// <summary>Configured storage tiers and their capacity (feeds the monitor and the full-storage banners).</summary>
+    public StorageLocations? Storage { get; init; }
     public required UserStore UserStore { get; init; }
     public bool ResetAdminPassword { get; init; }
     public double TrickleSpeed { get; init; } = 4;
@@ -108,7 +112,8 @@ public static class WebApi
     private sealed record RecordingSettingsRequest(bool? Events, bool? Continuous, List<string>? EventTypes,
         int? EventRetentionDays = null, int? ContinuousRetentionDays = null, string? RecordStream = null,
         List<string>? ScheduleDays = null, string? ScheduleStart = null, string? ScheduleEnd = null,
-        bool? ScheduleEnabled = null);
+        bool? ScheduleEnabled = null,
+        bool? ArchiveEvents = null, bool? ArchiveContinuous = null, int? ArchiveRetentionDays = null);
     private sealed record CredentialsRequest(string? Username, string? Password);
 
     /// <summary>
@@ -491,7 +496,28 @@ public static class WebApi
             version = o.Version,
             latestVersion = o.Updates?.Latest,
             repoUrl = UpdateChecker.RepoUrl,
+            // Worst storage tier state, for the live view's banner: "warn" when
+            // any tier is >= 90% used, "full" when one is out of space (recording
+            // to it has halted). Rides this endpoint so the wall needs no extra poll.
+            storage = ShapeStorage(o.Storage),
         }));
+
+        // Every configured storage location and its capacity (monitor page).
+        app.MapGet("/api/storage", () =>
+            o.Storage == null
+                ? Results.Json(new { error = "recording is not configured" }, statusCode: 404)
+                : Results.Json(o.Storage.Sample().Select(s => new
+                {
+                    role = s.Role.ToString().ToLowerInvariant(),
+                    label = s.Label,
+                    path = s.Path,
+                    totalBytes = s.TotalBytes,
+                    freeBytes = s.FreeBytes,
+                    usedPercent = Math.Round(s.UsedPercent, 1),
+                    online = s.Online,
+                    warn = s.Warn,
+                    full = s.Full,
+                })));
 
         app.MapGet("/api/cameras", () =>
         {
@@ -1037,6 +1063,13 @@ public static class WebApi
                 scheduleDays = (IEnumerable<string>?)s.ScheduleDays ?? CameraRecordingSettings.WeekDays,
                 scheduleStart = s.ScheduleStart ?? "",
                 scheduleEnd = s.ScheduleEnd ?? "",
+                // Archiving: available only when the server config maps an archive
+                // tier; per camera AND per type (strict opt-in). Footage moves to
+                // the archive when its normal retention above expires.
+                archiveAvailable = o.ArchiveAvailable,
+                archiveEvents = s.ArchiveEvents,
+                archiveContinuous = s.ArchiveContinuous,
+                archiveRetentionDays = s.ArchiveRetentionDays,
             };
 
             app.MapGet("/api/cameras/{name}/recording", (string name, HttpContext ctx) =>
@@ -1091,6 +1124,16 @@ public static class WebApi
                 }
                 static string? SchedTime(string? v) =>
                     v != null && CameraRecordingSettings.ParseMinutes(v) is int m && m > 0 ? v : null;
+                // Archiving is inert without the server-side archive tier — the
+                // switches can't be turned on for a destination that doesn't exist.
+                var archiveEvents = o.ArchiveAvailable ? req.ArchiveEvents : null;
+                var archiveContinuous = o.ArchiveAvailable ? req.ArchiveContinuous : null;
+                if ((req.ArchiveEvents == true || req.ArchiveContinuous == true) && !o.ArchiveAvailable)
+                    return Results.Json(new
+                    {
+                        error = "archiving requires \"archive_path\" in the server recording config " +
+                                "(ideally a different drive — in Docker, map a second volume)",
+                    }, statusCode: 409);
                 var updated = recordingSettings.Update(cam.Name, req.Events, continuous,
                     types, setEventTypes: req.EventTypes != null,
                     eventRetentionDays: Retention(req.EventRetentionDays),
@@ -1102,7 +1145,11 @@ public static class WebApi
                     scheduleDays: schedDays, setScheduleDays: req.ScheduleDays != null,
                     scheduleStart: SchedTime(req.ScheduleStart), setScheduleStart: req.ScheduleStart != null,
                     scheduleEnd: SchedTime(req.ScheduleEnd), setScheduleEnd: req.ScheduleEnd != null,
-                    scheduleEnabled: req.ScheduleEnabled);
+                    scheduleEnabled: req.ScheduleEnabled,
+                    archiveEvents: archiveEvents,
+                    archiveContinuous: archiveContinuous,
+                    archiveRetentionDays: Retention(req.ArchiveRetentionDays),
+                    setArchiveRetention: req.ArchiveRetentionDays != null);
                 return Results.Json(ShapeSettings(cam, updated));
             });
         }
@@ -1322,6 +1369,21 @@ public static class WebApi
     /// reach clients without a typed model. Leaves: numbers stay numbers; repeated
     /// element names become arrays; attributes are prefixed with '@'.
     /// </summary>
+    /// <summary>The worst storage-tier state for the wall banner: null when recording
+    /// is off or every tier is healthy, else the most urgent tier's summary.</summary>
+    private static object? ShapeStorage(StorageLocations? storage)
+    {
+        if (storage == null) return null;
+        var sample = storage.Sample();
+        var worst = sample.FirstOrDefault(s => s.Full) ?? sample.FirstOrDefault(s => s.Warn);
+        return worst == null ? null : new
+        {
+            label = worst.Label,
+            usedPercent = Math.Round(worst.UsedPercent, 1),
+            full = worst.Full,
+        };
+    }
+
     /// <summary>The floodlight-task fields the UI binds to, out of the camera's
     /// (much larger) FloodlightTask XML. Field names follow the wire format.</summary>
     private static object ShapeFloodlight(XElement task) => new

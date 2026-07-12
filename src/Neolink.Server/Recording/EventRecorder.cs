@@ -56,7 +56,8 @@ public sealed class EventRecorder
     /// "record from main/sub" runtime choice; null pins recording to <paramref name="hub"/>.</param>
     public EventRecorder(string camera, IStreamHub hub, ICameraControl control,
         EventStore store, RecordingConfig cfg, RecordingSettings settings,
-        IStreamHub? previewHub = null, IReadOnlyDictionary<string, IStreamHub>? hubsByKind = null)
+        IStreamHub? previewHub = null, IReadOnlyDictionary<string, IStreamHub>? hubsByKind = null,
+        Func<bool>? hasRoom = null)
     {
         _camera = camera;
         _hub = hub;
@@ -66,7 +67,12 @@ public sealed class EventRecorder
         _store = store;
         _cfg = cfg;
         _settings = settings;
+        _hasRoom = hasRoom;
     }
+
+    /// <summary>Free-space guard for the clips tier; null = never blocks.</summary>
+    private readonly Func<bool>? _hasRoom;
+    private bool _fullLogged;
 
     /// <summary>The hub clips are cut from right now: the user's per-camera stream
     /// choice when set (and served), otherwise the configured default.</summary>
@@ -538,6 +544,24 @@ public sealed class EventRecorder
     {
         lock (_mediaGate)
         {
+            // Free-space guard: a full clips volume records the event's metadata
+            // only (still visible in the strip) instead of failing mid-write.
+            if (_hasRoom?.Invoke() == false)
+            {
+                if (!_fullLogged)
+                {
+                    Log.Error($"{_camera}: clips storage is FULL — events are stored without video until space is freed");
+                    _fullLogged = true;
+                }
+                _preroll.Clear();
+                _previewPreroll.Clear();
+                return;
+            }
+            if (_fullLogged)
+            {
+                Log.Info($"{_camera}: storage has room again — event clips resume");
+                _fullLogged = false;
+            }
             try
             {
                 _writer = ClipWriter.TryCreate(Path.Combine(_store.EventDir(rec), "clip.mp4"),

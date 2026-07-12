@@ -30,16 +30,21 @@ public sealed class ContinuousRecorder
     private readonly RecordingSettings _settings;
     private readonly double _segmentSeconds;
     private readonly long _maxSegmentBytes;
+    private readonly Func<bool>? _hasRoom;
     private volatile bool _writing;
+    private bool _fullLogged;
 
     /// <summary>True while 24/7 footage is actually being written to disk (feeds the UI's REC badge).</summary>
     public bool IsWriting => _writing;
 
     /// <param name="hubsByKind">The camera's streams by kind, enabling the per-camera
     /// "record from main/sub" runtime choice; null pins recording to <paramref name="hub"/>.</param>
+    /// <param name="hasRoom">Free-space guard: false = the recordings volume is full,
+    /// so no new segment is opened (retried on a backoff). Null = never blocks.</param>
     public ContinuousRecorder(string camera, IStreamHub hub, EventStore store,
         RecordingSettings settings, RecordingConfig cfg,
-        IReadOnlyDictionary<string, IStreamHub>? hubsByKind = null)
+        IReadOnlyDictionary<string, IStreamHub>? hubsByKind = null,
+        Func<bool>? hasRoom = null)
     {
         _camera = camera;
         _hub = hub;
@@ -48,6 +53,7 @@ public sealed class ContinuousRecorder
         _settings = settings;
         _segmentSeconds = cfg.SegmentMinutes * 60.0;
         _maxSegmentBytes = (long)cfg.MaxSegmentSizeMb * 1024 * 1024;
+        _hasRoom = hasRoom;
     }
 
     /// <summary>The stream taped right now: the user's per-camera choice when set (and served).</summary>
@@ -141,6 +147,25 @@ public sealed class ContinuousRecorder
                 {
                     // Every segment starts on a keyframe so it plays standalone.
                     if (!v.Keyframe || DateTime.UtcNow < retryAfter) continue;
+                    // Free-space guard: a full volume halts new segments cleanly
+                    // (instead of failing mid-write) until the hourly cleanup or
+                    // the user frees space. One log per transition, not per try.
+                    if (_hasRoom?.Invoke() == false)
+                    {
+                        if (!_fullLogged)
+                        {
+                            Log.Error($"{_camera}: recordings storage is FULL — continuous recording halted until space is freed");
+                            _fullLogged = true;
+                        }
+                        _writing = false;
+                        retryAfter = DateTime.UtcNow + WriteErrorBackoff;
+                        continue;
+                    }
+                    if (_fullLogged)
+                    {
+                        Log.Info($"{_camera}: storage has room again — continuous recording resumes");
+                        _fullLogged = false;
+                    }
                     try
                     {
                         // Never blocks on disk: the file is opened and written by the

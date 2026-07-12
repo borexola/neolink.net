@@ -16,12 +16,22 @@ namespace Neolink.Recording;
 /// be switched off without losing it. ScheduleDays lists the enabled days
 /// ("mon".."sun", null = every day) and ScheduleStart/ScheduleEnd bound the
 /// time of day ("HH:mm"; null = midnight, so both null = all day).
+///
+/// Archiving (requires recording.archive_path on the server) is a strict opt-in
+/// per camera and per recording type: with ArchiveEvents/ArchiveContinuous on,
+/// footage whose normal retention expires is MOVED to the archive instead of
+/// deleted — retention stays the single knob for when footage leaves the live
+/// tier; archiving only changes what happens then. Archived footage is deleted
+/// after ArchiveRetentionDays (null or 0 = keep forever). All these fields are
+/// absent from pre-existing settings.json files and default to the old
+/// delete-only behavior.
 /// </summary>
 public sealed record CameraRecordingSettings(bool Events, bool Continuous, List<string>? EventTypes,
     int? EventRetentionDays = null, int? ContinuousRetentionDays = null,
     string? RecordStream = null,
     List<string>? ScheduleDays = null, string? ScheduleStart = null, string? ScheduleEnd = null,
-    bool ScheduleEnabled = false)
+    bool ScheduleEnabled = false,
+    bool ArchiveEvents = false, bool ArchiveContinuous = false, int? ArchiveRetentionDays = null)
 {
     /// <summary>Known detection labels (what the UI offers as event-type filters).</summary>
     public static readonly string[] KnownLabels =
@@ -171,7 +181,9 @@ public sealed class RecordingSettings
         List<string>? scheduleDays = null, bool setScheduleDays = false,
         string? scheduleStart = null, bool setScheduleStart = false,
         string? scheduleEnd = null, bool setScheduleEnd = false,
-        bool? scheduleEnabled = null)
+        bool? scheduleEnabled = null,
+        bool? archiveEvents = null, bool? archiveContinuous = null,
+        int? archiveRetentionDays = null, bool setArchiveRetention = false)
     {
         lock (_gate)
         {
@@ -188,7 +200,10 @@ public sealed class RecordingSettings
                 setScheduleDays ? scheduleDays : cur.ScheduleDays,
                 setScheduleStart ? scheduleStart : cur.ScheduleStart,
                 setScheduleEnd ? scheduleEnd : cur.ScheduleEnd,
-                scheduleEnabled ?? cur.ScheduleEnabled);
+                scheduleEnabled ?? cur.ScheduleEnabled,
+                archiveEvents ?? cur.ArchiveEvents,
+                archiveContinuous ?? cur.ArchiveContinuous,
+                setArchiveRetention ? archiveRetentionDays : cur.ArchiveRetentionDays);
             _cameras[camera] = next;
             SaveLocked();
             return next;
@@ -203,8 +218,10 @@ public sealed class RecordingSettings
             File.WriteAllText(tmp, JsonSerializer.Serialize(_cameras, JsonOpts));
             File.Move(tmp, _file, overwrite: true);
         }
-        catch (IOException ex)
+        catch (Exception ex)
         {
+            // Never let a broken state volume take the settings update down with
+            // it — the in-memory switch already applied; only persistence failed.
             Log.Warn($"Cannot persist recording settings: {ex.Message}");
         }
     }

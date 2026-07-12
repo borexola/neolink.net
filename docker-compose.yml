@@ -20,5 +20,12 @@ services:
       # Event recording storage: uncomment and set "recording": { "path": "/recordings" }
       # in config.json to capture detection events (clips + thumbnails) here.
       # - ./recordings:/recordings
+      # Optional tiered storage (see "Tiered storage" in the README):
+      # fast SSD tier for event clips — pair with "clips_path": "/clips"
+      # - /mnt/fast-ssd/neolink:/clips
+      # cold archive tier on a different (bigger/slower) drive — pair with
+      # "archive_path": "/archive"; expired footage moves here instead of
+      # being deleted once archiving is enabled per camera in the web UI
+      # - /mnt/bigdisk/neolink:/archive
     # For RTSP over UDP transport, prefer host networking instead of port maps:
     # network_mode: host
