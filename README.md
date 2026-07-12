@@ -33,6 +33,16 @@ The cameras are unmodified and no Reolink NVR is required.
 
 ![The Neolink.NET web UI: camera wall with resizable tiles and the event review strip](docs/screenshot.png)
 
+<table>
+  <tr>
+    <td width="33%"><a href="docs/events.png"><img src="docs/events.png" alt="Events page: deep-linkable event review with playback speed and HD/SD quality controls"></a><br><sub><b>Events page</b> — deep-linkable review, 1–16× playback, HD/SD</sub></td>
+    <td width="33%"><a href="docs/timeline.png"><img src="docs/timeline.png" alt="Timeline: synced multi-camera scrubbing with coverage bars, event marks and a footage calendar"></a><br><sub><b>Timeline</b> — synced scrubbing, event marks, footage calendar</sub></td>
+    <td width="33%"><a href="docs/camera-settings.png"><img src="docs/camera-settings.png" alt="Camera settings: stream encode tables, zoom/focus, lights — staged changes with a reboot warning before anything is sent"></a><br><sub><b>Camera settings</b> — staged changes, applied only when you say so</sub></td>
+  </tr>
+</table>
+
+*All screenshots show synthetic demo footage.*
+
 ## Features
 
 **RTSP bridge**
@@ -62,10 +72,14 @@ The cameras are unmodified and no Reolink NVR is required.
   center stage), **Free** (draggable, resizable floating windows)
 - Per-tile stream selection (main/sub), maximize/restore, browser fullscreen
 - **Camera settings & controls panel** (⚙ next to each camera): capabilities are
-  discovered from the camera itself — device info (model, firmware, serial), encode
-  profiles (resolution, framerate/bitrate options), battery status, and — where the
-  camera supports them — PTZ (press-and-hold pad), status LED / floodlight toggles,
-  PIR motion sensor on/off, and reboot
+  discovered from the camera itself — device info (model, firmware, serial), the
+  full stream encode tables (resolution with each one's framerate/bitrate menus),
+  battery status, and — where the camera supports them — PTZ (press-and-hold pad),
+  optical zoom & focus sliders, status LED / floodlight toggles with brightness and
+  auto-at-night mode, PIR on/off, a latched siren (sounds until you stop it),
+  privacy mode (beta), and reboot. Device settings **stage** and are sent only on
+  "Apply to camera" — with an up-front warning when a change restarts the stream
+  or can reboot the camera
 - **Battery cameras** (Argus etc.) are auto-detected: charge badge in the sidebar,
   sleep-friendly by default (the camera dozes while nobody watches), `always_on`
   per camera to hold it awake — see [Battery cameras](#battery-cameras-argus-etc)
@@ -79,7 +93,10 @@ The cameras are unmodified and no Reolink NVR is required.
   no YAML on the HA side
 - Motion / person / vehicle / animal `binary_sensor`s driven by the **camera's own
   detections** (event-driven, no server-side inference, no polling), plus battery,
-  night vision, floodlight, PIR, PTZ and reboot entities where the camera supports them
+  night vision, floodlight, PIR, PTZ, reboot, siren and privacy-mode entities where
+  the camera supports them — and a per-camera **Last event** sensor whose state is
+  the newest event's id, published the instant the event starts, so a notification's
+  tap action can deep-link straight to the exact clip (`/events?event={id}`)
 - **Video doorbells**: a button press is published as an MQTT event — surfacing
   in HA as an `event` entity (`device_class: doorbell`) for ring automations —
   and is also logged and recorded as a "Doorbell pressed" event with pre-roll
@@ -436,6 +453,8 @@ Add an `mqtt` section and Neolink connects to your broker and publishes
 [Home Assistant MQTT Discovery](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery)
 config, so a **device per camera** appears automatically — no YAML in HA.
 
+![A camera's Home Assistant device page: controls (floodlight, night vision, PTZ, privacy mode, siren, reboot), detection sensors and an activity feed — all auto-discovered over MQTT](docs/home-assistant.png)
+
 **Lightweight by design — the camera does the heavy lifting.** Neolink runs no
 object detection of its own: it never decodes, transcodes, or analyses a single
 video frame for motion or AI. All of that already happens *on the camera*, whose
@@ -736,21 +755,26 @@ GitHub**: build an image straight from your working tree, carry it over as a
 tar, and load it there. The Dockerfile copies `src/` as-is, so uncommitted
 edits are included.
 
-On the dev machine (repo root):
+On the dev machine (repo root). The image tag and tar name are FIXED
+(`neolink.net:test` → `neolink-test.tar`), so the server-side commands never
+change between test builds; only the `VERSION` label varies. Keep that label
+`X.Y.Z-something` — the update checker compares by the numeric prefix, and a
+label without one would see every release as an update:
 
 ```bash
-# a distinctive version string makes the test build unmistakable in the UI
-docker build -t neolink.net:0.8.3-mytest --build-arg VERSION=0.8.3-mytest .
+docker build -t neolink.net:test --build-arg VERSION=0.8.6-test .
 
-# sanity check, then export the image to a portable file
-docker run --rm --entrypoint dotnet neolink.net:0.8.3-mytest neolink.net.dll --version
-docker save neolink.net:0.8.3-mytest -o neolink.net-0.8.3-mytest.tar
+# sanity checks: the right version AND the right code (the suite runs in-image)
+docker run --rm --entrypoint dotnet neolink.net:test neolink.net.dll --version
+docker run --rm --entrypoint dotnet neolink.net:test neolink.net.dll selftest
+
+docker save neolink.net:test -o neolink-test.tar
 ```
 
 On the server (after copying the tar over):
 
 ```bash
-docker load -i neolink.net-0.8.3-mytest.tar
+docker load -i neolink-test.tar
 
 # replace the previous test container if one exists — a plain `docker start`
 # later would silently resurrect the OLD image, so remove it outright
@@ -762,7 +786,7 @@ docker run -d --name neolink-test \
   -e TZ=Europe/London \
   -v /srv/neolink/config:/config \
   -v /srv/neolink/recordings:/recordings \
-  neolink.net:0.8.3-mytest
+  neolink.net:test
 ```
 
 Notes:

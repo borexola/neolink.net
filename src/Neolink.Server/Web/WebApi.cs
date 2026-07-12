@@ -24,9 +24,12 @@ public sealed record WebStreamInfo(string Kind, string Path, IStreamHub Hub);
 /// <param name="SupportsEvents">False for generic RTSP cameras: no detection pushes, so event recording can't trigger.</param>
 /// <param name="Battery">Latest battery reading, or null (mains-powered / generic RTSP / unknown yet).</param>
 /// <param name="Asleep">Probe: is the camera intentionally disconnected so it can sleep (battery doze)?</param>
+/// <param name="SirenOn">Latest siren state the camera pushed, or null (no push yet / unsupported).</param>
+/// <param name="PrivacyOn">Latest privacy-mode state the camera pushed, or null (no push yet / unsupported).</param>
 public sealed record WebCameraInfo(string Name, List<WebStreamInfo> Streams, ICameraControl Control,
     HashSet<string>? PermittedUsers, Func<bool>? ContinuousActive = null, bool SupportsEvents = true,
-    Func<BatteryPush?>? Battery = null, Func<bool>? Asleep = null)
+    Func<BatteryPush?>? Battery = null, Func<bool>? Asleep = null,
+    Func<bool?>? SirenOn = null, Func<bool?>? PrivacyOn = null)
 {
     /// <summary>The camera's event recorder when server-side event recording runs —
     /// the shared entry point for on-demand clips (web UI button and HA switch).</summary>
@@ -68,8 +71,9 @@ public sealed class WebApiOptions
 ///   WS  /api/stream?path=...                — live fMP4 video (MSE-compatible)
 ///   GET /api/cameras/{name}/capabilities    — discovered device info + feature flags
 ///   GET /api/cameras/{name}/streaminfo      — encode profiles (resolution/fps/bitrate tables)
-///   POST/PUT .../settings/stream            — change an encode profile (needs http_address)
-///   GET/POST .../led /pir; POST .../ptz /reboot; GET .../battery — camera control
+///   GET/POST/PUT .../settings/stream        — current encode selection / change it (needs http_address)
+///   GET/POST .../led /pir /zoomfocus /floodlight /siren /privacy;
+///   POST .../ptz /reboot; GET .../battery   — camera control
 ///   GET /api/events[?camera=&amp;reviewed=&amp;limit=] — recorded detection events (when enabled)
 ///   GET /api/events/{id}[/clip /thumb]      — one event / its artifacts; POST .../review to (un)dismiss
 ///   GET/POST /api/cameras/{name}/recording  — per-camera recording switches + event-type filter
@@ -88,6 +92,10 @@ public static class WebApi
     private sealed record LedRequest(string? State, string? LightState);
     private sealed record PirRequest(bool? Enabled);
     private sealed record PtzRequest(string? Command, float? Speed);
+    private sealed record ZoomFocusRequest(uint? Zoom, uint? Focus);
+    private sealed record FloodlightRequest(int? Brightness, bool? Auto);
+    private sealed record SirenRequest(bool? On);
+    private sealed record PrivacyRequest(bool? On);
     private sealed record RecordOnDemandRequest(bool Active);
     private sealed record StreamSettingsRequest(string? Stream, uint? Width, uint? Height,
         uint? Framerate, uint? Bitrate);
@@ -496,6 +504,9 @@ public static class WebApi
                 // Battery cameras: intentionally disconnected (dozing) vs offline,
                 // plus the latest battery reading when the camera reports one.
                 asleep = c.Asleep?.Invoke() ?? false,
+                // Camera dark on purpose (privacy mode) — set from this UI OR the
+                // Reolink app; the pushes keep it current either way.
+                privacy = c.PrivacyOn?.Invoke() ?? false,
                 battery = c.Battery?.Invoke() is { } b
                     ? new { percent = b.Percent, charging = b.Charging }
                     : null,
@@ -624,6 +635,10 @@ public static class WebApi
                         // Gated on the server-wide beta switch: with ui.talk off,
                         // the UI never shows a mic button even on capable cameras.
                         talk = o.TalkEnabled && caps.Features.Talk,
+                        zoom = caps.Features.Zoom,
+                        siren = caps.Features.Siren,
+                        floodlight = caps.Features.Floodlight,
+                        privacy = caps.Features.Privacy,
                         streamSettings = control.CanSetStreamSettings,
                         // Baichuan-only: a generic RTSP camera can't be told to reboot
                         reboot = control is not GenericCameraControl,
@@ -670,6 +685,24 @@ public static class WebApi
             });
         app.MapPost("/api/cameras/{name}/settings/stream", SetStreamSettings);
         app.MapPut("/api/cameras/{name}/settings/stream", SetStreamSettings);
+
+        // The CURRENT encode selection per stream (what the Reolink app shows) —
+        // lets the UI preselect the real fps/bitrate, not the table defaults.
+        app.MapGet("/api/cameras/{name}/settings/stream", (string name, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: false, async (control, reqCt) =>
+            {
+                var enc = await control.GetStreamSettingsAsync(reqCt);
+                return enc == null
+                    ? Results.Json(new { error = "reading stream settings requires the camera's http_address" }, statusCode: 404)
+                    : Results.Json(enc.Select(s => new
+                    {
+                        stream = s.Stream,
+                        width = s.Width,
+                        height = s.Height,
+                        framerate = s.Framerate,
+                        bitrate = s.Bitrate,
+                    }));
+            }));
 
         app.MapGet("/api/cameras/{name}/battery", (string name, HttpContext ctx) =>
             ExecAsync(name, ctx, mutating: false, async (control, reqCt) =>
@@ -735,6 +768,103 @@ public static class WebApi
             {
                 await control.RebootAsync(reqCt);
                 return Results.Json(new { ok = true });
+            }));
+
+        // Optical zoom & focus (zoom-lens cameras): absolute positions with ranges.
+        app.MapGet("/api/cameras/{name}/zoomfocus", (string name, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: false, async (control, reqCt) =>
+            {
+                var zf = await control.GetZoomFocusAsync(reqCt);
+                if (zf == null)
+                    return Results.Json(new { error = "no zoom/focus on this camera" }, statusCode: 404);
+                static object? Pos(XElement? el) => el == null ? null : new
+                {
+                    cur = (long?)el.Element("curPos") ?? 0,
+                    min = (long?)el.Element("minPos") ?? 0,
+                    max = (long?)el.Element("maxPos") ?? 0,
+                };
+                return Results.Json(new { zoom = Pos(zf.Element("zoom")), focus = Pos(zf.Element("focus")) });
+            }));
+
+        app.MapPost("/api/cameras/{name}/zoomfocus", (string name, ZoomFocusRequest req, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: true, async (control, reqCt) =>
+            {
+                if (req.Zoom == null && req.Focus == null)
+                    return Results.Json(new { error = "provide zoom and/or focus (absolute position)" }, statusCode: 400);
+                if (req.Zoom is { } z) await control.SetZoomFocusAsync("zoomPos", z, reqCt);
+                if (req.Focus is { } f) await control.SetZoomFocusAsync("focusPos", f, reqCt);
+                return Results.Json(new { ok = true });
+            }));
+
+        // Manual siren. POST {on:true} latches it until {on:false}; a body without
+        // "on" plays one burst. GET answers the last state the camera pushed.
+        app.MapGet("/api/cameras/{name}/siren", (string name, HttpContext ctx) =>
+        {
+            var cam = cameras.FirstOrDefault(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase));
+            if (cam == null)
+                return Results.Json(new { error = $"unknown camera '{name}'" }, statusCode: 404);
+            if (CheckAuth(ctx, cam) is { } denied)
+                return denied;
+            return Results.Json(new { on = cam.SirenOn?.Invoke() });
+        });
+
+        app.MapPost("/api/cameras/{name}/siren", (string name, SirenRequest req, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: true, async (control, reqCt) =>
+            {
+                await control.SirenAsync(req.On, reqCt);
+                return Results.Json(new { ok = true, on = req.On });
+            }));
+
+        // Privacy mode: the camera goes dark (no video, no detections) until
+        // switched back. GET reads live from the camera.
+        app.MapGet("/api/cameras/{name}/privacy", (string name, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: false, async (control, reqCt) =>
+            {
+                var on = await control.GetPrivacyModeAsync(reqCt);
+                return on == null
+                    ? Results.Json(new { error = "privacy mode is not supported by this camera" }, statusCode: 404)
+                    : Results.Json(new { on });
+            }));
+
+        app.MapPost("/api/cameras/{name}/privacy", (string name, PrivacyRequest req, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: true, async (control, reqCt) =>
+            {
+                if (req.On == null)
+                    return Results.Json(new { error = "provide on: true|false" }, statusCode: 400);
+                await control.SetPrivacyModeAsync(req.On.Value, reqCt);
+                return Results.Json(new { ok = true, on = req.On });
+            }));
+
+        // Floodlight behavior (cameras with a spotlight): brightness and the
+        // "turn on with motion at night" switch. Read-modify-write of the
+        // camera's own FloodlightTask XML — unknown fields ride along verbatim.
+        app.MapGet("/api/cameras/{name}/floodlight", (string name, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: false, async (control, reqCt) =>
+            {
+                var task = await control.GetFloodlightTasksAsync(reqCt);
+                return task == null
+                    ? Results.Json(new { error = "no floodlight tasks on this camera" }, statusCode: 404)
+                    : Results.Json(ShapeFloodlight(task));
+            }));
+
+        app.MapPost("/api/cameras/{name}/floodlight", (string name, FloodlightRequest req, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: true, async (control, reqCt) =>
+            {
+                if (req.Brightness == null && req.Auto == null)
+                    return Results.Json(new { error = "provide brightness (percent) and/or auto (bool)" }, statusCode: 400);
+                var task = await control.GetFloodlightTasksAsync(reqCt);
+                if (task == null)
+                    return Results.Json(new { error = "no floodlight tasks on this camera" }, statusCode: 404);
+                if (req.Brightness is { } b)
+                {
+                    long min = (long?)task.Element("brightness_min") ?? 1;
+                    long max = (long?)task.Element("brightness_max") ?? 100;
+                    task.SetElementValue("brightness_cur", Math.Clamp(b, min, max));
+                }
+                if (req.Auto is { } auto)
+                    task.SetElementValue("enable", auto ? 1 : 0);
+                await control.SetFloodlightTasksAsync(task, reqCt);
+                return Results.Json(ShapeFloodlight(task));
             }));
 
         // On-demand clip capture: start records ONE clip capped at
@@ -1192,6 +1322,17 @@ public static class WebApi
     /// reach clients without a typed model. Leaves: numbers stay numbers; repeated
     /// element names become arrays; attributes are prefixed with '@'.
     /// </summary>
+    /// <summary>The floodlight-task fields the UI binds to, out of the camera's
+    /// (much larger) FloodlightTask XML. Field names follow the wire format.</summary>
+    private static object ShapeFloodlight(XElement task) => new
+    {
+        brightness = (long?)task.Element("brightness_cur") ?? 0,
+        brightnessMin = (long?)task.Element("brightness_min") ?? 1,
+        brightnessMax = (long?)task.Element("brightness_max") ?? 100,
+        // "enable" arms the camera's own turn-on-with-motion-at-night behavior.
+        auto = ((long?)task.Element("enable") ?? 0) == 1,
+    };
+
     private static object? XmlToJson(XElement el)
     {
         if (!el.HasElements)

@@ -196,6 +196,12 @@ public sealed class DeviceInfoXml
     public uint Width;
     public uint Height;
 
+    /// <summary>Whether the login DeviceInfo advertises a &lt;sleep&gt; element —
+    /// Reolink's actual support signal for Privacy Mode. Firmware without the
+    /// feature still answers the state query, so this is the reliable gate
+    /// (it is what Home Assistant's reolink library keys on too).</summary>
+    public bool HasSleep;
+
     public static DeviceInfoXml Parse(XElement el)
     {
         var info = new DeviceInfoXml();
@@ -206,6 +212,7 @@ public sealed class DeviceInfoXml
             info.Width = (uint?)res.Element("width") ?? 0;
             info.Height = (uint?)res.Element("height") ?? 0;
         }
+        info.HasSleep = el.Descendants("sleep").Any();
         return info;
     }
 }

@@ -37,6 +37,9 @@ public sealed class GenericCameraControl : ICameraControl
 
     public bool CanSetStreamSettings => false;
 
+    public Task<IReadOnlyList<StreamEncSetting>?> GetStreamSettingsAsync(CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<StreamEncSetting>?>(null);
+
     public Task SetStreamSettingsAsync(string stream, uint? width, uint? height,
         uint? framerate, uint? bitrate, CancellationToken ct) =>
         throw new NotSupportedException("stream settings are not available for generic RTSP cameras");
@@ -60,6 +63,24 @@ public sealed class GenericCameraControl : ICameraControl
 
     public Task RebootAsync(CancellationToken ct) =>
         throw new NotSupportedException("reboot is not available for generic RTSP cameras");
+
+    public Task<XElement?> GetZoomFocusAsync(CancellationToken ct) => Task.FromResult<XElement?>(null);
+
+    public Task SetZoomFocusAsync(string command, uint movePos, CancellationToken ct) =>
+        throw new NotSupportedException("zoom/focus is not available for generic RTSP cameras");
+
+    public Task SirenAsync(bool? on, CancellationToken ct) =>
+        throw new NotSupportedException("the siren is not available for generic RTSP cameras");
+
+    public Task<bool?> GetPrivacyModeAsync(CancellationToken ct) => Task.FromResult<bool?>(null);
+
+    public Task SetPrivacyModeAsync(bool on, CancellationToken ct) =>
+        throw new NotSupportedException("privacy mode is not available for generic RTSP cameras");
+
+    public Task<XElement?> GetFloodlightTasksAsync(CancellationToken ct) => Task.FromResult<XElement?>(null);
+
+    public Task SetFloodlightTasksAsync(XElement task, CancellationToken ct) =>
+        throw new NotSupportedException("floodlight control is not available for generic RTSP cameras");
 
     public Task TalkAsync(int sampleRate, System.Threading.Channels.ChannelReader<byte[]> pcm, CancellationToken ct) =>
         throw new NotSupportedException("two-way talk is not available for generic RTSP cameras");

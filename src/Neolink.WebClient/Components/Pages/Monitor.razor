@@ -68,8 +68,16 @@
                 <div class="mon-card">
                     <span class="mon-card-label">DISK FREE</span>
                     <span class="mon-card-value" style="color:@DiskColor()">@(Last is { DTot: > 0 } s3 ? Bytes(s3.DFree) : "—")</span>
-                    <span class="mon-card-sub">@(_info?.Disk ?? "volume")@(Last is { Rec: >= 0 } s4 ? $" · recordings {Bytes(s4.Rec)}" : "")</span>
+                    <span class="mon-card-sub">@(_info?.Disk ?? "volume")@(Last is { DTot: > 0 } su ? $" · {(su.DTot - su.DFree) * 100.0 / su.DTot:0}% used" : "")</span>
                 </div>
+                @if (Last is { Rec: >= 0 })
+                {
+                    <div class="mon-card">
+                        <span class="mon-card-label">RECORDINGS</span>
+                        <span class="mon-card-value">@(Last is { } sr ? Bytes(sr.Rec) : "—")</span>
+                        <span class="mon-card-sub">footage on disk@(Last is { DTot: > 0 } sp ? $" · {sp.Rec * 100.0 / sp.DTot:0.#}% of the volume" : "")</span>
+                    </div>
+                }
                 <div class="mon-card">
                     <span class="mon-card-label">VIEWERS</span>
                     <span class="mon-card-value">@(Last?.View.ToString() ?? "—")</span>
@@ -120,6 +128,12 @@
                                   })" />
                 <MonChart Title="Storage writes" Unit=" MB/s" WindowSec="_windowSec"
                           Series="@(new() { new("to disk", Amber, Pts(s => s.WMb)) })" />
+                @if (Last is { Rec: >= 0 })
+                {
+                    <MonChart Title="Recordings size" Unit=" GB" WindowSec="_windowSec"
+                              Series="@(new() { new("footage", Green,
+                                          _samples.Where(s => s.Rec >= 0).Select(s => (s.T, s.Rec / Gb)).ToList()) })" />
+                }
             </div>
 
             @* ---------------- cameras ---------------- *@
@@ -127,22 +141,24 @@
             {
                 <div class="mon-section">
                     <span class="mon-section-title">CAMERAS</span>
-                    <span class="mon-section-sub">availability as seen from this server · last 24 h or since start</span>
+                    <span class="mon-section-sub">availability as seen from this server · showing the selected @WindowLabel() window</span>
                 </div>
 
                 <div class="mon-avail-grid">
                     @foreach (var a in _avail)
                     {
+                        var runs = WindowRuns(a);
+                        var st = WindowStats(a, runs);
                         <div class="mon-avail-card">
                             <div class="mon-avail-head">
                                 <span class="mon-avail-dot @(a.On ? "up" : "down")"></span>
                                 <span class="mon-avail-name" title="@a.Cam">@a.Cam</span>
-                                <span class="mon-avail-grade @GradeClass(a.Pct)"
-                                      title="@GradeHint(a.Pct)">@Grade(a.Pct)</span>
-                                <span class="mon-avail-pct" style="color:@PctColor(a.Pct)">@PctLabel(a.Pct)%</span>
+                                <span class="mon-avail-grade @GradeClass(st.Pct)"
+                                      title="@GradeHint(st.Pct)">@Grade(st.Pct)</span>
+                                <span class="mon-avail-pct" style="color:@PctColor(st.Pct)">@PctLabel(st.Pct)%</span>
                             </div>
                             <div class="mon-avail-ribbon" aria-label="uptime timeline">
-                                @foreach (var seg in RibbonSegs(a))
+                                @foreach (var seg in RibbonSegs(runs))
                                 {
                                     <span class="mon-avail-seg @(seg.On ? "up" : "down")"
                                           style="width:@seg.Width%" title="@seg.Title"></span>
@@ -150,7 +166,7 @@
                             </div>
                             <div class="mon-avail-sub">
                                 <span>@(a.On ? "online" : "offline") for @Dur(NowMs() - a.Since)</span>
-                                <span>@OutageLabel(a)</span>
+                                <span>@OutageLabel(st)</span>
                             </div>
                         </div>
                     }
@@ -200,7 +216,8 @@
 
             <div class="mon-foot">
                 @(_samples.Count) backend samples · @(_browser.Count) browser samples ·
-                history covers the last hour · charts show the selected window
+                history covers 24 h (full 2 s detail for the last hour, one-minute
+                averages beyond) · everything on this page follows the selected window
             </div>
         </div>
     }
@@ -214,8 +231,12 @@
     private const string Purple = "#b06bff";
     private const string Red = "#ff5f6b";
     private const double Mb = 1024.0 * 1024.0;
+    private const double Gb = Mb * 1024.0;
 
-    private static readonly (string Label, int Sec)[] Windows = { ("5m", 300), ("15m", 900), ("1h", 3600) };
+    // Up to 1h the charts show full 2s detail; 6h/24h ride the server's
+    // one-minute aggregate tier (24h is the whole history the server keeps).
+    private static readonly (string Label, int Sec)[] Windows =
+        { ("5m", 300), ("15m", 900), ("1h", 3600), ("6h", 21600), ("24h", 86400) };
 
     private string _server = "";
     private string _origin = "";
@@ -327,8 +348,9 @@
             _info ??= stats.Info;
             if (stats.Avail is { Count: > 0 } av) _avail = av;
             _samples.AddRange(stats.Samples);
-            // Mirror the server's ring: an hour at 2s.
-            if (_samples.Count > 1800) _samples.RemoveRange(0, _samples.Count - 1800);
+            // Mirror the server's tiers: 2s detail for the last hour, ~1/min
+            // beyond, nothing past 24h — a tab left open all day stays light.
+            Compact(_samples, s => s.T);
         }
         catch (Exception ex)
         {
@@ -368,9 +390,31 @@
                 p.Fps,
                 sw.Elapsed.TotalMilliseconds,
                 p.DomNodes));
-            if (_browser.Count > 1800) _browser.RemoveRange(0, _browser.Count - 1800);
+            Compact(_browser, b => b.T);
         }
         catch { /* circuit hiccup: skip this beat */ }
+    }
+
+    /// <summary>Time-based history budget shared by both sample lists: full detail
+    /// for the last hour, thinned to ~one per minute beyond, dropped after 24h.</summary>
+    private static void Compact<T>(List<T> list, Func<T, long> time)
+    {
+        if (list.Count < 2000) return; // nothing worth compacting yet
+        long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        long dayCutoff = now - 24L * 3600 * 1000;
+        long fineCutoff = now - 3600L * 1000;
+        var kept = new List<T>(list.Count);
+        long lastKept = long.MinValue;
+        foreach (var item in list)
+        {
+            long t = time(item);
+            if (t < dayCutoff) continue;
+            if (t < fineCutoff && t - lastKept < 55_000) continue;
+            kept.Add(item);
+            lastKept = t;
+        }
+        list.Clear();
+        list.AddRange(kept);
     }
 
     // ------------------------------------------------------------ chart data
@@ -384,27 +428,56 @@
     // ------------------------------------------------------------ availability
 
     private sealed record Seg(bool On, string Width, string Title);
+    private sealed record ClampedRun(long Start, long End, bool On);
+    private sealed record WinStats(double Pct, int Outs, long Longest, long Obs);
 
     private static long NowMs() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
-    /// <summary>Status-page ribbon: one span per online/offline run, widths as % of the observed window.</summary>
-    private static IEnumerable<Seg> RibbonSegs(ApiCamAvail a)
+    private string WindowLabel() => Windows.FirstOrDefault(w => w.Sec == _windowSec).Label ?? "1h";
+
+    /// <summary>The camera's online/offline runs clamped to the selected window —
+    /// ribbon and stats both derive from this, so the cards obey the filter.</summary>
+    private List<ClampedRun> WindowRuns(ApiCamAvail a)
     {
-        if (a.Runs.Count == 0) yield break;
         long now = NowMs();
-        long start = a.Runs[0][0];
-        double span = Math.Max(1, now - start);
+        long winStart = now - (long)_windowSec * 1000;
+        var runs = new List<ClampedRun>();
         for (int i = 0; i < a.Runs.Count; i++)
         {
             long s = a.Runs[i][0];
             long e = i + 1 < a.Runs.Count ? a.Runs[i + 1][0] : now;
-            if (e <= s) continue;
-            bool on = a.Runs[i][1] == 1;
-            var st = DateTimeOffset.FromUnixTimeMilliseconds(s).ToLocalTime();
-            var en = DateTimeOffset.FromUnixTimeMilliseconds(e).ToLocalTime();
-            yield return new Seg(on,
-                ((e - s) / span * 100).ToString("0.###", CultureInfo.InvariantCulture),
-                $"{(on ? "online" : "offline")} {st:HH:mm}–{en:HH:mm} ({Dur(e - s)})");
+            if (e <= winStart || e <= s) continue;
+            runs.Add(new ClampedRun(Math.Max(s, winStart), e, a.Runs[i][1] == 1));
+        }
+        return runs;
+    }
+
+    /// <summary>Uptime/outage figures over the clamped window only.</summary>
+    private static WinStats WindowStats(ApiCamAvail a, List<ClampedRun> runs)
+    {
+        if (runs.Count == 0) return new(a.On ? 100 : 0, 0, 0, 0);
+        long obs = runs[^1].End - runs[0].Start;
+        long online = runs.Where(r => r.On).Sum(r => r.End - r.Start);
+        var outages = runs.Where(r => !r.On).ToList();
+        return new(
+            obs <= 0 ? 100 : online * 100.0 / obs,
+            outages.Count,
+            outages.Count == 0 ? 0 : outages.Max(r => r.End - r.Start),
+            obs);
+    }
+
+    /// <summary>Status-page ribbon: one span per run, widths as % of the observed span.</summary>
+    private static IEnumerable<Seg> RibbonSegs(List<ClampedRun> runs)
+    {
+        if (runs.Count == 0) yield break;
+        double span = Math.Max(1, runs[^1].End - runs[0].Start);
+        foreach (var r in runs)
+        {
+            var st = DateTimeOffset.FromUnixTimeMilliseconds(r.Start).ToLocalTime();
+            var en = DateTimeOffset.FromUnixTimeMilliseconds(r.End).ToLocalTime();
+            yield return new Seg(r.On,
+                ((r.End - r.Start) / span * 100).ToString("0.###", CultureInfo.InvariantCulture),
+                $"{(r.On ? "online" : "offline")} {st:HH:mm}–{en:HH:mm} ({Dur(r.End - r.Start)})");
         }
     }
 
@@ -424,9 +497,9 @@
     private static string PctColor(double pct) =>
         pct >= 99 ? "var(--ok)" : pct >= 90 ? "#ffb020" : "var(--err)";
 
-    private static string OutageLabel(ApiCamAvail a) => a.Outs == 0
-        ? $"no outages in {Dur(a.Obs)}"
-        : $"{a.Outs} outage{(a.Outs == 1 ? "" : "s")} · longest {Dur(a.Longest)}";
+    private static string OutageLabel(WinStats st) => st.Outs == 0
+        ? $"no outages in {Dur(st.Obs)}"
+        : $"{st.Outs} outage{(st.Outs == 1 ? "" : "s")} · longest {Dur(st.Longest)}";
 
     private static string Dur(long ms)
     {

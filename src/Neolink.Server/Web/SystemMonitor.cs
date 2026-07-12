@@ -24,15 +24,20 @@ public readonly record struct SystemSample(
     long StorageFiles);      // recording files completed since the server started
 
 /// <summary>
-/// Samples the server's resource usage every 2 seconds into a fixed ring buffer
-/// (one hour deep) for the web UI's monitor page. Everything is measured from
-/// inside the process — no perf counters, no OS-specific dependencies — so it
-/// works the same on Windows, Linux and in containers.
+/// Samples the server's resource usage every 2 seconds for the web UI's monitor
+/// page. Two fixed rings hold the history: full 2s detail for the last hour,
+/// plus one-minute aggregates covering the last 24 hours (≈160 KB total — the
+/// deep history is effectively free). Everything is measured from inside the
+/// process — no perf counters, no OS-specific dependencies — so it works the
+/// same on Windows, Linux and in containers.
 /// </summary>
 public sealed class SystemMonitor
 {
     public static readonly TimeSpan SamplePeriod = TimeSpan.FromSeconds(2);
-    private const int Capacity = 1800;                    // 1 hour at 2s
+    public static readonly TimeSpan History = TimeSpan.FromHours(24);
+    private const int Capacity = 1800;                    // 1 hour at 2s (full detail)
+    private const int MinuteCapacity = 1440;              // 24 hours at 1 min (aggregates)
+    private const int TicksPerMinute = 30;                // fine samples folded into one aggregate
     private const int RecordingsSizeEveryTicks = 30;      // walking the tree is expensive: once a minute
 
     private readonly string _diskProbePath;
@@ -44,6 +49,14 @@ public sealed class SystemMonitor
     private readonly SystemSample[] _ring = new SystemSample[Capacity];
     private int _count;
     private int _next;
+
+    // Minute tier: rates are averaged over the minute (a spike still shows as a
+    // raised average), gauges keep their last value. Feeds windows beyond 1 h.
+    private readonly SystemSample[] _minuteRing = new SystemSample[MinuteCapacity];
+    private int _minuteCount;
+    private int _minuteNext;
+    private double _aggCpu, _aggAlloc, _aggStorage;
+    private int _aggN;
 
     private TimeSpan _prevCpu;
     private DateTime _prevWall;
@@ -97,14 +110,25 @@ public sealed class SystemMonitor
         startUtcMs = StartedUtc.ToUnixTimeMilliseconds(),
         disk = SafeVolumeName(),
         samplePeriodMs = (long)SamplePeriod.TotalMilliseconds,
+        historyMs = (long)History.TotalMilliseconds,
     };
 
-    /// <summary>Samples newer than <paramref name="afterUnixMs"/>, oldest first.</summary>
+    /// <summary>
+    /// Samples newer than <paramref name="afterUnixMs"/>, oldest first: minute
+    /// aggregates for the deep past, full 2s detail once the fine ring covers it.
+    /// </summary>
     public List<SystemSample> Since(long afterUnixMs)
     {
         lock (_gate)
         {
-            var result = new List<SystemSample>(_count);
+            var result = new List<SystemSample>(_count + _minuteCount);
+            long fineOldest = _count == 0 ? long.MaxValue
+                : _ring[(_next - _count + Capacity) % Capacity].UnixMs;
+            for (int i = 0; i < _minuteCount; i++)
+            {
+                var s = _minuteRing[(_minuteNext - _minuteCount + i + MinuteCapacity) % MinuteCapacity];
+                if (s.UnixMs > afterUnixMs && s.UnixMs < fineOldest) result.Add(s);
+            }
             for (int i = 0; i < _count; i++)
             {
                 var s = _ring[(_next - _count + i + Capacity) % Capacity];
@@ -211,6 +235,24 @@ public sealed class SystemMonitor
             _ring[_next] = sample;
             _next = (_next + 1) % Capacity;
             if (_count < Capacity) _count++;
+
+            // Fold this minute's rates into one aggregate for the 24h tier.
+            _aggCpu += sample.CpuPercent;
+            _aggAlloc += sample.AllocMbPerSec;
+            _aggStorage += sample.StorageMbPerSec;
+            if (++_aggN >= TicksPerMinute)
+            {
+                _minuteRing[_minuteNext] = sample with
+                {
+                    CpuPercent = Math.Round(_aggCpu / _aggN, 2),
+                    AllocMbPerSec = Math.Round(_aggAlloc / _aggN, 2),
+                    StorageMbPerSec = Math.Round(_aggStorage / _aggN, 2),
+                };
+                _minuteNext = (_minuteNext + 1) % MinuteCapacity;
+                if (_minuteCount < MinuteCapacity) _minuteCount++;
+                _aggCpu = _aggAlloc = _aggStorage = 0;
+                _aggN = 0;
+            }
         }
     }
 

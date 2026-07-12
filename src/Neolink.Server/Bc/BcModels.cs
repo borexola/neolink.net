@@ -42,13 +42,19 @@ public static class BcConstants
     public const uint MsgIdUdpKeepAlive = 234;
     public const uint MsgIdBatteryInfoList = 252;
     public const uint MsgIdBatteryInfo = 253;
+    public const uint MsgIdPlayAudio = 263;            // "audioPlayInfo" — manual siren trigger
+    public const uint MsgIdFloodlightManual = 288;
+    public const uint MsgIdFloodlightTasksWrite = 290;
     public const uint MsgIdFloodlightStatusList = 291;
     public const uint MsgIdGetZoomFocus = 294;
     public const uint MsgIdSetZoomFocus = 295;
+    public const uint MsgIdFloodlightTasksRead = 438;
     public const uint MsgIdNetInfo = 464;
+    public const uint MsgIdSleepState = 574;           // privacy-mode read (reply carries <sleep>)
+    public const uint MsgIdSetSleepState = 575;        // privacy-mode write (<sleepState> body)
     public const uint MsgIdSirenStatusList = 547;
     public const uint MsgIdSmartAiEventList = 600; // "yoloWorldEventList" pushes on newer firmware
-    public const uint MsgIdSleepStatus = 623;
+    public const uint MsgIdSleepStatus = 623;      // privacy-mode pushes AND write (<sleepState>)
 
     // Message classes. The class dictates the header size:
     //  0x6514: legacy, 20 byte header (initial login)

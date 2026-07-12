@@ -140,8 +140,10 @@ html, body {
 
 .notice.error { color: var(--err); }
 
-/* Unsaved server-settings edits: amber so it reads as "action needed", not failure */
-.notice.pending {
+/* Unsaved edits / disruptive-change warnings: amber reads as "action needed",
+   not failure (server settings pending bar, camera-panel apply warnings). */
+.notice.pending,
+.notice.warn {
     color: #e8b054;
     border: 1px solid color-mix(in srgb, #e8b054 40%, transparent);
     background: color-mix(in srgb, #e8b054 9%, transparent);
@@ -225,7 +227,8 @@ html, body {
 .cam-battery.battery-low { color: var(--err); }
 
 /* Battery camera intentionally sleeping (as opposed to unreachable) */
-.cam-doze-badge {
+.cam-doze-badge,
+.cam-privacy-badge {
     display: inline-flex;
     align-items: center;
     gap: 3px;
@@ -581,6 +584,34 @@ html, body {
 
 /* Applies wherever a live player renders a status overlay (grid tiles, quick view) */
 video[data-live="1"] ~ .tile-status { display: none; }
+
+/* Privacy mode: an OPAQUE cover so neither a frozen last frame nor the player's
+   own status text shows through. Rendered by Blazor from the camera's state. */
+.tile-privacy {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    background: var(--panel-2);
+    color: var(--muted);
+    font-size: 13px;
+    letter-spacing: 1px;
+    z-index: 2;
+    pointer-events: none;
+}
+
+.tile-privacy-icon { font-size: 26px; }
+
+.tile-privacy small {
+    font-size: 11px;
+    opacity: 0.7;
+    letter-spacing: 0.4px;
+    max-width: 80%;
+    text-align: center;
+}
 
 .tile-bar {
     position: absolute;
@@ -1302,6 +1333,28 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     border: 1px solid var(--line);
     border-radius: 10px;
     padding: 10px 12px;
+}
+
+/* Staged-edits bar: pinned to the panel's bottom edge (mirror of .campanel-head)
+   so Apply/Discard and the disruption warning never scroll out of sight. */
+.campanel-pending {
+    position: sticky;
+    bottom: -16px; /* campanel padding: pin flush to the panel edge */
+    background: var(--panel);
+    border-top: 1px solid var(--line);
+    margin: 0 -16px -16px;
+    padding: 10px 16px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    z-index: 2;
+}
+
+.campanel-pending-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
 }
 
 /* Server settings: head and foot pinned, only the sections scroll — the
@@ -2699,6 +2752,12 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     align-items: center;
     gap: 6px;
     margin-top: 2px;
+    flex-wrap: wrap; /* speed + quality groups wrap on narrow screens */
+}
+
+/* The HD/SD group sits apart from the speed chips. */
+.player-quality-label {
+    margin-left: 10px;
 }
 
 /* Admin server-settings fields */
@@ -3273,6 +3332,58 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 }
 
 .stream-chip.chip-active:hover { border-color: var(--accent); color: var(--accent); }
+
+/* Small BETA pill for features still proving themselves on real hardware. */
+.beta-tag {
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    color: #e8b054;
+    border: 1px solid color-mix(in srgb, #e8b054 50%, transparent);
+    border-radius: 4px;
+    padding: 1px 5px;
+    vertical-align: 1px;
+}
+
+/* A staged (not yet applied) camera-setting value: amber + dashed = provisional. */
+.chip-pending,
+.chip.chip-pending {
+    border: 1px dashed #e8b054;
+    color: #e8b054;
+}
+
+select.input-pending {
+    border-color: #e8b054;
+    color: #e8b054;
+}
+
+/* Zoom/focus + floodlight-brightness sliders in the camera panel */
+.zf-slider {
+    flex: 1;
+    min-width: 90px;
+    accent-color: var(--accent);
+}
+
+.zf-slider.input-pending { accent-color: #e8b054; }
+
+.zf-pos {
+    min-width: 52px;
+    text-align: right;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+    font-size: 12px;
+}
+
+/* Per-stream fps/bitrate pickers next to the resolution chips */
+.stream-tune select {
+    font-size: 12px;
+    padding: 3px 6px;
+}
+
+.stream-tune.tune-pending select {
+    border-color: #e8b054;
+    color: #e8b054;
+}
 
 .notice.small { font-size: 11px; padding-top: 8px; }
 

@@ -17,7 +17,11 @@ public sealed class CameraOfflineException : Exception
 }
 
 /// <summary>Features a camera was found to support, discovered by probing.</summary>
-public sealed record CameraFeatures(bool Ptz, bool Led, bool Pir, bool Battery, bool Talk);
+public sealed record CameraFeatures(bool Ptz, bool Led, bool Pir, bool Battery, bool Talk,
+    bool Zoom = false, bool Siren = false, bool Floodlight = false, bool Privacy = false);
+
+/// <summary>One stream's current encode selection (Baichuan stream naming).</summary>
+public sealed record StreamEncSetting(string Stream, uint Width, uint Height, uint Framerate, uint Bitrate);
 
 /// <summary>Discovered camera capabilities: identity, advertised support flags, probed features.</summary>
 public sealed record CameraCapabilities(VersionInfoXml? Version, XElement? Support, CameraFeatures Features);
@@ -40,6 +44,12 @@ public interface ICameraControl
     bool CanSetStreamSettings { get; }
 
     /// <summary>
+    /// The CURRENT encode selection of each stream (what the Reolink app shows),
+    /// read via the camera's HTTP API — null when no http_address is configured.
+    /// </summary>
+    Task<IReadOnlyList<StreamEncSetting>?> GetStreamSettingsAsync(CancellationToken ct);
+
+    /// <summary>
     /// Changes one stream's encode settings via the camera's Reolink HTTP API.
     /// The camera restarts the affected stream to apply them.
     /// </summary>
@@ -56,6 +66,27 @@ public interface ICameraControl
     Task SetPirEnabledAsync(bool enabled, CancellationToken ct);
     Task PtzAsync(string command, float speed, CancellationToken ct);
     Task RebootAsync(CancellationToken ct);
+
+    /// <summary>Raw &lt;PtzZoomFocus&gt; XML (zoom/focus positions + ranges), or null if unsupported.</summary>
+    Task<XElement?> GetZoomFocusAsync(CancellationToken ct);
+
+    /// <summary>Drives optical zoom ("zoomPos") or focus ("focusPos") to an absolute position.</summary>
+    Task SetZoomFocusAsync(string command, uint movePos, CancellationToken ct);
+
+    /// <summary>Latches the siren: true = sounds until stopped, false = stop. Null = one burst.</summary>
+    Task SirenAsync(bool? on, CancellationToken ct);
+
+    /// <summary>Whether privacy mode (camera dark, no video) is on; null when unsupported.</summary>
+    Task<bool?> GetPrivacyModeAsync(CancellationToken ct);
+
+    /// <summary>Turns privacy mode on or off.</summary>
+    Task SetPrivacyModeAsync(bool on, CancellationToken ct);
+
+    /// <summary>Raw &lt;FloodlightTask&gt; XML (brightness, auto mode, schedule), or null if unsupported.</summary>
+    Task<XElement?> GetFloodlightTasksAsync(CancellationToken ct);
+
+    /// <summary>Writes back a (modified) &lt;FloodlightTask&gt; from <see cref="GetFloodlightTasksAsync"/>.</summary>
+    Task SetFloodlightTasksAsync(XElement task, CancellationToken ct);
 
     /// <summary>
     /// Two-way talk: streams 16-bit LE mono PCM chunks at <paramref name="sampleRate"/>
@@ -132,29 +163,78 @@ public sealed class CameraControl : ICameraControl
             // sequentially the silent ones stack up to 4s each — long enough for the
             // UI's HTTP timeout to abort the first panel open after a reconnect.
             bool ptz = SupportFlag(support, "ptzMode") || SupportFlag(support, "ptzCfg");
+            // Siren comes from the Support flags alone — its only "probe" command
+            // PLAYS the siren, which is not something discovery may ever do.
+            bool siren = SupportFlag(support, "supportAudioAlarm")
+                         || SupportFlag(support, "audioAlarm")
+                         || SupportFlag(support, "supportAudioAlarmEnable");
             var ledTask = ProbeAsync(() => camera.GetLedStateAsync(ProbeTimeout, ct));
             var pirTask = ProbeAsync(() => camera.GetPirStateAsync(ProbeTimeout, ct));
             var batteryTask = ProbeAsync(() => camera.GetBatteryInfoAsync(ProbeTimeout, ct));
             var talkTask = TryAsync(() => camera.GetTalkAbilityAsync(ProbeTimeout, ct));
-            await Task.WhenAll(ledTask, pirTask, batteryTask, talkTask).ConfigureAwait(false);
+            var zoomTask = TryAsync(() => camera.GetZoomFocusAsync(ProbeTimeout, ct));
+            var floodTask = TryAsync(() => camera.GetFloodlightTasksAsync(ProbeTimeout, ct));
+            // Privacy mode is only real when the login DeviceInfo advertises a
+            // <sleep> element (Reolink's support signal — E1/E-series/doorbell).
+            // Other firmware happily ANSWERS the state query but ignores writes,
+            // so probing the query alone over-detects.
+            var privacyTask = camera.DeviceInfo?.HasSleep == true
+                ? ProbeValueAsync(() => camera.GetPrivacyModeAsync(ProbeTimeout, ct))
+                : Task.FromResult<bool?>(null);
+            await Task.WhenAll(ledTask, pirTask, batteryTask, talkTask, zoomTask, floodTask, privacyTask).ConfigureAwait(false);
             bool led = ledTask.Result;
             bool pir = pirTask.Result;
             bool battery = batteryTask.Result;
             bool talk = talkTask.Result != null
                 && talkTask.Result.AudioType.Equals("adpcm", StringComparison.OrdinalIgnoreCase);
+            // A real zoom lens reports a usable range; fixed-lens cameras answer
+            // with max 0 (or not at all) and get no zoom UI.
+            bool zoom = ZoomMax(zoomTask.Result) > 0;
+            bool floodlight = floodTask.Result != null;
+            bool privacy = privacyTask.Result != null; // camera answered the sleep query
 
-            _caps = new CameraCapabilities(version, support, new CameraFeatures(ptz, led, pir, battery, talk));
+            _caps = new CameraCapabilities(version, support, new CameraFeatures(
+                ptz, led, pir, battery, talk, zoom, siren, floodlight, privacy));
             _capsSession = camera;
             Log.Info($"{CameraName}: capabilities discovered " +
                      $"(ptz={ptz}, led={led}, pir={pir}, battery={battery}, talk={talk}" +
+                     $", zoom={zoom}, siren={siren}, floodlight={floodlight}, privacy={privacy}" +
                      $"{(version != null && version.Model.Length > 0 ? $", model={version.Model}" : "")})");
             return _caps;
         }, ct);
+
+    /// <summary>Probe returning the value itself (null = feature absent/silent).</summary>
+    private static async Task<T?> ProbeValueAsync<T>(Func<Task<T?>> op) where T : struct
+    {
+        try { return await op().ConfigureAwait(false); }
+        catch (Exception ex) when (ex is CameraCommandException or TimeoutException or IOException) { return null; }
+    }
+
+    /// <summary>The zoom range's maxPos from a &lt;PtzZoomFocus&gt; reply (0 = none/fixed lens).</summary>
+    internal static long ZoomMax(XElement? zoomFocus) =>
+        long.TryParse(zoomFocus?.Element("zoom")?.Element("maxPos")?.Value.Trim(), out var v) ? v : 0;
 
     public Task<StreamInfoListXml?> GetStreamInfoAsync(CancellationToken ct) =>
         WithCameraAsync(camera => camera.GetStreamInfoAsync(ct: ct), ct);
 
     public bool CanSetStreamSettings => _httpApi != null;
+
+    public async Task<IReadOnlyList<StreamEncSetting>?> GetStreamSettingsAsync(CancellationToken ct)
+    {
+        if (_httpApi == null) return null;
+        var enc = await _httpApi.GetEncAsync(ct).ConfigureAwait(false);
+        var list = new List<StreamEncSetting>();
+        // HTTP API key → Baichuan stream kind (the names differ for the third stream).
+        foreach (var (key, kind) in new[] { ("mainStream", "mainStream"), ("subStream", "subStream"), ("extStream", "externStream") })
+        {
+            if (enc[key] is not System.Text.Json.Nodes.JsonObject s) continue;
+            var size = ((string?)s["size"] ?? "").Split('*');
+            uint w = size.Length == 2 && uint.TryParse(size[0], out var pw) ? pw : 0;
+            uint h = size.Length == 2 && uint.TryParse(size[1], out var ph) ? ph : 0;
+            list.Add(new StreamEncSetting(kind, w, h, (uint?)s["frameRate"] ?? 0, (uint?)s["bitRate"] ?? 0));
+        }
+        return list;
+    }
 
     // Rides the camera's HTTP API, not the BC connection (no verified BC setter
     // exists), so it works even while the BC session is mid-reconnect and does
@@ -222,6 +302,46 @@ public sealed class CameraControl : ICameraControl
         WithCameraAsync<object?>(async camera =>
         {
             await camera.PtzAsync(command, speed, ct).ConfigureAwait(false);
+            return null;
+        }, ct);
+
+    public Task<XElement?> GetZoomFocusAsync(CancellationToken ct) =>
+        WithCameraAsync(camera => camera.GetZoomFocusAsync(ct: ct), ct);
+
+    public Task SetZoomFocusAsync(string command, uint movePos, CancellationToken ct) =>
+        WithCameraAsync<object?>(async camera =>
+        {
+            await camera.SetZoomFocusAsync(command, movePos, ct).ConfigureAwait(false);
+            return null;
+        }, ct);
+
+    public Task SirenAsync(bool? on, CancellationToken ct) =>
+        WithCameraAsync<object?>(async camera =>
+        {
+            if (on is { } latch) await camera.SirenManualAsync(latch, ct).ConfigureAwait(false);
+            else await camera.SirenBurstAsync(ct).ConfigureAwait(false);
+            Log.Info($"{CameraName}: 🔊 siren {(on == null ? "burst" : on == true ? "ON (until stopped)" : "off")}");
+            return null;
+        }, ct);
+
+    public Task<bool?> GetPrivacyModeAsync(CancellationToken ct) =>
+        WithCameraAsync(camera => camera.GetPrivacyModeAsync(ct: ct), ct);
+
+    public Task SetPrivacyModeAsync(bool on, CancellationToken ct) =>
+        WithCameraAsync<object?>(async camera =>
+        {
+            await camera.SetPrivacyModeAsync(on, ct).ConfigureAwait(false);
+            Log.Info($"{CameraName}: privacy mode {(on ? "ON — camera going dark" : "off")}");
+            return null;
+        }, ct);
+
+    public Task<XElement?> GetFloodlightTasksAsync(CancellationToken ct) =>
+        WithCameraAsync(camera => camera.GetFloodlightTasksAsync(ct: ct), ct);
+
+    public Task SetFloodlightTasksAsync(XElement task, CancellationToken ct) =>
+        WithCameraAsync<object?>(async camera =>
+        {
+            await camera.SetFloodlightTasksAsync(task, ct).ConfigureAwait(false);
             return null;
         }, ct);
 
