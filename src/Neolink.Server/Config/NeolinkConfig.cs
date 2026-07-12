@@ -184,6 +184,8 @@ public sealed class NeolinkConfig
             switch (Key(prop.Name))
             {
                 case "path": path = prop.Value.GetString(); break;
+                case "clipspath": rec.ClipsPath = prop.Value.GetString() ?? ""; break;
+                case "archivepath": rec.ArchivePath = prop.Value.GetString() ?? ""; break;
                 case "retentiondays": rec.RetentionDays = prop.Value.GetInt32(); break;
                 case "preseconds": rec.PreSeconds = prop.Value.GetInt32(); break;
                 case "postseconds": rec.PostSeconds = prop.Value.GetInt32(); break;
@@ -310,6 +312,8 @@ public sealed class NeolinkConfig
             {
                 Path = MiniToml.GetString(rec, "path")
                     ?? throw new FormatException("[recording] needs a 'path' (the storage directory)"),
+                ClipsPath = MiniToml.GetString(rec, "clips_path") ?? "",
+                ArchivePath = MiniToml.GetString(rec, "archive_path") ?? "",
                 RetentionDays = (int)(MiniToml.GetInt(rec, "retention_days") ?? 7),
                 PreSeconds = (int)(MiniToml.GetInt(rec, "pre_seconds") ?? 5),
                 PostSeconds = (int)(MiniToml.GetInt(rec, "post_seconds") ?? 8),
@@ -580,6 +584,19 @@ public sealed class RecordingConfig
 
     /// <summary>Storage directory for clips/thumbnails/event metadata (mount a volume here in Docker).</summary>
     public string Path { get; set; } = "";
+
+    /// <summary>Optional fast tier: event clips/thumbnails/metadata are written here
+    /// instead of <see cref="Path"/> (continuous 24/7 footage stays on Path). Point
+    /// it at an SSD for quick event review. Empty = keep everything under Path.</summary>
+    public string ClipsPath { get; set; } = "";
+
+    /// <summary>Optional archive tier: aged footage is MOVED here instead of being
+    /// deleted — but only for cameras whose Archive switch is turned ON in the web
+    /// UI (per-camera move/delete ages live there too). Point this at a DIFFERENT
+    /// drive than <see cref="Path"/> (in Docker, map a second volume). Empty =
+    /// no archive tier; expired footage is deleted as always.</summary>
+    public string ArchivePath { get; set; } = "";
+
     /// <summary>Days to keep events; 0 keeps them forever.</summary>
     public int RetentionDays { get; set; } = 7;
     /// <summary>Seconds of video kept from before the detection.</summary>

@@ -8,7 +8,7 @@
    close it mid-adjustment. *@
 
 <div class="backdrop panel-backdrop"></div>
-<aside class="campanel" role="dialog" aria-label="Camera settings">
+<aside class="campanel campanel-wide" role="dialog" aria-label="Camera settings">
     <div class="campanel-head">
         <span class="dot @(_caps?.Online == true ? "on" : "off")"></span>
         <span class="campanel-title">@CameraName</span>
@@ -30,8 +30,11 @@
     }
     else if (_caps != null)
     {
+        @* Masonry body: sections flow into two columns on wide screens (one on
+           mobile) — each card keeps its grouping and never splits across columns. *@
+        <div class="campanel-body">
         <div class="campanel-section">
-            <div class="campanel-section-title">DEVICE</div>
+            <div class="campanel-section-title">@UiIcon.Render("info", 13) DEVICE</div>
             <table class="kv">
                 @if (!string.IsNullOrEmpty(_caps.Version?.Model)) { <tr><td>Model</td><td>@_caps.Version!.Model</td></tr> }
                 @if (!string.IsNullOrEmpty(_caps.Version?.Name)) { <tr><td>Name</td><td>@_caps.Version!.Name</td></tr> }
@@ -46,7 +49,7 @@
         {
             var canSetStream = _caps.Features?.StreamSettings == true;
             <div class="campanel-section">
-                <div class="campanel-section-title">STREAMS</div>
+                <div class="campanel-section-title">@UiIcon.Render("film", 13) STREAMS</div>
                 @foreach (var group in _profiles.GroupBy(p => p.Type))
                 {
                     @* The camera reports one encode table per selectable resolution;
@@ -117,7 +120,7 @@
         @if (_caps.Features?.Battery == true && _battery != null)
         {
             <div class="campanel-section">
-                <div class="campanel-section-title">BATTERY</div>
+                <div class="campanel-section-title">@UiIcon.Render("battery", 13) BATTERY</div>
                 <table class="kv">
                     @if (Num(_battery, "batteryPercent") is { } pct) { <tr><td>Charge</td><td>@pct%</td></tr> }
                     @if (Str(_battery, "chargeStatus") is { Length: > 0 } cs) { <tr><td>Status</td><td>@cs</td></tr> }
@@ -129,7 +132,7 @@
         @if (_caps.Features?.Ptz == true)
         {
             <div class="campanel-section">
-                <div class="campanel-section-title">PAN / TILT</div>
+                <div class="campanel-section-title">@UiIcon.Render("move", 13) PAN / TILT</div>
                 <div class="ptz-row">
                     <div class="ptz-pad">
                         <span></span>
@@ -157,7 +160,7 @@
         @if (_caps.Features?.Zoom == true && _zoomFocus?.Zoom is { Max: > 0 } zr)
         {
             <div class="campanel-section">
-                <div class="campanel-section-title">ZOOM / FOCUS</div>
+                <div class="campanel-section-title">@UiIcon.Render("zoom", 13) ZOOM / FOCUS</div>
                 @* Live controls like PTZ: the lens moves when you let go of the
                    slider — an absolute position, so there is nothing to stage. *@
                 <div class="control-row">
@@ -186,7 +189,7 @@
         @if (_caps.Features?.Led == true && _led != null)
         {
             <div class="campanel-section">
-                <div class="campanel-section-title">LIGHTS</div>
+                <div class="campanel-section-title">@UiIcon.Render("sun", 13) LIGHTS</div>
                 @* LedState semantics (per the BC protocol): "state" drives the IR
                    night-vision LEDs, "lightState" the little status/power LED. *@
                 @if (Str(_led, "state") is { Length: > 0 } irState)
@@ -238,7 +241,7 @@
         @if (_caps.Features?.Siren == true)
         {
             <div class="campanel-section">
-                <div class="campanel-section-title">SIREN</div>
+                <div class="campanel-section-title">@UiIcon.Render("siren", 13) SIREN</div>
                 <div class="control-row">
                     <span>@(_sirenOn == true ? "Sounding now" : "Sound the siren")</span>
                     @if (_sirenOn == true)
@@ -261,7 +264,7 @@
         @if (_caps.Features?.Privacy == true)
         {
             <div class="campanel-section">
-                <div class="campanel-section-title">PRIVACY MODE <span class="beta-tag">BETA</span></div>
+                <div class="campanel-section-title">@UiIcon.Render("eye-off", 13) PRIVACY MODE <span class="beta-tag">BETA</span></div>
                 <div class="control-row">
                     <span>Camera dark (no video, no detections)</span>
                     @if (_privacyOn == true)
@@ -289,7 +292,7 @@
         @if (_caps.Features?.Pir == true && _pir != null)
         {
             <div class="campanel-section">
-                <div class="campanel-section-title">PIR MOTION SENSOR</div>
+                <div class="campanel-section-title">@UiIcon.Render("activity", 13) PIR MOTION SENSOR</div>
                 <div class="control-row">
                     <span>Enabled @PendingMark(_pendingPir?.ToString())</span>
                     <button class="chip @((_pendingPir ?? PirEnabled) ? "" : "chip-off") @(_pendingPir != null ? "chip-pending" : "")"
@@ -303,7 +306,7 @@
         @if (_recording != null)
         {
             <div class="campanel-section">
-                <div class="campanel-section-title">RECORDING</div>
+                <div class="campanel-section-title">@UiIcon.Render("rec", 13) RECORDING</div>
                 <div class="notice small">
                     These are <b>Neolink server</b> settings — what this server records from the
                     camera's streams. Nothing here is sent to the camera or changes its own
@@ -324,6 +327,7 @@
                         </select>
                     </div>
                 }
+                <div class="campanel-subtitle">@UiIcon.Render("bolt", 12) EVENTS</div>
                 @if (_recording.EventsAvailable)
                 {
                     <div class="control-row">
@@ -414,8 +418,9 @@
                 {
                     @* Hairline between the event-based half above and 24/7 below. *@
                     <div class="campanel-divider"></div>
+                    <div class="campanel-subtitle">@UiIcon.Render("clock", 12) CONTINUOUS (24/7)</div>
                     <div class="control-row">
-                        <span>Continuous (24/7)</span>
+                        <span>Record around the clock</span>
                         <button class="chip @(_recording.Continuous ? "" : "chip-off")"
                                 @onclick="() => SetRecordingAsync(continuous: !_recording.Continuous)">
                             @(_recording.Continuous ? "on" : "off")
@@ -433,11 +438,67 @@
                         </div>
                     }
                 }
-                @if (_recording.Events || _recording.Continuous)
+                @if (_recording.ArchiveAvailable)
                 {
-                    <div class="notice small">
-                        Retention is per camera and per recording type: blank uses the server default,
-                        0 keeps footage forever. Expired days are removed by the hourly cleanup.
+                    <div class="campanel-divider"></div>
+                    <div class="campanel-subtitle">@UiIcon.Render("archive", 12) ARCHIVE <span class="beta-tag">BETA</span></div>
+                    @* Purpose up-front — visible BEFORE anything is switched on. *@
+                    <div class="event-sub lc-explain">
+                        Normally footage is deleted when its retention ends. Archiving moves it
+                        to the server's archive drive instead — still playable, just off the
+                        main disk. Watch the lifecycle strip below react as you toggle.
+                    </div>
+                    <div class="control-row">
+                        <span>Archive event clips</span>
+                        <button class="chip @(_recording.ArchiveEvents ? "" : "chip-off")"
+                                title="@(_recording.ArchiveEvents
+                                    ? "When their retention expires, event clips MOVE to the archive drive instead of being deleted — click for plain deletion"
+                                    : "Expired event clips are deleted — click to move them to the archive drive instead")"
+                                @onclick="() => SetRecordingAsync(archiveEvents: !_recording.ArchiveEvents)">
+                            @(_recording.ArchiveEvents ? "on" : "off")
+                        </button>
+                    </div>
+                    <div class="control-row">
+                        <span>Archive continuous footage</span>
+                        <button class="chip @(_recording.ArchiveContinuous ? "" : "chip-off")"
+                                title="@(_recording.ArchiveContinuous
+                                    ? "When its retention expires, 24/7 footage MOVES to the archive drive instead of being deleted — click for plain deletion"
+                                    : "Expired 24/7 footage is deleted — click to move it to the archive drive instead")"
+                                @onclick="() => SetRecordingAsync(archiveContinuous: !_recording.ArchiveContinuous)">
+                            @(_recording.ArchiveContinuous ? "on" : "off")
+                        </button>
+                    </div>
+                    @if (_recording.ArchiveEvents || _recording.ArchiveContinuous)
+                    {
+                        <div class="control-row">
+                            <span>Keep in archive (days)</span>
+                            <input class="ret-input" type="number" min="0" step="1"
+                                   placeholder="forever"
+                                   title="How long archived footage is kept before final deletion. Blank or 0 = keep forever."
+                                   value="@(_recording.ArchiveRetentionDays?.ToString() ?? "")"
+                                   @onchange="e => SetArchiveDaysAsync((string?)e.Value)" />
+                        </div>
+                    }
+                }
+                @if ((_recording.EventsAvailable && _recording.Events) || _recording.Continuous)
+                {
+                    @* The story of this camera's footage, told with the CURRENT settings —
+                       it re-renders on every toggle, so cause and effect are immediate. *@
+                    <div class="lifecycle"
+                         title="Applied by the hourly cleanup. Blank retention = the server default; 0 = keep forever.">
+                        <div class="lc-title">FOOTAGE LIFECYCLE</div>
+                        @if (_recording.EventsAvailable && _recording.Events)
+                        {
+                            @LifecycleRow("Events", _recording.EventRetentionDays ?? _recording.DefaultEventRetentionDays, _recording.ArchiveEvents)
+                        }
+                        @if (_recording.Continuous)
+                        {
+                            @LifecycleRow("24/7", _recording.ContinuousRetentionDays ?? _recording.DefaultContinuousRetentionDays, _recording.ArchiveContinuous)
+                        }
+                        @if (_recording.ArchiveEvents || _recording.ArchiveContinuous)
+                        {
+                            <div class="event-sub">Archived footage stays playable in Events and the Timeline.</div>
+                        }
                     </div>
                 }
             </div>
@@ -446,7 +507,7 @@
         @if (_caps.Features?.Reboot != false)
         {
             <div class="campanel-section">
-                <div class="campanel-section-title">MAINTENANCE</div>
+                <div class="campanel-section-title">@UiIcon.Render("wrench", 13) MAINTENANCE</div>
                 <div class="control-row">
                     <span>Restart the camera</span>
                     @if (!_confirmReboot)
@@ -461,6 +522,7 @@
                 </div>
             </div>
         }
+        </div> @* /campanel-body *@
 
         @if (_status != null)
         {
@@ -854,15 +916,24 @@
     private async Task SetRecordingAsync(bool? events = null, bool? continuous = null, List<string>? eventTypes = null,
         int? eventRetentionDays = null, int? continuousRetentionDays = null, string? recordStream = null,
         List<string>? scheduleDays = null, string? scheduleStart = null, string? scheduleEnd = null,
-        bool? scheduleEnabled = null)
+        bool? scheduleEnabled = null,
+        bool? archiveEvents = null, bool? archiveContinuous = null, int? archiveRetentionDays = null)
     {
         object body = new
         {
             events, continuous, eventTypes, eventRetentionDays, continuousRetentionDays, recordStream,
             scheduleDays, scheduleStart, scheduleEnd, scheduleEnabled,
+            archiveEvents, archiveContinuous, archiveRetentionDays,
         };
         if (await PostAsync("recording", body))
             _recording = await GetAsync<ApiRecordingSettings>("recording");
+    }
+
+    /// <summary>Blank/invalid input clears the override (the API takes negative = clear).</summary>
+    private Task SetArchiveDaysAsync(string? raw)
+    {
+        int days = int.TryParse(raw?.Trim(), out var d) && d >= 0 ? d : -1;
+        return SetRecordingAsync(archiveRetentionDays: days);
     }
 
     private static string StreamLabel(string? kind) => kind switch
@@ -875,6 +946,40 @@
 
     private static string RetentionLabel(int days) =>
         days > 0 ? $"default ({days}d)" : "default (forever)";
+
+    private static string DaysLabel(int days) => days == 1 ? "1 day" : $"{days} days";
+
+    /// <summary>One lifecycle-strip line: live window → archive → deletion, from
+    /// the settings as they stand right now (retention 0 = nothing ever expires).</summary>
+    private RenderFragment LifecycleRow(string name, int days, bool archives) => __builder =>
+    {
+        <div class="lc-row">
+            <span class="lc-name">@name</span>
+            @if (days <= 0)
+            {
+                <span class="lc-pill lc-live">kept forever</span>
+            }
+            else
+            {
+                <span class="lc-pill lc-live">@DaysLabel(days) on this server</span>
+                <span class="lc-arrow">→</span>
+                @if (archives)
+                {
+                    var keep = _recording?.ArchiveRetentionDays ?? 0;
+                    <span class="lc-pill lc-archive">archive@(keep > 0 ? $" · {DaysLabel(keep)}" : " · forever")</span>
+                    @if (keep > 0)
+                    {
+                        <span class="lc-arrow">→</span>
+                        <span class="lc-pill lc-del">deleted</span>
+                    }
+                }
+                else
+                {
+                    <span class="lc-pill lc-del">deleted</span>
+                }
+            }
+        </div>
+    };
 
     /// <summary>Blank/invalid input resets to the server default (the API takes negative = clear).</summary>
     private Task SetRetentionAsync(bool forEvents, string? raw)

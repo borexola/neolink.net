@@ -141,11 +141,14 @@ HomeAssistantMqtt? mqtt = null;
 // Recording (detection events + continuous), when a storage path is configured.
 EventStore? eventStore = null;
 RecordingSettings? recordingSettings = null;
+StorageLocations? storage = null;
 if (config.Recording is { } recCfg)
 {
     try
     {
-        eventStore = new EventStore(recCfg.Path);
+        storage = new StorageLocations(recCfg);
+        eventStore = new EventStore(storage.MainRoot,
+            storage.HasClipsTier ? storage.ClipsRoot : null, storage.ArchiveRoot);
         eventStore.Load();
         // Runtime switches live in the state dir; older locations (config dir,
         // recordings root) are checked once for migration.
@@ -154,26 +157,37 @@ if (config.Recording is { } recCfg)
                  $"(default retention — events: {(recCfg.RetentionDays > 0 ? $"{recCfg.RetentionDays} days" : "forever")}, " +
                  $"continuous: {(recCfg.EffectiveContinuousRetentionDays > 0 ? $"{recCfg.EffectiveContinuousRetentionDays} days" : "forever")}; " +
                  "per-camera overrides apply)");
-        // Per-camera retention: the cleanup pass sees storage-directory names, so map
-        // them back to camera names to look up each camera's override (null = default).
+        if (storage.HasClipsTier)
+            Log.Info($"Recording: event clips go to the fast tier at {storage.ClipsRoot}");
+        if (storage.ArchiveRoot is { } archRoot)
+            Log.Info($"Recording: archive tier at {archRoot} — cameras opt in from the web UI");
+        // Per-camera lifecycle: the cleanup pass sees storage-directory names, so map
+        // them back to camera names to look up each camera's settings. Archiving is
+        // a per-camera opt-in and needs the archive tier to exist.
         var store = eventStore;
         var settings = recordingSettings;
+        bool hasArchive = storage.HasArchiveTier;
         var camerasByDir = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var c in config.Cameras)
             camerasByDir.TryAdd(EventStore.SafeName(c.Name), c.Name);
-        (int, int) RetentionFor(string dirName)
+        EventStore.CameraStoragePolicy PolicyFor(string dirName)
         {
             var name = camerasByDir.TryGetValue(dirName, out var n) ? n : dirName;
             var s = settings.Get(name);
-            return (s.EventRetentionDays ?? recCfg.RetentionDays,
-                    s.ContinuousRetentionDays ?? recCfg.EffectiveContinuousRetentionDays);
+            return new EventStore.CameraStoragePolicy(
+                s.EventRetentionDays ?? recCfg.RetentionDays,
+                s.ContinuousRetentionDays ?? recCfg.EffectiveContinuousRetentionDays,
+                ArchiveEvents: hasArchive && s.ArchiveEvents,
+                ArchiveContinuous: hasArchive && s.ArchiveContinuous,
+                ArchiveDeleteDays: s.ArchiveRetentionDays ?? 0);
         }
-        tasks.Add(Task.Run(() => store.RunRetentionAsync(RetentionFor, shutdown.Token)));
+        tasks.Add(Task.Run(() => store.RunRetentionAsync(PolicyFor, shutdown.Token)));
     }
     catch (Exception ex)
     {
         Log.Error($"Recording disabled: cannot use storage path '{recCfg.Path}': {ex.Message}");
         eventStore = null;
+        storage = null;
     }
 }
 
@@ -282,7 +296,8 @@ foreach (var cam in config.Cameras)
                 var previewStream = webStreams.FirstOrDefault(s => s.Kind == "subStream");
                 if (previewStream == recordStream) previewStream = null;
                 var recorder = new EventRecorder(cam.Name, recordStream.Hub, control, eventStore,
-                    config.Recording, recordingSettings, previewStream?.Hub, hubsByKind);
+                    config.Recording, recordingSettings, previewStream?.Hub, hubsByKind,
+                    hasRoom: storage == null ? null : () => storage.HasRoom(StorageRole.Clips));
                 recorderSink = recorder.OnMotion;
                 eventRecorder = recorder;
                 tasks.Add(Task.Run(() => recorder.RunAsync(shutdown.Token)));
@@ -293,7 +308,8 @@ foreach (var cam in config.Cameras)
             if (RecordingConfig.ContinuousEnabled)
             {
                 var continuous = new ContinuousRecorder(cam.Name, recordStream.Hub, eventStore,
-                    recordingSettings, config.Recording, hubsByKind);
+                    recordingSettings, config.Recording, hubsByKind,
+                    hasRoom: storage == null ? null : () => storage.HasRoom(StorageRole.Main));
                 continuousRecorder = continuous;
                 tasks.Add(Task.Run(() => continuous.RunAsync(shutdown.Token)));
             }
@@ -390,6 +406,8 @@ if (config.WebPort > 0)
         Events = eventStore,
         RecordingSettings = recordingSettings,
         Recording = config.Recording,
+        ArchiveAvailable = storage?.HasArchiveTier ?? false,
+        Storage = storage,
         UserStore = userStore,
         ResetAdminPassword = config.EffectiveResetAdminPassword,
         TrickleSpeed = config.Ui.TrickleSpeed,

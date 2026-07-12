@@ -178,6 +178,12 @@ public static class SelfTest
                   // a comment
                   "bind": "127.0.0.1",
                   "bind_port": 8555,
+                  "recording": {
+                    "path": "/recordings",
+                    "clips_path": "/clips",
+                    "archive_path": "/archive",
+                    "retention_days": 14,
+                  },
                   "users": [ { "name": "me", "pass": "mepass" } ],
                   "cameras": [
                     {
@@ -214,6 +220,12 @@ public static class SelfTest
                 // Battery cameras: always_on is tri-state — unset means auto.
                 Assert(cfg.Cameras[0].AlwaysOn == null, "always_on defaults to auto");
                 Assert(cfg.Cameras[1].AlwaysOn == true, "always_on parsed");
+                // Tiered-storage keys must round-trip through the parser — the
+                // archive UI only appears when archive_path survives loading.
+                AssertEq(cfg.Recording!.Path, "/recordings");
+                AssertEq(cfg.Recording.ClipsPath, "/clips");
+                AssertEq(cfg.Recording.ArchivePath, "/archive");
+                AssertEq(cfg.Recording.RetentionDays, 14);
             }
             finally
             {
@@ -662,6 +674,158 @@ public static class SelfTest
             finally
             {
                 try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+        });
+
+        Test("storage locations: tier resolution + capacity thresholds", () =>
+        {
+            var baseDir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            var mainP = Path.Combine(baseDir, "recordings");
+            var clipsP = Path.Combine(baseDir, "ssd");
+            var archiveP = Path.Combine(baseDir, "archive");
+            try
+            {
+                // Unconfigured tiers collapse to main — a plain install has one location.
+                var plain = new Recording.StorageLocations(
+                    new Config.RecordingConfig { Path = mainP });
+                Assert(!plain.HasClipsTier, "no clips tier by default");
+                Assert(!plain.HasArchiveTier, "no archive tier by default");
+                AssertEq(plain.Locations.Count, 1);
+                AssertEq(Path.GetFullPath(plain.ClipsRoot), Path.GetFullPath(mainP)); // clips fall back to main
+                Assert(plain.ArchiveRoot == null, "archive root null when unset");
+
+                // All three tiers configured and distinct → three locations.
+                // A fake probe drives the capacity thresholds deterministically (GB-scale,
+                // so the 1 GiB free-space reserve behaves as it would on a real drive).
+                const long GB = 1024L * 1024 * 1024;
+                var caps = new Dictionary<string, (long, long)?>(StringComparer.OrdinalIgnoreCase)
+                {
+                    [Path.GetFullPath(mainP)] = (1000 * GB, 40 * GB),    // 96% used → warn, plenty free
+                    [Path.GetFullPath(clipsP)] = (1000 * GB, 500 * GB),  // 50% used → healthy
+                    [Path.GetFullPath(archiveP)] = (1000 * GB, GB / 2),  // 0.5 GB free → full
+                };
+                var full = new Recording.StorageLocations(
+                    new Config.RecordingConfig { Path = mainP, ClipsPath = clipsP, ArchivePath = archiveP },
+                    probe: p => caps.TryGetValue(Path.GetFullPath(p), out var v) ? v : null);
+
+                Assert(full.HasClipsTier && full.HasArchiveTier, "all tiers detected");
+                AssertEq(full.Locations.Count, 3);
+                AssertEq(Path.GetFullPath(full.ClipsRoot), Path.GetFullPath(clipsP));
+                AssertEq(Path.GetFullPath(full.ArchiveRoot!), Path.GetFullPath(archiveP));
+
+                var sample = full.Sample();
+                var mainS = sample.First(s => s.Role == Recording.StorageRole.Main);
+                var clipsS = sample.First(s => s.Role == Recording.StorageRole.Clips);
+                var archiveS = sample.First(s => s.Role == Recording.StorageRole.Archive);
+                Assert(mainS.UsedPercent >= 90 && mainS.Warn && !mainS.Full, "main warns at 96% used, plenty free");
+                Assert(!clipsS.Warn && !clipsS.Full, "healthy tier is neither warn nor full");
+                Assert(archiveS.Full, "archive under the free-space reserve is full");
+                Assert(!full.HasRoom(Recording.StorageRole.Archive), "no room to write the near-full archive");
+                Assert(full.HasRoom(Recording.StorageRole.Clips), "room to write the healthy clips tier");
+
+                // Threshold logic keys off the byte reserve, not just percent.
+                var tiny = new Recording.StorageStatus(Recording.StorageRole.Main, "m", mainP,
+                    TotalBytes: 10_000_000_000, FreeBytes: 100_000_000, Online: true); // 100 MB free < 1 GiB reserve
+                Assert(tiny.Full, "under the free-space reserve is full");
+                var roomy = tiny with { FreeBytes = 5L * 1024 * 1024 * 1024 };
+                Assert(!roomy.Full, "well above the reserve is not full");
+
+                // HasRoom fails open when a volume can't be read.
+                var blind = new Recording.StorageLocations(
+                    new Config.RecordingConfig { Path = mainP }, probe: _ => null);
+                Assert(blind.HasRoom(Recording.StorageRole.Main), "unreadable volume does not block recording");
+            }
+            finally
+            {
+                try { Directory.Delete(baseDir, recursive: true); } catch { }
+            }
+        });
+
+        Test("archive lifecycle: move at age, serve from archive, delete from archive", () =>
+        {
+            var baseDir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            var live = Path.Combine(baseDir, "recordings");
+            var arch = Path.Combine(baseDir, "archive");
+            try
+            {
+                // Stage a 10-day-old day (event + continuous) and a fresh event.
+                string dayOld = $"{DateTime.Now.Date.AddDays(-10):yyyy-MM-dd}";
+                var oldEvDir = Path.Combine(live, "cam1", dayOld, "detections", "080000-arc1");
+                Directory.CreateDirectory(oldEvDir);
+                File.WriteAllText(Path.Combine(oldEvDir, "event.json"),
+                    $$"""{"id":"cam1~{{dayOld}}~080000-arc1","camera":"cam1","startUtc":"{{dayOld}}T08:00:00Z","endUtc":"{{dayOld}}T08:00:30Z","labels":["person"],"hasClip":true}""");
+                File.WriteAllText(Path.Combine(oldEvDir, "clip.mp4"), "clip-bytes");
+                var oldCont = Path.Combine(live, "cam1", dayOld, "continuous");
+                Directory.CreateDirectory(oldCont);
+                File.WriteAllText(Path.Combine(oldCont, "08-00-00.mp4"), "seg-bytes");
+                // A 40-day-old day already IN the archive: past the delete window.
+                string dayAncient = $"{DateTime.Now.Date.AddDays(-40):yyyy-MM-dd}";
+                var ancient = Path.Combine(arch, "cam1", dayAncient, "continuous");
+                Directory.CreateDirectory(ancient);
+                File.WriteAllText(Path.Combine(ancient, "01-00-00.mp4"), "x");
+
+                var store = new Recording.EventStore(live, clipsRoot: null, archiveRoot: arch);
+                store.Load();
+                Assert(store.Find($"cam1~{dayOld}~080000-arc1") != null, "old event indexed from live");
+
+                // Archive on for both types: retention 7 days = footage moves at
+                // day 7 (instead of deletion); archive deletes after 30.
+                store.Cleanup(_ => new Recording.EventStore.CameraStoragePolicy(
+                    EventDays: 7, ContinuousDays: 7,
+                    ArchiveEvents: true, ArchiveContinuous: true, ArchiveDeleteDays: 30));
+
+                Assert(!Directory.Exists(Path.Combine(live, "cam1", dayOld)), "aged day left the live tier");
+                Assert(File.Exists(Path.Combine(arch, "cam1", dayOld, "detections", "080000-arc1", "clip.mp4")),
+                    "event clip moved to the archive");
+                Assert(File.Exists(Path.Combine(arch, "cam1", dayOld, "continuous", "08-00-00.mp4")),
+                    "continuous segment moved to the archive");
+                // The index followed the move: the event still resolves and plays.
+                var moved = store.ArtifactPath($"cam1~{dayOld}~080000-arc1", "clip.mp4");
+                Assert(moved != null && moved.StartsWith(Path.GetFullPath(arch), StringComparison.OrdinalIgnoreCase),
+                    "archived event's clip resolves inside the archive");
+                // The timeline sees archived footage transparently.
+                Assert(store.ListContinuousDays("cam1").Contains(dayOld), "archived day listed for the timeline");
+                AssertEq(store.ListSegments("cam1", dayOld).Count, 1);
+                Assert(store.SegmentPath("cam1", dayOld, "08-00-00.mp4") != null, "archived segment path resolves");
+                // The ancient archived day fell past the 30-day archive window.
+                Assert(!Directory.Exists(Path.Combine(arch, "cam1", dayAncient)), "expired archive day deleted");
+
+                // A second pass is a no-op (idempotent), and 0 = keep forever.
+                store.Cleanup(_ => new Recording.EventStore.CameraStoragePolicy(
+                    EventDays: 7, ContinuousDays: 7,
+                    ArchiveEvents: true, ArchiveContinuous: true, ArchiveDeleteDays: 0));
+                Assert(File.Exists(Path.Combine(arch, "cam1", dayOld, "continuous", "08-00-00.mp4")),
+                    "archived footage survives with delete window 0 (forever)");
+
+                // The per-type split: events archive while continuous deletes.
+                string daySplit = $"{DateTime.Now.Date.AddDays(-9):yyyy-MM-dd}";
+                var splitEv = Path.Combine(live, "cam2", daySplit, "detections", "090000-arc2");
+                Directory.CreateDirectory(splitEv);
+                File.WriteAllText(Path.Combine(splitEv, "event.json"),
+                    $$"""{"id":"cam2~{{daySplit}}~090000-arc2","camera":"cam2","startUtc":"{{daySplit}}T09:00:00Z","endUtc":"{{daySplit}}T09:00:30Z","labels":["person"],"hasClip":true}""");
+                File.WriteAllText(Path.Combine(splitEv, "clip.mp4"), "clip-bytes");
+                var splitCont = Path.Combine(live, "cam2", daySplit, "continuous");
+                Directory.CreateDirectory(splitCont);
+                File.WriteAllText(Path.Combine(splitCont, "09-00-00.mp4"), "seg-bytes");
+                store.Cleanup(_ => new Recording.EventStore.CameraStoragePolicy(
+                    EventDays: 7, ContinuousDays: 7,
+                    ArchiveEvents: true, ArchiveContinuous: false));
+                Assert(File.Exists(Path.Combine(arch, "cam2", daySplit, "detections", "090000-arc2", "clip.mp4")),
+                    "events-only archiving moved the event clip");
+                Assert(!Directory.Exists(Path.Combine(arch, "cam2", daySplit, "continuous"))
+                    && !Directory.Exists(splitCont),
+                    "events-only archiving still DELETED expired continuous footage");
+
+                // Old settings.json without the archive fields deserializes to archive-off.
+                var legacy = System.Text.Json.JsonSerializer.Deserialize<Recording.CameraRecordingSettings>(
+                    """{"events":true,"continuous":false,"eventTypes":null}""",
+                    new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                Assert(legacy != null && !legacy.ArchiveEvents && !legacy.ArchiveContinuous
+                    && legacy.ArchiveRetentionDays == null, "pre-archive settings default to archive off");
+            }
+            finally
+            {
+                try { Directory.Delete(baseDir, recursive: true); } catch { }
             }
         });
 

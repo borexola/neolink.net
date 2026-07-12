@@ -4,6 +4,75 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
+## 0.8.7
+
+### New
+
+- **Tiered storage** — all optional, zero config changes required; a plain
+  `recording.path` install behaves exactly as before:
+  - **Fast clips tier** (`"clips_path"`): point it at an SSD and new event
+    clips are written there for fast review, while continuous 24/7 footage
+    stays on the main volume. Existing footage is found on both.
+  - **Archive tier** (`"archive_path"`, BETA): with it configured, every camera's
+    RECORDING settings gain **Archive event clips** and **Archive continuous
+    footage** switches (both off by default). Retention stays the single
+    clock: when an enabled type's retention expires, its footage is **moved**
+    to the archive instead of deleted — e.g. "Keep event clips: 30" moves
+    clips to the archive on day 30. One per-camera knob sets how long the
+    archive keeps footage (blank = forever). Events, the timeline and
+    continuous playback read archived footage transparently. Deletion from
+    the archive keeps honoring the configured window even if archiving is
+    later switched off. Use a separate drive for the archive — in Docker,
+    map a second volume (e.g. `-v /mnt/bigdisk:/archive`), and map a volume
+    for EVERY tier path you configure: an unmapped container path is created
+    in the container's writable layer, where footage survives restarts but
+    is destroyed with the container. On the Home Assistant add-on, point the
+    paths at a NAS share under `/share` or `/media` instead — no mapping
+    needed.
+  - **Capacity watch**: at 90% used on any configured location the web UI
+    shows an amber warning banner (dismissible for the session); when a
+    location runs out of space, recording to it halts cleanly with a red
+    banner (no partial files, one log line per transition) and resumes
+    automatically once space is freed. New `GET /api/storage` reports every
+    location; with split storage configured the Monitor page shows a live
+    STORAGE section with per-location free space and warn/full states.
+
+### Changed
+
+- **Event playback speed is now a sticky preference**: pick 2× (or any speed)
+  in the event player and every event you open afterwards — on the Events
+  page or in the live view's popup — starts at that speed. Persisted in the
+  browser, shared between both players; the timeline already remembered its
+  speed the same way.
+- **Camera settings panel redesign**: the dialog is now roomier
+  (~1080 px on desktop) with the section cards flowing into two columns,
+  each marked with a small icon; cards keep their grouping and collapse to
+  the familiar single column on tablets and phones. Archiving controls sit
+  under an ARCHIVE sub-heading flagged BETA.
+- **RECORDING card restructured around a footage-lifecycle strip**: the card
+  is grouped into EVENTS / CONTINUOUS (24/7) / ARCHIVE blocks, the archive's
+  purpose is explained up-front (before anything is switched on), and a live
+  FOOTAGE LIFECYCLE strip at the bottom traces each recording type through
+  colored stages — e.g. "30 days on this server → archive · forever" — built
+  from the settings as currently toggled, so flipping a switch shows exactly
+  what it changes.
+
+### Fixed
+
+- Disk-write failures can no longer take the service down. The clip writer's
+  final buffer flush runs on a raw thread — a volume that filled or vanished
+  mid-clip could crash the whole process there; it now logs and marks the
+  clip faulted instead. A dead clips volume no longer kills a detection
+  event either (the event still registers and reaches Home Assistant,
+  metadata-only), and settings/event-metadata persistence failures of any
+  kind log a warning instead of bubbling up.
+
+### Compatibility
+
+- Existing `settings.json` files without the new per-camera archive fields
+  load unchanged (archiving simply stays off), and servers without
+  `archive_path` reject attempts to enable archiving with a clear message.
+
 ## 0.8.6
 
 ### New

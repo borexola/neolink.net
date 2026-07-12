@@ -78,7 +78,15 @@ public sealed record LocalApiInfo(string BaseUrl);
 
 /// <summary>Server capability flags (GET /api/features).</summary>
 public sealed record ApiFeaturesInfo(bool Events, bool Continuous, double TrickleSpeed = 4,
-    string? Version = null, string? LatestVersion = null, string? RepoUrl = null);
+    string? Version = null, string? LatestVersion = null, string? RepoUrl = null,
+    ApiStorageState? Storage = null);
+
+/// <summary>The worst storage tier's state (in /api/features); null = all healthy.</summary>
+public sealed record ApiStorageState(string Label, double UsedPercent, bool Full);
+
+/// <summary>GET /api/storage — one configured storage location and its capacity.</summary>
+public sealed record ApiStorageLocation(string Role, string Label, string Path,
+    long TotalBytes, long FreeBytes, double UsedPercent, bool Online, bool Warn, bool Full);
 
 /// <summary>GET /api/admin/config — the editable server settings.</summary>
 public sealed record ApiAdminConfig(string Path, bool Writable, JsonElement Settings);
@@ -104,7 +112,9 @@ public sealed record ApiRecordingSettings(bool Events, bool Continuous,
     bool EventsAvailable = true, string? RecordStream = null,
     string? DefaultRecordStream = null, List<string>? AvailableStreams = null,
     List<string>? ScheduleDays = null, string? ScheduleStart = null, string? ScheduleEnd = null,
-    bool ScheduleEnabled = false)
+    bool ScheduleEnabled = false,
+    bool ArchiveAvailable = false, bool ArchiveEvents = false,
+    bool ArchiveContinuous = false, int? ArchiveRetentionDays = null)
 {
     /// <summary>null EventTypes = every detection type is recorded.</summary>
     public bool TypeEnabled(string label) => EventTypes == null || EventTypes.Contains(label);
@@ -228,6 +238,14 @@ public static class UiIcon
             "zoom" => "<circle cx=\"11\" cy=\"11\" r=\"7\"/><line x1=\"21\" y1=\"21\" x2=\"16\" y2=\"16\"/>",
             // Record: ring with a filled core — the classic ⏺ shape.
             "rec" => "<circle cx=\"12\" cy=\"12\" r=\"9\"/><circle cx=\"12\" cy=\"12\" r=\"4.5\" fill=\"currentColor\" stroke=\"none\"/>",
+            // Camera-panel section markers.
+            "info" => "<circle cx=\"12\" cy=\"12\" r=\"10\"/><line x1=\"12\" y1=\"16\" x2=\"12\" y2=\"12\"/><line x1=\"12\" y1=\"8\" x2=\"12.01\" y2=\"8\"/>",
+            "move" => "<polyline points=\"5 9 2 12 5 15\"/><polyline points=\"9 5 12 2 15 5\"/><polyline points=\"15 19 12 22 9 19\"/><polyline points=\"19 9 22 12 19 15\"/><line x1=\"2\" y1=\"12\" x2=\"22\" y2=\"12\"/><line x1=\"12\" y1=\"2\" x2=\"12\" y2=\"22\"/>",
+            "sun" => "<circle cx=\"12\" cy=\"12\" r=\"5\"/><line x1=\"12\" y1=\"1\" x2=\"12\" y2=\"3\"/><line x1=\"12\" y1=\"21\" x2=\"12\" y2=\"23\"/><line x1=\"4.22\" y1=\"4.22\" x2=\"5.64\" y2=\"5.64\"/><line x1=\"18.36\" y1=\"18.36\" x2=\"19.78\" y2=\"19.78\"/><line x1=\"1\" y1=\"12\" x2=\"3\" y2=\"12\"/><line x1=\"21\" y1=\"12\" x2=\"23\" y2=\"12\"/><line x1=\"4.22\" y1=\"19.78\" x2=\"5.64\" y2=\"18.36\"/><line x1=\"18.36\" y1=\"5.64\" x2=\"19.78\" y2=\"4.22\"/>",
+            "siren" => "<polygon points=\"11 5 6 9 2 9 2 15 6 15 11 19 11 5\"/><path d=\"M15.54 8.46a5 5 0 0 1 0 7.07\"/><path d=\"M19.07 4.93a10 10 0 0 1 0 14.14\"/>",
+            "eye-off" => "<path d=\"M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94\"/><path d=\"M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19\"/><line x1=\"1\" y1=\"1\" x2=\"23\" y2=\"23\"/>",
+            "wrench" => "<path d=\"M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z\"/>",
+            "archive" => "<polyline points=\"21 8 21 21 3 21 3 8\"/><rect x=\"1\" y=\"3\" width=\"22\" height=\"5\"/><line x1=\"10\" y1=\"12\" x2=\"14\" y2=\"12\"/>",
             _ => "",
         };
         return new MarkupString(

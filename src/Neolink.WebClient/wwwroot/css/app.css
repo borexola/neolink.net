@@ -1335,6 +1335,31 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     padding: 10px 12px;
 }
 
+/* Camera settings dialog: roomier than the base panel, with the section cards
+   flowing masonry-style into two columns (cards never split across columns).
+   Below the breakpoint it falls back to the familiar single column. */
+.campanel-wide { width: min(1080px, 94vw); }
+
+.campanel-body {
+    columns: 2;
+    column-gap: 12px;
+}
+
+.campanel-body > * {
+    break-inside: avoid;
+    margin: 0 0 12px;
+}
+
+.campanel-body .campanel-section { transition: border-color 0.15s ease; }
+
+.campanel-body .campanel-section:hover {
+    border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
+}
+
+@media (max-width: 860px) {
+    .campanel-body { columns: 1; }
+}
+
 /* Staged-edits bar: pinned to the panel's bottom edge (mirror of .campanel-head)
    so Apply/Discard and the disruption warning never scroll out of sight. */
 .campanel-pending {
@@ -1416,6 +1441,100 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     color: var(--muted);
     letter-spacing: 2px;
     margin-bottom: 8px;
+}
+
+.campanel-section-title .nl-icon {
+    vertical-align: -2.5px;
+    margin-right: 5px;
+    opacity: 0.7;
+}
+
+/* Sub-grouping inside a section (e.g. the RECORDING card's ARCHIVE block). */
+.campanel-subtitle {
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 2px;
+    margin: 2px 0 8px;
+}
+
+.campanel-subtitle .nl-icon {
+    vertical-align: -2px;
+    margin-right: 5px;
+    opacity: 0.7;
+}
+
+/* Doubled class: .event-sub (later in this file) ellipsizes single lines;
+   an explanation must wrap, so this needs the higher specificity. */
+.event-sub.lc-explain {
+    margin: -2px 0 8px;
+    line-height: 1.4;
+    white-space: normal;
+}
+
+/* The lifecycle strip's footer line must wrap too. */
+.lifecycle .event-sub { white-space: normal; }
+
+/* Footage-lifecycle strip: the RECORDING card's living summary — colored pills
+   trace each recording type from live disk to archive to deletion, built from
+   the settings as currently toggled (so flipping a switch explains itself). */
+.lifecycle {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 10px;
+    padding: 8px 10px;
+    border: 1px dashed var(--line);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--panel) 55%, transparent);
+}
+
+.lc-title {
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: 2px;
+}
+
+.lc-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.lc-name {
+    min-width: 44px;
+    font-size: 10px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+
+.lc-arrow { color: var(--muted); font-size: 12px; }
+
+.lc-pill {
+    font-size: 11px;
+    border-radius: 999px;
+    padding: 1px 9px;
+    white-space: nowrap;
+    border: 1px solid;
+}
+
+.lc-live {
+    color: var(--ok);
+    border-color: color-mix(in srgb, var(--ok) 45%, transparent);
+    background: color-mix(in srgb, var(--ok) 8%, transparent);
+}
+
+.lc-archive {
+    color: #e8b054;
+    border-color: color-mix(in srgb, #e8b054 45%, transparent);
+    background: color-mix(in srgb, #e8b054 8%, transparent);
+}
+
+.lc-del {
+    color: color-mix(in srgb, var(--err) 80%, var(--text));
+    border-color: color-mix(in srgb, var(--err) 40%, transparent);
+    background: color-mix(in srgb, var(--err) 7%, transparent);
 }
 
 .kv {
@@ -2745,6 +2864,28 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 
 .update-banner-text { font-size: 12px; color: var(--text); line-height: 1.35; }
 .update-banner a.chip { text-decoration: none; }
+
+/* Storage capacity banners: amber = a tier is >= 90% used (dismissible for the
+   session), red = a tier is out of space and recording to it has halted. */
+.storage-banner {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 4px 10px;
+    padding: 8px 10px;
+    border: 1px solid #ffb020;
+    border-radius: 8px;
+    background: color-mix(in srgb, #ffb020 12%, transparent);
+}
+
+.storage-banner a.chip { text-decoration: none; }
+
+.storage-banner-full {
+    border-color: #ff5252;
+    background: color-mix(in srgb, #ff5252 14%, transparent);
+}
+
+.storage-banner-full .sec-banner-text { color: #ff8a80; }
 
 /* Event player speed control */
 .player-speed {
