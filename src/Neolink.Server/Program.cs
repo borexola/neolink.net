@@ -309,7 +309,9 @@ foreach (var cam in config.Cameras)
         Battery: battery == null ? null : () => battery.Battery,
         // Asleep = every stream of the camera is parked on purpose (battery doze),
         // as opposed to offline-because-unreachable.
-        Asleep: sleepers.Count == 0 ? null : () => sleepers.All(s => s.Parked))
+        Asleep: sleepers.Count == 0 ? null : () => sleepers.All(s => s.Parked),
+        SirenOn: battery == null ? null : () => battery.SirenOn,
+        PrivacyOn: battery == null ? null : () => battery.PrivacyOn)
         // The recorder rides along so the web API and the MQTT bridge share one
         // on-demand recording session per camera (UI button ≡ HA Record switch).
         { EventRecorder = eventRecorder });

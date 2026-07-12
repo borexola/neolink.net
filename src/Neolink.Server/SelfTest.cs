@@ -605,6 +605,40 @@ public static class SelfTest
                 Assert(store2.List().Count == 1, "recent event survives retention");
                 Assert(store2.ListContinuousDays("cam1").Count == 1, "recent day listed");
 
+                // The exact boundary: a day EXACTLY retention-days old is kept
+                // (deletion needs strictly older) — "keep 7 days" never eats day 7.
+                static string DayDir(string root, string cam, DateTime day, string half) =>
+                    Path.Combine(root, cam, $"{day:yyyy-MM-dd}", half);
+                var boundary = DayDir(dir, "cam1", DateTime.Now.Date.AddDays(-7), "detections");
+                var justOver = DayDir(dir, "cam1", DateTime.Now.Date.AddDays(-8), "detections");
+                Directory.CreateDirectory(boundary);
+                Directory.CreateDirectory(justOver);
+                store2.Cleanup(retentionDays: 7, continuousRetentionDays: 7);
+                Assert(Directory.Exists(boundary), "day exactly at the window is kept");
+                Assert(!Directory.Exists(Path.GetDirectoryName(justOver)!), "one day past the window is deleted");
+
+                // Per TYPE in the same day folder: expired detections go while
+                // continuous footage with a longer window stays (and vice versa).
+                var mixedDay = Path.Combine(dir, "cam1", $"{DateTime.Now.Date.AddDays(-10):yyyy-MM-dd}");
+                Directory.CreateDirectory(Path.Combine(mixedDay, "detections", "010101-mixd"));
+                Directory.CreateDirectory(Path.Combine(mixedDay, "continuous"));
+                File.WriteAllText(Path.Combine(mixedDay, "continuous", "01-00-00.mp4"), "x");
+                store2.Cleanup(retentionDays: 7, continuousRetentionDays: 30);
+                Assert(!Directory.Exists(Path.Combine(mixedDay, "detections")), "expired detections removed");
+                Assert(File.Exists(Path.Combine(mixedDay, "continuous", "01-00-00.mp4")),
+                    "continuous with a longer window survives in the same day folder");
+
+                // 0 = keep forever, and per-camera windows apply independently.
+                var keeper = DayDir(dir, "cam1", DateTime.Now.Date.AddDays(-3650), "detections");
+                var goner = DayDir(dir, "cam3", DateTime.Now.Date.AddDays(-3650), "detections");
+                Directory.CreateDirectory(keeper);
+                Directory.CreateDirectory(goner);
+                store2.Cleanup(cam => cam == "cam1" ? (0, 0) : (7, 7));
+                Assert(Directory.Exists(keeper), "retention 0 keeps a decade-old day forever");
+                Assert(!Directory.Exists(Path.GetDirectoryName(goner)!), "another camera's window still applies");
+                Assert(File.Exists(Path.Combine(mixedDay, "continuous", "01-00-00.mp4")),
+                    "keep-forever pass leaves the mixed day's footage alone");
+
                 // The old layout ({cam}/{date}/{event}, {cam}/continuous/{date})
                 // migrates by rename when a store loads.
                 var legacyEvent = Path.Combine(dir, "cam2", "2001-02-03", "090000-beef");
@@ -1168,6 +1202,69 @@ public static class SelfTest
             Assert(test.IsNewer("v0.8.6"), "a genuinely newer release still is");
         });
 
+        Test("camera control: zoom/siren/floodlight wire formats", () =>
+        {
+            // These bodies must match the reference Rust neolink structurally —
+            // element names, nesting and field values are the contract.
+            var zf = Protocol.BcCameraCommands.BuildStartZoomFocus(0, "zoomPos", 27);
+            AssertEq(zf.Name.LocalName, "StartZoomFocus");
+            AssertEq((string?)zf.Attribute("version") ?? "", Bc.Xml.BcXmlBody.XmlVersion);
+            AssertEq((string?)zf.Element("channelId") ?? "", "0");
+            AssertEq((string?)zf.Element("command") ?? "", "zoomPos");
+            AssertEq((string?)zf.Element("movePos") ?? "", "27");
+
+            var siren = Protocol.BcCameraCommands.BuildAudioAlarmPlay(1);
+            AssertEq(siren.Name.LocalName, "audioPlayInfo");
+            AssertEq((long?)siren.Element("channelId") ?? -1, 1L);
+            AssertEq((long?)siren.Element("playMode") ?? -1, 0L);
+            AssertEq((long?)siren.Element("playDuration") ?? -1, 0L);
+            AssertEq((long?)siren.Element("playTimes") ?? -1, 1L);
+            AssertEq((long?)siren.Element("onOff") ?? -1, 0L);
+
+            var fl = Protocol.BcCameraCommands.BuildFloodlightManual(0, on: true, durationSeconds: 30);
+            AssertEq(fl.Name.LocalName, "FloodlightManual");
+            AssertEq((string?)fl.Attribute("version") ?? "", "1");
+            AssertEq((long?)fl.Element("status") ?? -1, 1L);
+            AssertEq((long?)fl.Element("duration") ?? -1, 30L);
+
+            // Manual (latched) siren: playMode 2 with onOff as the switch, per
+            // Home Assistant's reolink library.
+            var manual = Protocol.BcCameraCommands.BuildAudioAlarmManual(0, on: true);
+            AssertEq((long?)manual.Element("playMode") ?? -1, 2L);
+            AssertEq((long?)manual.Element("onOff") ?? -1, 1L);
+            AssertEq((long?)Protocol.BcCameraCommands.BuildAudioAlarmManual(0, on: false).Element("onOff") ?? -1, 0L);
+
+            // Privacy-mode write body (msg 623): operate 2 = set, sleep 0/1.
+            var sleep = Protocol.BcCameraCommands.BuildSleepState(on: true);
+            AssertEq(sleep.Name.LocalName, "sleepState");
+            AssertEq((long?)sleep.Element("operate") ?? -1, 2L);
+            AssertEq((long?)sleep.Element("sleep") ?? -1, 1L);
+
+            // The <sleep> boolean parses from either a bare or a nested reply.
+            var nested = Bc.Xml.BcXmlBody.FromRaw(System.Xml.Linq.XElement.Parse(
+                "<sleepState version=\"1.1\"><channelId>0</channelId><sleep>1</sleep></sleepState>"));
+            AssertEq(Protocol.BcCameraCommands.ParseSleepValue(nested), (bool?)true);
+            AssertEq(Protocol.BcCameraCommands.ParseSleepValue(null), (bool?)null);
+
+            // Privacy support is gated on the login DeviceInfo advertising <sleep>
+            // — models without the feature still answer the state query.
+            var withSleep = Bc.Xml.DeviceInfoXml.Parse(System.Xml.Linq.XElement.Parse(
+                "<DeviceInfo><resolution><width>1</width><height>1</height></resolution><sleep>0</sleep></DeviceInfo>"));
+            var withoutSleep = Bc.Xml.DeviceInfoXml.Parse(System.Xml.Linq.XElement.Parse(
+                "<DeviceInfo><resolution><width>1</width><height>1</height></resolution></DeviceInfo>"));
+            Assert(withSleep.HasSleep, "DeviceInfo with <sleep> advertises privacy mode");
+            Assert(!withoutSleep.HasSleep, "DeviceInfo without <sleep> does not");
+
+            // Capability gating: only a usable zoom range (maxPos > 0) advertises
+            // zoom — fixed-lens cameras answer with 0 (or not at all).
+            var range = System.Xml.Linq.XElement.Parse(
+                "<PtzZoomFocus version=\"1.1\"><channelId>0</channelId>" +
+                "<zoom><maxPos>32</maxPos><minPos>1</minPos><curPos>7</curPos></zoom>" +
+                "<focus><maxPos>249</maxPos><minPos>0</minPos><curPos>100</curPos></focus></PtzZoomFocus>");
+            AssertEq(Streaming.CameraControl.ZoomMax(range), 32L);
+            AssertEq(Streaming.CameraControl.ZoomMax(null), 0L);
+        });
+
         Test("web api: auth gate, token transports, endpoint contracts", () =>
         {
             // Boots the real HTTP API on an ephemeral loopback port (UI disabled)
@@ -1499,6 +1596,8 @@ public static class SelfTest
         public string CameraName => name;
         public bool Online => true;
         public bool CanSetStreamSettings => false;
+        public Task<IReadOnlyList<Streaming.StreamEncSetting>?> GetStreamSettingsAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<Streaming.StreamEncSetting>?>(null);
         public Task<Streaming.CameraCapabilities> GetCapabilitiesAsync(CancellationToken ct) =>
             throw new NotSupportedException();
         public Task<Bc.Xml.StreamInfoListXml?> GetStreamInfoAsync(CancellationToken ct) =>
@@ -1516,6 +1615,15 @@ public static class SelfTest
         public Task SetPirEnabledAsync(bool enabled, CancellationToken ct) => Task.CompletedTask;
         public Task PtzAsync(string command, float speed, CancellationToken ct) => Task.CompletedTask;
         public Task RebootAsync(CancellationToken ct) => Task.CompletedTask;
+        public Task<System.Xml.Linq.XElement?> GetZoomFocusAsync(CancellationToken ct) =>
+            Task.FromResult<System.Xml.Linq.XElement?>(null);
+        public Task SetZoomFocusAsync(string command, uint movePos, CancellationToken ct) => Task.CompletedTask;
+        public Task SirenAsync(bool? on, CancellationToken ct) => Task.CompletedTask;
+        public Task<bool?> GetPrivacyModeAsync(CancellationToken ct) => Task.FromResult<bool?>(null);
+        public Task SetPrivacyModeAsync(bool on, CancellationToken ct) => Task.CompletedTask;
+        public Task<System.Xml.Linq.XElement?> GetFloodlightTasksAsync(CancellationToken ct) =>
+            Task.FromResult<System.Xml.Linq.XElement?>(null);
+        public Task SetFloodlightTasksAsync(System.Xml.Linq.XElement task, CancellationToken ct) => Task.CompletedTask;
         public Task TalkAsync(int sampleRate, ChannelReader<byte[]> pcm, CancellationToken ct) =>
             throw new NotSupportedException();
     }

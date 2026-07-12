@@ -52,6 +52,8 @@ public sealed class CameraService : ILiveCameraSource
     private volatile IBcCamera? _live;
     private volatile bool _batteryPowered;
     private volatile BatteryPush? _battery;
+    private volatile int _sirenOn = -1;    // from msg 547 pushes: -1 unknown, 0 off, 1 on
+    private volatile int _privacyOn = -1;  // from msg 623 pushes: -1 unknown, 0 off, 1 on
     private volatile bool _parked;
     private bool _sleepHintLogged;
 
@@ -72,6 +74,12 @@ public sealed class CameraService : ILiveCameraSource
 
     /// <summary>Latest battery reading (login query + msg 252 pushes), or null.</summary>
     public BatteryPush? Battery => _battery;
+
+    /// <summary>Last siren state the camera pushed (msg 547); null before the first push.</summary>
+    public bool? SirenOn => _sirenOn < 0 ? null : _sirenOn == 1;
+
+    /// <summary>Last privacy-mode state the camera pushed (msg 623); null before the first push.</summary>
+    public bool? PrivacyOn => _privacyOn < 0 ? null : _privacyOn == 1;
 
     /// <summary>True while intentionally disconnected so a battery camera can sleep.</summary>
     public bool Parked => _parked;
@@ -243,7 +251,12 @@ public sealed class CameraService : ILiveCameraSource
         var externalStatusSink = StatusSink;
         Action<StatusPush> statusSink = push =>
         {
-            if (push is BatteryPush b) _battery = b;
+            switch (push)
+            {
+                case BatteryPush b: _battery = b; break;
+                case SirenStatusPush s: _sirenOn = s.On ? 1 : 0; break;
+                case SleepStatusPush sl: _privacyOn = sl.Sleeping ? 1 : 0; break;
+            }
             externalStatusSink?.Invoke(push);
         };
         Task statusTask = Task.Run(() => WatchStatusGuardedAsync(camera, statusSink, linked.Token), CancellationToken.None);
@@ -265,7 +278,13 @@ public sealed class CameraService : ILiveCameraSource
                 }
 
                 if (++frames == 1)
+                {
                     Log.Info($"{Tag}: receiving media");
+                    // Media flowing = definitely not private. Heals a stale flag
+                    // when the wake happened while we were reconnecting (the
+                    // "off" push can be missed across a connection swap).
+                    if (_privacyOn == 1) _privacyOn = 0;
+                }
                 onFrame();
 
                 switch (frame)

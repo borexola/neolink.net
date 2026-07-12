@@ -21,7 +21,7 @@ public sealed record ApiStream(string Kind, string Path, bool Ready, string? Cod
 /// <param name="Recording">24/7 footage is being written for this camera right now.</param>
 /// <param name="OnDemand">On-demand clip capture state; null when the camera can't record events.</param>
 public sealed record ApiCamera(string Name, bool Online, List<ApiStream> Streams, bool Recording = false,
-    bool Asleep = false, ApiBattery? Battery = null, ApiOnDemand? OnDemand = null);
+    bool Asleep = false, ApiBattery? Battery = null, ApiOnDemand? OnDemand = null, bool Privacy = false);
 
 /// <summary>On-demand clip capture (the tile record button / HA Record switch):
 /// one clip, stopped automatically at MaxSeconds.</summary>
@@ -36,7 +36,18 @@ public sealed record ApiVersion(string? Name, string? Model, string? Serial, str
     string? Hardware, string? Build);
 
 public sealed record ApiFeatures(bool Ptz, bool Led, bool Pir, bool Battery,
-    bool StreamSettings = false, bool Reboot = true);
+    bool StreamSettings = false, bool Reboot = true,
+    bool Zoom = false, bool Siren = false, bool Floodlight = false, bool Privacy = false);
+
+/// <summary>GET /api/cameras/{name}/zoomfocus — absolute positions with their ranges.</summary>
+public sealed record ApiZoomPos(long Cur, long Min, long Max);
+public sealed record ApiZoomFocus(ApiZoomPos? Zoom, ApiZoomPos? Focus);
+
+/// <summary>GET/POST /api/cameras/{name}/floodlight — the spotlight's behavior settings.</summary>
+public sealed record ApiFloodlight(long Brightness, long BrightnessMin, long BrightnessMax, bool Auto);
+
+/// <summary>GET /api/cameras/{name}/settings/stream — one stream's CURRENT encode selection.</summary>
+public sealed record ApiStreamEnc(string Stream, uint Width, uint Height, uint Framerate, uint Bitrate);
 
 /// <summary>GET /api/cameras/{name}/capabilities — discovered device info and features.</summary>
 public sealed record ApiCapabilities(bool Online, ApiVersion? Version, ApiFeatures? Features, JsonElement Support);

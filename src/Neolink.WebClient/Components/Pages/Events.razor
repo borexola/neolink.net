@@ -137,9 +137,14 @@
                             {
                                 <button class="chip @(_speed == s ? "chip-active" : "")" @onclick="() => SetSpeedAsync(s)">@FormatSpeed(s)</button>
                             }
-                            @if (_speed > 1 && sel.HasPreview)
+                            @if (sel.HasPreview)
                             {
-                                <span class="event-sub">· preview quality while fast-forwarding</span>
+                                <span class="tool-label player-quality-label">QUALITY</span>
+                                <button class="chip @(_sd ? "" : "chip-active")" title="Full-quality main-stream recording"
+                                        @onclick="() => SetStreamAsync(sd: false)">HD</button>
+                                <button class="chip @(_sd ? "chip-active" : "")"
+                                        title="Low-res sub-stream recording — smoother fast-forward on slow storage"
+                                        @onclick="() => SetStreamAsync(sd: true)">SD</button>
                             }
                         </div>
                     }
@@ -197,7 +202,13 @@
     private string? _error;
 
     private double _speed = 1;
-    private static readonly double[] Speeds = { 1, 2, 4, 8 };
+    private static readonly double[] Speeds = { 1, 2, 4, 8, 16 };
+
+    /// <summary>The user's HD/SD pick: false = full main-stream clip (default at
+    /// every speed — muted fast playback keeps it smooth), true = the low-res
+    /// sub-stream twin, the escape hatch when storage or decoder can't keep up.
+    /// Shared with the live view's popup player ("neolink.eventSd").</summary>
+    private bool _sd;
 
     private string? _pendingVideoUrl; // set when a clip needs (re)attaching after render
 
@@ -219,6 +230,7 @@
                 }
             }
             catch { }
+            try { _sd = await JS.InvokeAsync<string?>("neolink.lsGet", "neolink.eventSd") == "1"; } catch { }
             try { _origin = await JS.InvokeAsync<string>("neolink.defaultServer"); } catch { }
             if (string.IsNullOrWhiteSpace(_server))
                 _server = _origin;
@@ -377,7 +389,7 @@
         $"{Base}/api/events/{Uri.EscapeDataString(ev.Id)}/{kind}{TokenQuery('?')}";
 
     private string PlayerUrl(ApiEvent ev) =>
-        _speed > 1 && ev.HasPreview ? Artifact(ev, "preview") : Artifact(ev, "clip");
+        _sd && ev.HasPreview ? Artifact(ev, "preview") : Artifact(ev, "clip");
 
     /// <summary>Resolve a ?event={id} deep link: find the event (the rolling list, or a
     /// direct lookup for older ones), bring its day into the list, and play it.</summary>
@@ -424,6 +436,14 @@
         _speed = s;
         if (_selected is { HasClip: true } ev)
             await JS.InvokeVoidAsync("neolink.eventPlayer", "ev-video", PlayerUrl(ev), s);
+    }
+
+    private async Task SetStreamAsync(bool sd)
+    {
+        _sd = sd;
+        try { await JS.InvokeVoidAsync("neolink.lsSet", "neolink.eventSd", sd ? "1" : "0"); } catch { }
+        if (_selected is { HasClip: true } ev)
+            await JS.InvokeVoidAsync("neolink.eventPlayer", "ev-video", PlayerUrl(ev), _speed);
     }
 
     /// <summary>Leaving an event marks it reviewed — the same "seen it" semantics as the live strip.</summary>

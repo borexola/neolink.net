@@ -141,9 +141,14 @@
         {
             var pts = Visible(s);
             if (pts.Count < 2) continue;
+            // Wide windows can hold thousands of points; the chart is 600 units
+            // across, so stride to ~2 per unit — invisible, and it keeps the SVG
+            // (re-rendered every poll over the circuit) small.
+            int stride = Math.Max(1, pts.Count / 1200);
             var line = new StringBuilder();
-            foreach (var p in pts)
+            for (int i = 0; i < pts.Count; i += stride)
             {
+                var p = i + stride >= pts.Count ? pts[^1] : pts[i]; // always end on the newest
                 line.Append(line.Length == 0 ? "M" : "L");
                 line.Append(F(X(p.T))).Append(' ').Append(F(Y(p.V)));
             }

@@ -114,4 +114,142 @@ public static class BcCameraCommands
         var el = reply?.Xml?.RawElement("TalkAbility");
         return el == null ? null : TalkAbilityXml.Parse(el);
     }
+
+    // ------------------------------------------------------------------ zoom & focus
+
+    public static readonly string[] ZoomFocusCommands = { "zoomPos", "focusPos" };
+
+    /// <summary>Raw &lt;PtzZoomFocus&gt; XML (zoom/focus positions and their ranges), or null if unsupported.</summary>
+    public static async Task<XElement?> GetZoomFocusAsync(this IBcCamera cam, TimeSpan? timeout = null, CancellationToken ct = default)
+    {
+        var reply = await cam.SendCommandAsync(BcConstants.MsgIdGetZoomFocus, extension: ChannelExt(cam),
+            replyTimeout: timeout, ct: ct).ConfigureAwait(false);
+        return reply?.Xml?.RawElement("PtzZoomFocus");
+    }
+
+    /// <summary>&lt;StartZoomFocus&gt; body — wire format per the reference Rust neolink.</summary>
+    internal static XElement BuildStartZoomFocus(byte channelId, string command, uint movePos) =>
+        new("StartZoomFocus", new XAttribute("version", BcXmlBody.XmlVersion),
+            new XElement("channelId", channelId),
+            new XElement("command", command),
+            new XElement("movePos", movePos));
+
+    /// <summary>Drives the optical zoom ("zoomPos") or focus ("focusPos") to an absolute position.</summary>
+    public static async Task SetZoomFocusAsync(this IBcCamera cam, string command, uint movePos, CancellationToken ct = default)
+    {
+        if (!ZoomFocusCommands.Contains(command))
+            throw new ArgumentException($"Unknown zoom/focus command '{command}' (expected one of: {string.Join(", ", ZoomFocusCommands)})");
+        await cam.SendCommandAsync(BcConstants.MsgIdSetZoomFocus,
+            BcXmlBody.FromRaw(BuildStartZoomFocus(cam.ChannelId, command, movePos)), ChannelExt(cam),
+            replyTimeout: TimeSpan.FromMilliseconds(800), tolerateNoReply: true, ct: ct).ConfigureAwait(false);
+    }
+
+    // ------------------------------------------------------------------ siren
+
+    /// <summary>&lt;audioPlayInfo&gt; body — the field values the reference Rust neolink sends for one siren burst.</summary>
+    internal static XElement BuildAudioAlarmPlay(byte channelId) =>
+        new("audioPlayInfo",
+            new XElement("channelId", channelId),
+            new XElement("playMode", 0),
+            new XElement("playDuration", 0),
+            new XElement("playTimes", 1),
+            new XElement("onOff", 0));
+
+    /// <summary>&lt;audioPlayInfo&gt; manual mode — playMode 2 with onOff as the latch,
+    /// exactly as Home Assistant's reolink library (reolink_aio) sends it: the siren
+    /// sounds until switched off.</summary>
+    internal static XElement BuildAudioAlarmManual(byte channelId, bool on) =>
+        new("audioPlayInfo", new XAttribute("version", BcXmlBody.XmlVersion),
+            new XElement("channelId", channelId),
+            new XElement("playMode", 2),
+            new XElement("playDuration", 10),
+            new XElement("playTimes", 1),
+            new XElement("onOff", on ? 1 : 0));
+
+    /// <summary>Sounds the camera's siren once (msg 263). The camera must answer 200.</summary>
+    public static async Task SirenBurstAsync(this IBcCamera cam, CancellationToken ct = default)
+    {
+        await cam.SendCommandAsync(BcConstants.MsgIdPlayAudio,
+            BcXmlBody.FromRaw(BuildAudioAlarmPlay(cam.ChannelId)), ChannelExt(cam), ct: ct).ConfigureAwait(false);
+    }
+
+    /// <summary>Latches the siren on (sounds until stopped) or off (msg 263, manual mode).</summary>
+    public static async Task SirenManualAsync(this IBcCamera cam, bool on, CancellationToken ct = default)
+    {
+        await cam.SendCommandAsync(BcConstants.MsgIdPlayAudio,
+            BcXmlBody.FromRaw(BuildAudioAlarmManual(cam.ChannelId, on)), ChannelExt(cam), ct: ct).ConfigureAwait(false);
+    }
+
+    // ------------------------------------------------------------------ privacy mode
+
+    /// <summary>&lt;sleepState&gt; write body — privacy mode on/off, exactly as
+    /// Home Assistant's reolink library sends it (operate 2 = set).</summary>
+    internal static XElement BuildSleepState(bool on) =>
+        new("sleepState", new XAttribute("version", BcXmlBody.XmlVersion),
+            new XElement("operate", 2),
+            new XElement("sleep", on ? 1 : 0));
+
+    /// <summary>Whether privacy mode (camera "sleep": no video, lens dark) is on —
+    /// null when the camera doesn't answer the query (msg 574).</summary>
+    public static async Task<bool?> GetPrivacyModeAsync(this IBcCamera cam, TimeSpan? timeout = null, CancellationToken ct = default)
+    {
+        var reply = await cam.SendCommandAsync(BcConstants.MsgIdSleepState, extension: ChannelExt(cam),
+            replyTimeout: timeout, ct: ct).ConfigureAwait(false);
+        return ParseSleepValue(reply?.Xml);
+    }
+
+    /// <summary>The &lt;sleep&gt; boolean wherever the reply nests it (firmwares vary).</summary>
+    internal static bool? ParseSleepValue(BcXmlBody? xml)
+    {
+        if (xml == null) return null;
+        foreach (var root in xml.Raw)
+        {
+            var el = root.Name.LocalName == "sleep" ? root : root.Descendants("sleep").FirstOrDefault();
+            if (el == null) continue;
+            var v = el.Value.Trim().ToLowerInvariant();
+            if (v.Length > 0) return v is "1" or "true" or "sleep" or "sleeping";
+        }
+        return null;
+    }
+
+    /// <summary>Turns privacy mode on (camera goes dark) or off (msg 575 — NOT 623:
+    /// that id carries the state pushes, which our status watcher owns).</summary>
+    public static async Task SetPrivacyModeAsync(this IBcCamera cam, bool on, CancellationToken ct = default)
+    {
+        await cam.SendCommandAsync(BcConstants.MsgIdSetSleepState,
+            BcXmlBody.FromRaw(BuildSleepState(on)), ChannelExt(cam),
+            replyTimeout: TimeSpan.FromMilliseconds(800), tolerateNoReply: true, ct: ct).ConfigureAwait(false);
+    }
+
+    // ------------------------------------------------------------------ floodlight
+
+    /// <summary>Raw &lt;FloodlightTask&gt; XML (brightness, auto-mode, schedule), or null if unsupported.</summary>
+    public static async Task<XElement?> GetFloodlightTasksAsync(this IBcCamera cam, TimeSpan? timeout = null, CancellationToken ct = default)
+    {
+        var reply = await cam.SendCommandAsync(BcConstants.MsgIdFloodlightTasksRead, extension: ChannelExt(cam),
+            replyTimeout: timeout, ct: ct).ConfigureAwait(false);
+        return reply?.Xml?.RawElement("FloodlightTask");
+    }
+
+    /// <summary>Writes back a (modified) &lt;FloodlightTask&gt; obtained from <see cref="GetFloodlightTasksAsync"/>.</summary>
+    public static async Task SetFloodlightTasksAsync(this IBcCamera cam, XElement task, CancellationToken ct = default)
+    {
+        await cam.SendCommandAsync(BcConstants.MsgIdFloodlightTasksWrite, BcXmlBody.FromRaw(task), ChannelExt(cam),
+            replyTimeout: TimeSpan.FromMilliseconds(800), tolerateNoReply: true, ct: ct).ConfigureAwait(false);
+    }
+
+    /// <summary>&lt;FloodlightManual&gt; body — wire format per the reference Rust neolink (version "1").</summary>
+    internal static XElement BuildFloodlightManual(byte channelId, bool on, int durationSeconds) =>
+        new("FloodlightManual", new XAttribute("version", "1"),
+            new XElement("channelId", channelId),
+            new XElement("status", on ? 1 : 0),
+            new XElement("duration", durationSeconds));
+
+    /// <summary>Manually turns the floodlight on (for a duration) or off (msg 288).</summary>
+    public static async Task FloodlightManualAsync(this IBcCamera cam, bool on, int durationSeconds, CancellationToken ct = default)
+    {
+        await cam.SendCommandAsync(BcConstants.MsgIdFloodlightManual,
+            BcXmlBody.FromRaw(BuildFloodlightManual(cam.ChannelId, on, durationSeconds)), ChannelExt(cam),
+            replyTimeout: TimeSpan.FromMilliseconds(500), tolerateNoReply: true, ct: ct).ConfigureAwait(false);
+    }
 }

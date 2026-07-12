@@ -49,23 +49,27 @@
                 <div class="campanel-section-title">STREAMS</div>
                 @foreach (var group in _profiles.GroupBy(p => p.Type))
                 {
-                    @* The camera reports one encode table per selectable quality level;
-                       sub-stream tables are usually identical duplicates — dedupe. *@
+                    @* The camera reports one encode table per selectable resolution;
+                       identical duplicates are deduped. Resolution picks the table,
+                       the selects offer that table's full fps/bitrate ranges. *@
                     var options = group
                         .DistinctBy(p => (p.Width, p.Height, p.DefaultFramerate, p.DefaultBitrate))
                         .ToList();
+                    var kind = group.Key;
+                    var sel = SelectedTable(kind, options);
+                    var pending = _pendingStreams.GetValueOrDefault(kind);
                     <div class="stream-group">
-                        <span class="stream-group-name">@group.First().Label</span>
+                        <span class="stream-group-name">@group.First().Label @PendingMark(pending?.ToString())</span>
                         <div class="stream-options">
                             @foreach (var p in options)
                             {
                                 @if (canSetStream)
                                 {
-                                    <button class="chip stream-chip clickable @(IsActiveProfile(p) ? "chip-active" : "")"
-                                            disabled="@_settingProfile"
+                                    <button class="chip stream-chip clickable @(IsPendingTable(kind, p) ? "chip-pending" : IsActiveProfile(p) ? "chip-active" : "")"
+                                            disabled="@_applying"
                                             title="Framerates: @string.Join(", ", p.Framerates) fps — Bitrates: @string.Join(", ", p.Bitrates) kbps"
-                                            @onclick="() => SetProfileAsync(p)">
-                                        @(p.Width)×@(p.Height) · @p.DefaultFramerate fps · @p.DefaultBitrate kbps
+                                            @onclick="() => StageResolution(kind, p, options)">
+                                        @(p.Width)×@(p.Height)
                                     </button>
                                 }
                                 else
@@ -76,12 +80,35 @@
                                     </span>
                                 }
                             }
+                            @if (canSetStream && sel != null)
+                            {
+                                var shownFps = pending?.Fps ?? CurrentFps(kind) ?? sel.DefaultFramerate;
+                                var shownKbps = pending?.Kbps ?? CurrentKbps(kind) ?? sel.DefaultBitrate;
+                                <label class="stream-tune @(pending != null ? "tune-pending" : "")">
+                                    <select disabled="@_applying" value="@shownFps"
+                                            @onchange="e => StageFps(kind, uint.Parse((string)e.Value!), options)">
+                                        @foreach (var f in TableValues(sel.Framerates, shownFps))
+                                        {
+                                            <option value="@f">@f fps</option>
+                                        }
+                                    </select>
+                                </label>
+                                <label class="stream-tune @(pending != null ? "tune-pending" : "")">
+                                    <select disabled="@_applying" value="@shownKbps"
+                                            @onchange="e => StageKbps(kind, uint.Parse((string)e.Value!), options)">
+                                        @foreach (var b in TableValues(sel.Bitrates, shownKbps))
+                                        {
+                                            <option value="@b">@b kbps</option>
+                                        }
+                                    </select>
+                                </label>
+                            }
                         </div>
                     </div>
                 }
                 <div class="notice small">
                     @(canSetStream
-                        ? "Read from the camera; the highlighted profile is live. Click a profile to apply it — the camera restarts the stream briefly."
+                        ? "Read from the camera; the highlighted resolution is live and the menus show its full framerate/bitrate tables. Changes stage — nothing is sent until you apply below."
                         : "Read from the camera; the highlighted profile is live. To change profiles from here, set the camera's \"http_address\" in the server config.")
                 </div>
             </div>
@@ -127,6 +154,35 @@
             </div>
         }
 
+        @if (_caps.Features?.Zoom == true && _zoomFocus?.Zoom is { Max: > 0 } zr)
+        {
+            <div class="campanel-section">
+                <div class="campanel-section-title">ZOOM / FOCUS</div>
+                @* Live controls like PTZ: the lens moves when you let go of the
+                   slider — an absolute position, so there is nothing to stage. *@
+                <div class="control-row">
+                    <span>Optical zoom</span>
+                    <input class="zf-slider" type="range" min="@zr.Min" max="@zr.Max" step="1"
+                           disabled="@_zfBusy" value="@(_zoomShown ?? zr.Cur)"
+                           @oninput="e => _zoomShown = long.Parse((string)e.Value!)"
+                           @onchange="e => SetZoomFocusAsync(zoom: long.Parse((string)e.Value!))" />
+                    <span class="zf-pos">@(_zoomShown ?? zr.Cur)/@zr.Max</span>
+                </div>
+                @if (_zoomFocus.Focus is { Max: > 0 } fr)
+                {
+                    <div class="control-row">
+                        <span>Focus</span>
+                        <input class="zf-slider" type="range" min="@fr.Min" max="@fr.Max" step="1"
+                               disabled="@_zfBusy" value="@(_focusShown ?? fr.Cur)"
+                               @oninput="e => _focusShown = long.Parse((string)e.Value!)"
+                               @onchange="e => SetZoomFocusAsync(focus: long.Parse((string)e.Value!))" />
+                        <span class="zf-pos">@(_focusShown ?? fr.Cur)/@fr.Max</span>
+                    </div>
+                    <div class="notice small">Most cameras refocus automatically after a zoom — move the focus slider only to override.</div>
+                }
+            </div>
+        }
+
         @if (_caps.Features?.Led == true && _led != null)
         {
             <div class="campanel-section">
@@ -136,8 +192,9 @@
                 @if (Str(_led, "state") is { Length: > 0 } irState)
                 {
                     <div class="control-row">
-                        <span>Infrared night vision</span>
-                        <select value="@irState" @onchange='e => SetLedAsync("state", (string?)e.Value)'>
+                        <span>Infrared night vision @PendingMark(_pendingIr)</span>
+                        <select class="@(_pendingIr != null ? "input-pending" : "")" value="@(_pendingIr ?? irState)"
+                                disabled="@_applying" @onchange='e => StageIr((string?)e.Value)'>
                             <option value="auto">auto</option>
                             <option value="open">on</option>
                             <option value="close">off</option>
@@ -146,12 +203,85 @@
                 }
                 @if (Str(_led, "lightState") is { Length: > 0 } statusLed)
                 {
+                    var shownLed = _pendingStatusLed ?? statusLed;
                     <div class="control-row">
-                        <span>Status LED</span>
-                        <button class="chip @(statusLed == "open" ? "" : "chip-off")" @onclick="ToggleStatusLedAsync">
-                            @(statusLed == "open" ? "on" : "off")
+                        <span>Status LED @PendingMark(_pendingStatusLed)</span>
+                        <button class="chip @(shownLed == "open" ? "" : "chip-off") @(_pendingStatusLed != null ? "chip-pending" : "")"
+                                disabled="@_applying" @onclick="StageStatusLedToggle">
+                            @(shownLed == "open" ? "on" : "off")
                         </button>
                     </div>
+                }
+                @if (_caps.Features?.Floodlight == true && _floodlight is { } flCur)
+                {
+                    @* The spotlight's BEHAVIOR (staged like other device settings);
+                       the on/off toggle above drives it directly. *@
+                    <div class="control-row">
+                        <span>Floodlight brightness @PendingMark(_pendingFlBrightness?.ToString())</span>
+                        <input class="zf-slider @(_pendingFlBrightness != null ? "input-pending" : "")"
+                               type="range" min="@flCur.BrightnessMin" max="@flCur.BrightnessMax" step="1"
+                               disabled="@_applying" value="@(_pendingFlBrightness ?? flCur.Brightness)"
+                               @oninput="e => StageFlBrightness(long.Parse((string)e.Value!))" />
+                        <span class="zf-pos">@(_pendingFlBrightness ?? flCur.Brightness)</span>
+                    </div>
+                    <div class="control-row">
+                        <span>Auto: on motion at night @PendingMark(_pendingFlAuto?.ToString())</span>
+                        <button class="chip @((_pendingFlAuto ?? flCur.Auto) ? "" : "chip-off") @(_pendingFlAuto != null ? "chip-pending" : "")"
+                                disabled="@_applying" @onclick="StageFlAutoToggle">
+                            @((_pendingFlAuto ?? flCur.Auto) ? "on" : "off")
+                        </button>
+                    </div>
+                }
+            </div>
+        }
+
+        @if (_caps.Features?.Siren == true)
+        {
+            <div class="campanel-section">
+                <div class="campanel-section-title">SIREN</div>
+                <div class="control-row">
+                    <span>@(_sirenOn == true ? "Sounding now" : "Sound the siren")</span>
+                    @if (_sirenOn == true)
+                    {
+                        <button class="chip chip-danger" @onclick="() => SirenAsync(false)">Stop siren</button>
+                    }
+                    else if (!_confirmSiren)
+                    {
+                        <button class="chip" @onclick="() => _confirmSiren = true">Siren…</button>
+                    }
+                    else
+                    {
+                        <button class="chip chip-danger" @onclick="() => SirenAsync(true)">Confirm — sounds until stopped</button>
+                        <button class="chip" @onclick="() => _confirmSiren = false">Cancel</button>
+                    }
+                </div>
+            </div>
+        }
+
+        @if (_caps.Features?.Privacy == true)
+        {
+            <div class="campanel-section">
+                <div class="campanel-section-title">PRIVACY MODE <span class="beta-tag">BETA</span></div>
+                <div class="control-row">
+                    <span>Camera dark (no video, no detections)</span>
+                    @if (_privacyOn == true)
+                    {
+                        <button class="chip chip-active" @onclick="() => SetPrivacyAsync(false)">on — click to wake</button>
+                    }
+                    else if (!_confirmPrivacy)
+                    {
+                        <button class="chip chip-off" @onclick="() => _confirmPrivacy = true">off</button>
+                    }
+                    else
+                    {
+                        <button class="chip chip-danger" @onclick="() => SetPrivacyAsync(true)">Confirm — stops video &amp; recording</button>
+                        <button class="chip" @onclick="() => _confirmPrivacy = false">Cancel</button>
+                    }
+                </div>
+                @if (_privacyOn == true)
+                {
+                    <div class="notice small">The stream drops while private; Neolink keeps the control
+                        connection and the toggle stays available.</div>
                 }
             </div>
         }
@@ -161,9 +291,10 @@
             <div class="campanel-section">
                 <div class="campanel-section-title">PIR MOTION SENSOR</div>
                 <div class="control-row">
-                    <span>Enabled</span>
-                    <button class="chip @(PirEnabled ? "" : "chip-off")" @onclick="TogglePirAsync">
-                        @(PirEnabled ? "on" : "off")
+                    <span>Enabled @PendingMark(_pendingPir?.ToString())</span>
+                    <button class="chip @((_pendingPir ?? PirEnabled) ? "" : "chip-off") @(_pendingPir != null ? "chip-pending" : "")"
+                            disabled="@_applying" @onclick="StagePirToggle">
+                        @((_pendingPir ?? PirEnabled) ? "on" : "off")
                     </button>
                 </div>
             </div>
@@ -173,6 +304,11 @@
         {
             <div class="campanel-section">
                 <div class="campanel-section-title">RECORDING</div>
+                <div class="notice small">
+                    These are <b>Neolink server</b> settings — what this server records from the
+                    camera's streams. Nothing here is sent to the camera or changes its own
+                    (SD-card) recording.
+                </div>
                 @if ((_recording.AvailableStreams?.Count ?? 0) > 1)
                 {
                     <div class="control-row">
@@ -231,9 +367,7 @@
                     <div class="notice small">
                         ⚠ Person/vehicle/animal labels only arrive when the matching Smart Detection is
                         enabled <b>in the Reolink app</b> (camera → Settings → Detection) — the camera does
-                        the detecting and must be set up to send this data. The chips above are a Neolink-side
-                        filter on what arrives: disabled types are discarded and the camera's own settings
-                        are never changed.
+                        the detecting. The chips filter what this server keeps; disabled types are discarded.
                     </div>
                     <div class="control-row">
                         <span>Scheduled capture</span>
@@ -332,6 +466,39 @@
         {
             <div class="notice">@_status</div>
         }
+
+        @* Staged device edits: nothing above is sent to the camera until Apply.
+           Disruptive changes get called out BEFORE the user commits to them. *@
+        @if (PendingCount > 0)
+        {
+            <div class="campanel-pending">
+                @if (PendingMayReboot)
+                {
+                    <div class="notice warn small">
+                        ⚠ The staged <b>resolution change</b> makes some cameras <b>reboot</b> —
+                        expect video (and recording) to drop for up to a minute.
+                    </div>
+                }
+                else if (PendingDisruptive)
+                {
+                    <div class="notice warn small">
+                        ⚠ Applying restarts the camera's video stream briefly — live view
+                        resumes in a few seconds.
+                    </div>
+                }
+                <div class="campanel-pending-row">
+                    <span class="event-sub">
+                        @PendingCount unsaved change@(PendingCount == 1 ? "" : "s") — closing
+                        the panel discards @(PendingCount == 1 ? "it" : "them").
+                    </span>
+                    <span class="tile-spacer"></span>
+                    <button class="chip" disabled="@_applying" @onclick="DiscardPending">Discard</button>
+                    <button class="chip chip-active" disabled="@_applying" @onclick="ApplyPendingAsync">
+                        @(_applying ? "Applying…" : "Apply to camera")
+                    </button>
+                </div>
+            </div>
+        }
     }
 </aside>
 
@@ -352,15 +519,228 @@
     private JsonElement? _battery;
     private JsonElement? _led;
     private JsonElement? _pir;
+    private ApiZoomFocus? _zoomFocus;
+    private ApiFloodlight? _floodlight;
     private bool _loading;
     private string? _error;
     private string? _status;
     private bool _confirmReboot;
-    private bool _settingProfile;
+    private bool _confirmSiren;
+    private bool _confirmPrivacy;
+    private bool? _sirenOn;   // last known state (pushes / this panel's own actions)
+    private bool? _privacyOn;
     private int _ptzSpeed = 32;
     private string? _loadedFor;
 
+    // Zoom/focus are LIVE controls: the shown value tracks the slider while it
+    // drags; the position is written on release and re-read afterwards.
+    private long? _zoomShown;
+    private long? _focusShown;
+    private bool _zfBusy;
+
     private bool PirEnabled => Num(_pir, "enable") == 1;
+
+    // ---------------------------------------------------------- staged edits
+    // Device settings stage locally and are sent only on "Apply to camera":
+    // a mis-click can be discarded, and disruptive changes (a profile write
+    // restarts the stream; a resolution change reboots some models) are
+    // announced by a warning before the user commits. Staging the current
+    // value again simply un-stages it.
+
+    /// <summary>One stream's staged encode change: the resolution table + the
+    /// fps/bitrate picked from that table's ranges.</summary>
+    private sealed record PendingStream(ApiEncodeProfile Table, uint Fps, uint Kbps);
+
+    private readonly Dictionary<string, PendingStream> _pendingStreams = new(StringComparer.Ordinal);
+    private List<ApiStreamEnc>? _encCurrent; // the camera's CURRENT selections (null without http_address)
+    private string? _pendingIr;          // "auto" | "open" | "close"
+    private string? _pendingStatusLed;   // "open" | "close"
+    private bool? _pendingPir;
+    private long? _pendingFlBrightness;
+    private bool? _pendingFlAuto;
+    private bool _applying;
+
+    private int PendingCount =>
+        _pendingStreams.Count + (_pendingIr != null ? 1 : 0)
+        + (_pendingStatusLed != null ? 1 : 0) + (_pendingPir != null ? 1 : 0)
+        + (_pendingFlBrightness != null ? 1 : 0) + (_pendingFlAuto != null ? 1 : 0);
+
+    /// <summary>Any staged change that interrupts the device when applied.</summary>
+    private bool PendingDisruptive => _pendingStreams.Count > 0;
+
+    /// <summary>A resolution change (not just fps/bitrate) makes some models fully
+    /// reboot. "Same resolution" is checked against the camera's reported encode
+    /// selection first, the live stream's dimensions as fallback — unknown counts
+    /// as a change, so uncertainty over-warns rather than under-warns.</summary>
+    private bool PendingMayReboot =>
+        _pendingStreams.Any(kv =>
+            !(CurrentEnc(kv.Key) is { } e && e.Width == kv.Value.Table.Width && e.Height == kv.Value.Table.Height)
+            && Camera?.Streams.Any(s => s.Kind == kv.Value.Table.Type
+                && s.Width == kv.Value.Table.Width && s.Height == kv.Value.Table.Height) != true);
+
+    /// <summary>The little "· pending" tag next to a staged control's label.</summary>
+    private static string PendingMark(string? pending) => pending != null ? "· pending" : "";
+
+    // ---- streams: resolution picks the table, fps/kbps come from its ranges ----
+
+    private ApiStreamEnc? CurrentEnc(string kind) => _encCurrent?.FirstOrDefault(e => e.Stream == kind);
+    private uint? CurrentFps(string kind) => CurrentEnc(kind) is { Framerate: > 0 } e ? e.Framerate : null;
+    private uint? CurrentKbps(string kind) => CurrentEnc(kind) is { Bitrate: > 0 } e ? e.Bitrate : null;
+
+    private bool IsPendingTable(string kind, ApiEncodeProfile p) =>
+        _pendingStreams.GetValueOrDefault(kind) is { } ps && SameTable(ps.Table, p);
+
+    private static bool SameTable(ApiEncodeProfile a, ApiEncodeProfile b) =>
+        a.Width == b.Width && a.Height == b.Height;
+
+    /// <summary>The table whose fps/bitrate ranges the selects offer: the staged
+    /// one, else the live resolution's, else the camera's first.</summary>
+    private ApiEncodeProfile? SelectedTable(string kind, List<ApiEncodeProfile> options) =>
+        _pendingStreams.GetValueOrDefault(kind)?.Table
+        ?? options.FirstOrDefault(IsActiveProfile)
+        ?? options.FirstOrDefault();
+
+    /// <summary>The table's values, with the shown value included even when the
+    /// camera reports something off-table (older firmware quirks).</summary>
+    private static IEnumerable<uint> TableValues(List<uint> table, uint shown) =>
+        table.Contains(shown) ? table : table.Append(shown).OrderByDescending(v => v);
+
+    private void StageStream(string kind, ApiEncodeProfile table, uint fps, uint kbps, List<ApiEncodeProfile> options)
+    {
+        // Clamp to the chosen table's ranges (switching tables can strand values).
+        if (!table.Framerates.Contains(fps)) fps = table.DefaultFramerate;
+        if (!table.Bitrates.Contains(kbps)) kbps = table.DefaultBitrate;
+
+        // Staging exactly the live state again un-stages (nothing to send).
+        bool liveTable = IsActiveProfile(table);
+        bool liveRates = fps == (CurrentFps(kind) ?? table.DefaultFramerate)
+                         && kbps == (CurrentKbps(kind) ?? table.DefaultBitrate);
+        if (liveTable && liveRates)
+            _pendingStreams.Remove(kind);
+        else
+            _pendingStreams[kind] = new PendingStream(table, fps, kbps);
+    }
+
+    private void StageResolution(string kind, ApiEncodeProfile table, List<ApiEncodeProfile> options)
+    {
+        var ps = _pendingStreams.GetValueOrDefault(kind);
+        StageStream(kind, table,
+            ps?.Fps ?? CurrentFps(kind) ?? table.DefaultFramerate,
+            ps?.Kbps ?? CurrentKbps(kind) ?? table.DefaultBitrate, options);
+    }
+
+    private void StageFps(string kind, uint fps, List<ApiEncodeProfile> options)
+    {
+        var table = SelectedTable(kind, options);
+        if (table == null) return;
+        var ps = _pendingStreams.GetValueOrDefault(kind);
+        StageStream(kind, table, fps, ps?.Kbps ?? CurrentKbps(kind) ?? table.DefaultBitrate, options);
+    }
+
+    private void StageKbps(string kind, uint kbps, List<ApiEncodeProfile> options)
+    {
+        var table = SelectedTable(kind, options);
+        if (table == null) return;
+        var ps = _pendingStreams.GetValueOrDefault(kind);
+        StageStream(kind, table, ps?.Fps ?? CurrentFps(kind) ?? table.DefaultFramerate, kbps, options);
+    }
+
+    private void StageIr(string? value) =>
+        _pendingIr = value == null || value == Str(_led, "state") ? null : value;
+
+    private void StageStatusLedToggle()
+    {
+        var target = (_pendingStatusLed ?? Str(_led, "lightState")) == "open" ? "close" : "open";
+        _pendingStatusLed = target == Str(_led, "lightState") ? null : target;
+    }
+
+    private void StagePirToggle()
+    {
+        var target = !(_pendingPir ?? PirEnabled);
+        _pendingPir = target == PirEnabled ? null : target;
+    }
+
+    private void StageFlBrightness(long value) =>
+        _pendingFlBrightness = value == _floodlight?.Brightness ? null : value;
+
+    private void StageFlAutoToggle()
+    {
+        var target = !(_pendingFlAuto ?? _floodlight?.Auto ?? false);
+        _pendingFlAuto = target == _floodlight?.Auto ? null : target;
+    }
+
+    private void DiscardPending()
+    {
+        _pendingStreams.Clear();
+        _pendingIr = _pendingStatusLed = null;
+        _pendingPir = null;
+        _pendingFlBrightness = null;
+        _pendingFlAuto = null;
+    }
+
+    /// <summary>Sends the staged changes one at a time (the camera answers control
+    /// commands serially). Whatever fails stays staged, so Apply can be retried.</summary>
+    private async Task ApplyPendingAsync()
+    {
+        if (_applying) return;
+        _applying = true;
+        var applied = new List<string>();
+        try
+        {
+            if (_pendingIr is { } ir && await PostAsync("led", new { state = ir }))
+            {
+                _pendingIr = null;
+                applied.Add("night vision");
+            }
+            if (_pendingStatusLed is { } led && await PostAsync("led", new { lightState = led }))
+            {
+                _pendingStatusLed = null;
+                applied.Add("status LED");
+            }
+            if (_pendingPir is { } pir && await PostAsync("pir", new { enabled = pir }))
+            {
+                _pendingPir = null;
+                applied.Add("PIR");
+            }
+            if ((_pendingFlBrightness != null || _pendingFlAuto != null)
+                && await PostAsync("floodlight", new { brightness = _pendingFlBrightness, auto = _pendingFlAuto }))
+            {
+                _pendingFlBrightness = null;
+                _pendingFlAuto = null;
+                applied.Add("floodlight behavior");
+            }
+            // The disruptive ones go LAST: the quick settings land before the
+            // stream restarts make the camera briefly deaf to commands.
+            foreach (var (kind, ps) in _pendingStreams.ToList())
+            {
+                if (!await PostAsync("settings/stream", new
+                    {
+                        stream = kind,
+                        width = ps.Table.Width,
+                        height = ps.Table.Height,
+                        framerate = ps.Fps,
+                        bitrate = ps.Kbps,
+                    }))
+                    break; // whatever failed stays staged for retry
+                _pendingStreams.Remove(kind);
+                applied.Add($"{ps.Table.Label} stream → {ps.Table.Width}×{ps.Table.Height} @{ps.Fps} fps {ps.Kbps} kbps " +
+                            "(the camera restarts the stream; video resumes shortly)");
+            }
+
+            if (applied.Count > 0)
+                _status = "Applied: " + string.Join(", ", applied) + ".";
+
+            // Refresh what the camera now reports (best-effort).
+            if (_caps?.Features?.Led == true) _led = await GetAsync<JsonElement?>("led");
+            if (_caps?.Features?.Pir == true) _pir = await GetAsync<JsonElement?>("pir");
+            if (_caps?.Features?.Floodlight == true) _floodlight = await GetAsync<ApiFloodlight?>("floodlight");
+            if (_caps?.Features?.StreamSettings == true) _encCurrent = await GetAsync<List<ApiStreamEnc>?>("settings/stream");
+        }
+        finally
+        {
+            _applying = false;
+        }
+    }
 
     protected override async Task OnParametersSetAsync()
     {
@@ -377,7 +757,13 @@
         _recording = null;
         _profiles = null;
         _battery = _led = _pir = null;
-        _confirmReboot = false;
+        _zoomFocus = null;
+        _floodlight = null;
+        _encCurrent = null;
+        _zoomShown = _focusShown = null;
+        _sirenOn = _privacyOn = null;
+        _confirmReboot = _confirmSiren = _confirmPrivacy = false;
+        DiscardPending(); // switching cameras must not carry staged edits across
         StateHasChanged();
 
         // Capability discovery drives everything else; the camera answers control
@@ -390,6 +776,11 @@
             if (_caps.Features?.Battery == true) _battery = await GetAsync<JsonElement?>("battery");
             if (_caps.Features?.Led == true) _led = await GetAsync<JsonElement?>("led");
             if (_caps.Features?.Pir == true) _pir = await GetAsync<JsonElement?>("pir");
+            if (_caps.Features?.Zoom == true) _zoomFocus = await GetAsync<ApiZoomFocus?>("zoomfocus");
+            if (_caps.Features?.Floodlight == true) _floodlight = await GetAsync<ApiFloodlight?>("floodlight");
+            if (_caps.Features?.StreamSettings == true) _encCurrent = await GetAsync<List<ApiStreamEnc>?>("settings/stream");
+            if (_caps.Features?.Siren == true) _sirenOn = (await GetAsync<JsonElement?>("siren"))?.TryGetProperty("on", out var so) == true && so.ValueKind != JsonValueKind.Null ? so.GetBoolean() : null;
+            if (_caps.Features?.Privacy == true) _privacyOn = (await GetAsync<JsonElement?>("privacy"))?.TryGetProperty("on", out var po) == true && po.ValueKind != JsonValueKind.Null ? po.GetBoolean() : null;
         }
         _loading = false;
     }
@@ -401,50 +792,50 @@
     private Task PtzAsync(string command) => PostAsync("ptz", new { command, speed = (float)_ptzSpeed });
     private Task PtzStopAsync() => PtzAsync("stop");
 
-    private bool IsActiveProfile(ApiEncodeProfile p) =>
-        Camera?.Streams.Any(s => s.Kind == p.Type && s.Width == p.Width && s.Height == p.Height) == true;
-
-    private async Task SetProfileAsync(ApiEncodeProfile p)
+    /// <summary>Live lens control: write the absolute position, then re-read where
+    /// the lens actually landed (zooming usually moves the focus too).</summary>
+    private async Task SetZoomFocusAsync(long? zoom = null, long? focus = null)
     {
-        if (_settingProfile) return;
-        _settingProfile = true;
+        if (_zfBusy) return;
+        _zfBusy = true;
         try
         {
-            if (await PostAsync("settings/stream", new
-                {
-                    stream = p.Type,
-                    width = p.Width,
-                    height = p.Height,
-                    framerate = p.DefaultFramerate,
-                    bitrate = p.DefaultBitrate,
-                }))
+            if (await PostAsync("zoomfocus", new { zoom, focus }))
             {
-                _status = $"{p.Label} stream set to {p.Width}×{p.Height} — " +
-                          "the camera restarts the stream; video resumes in a few seconds.";
+                _zoomFocus = await GetAsync<ApiZoomFocus?>("zoomfocus") ?? _zoomFocus;
+                _zoomShown = _focusShown = null;
             }
         }
         finally
         {
-            _settingProfile = false;
+            _zfBusy = false;
         }
     }
 
-    private async Task SetLedAsync(string field, string? value)
+    private async Task SirenAsync(bool on)
     {
-        if (value == null) return;
-        object body = field == "state" ? new { state = value } : new { lightState = value };
-        if (await PostAsync("led", body))
-            _led = await GetAsync<JsonElement?>("led");
+        _confirmSiren = false;
+        if (await PostAsync("siren", new { on }))
+        {
+            _sirenOn = on;
+            _status = on ? "Siren ON — it sounds until you stop it." : "Siren stopped.";
+        }
     }
 
-    private Task ToggleStatusLedAsync() =>
-        SetLedAsync("lightState", Str(_led, "lightState") == "open" ? "close" : "open");
-
-    private async Task TogglePirAsync()
+    private async Task SetPrivacyAsync(bool on)
     {
-        if (await PostAsync("pir", new { enabled = !PirEnabled }))
-            _pir = await GetAsync<JsonElement?>("pir");
+        _confirmPrivacy = false;
+        if (await PostAsync("privacy", new { on }))
+        {
+            _privacyOn = on;
+            _status = on
+                ? "Privacy mode ON — the camera goes dark until switched back."
+                : "Privacy mode off — the camera wakes and video resumes shortly.";
+        }
     }
+
+    private bool IsActiveProfile(ApiEncodeProfile p) =>
+        Camera?.Streams.Any(s => s.Kind == p.Type && s.Width == p.Width && s.Height == p.Height) == true;
 
     private static string TypeIcon(string label) => label switch
     {

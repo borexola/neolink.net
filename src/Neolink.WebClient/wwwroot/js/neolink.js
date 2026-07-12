@@ -485,14 +485,28 @@
             });
         },
 
-        // Drives the event player: points the <video> at `url` (full clip at 1×,
-        // low-res preview when fast-forwarding), preserving the current position
+        // Drives the event player: points the <video> at `url` (the user picks
+        // main clip or sub-stream preview), preserving the current position
         // across a source swap, and applies the playback rate. Idempotent — a
-        // same-url call only updates the rate. Fast-forwarding the light preview
-        // avoids the decoder stall that froze 2K/4K (H.265) clips at 2×/4×.
+        // same-url call only updates the rate.
+        //
+        // Fast playback borrows the timeline's recipe: above 1× the audio is
+        // muted (the decoder drops the audio pipeline entirely — that, not
+        // video, is what stalled full-res clips at high rates), and the native
+        // playbackRate does the rest. The previous mute state comes back at 1×.
         eventPlayer(videoId, url, rate) {
             const v = document.getElementById(videoId);
             if (!v || !url) return;
+            const applyRate = () => {
+                v.defaultPlaybackRate = v.playbackRate = rate;
+                if (rate > 1) {
+                    if (!v.dataset.evFfMuted) v.dataset.evFfMuted = v.muted ? 'm' : 'u';
+                    v.muted = true;
+                } else if (v.dataset.evFfMuted) {
+                    v.muted = v.dataset.evFfMuted === 'm';
+                    delete v.dataset.evFfMuted;
+                }
+            };
             if (v.dataset.evUrl !== url) {
                 const at = (v.currentTime && isFinite(v.currentTime)) ? v.currentTime : 0;
                 v.dataset.evUrl = url;
@@ -500,7 +514,7 @@
                 const onMeta = () => {
                     v.removeEventListener('loadedmetadata', onMeta);
                     try { if (at > 0 && at < v.duration) v.currentTime = at; } catch { }
-                    v.defaultPlaybackRate = v.playbackRate = rate;
+                    applyRate();
                     // Fresh full-page load (notification deep link): start muted
                     // by design. Otherwise autoplay policy can still veto sound —
                     // retry muted so the clip starts either way; the user can
@@ -511,7 +525,7 @@
                 v.addEventListener('loadedmetadata', onMeta);
                 try { v.load(); } catch { }
             } else {
-                v.defaultPlaybackRate = v.playbackRate = rate;
+                applyRate();
             }
         },
 
@@ -579,10 +593,11 @@
             update();
         },
 
-        // Esc dismisses the top-most pop-up (event player / quick view). The key
-        // routes through the dialog's own Close button, so every Blazor-side
-        // close effect (mark-reviewed on close, player teardown) runs exactly
-        // as if it was clicked.
+        // Esc dismisses the quick view. The key routes through the dialog's own
+        // Close button, so every Blazor-side close effect runs exactly as if it
+        // was clicked. The EVENT PLAYER is deliberately NOT on this list:
+        // closing it marks the event reviewed (it leaves the strip), so it must
+        // never vanish on a stray Esc — only its explicit ✕ closes it.
         escInit() {
             if (document.body.dataset.escInit) return;
             document.body.dataset.escInit = '1';
@@ -595,7 +610,7 @@
                     ctx.click();
                     return;
                 }
-                const dialogs = document.querySelectorAll('.event-player, .quick-view');
+                const dialogs = document.querySelectorAll('.quick-view');
                 const btn = dialogs.length
                     ? dialogs[dialogs.length - 1].querySelector('.icon-btn[title="Close"]')
                     : null;

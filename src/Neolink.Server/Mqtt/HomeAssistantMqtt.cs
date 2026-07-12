@@ -19,7 +19,9 @@ namespace Neolink.Mqtt;
 ///   • binary_sensor: motion, person, vehicle, animal,
 ///                    package, line crossing, intrusion,
 ///                    loitering                          (from the alarm pushes)
-///   • binary_sensor: siren                              (from the status pushes)
+///   • binary_sensor: siren sounding                     (from the status pushes)
+///   • switch:        siren — ON sounds until OFF        (audio-alarm cameras)
+///   • switch:        privacy mode — camera dark         (cameras answering msg 574)
 ///   • event:         doorbell press                     (video doorbells; not retained)
 ///   • binary_sensor: visitor                            (doorbell press pulse; HA
 ///                                                        auto-clears it via off_delay)
@@ -40,7 +42,7 @@ namespace Neolink.Mqtt;
 ///                    {web-ui}/events?event={id}
 ///   • select:        night vision (auto/on/off)         (IR-capable cameras)
 ///   • light:         floodlight                         (cameras with a spotlight)
-///   • button:        reboot, and PTZ steps              (per capability)
+///   • button:        reboot, siren, and PTZ steps       (per capability)
 ///   • camera:        latest snapshot                    (when the camera supports it)
 ///
 /// The SERVER also reports itself: a "Neolink.NET Server" device with health
@@ -534,6 +536,13 @@ internal sealed class CameraBridge
 
         if (f.Battery)
             await AnnounceEntityAsync("sensor", "battery", BatterySensorConfig(), ct).ConfigureAwait(false);
+        // The siren is a SWITCH: ON sounds until OFF. Its state topic is the same
+        // one the camera's own status pushes (msg 547) feed, so HA tracks reality
+        // even when the siren was set off by the camera's own detection rules.
+        if (f.Siren)
+            await AnnounceEntityAsync("switch", "siren_switch", SirenSwitchConfig(), ct).ConfigureAwait(false);
+        if (f.Privacy)
+            await AnnounceEntityAsync("switch", "privacy_mode", PrivacySwitchConfig(), ct).ConfigureAwait(false);
         if (_hasIr)
             await AnnounceEntityAsync("select", "ir", IrSelectConfig(), ct).ConfigureAwait(false);
         if (_hasFloodlight)
@@ -891,7 +900,11 @@ internal sealed class CameraBridge
                     }
                     break;
 
-                // SleepStatusPush: parsed for the log, no HA surface yet.
+                case SleepStatusPush sleep:
+                    // Feeds the privacy-mode switch's state topic; the switch
+                    // itself is announced from the capability probe.
+                    await _hub.PublishAsync(StateTopic("privacy_mode"), sleep.Sleeping ? "ON" : "OFF", ct).ConfigureAwait(false);
+                    break;
             }
         }
         catch (Exception ex)
@@ -917,12 +930,44 @@ internal sealed class CameraBridge
 
     private object SirenConfig() => new
     {
-        name = "Siren",
+        // "sounding" (not "Siren"): the SWITCH below carries the plain name.
+        name = "Siren sounding",
         unique_id = $"neolink_{Id}_siren",
         state_topic = StateTopic("siren"),
         payload_on = "ON",
         payload_off = "OFF",
         device_class = "sound",
+        device = Device(),
+        availability = Availability(),
+        availability_mode = "all",
+    };
+
+    /// <summary>ON = sound until switched OFF. State rides the same topic the
+    /// camera's own siren pushes feed, so the switch reflects reality.</summary>
+    private object SirenSwitchConfig() => new
+    {
+        name = "Siren",
+        unique_id = $"neolink_{Id}_siren_switch",
+        state_topic = StateTopic("siren"),
+        command_topic = CommandTopic("siren"),
+        payload_on = "ON",
+        payload_off = "OFF",
+        icon = "mdi:alarm-bell",
+        device = Device(),
+        availability = Availability(),
+        availability_mode = "all",
+    };
+
+    /// <summary>Privacy mode: ON = camera dark (no video, no detections).</summary>
+    private object PrivacySwitchConfig() => new
+    {
+        name = "Privacy mode",
+        unique_id = $"neolink_{Id}_privacy_mode",
+        state_topic = StateTopic("privacy_mode"),
+        command_topic = CommandTopic("privacy_mode"),
+        payload_on = "ON",
+        payload_off = "OFF",
+        icon = "mdi:eye-off",
         device = Device(),
         availability = Availability(),
         availability_mode = "all",
@@ -1059,6 +1104,16 @@ internal sealed class CameraBridge
             {
                 case "reboot" when payload == "PRESS":
                     await _control.RebootAsync(ct).ConfigureAwait(false);
+                    break;
+                case "siren":
+                    await _control.SirenAsync(payload == "ON", ct).ConfigureAwait(false);
+                    // Optimistic state so HA's toggle doesn't snap back; the
+                    // camera's own siren push confirms (or corrects) shortly.
+                    await _hub.PublishAsync(StateTopic("siren"), payload == "ON" ? "ON" : "OFF", ct).ConfigureAwait(false);
+                    break;
+                case "privacy_mode":
+                    await _control.SetPrivacyModeAsync(payload == "ON", ct).ConfigureAwait(false);
+                    await _hub.PublishAsync(StateTopic("privacy_mode"), payload == "ON" ? "ON" : "OFF", ct).ConfigureAwait(false);
                     break;
                 case "ir":
                     await _control.SetLedStateAsync(HaToIr(payload), null, ct).ConfigureAwait(false);

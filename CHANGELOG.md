@@ -4,6 +4,77 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
+## 0.8.6 — unreleased
+
+### New
+
+- **Stream settings expose the camera's full encode tables**: each stream now
+  offers its complete framerate and bitrate menus per resolution (e.g. up to
+  8192 kbps on a 5K main stream) instead of one preset per resolution, and the
+  menus preselect the camera's *current* values, read live over its HTTP API
+  (new `GET /api/cameras/{name}/settings/stream`). Changes stage per stream;
+  a bitrate/framerate-only change warns about the brief stream restart, while
+  a resolution change keeps the stronger some-cameras-reboot warning.
+
+- **More camera controls** (each appears only on cameras that support it,
+  wire formats follow the reference Rust neolink):
+  - **Optical zoom & focus sliders** in the camera panel — absolute position
+    with the lens's real range; focus is there for the rare manual override.
+  - **Manual siren, on until you stop it** — a confirm-gated control in the
+    panel that latches the siren (manual mode, as the Reolink app does) and
+    shows a **Stop siren** button while it sounds; one-shot bursts remain
+    available through the API. Home Assistant gets a **Siren switch** whose
+    state follows the camera's own siren pushes (the old status sensor is
+    renamed "Siren sounding").
+  - **Privacy mode (read/write, BETA)** — cameras that support it (the app's
+    "sleep": lens dark, no video, no detections; E1/E-series, battery doorbell,
+    Go PT) get a confirm-gated toggle in the panel, a
+    `GET/POST /api/cameras/{name}/privacy` endpoint and a **Privacy mode
+    switch** in Home Assistant, state-tracked from the camera's pushes.
+    Support is detected from the login DeviceInfo's `<sleep>` advertisement —
+    unsupported models answer the state query but ignore writes, so the query
+    alone is not trusted. Wire format (read msg 574, write msg 575) follows
+    Home Assistant's reolink library. And when a camera is darkened — from
+    here or from the Reolink app — the live view says so: tiles show an opaque
+    "🔒 privacy mode" cover (it also hides the frozen last frame the player
+    would otherwise keep showing), and the sidebar carries a "private" badge
+    (state from the camera's own pushes, self-healing the moment video flows
+    again).
+  - **Floodlight behavior** — brightness and the "turn on with motion at
+    night" switch, staged and applied like other device settings (the on/off
+    toggle stays under LIGHTS). Unknown camera fields are preserved verbatim
+    on write.
+- **Monitor page upgrades**:
+  - **Recordings get their own card** (size on disk + share of the volume) and
+    their own chart, instead of hiding in the DISK FREE footnote.
+  - **History now covers 24 hours** — full 2-second detail for the last hour,
+    one-minute averages beyond (≈160 KB of memory, so it's effectively free) —
+    with new **6h and 24h** window buttons.
+  - **The camera health cards obey the selected window**: uptime %, grade,
+    outage counts and the timeline ribbon are all computed over the window you
+    picked, not a fixed 24 h.
+
+### Changed
+
+- **Event playback fast-forwards the full-quality recording**: speeds above 1×
+  now stay on the main-stream clip (audio is muted during fast-forward — the
+  same trick that lets the timeline run high-res footage at speed — and comes
+  back at 1×). A **16×** step was added, and when the low-res sub-stream twin
+  exists an **HD/SD** toggle lets you drop quality on purpose (the choice is
+  remembered). Previously anything above 1× silently switched to the low-res
+  preview.
+- **The event pop-up only closes on ✕**: Esc and clicks outside no longer
+  dismiss it — closing marks the event reviewed, so an accidental tap must not
+  count as "seen it".
+- **Camera settings stage before they apply**: device settings in the camera
+  panel (stream profile, night vision, status LED, PIR) no longer fire at the
+  camera on every click. Edits collect as *pending* — amber-marked, with an
+  Apply / Discard bar pinned to the panel's bottom — and nothing is sent until
+  **Apply to camera**. Disruptive changes are called out up front: a profile
+  write warns that the stream restarts, and a **resolution change warns that
+  some cameras reboot**. Quick settings are applied before the disruptive one,
+  and anything that fails stays staged for retry.
+
 ## 0.8.5
 
 ### New

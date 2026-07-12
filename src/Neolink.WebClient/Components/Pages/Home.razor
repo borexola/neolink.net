@@ -114,7 +114,13 @@
                             @UiIcon.Render(bat.Charging ? "bolt" : "battery", 11)@bat.Percent%
                         </span>
                     }
-                    @if (cam.Asleep && !cam.Online)
+                    @if (cam.Privacy)
+                    {
+                        <span class="cam-privacy-badge" title="Privacy mode — the camera is dark on purpose (turn it off here or in the Reolink app)">
+                            🔒 private
+                        </span>
+                    }
+                    else if (cam.Asleep && !cam.Online)
                     {
                         <span class="cam-doze-badge" title="Battery camera sleeping — open its stream to reconnect">
                             @UiIcon.Render("moon", 10) asleep
@@ -466,6 +472,17 @@
                         @* no autoplay: the JS player starts playback once its jitter buffer is filled *@
                         <video id="vid-@index" muted playsinline></video>
                         <div class="tile-status">connecting…</div>
+                        @* Privacy is its own OPAQUE overlay: the player neither shows a
+                           frozen last frame under it nor overwrites it (it rewrites
+                           .tile-status with its own connecting/reconnect text). *@
+                        @if (camera is { Privacy: true })
+                        {
+                            <div class="tile-privacy">
+                                <span class="tile-privacy-icon">🔒</span>
+                                <span>privacy mode</span>
+                                <small>the camera is dark on purpose</small>
+                            </div>
+                        }
                         @* Phones: the camera name floats translucent over the feed's top-right
                            corner instead of sitting in the crowded bottom bar (CSS gates it). *@
                         <span class="tile-name-float">@slot.Camera</span>
@@ -587,6 +604,14 @@
             <div class="quick-view-media zoom-on" id="quick-view-media">
                 <video id="vid-quick" muted playsinline></video>
                 <div class="tile-status">connecting…</div>
+                @if (_cameras.FirstOrDefault(c => c.Name == qv.Camera) is { Privacy: true })
+                {
+                    <div class="tile-privacy">
+                        <span class="tile-privacy-icon">🔒</span>
+                        <span>privacy mode</span>
+                        <small>the camera is dark on purpose — switch it back in camera settings or the Reolink app</small>
+                    </div>
+                }
                 @ZoomHud
                 @if (TalkActive(qv.Camera!))
                 {
@@ -892,7 +917,9 @@
 
     @if (_playEvent != null)
     {
-        <div class="backdrop player-backdrop" @onclick="ClosePlayerAsync"></div>
+        @* No @onclick: closing marks the event reviewed, so a stray click on the
+           dim wall (or Esc — see escInit) must never dismiss it. Only ✕ closes. *@
+        <div class="backdrop player-backdrop"></div>
         <div class="event-player" role="dialog" aria-label="Event playback">
             <div class="event-player-head">
                 <div class="event-player-title">
@@ -906,13 +933,13 @@
             @if (_playEvent.HasClip)
             {
                 @* @key forces a fresh <video> when navigating between events.
-                   The source is chosen by speed (JS owns it, preserving position):
-                   full clip at 1×, low-res sub-stream preview when fast-forwarding
-                   so the decoder doesn't stall on 2K/4K (esp. H.265) frames. *@
+                   JS owns the source (preserving position across an HD↔SD swap)
+                   and mutes the audio pipeline above 1× — the timeline's recipe,
+                   which is what lets full-res clips fast-forward smoothly. *@
                 @* zoom-on: the recorded clip gets the same digital zoom as live
                    tiles (wheel at the cursor, drag to pan, HUD, dbl-click 1:1).
                    Keyed per event so zoom resets when navigating between events
-                   but survives the clip↔preview swap at higher speeds. *@
+                   but survives the HD↔SD swap. *@
                 <div class="event-player-media zoom-on" @key="_playEvent.Id">
                     <video id="event-player-video" controls autoplay playsinline></video>
                     @ZoomHud
@@ -924,9 +951,14 @@
                         <button class="chip @(_playSpeed == s ? "chip-active" : "")"
                                 @onclick="() => SetPlaySpeedAsync(s)">@FormatSpeed(s)</button>
                     }
-                    @if (_playSpeed > 1 && _playEvent.HasPreview)
+                    @if (_playEvent.HasPreview)
                     {
-                        <span class="event-sub">· preview quality while fast-forwarding</span>
+                        <span class="tool-label player-quality-label">QUALITY</span>
+                        <button class="chip @(_playSd ? "" : "chip-active")" title="Full-quality main-stream recording"
+                                @onclick="() => SetPlayStreamAsync(sd: false)">HD</button>
+                        <button class="chip @(_playSd ? "chip-active" : "")"
+                                title="Low-res sub-stream recording — smoother fast-forward on slow storage"
+                                @onclick="() => SetPlayStreamAsync(sd: true)">SD</button>
                     }
                 </div>
             }
@@ -1186,6 +1218,7 @@
             _secWarnDismissed = await JS.InvokeAsync<string?>("neolink.ssGet", SecWarnDismissKey) == "1";
             _mainWarned = await JS.InvokeAsync<string?>("neolink.lsGet", MainWarnKey) == "1";
             _updateDismissedVersion = await JS.InvokeAsync<string?>("neolink.lsGet", "neolink.updateDismissed");
+            _playSd = await JS.InvokeAsync<string?>("neolink.lsGet", "neolink.eventSd") == "1";
         }
         catch { }
     }
@@ -2023,14 +2056,19 @@
         }
     }
 
-    private static readonly double[] PlaybackSpeeds = { 1, 2, 4, 8 };
+    private static readonly double[] PlaybackSpeeds = { 1, 2, 4, 8, 16 };
     private double _playSpeed = 1;
+
+    /// <summary>The user's HD/SD pick: false = full main-stream clip (default at
+    /// every speed — muted fast playback keeps it smooth), true = the low-res
+    /// sub-stream twin, the escape hatch when storage or decoder can't keep up.
+    /// Persisted browser-side ("neolink.eventSd") — a deliberate choice sticks.</summary>
+    private bool _playSd;
 
     private static string FormatSpeed(double s) => s == 1 ? "1×" : $"{s:0}×";
 
-    /// <summary>Full clip at 1×; the light sub-stream preview when fast-forwarding (if it exists).</summary>
     private string PlayerUrl => _playEvent == null ? "" :
-        (_playSpeed > 1 && _playEvent.HasPreview)
+        (_playSd && _playEvent.HasPreview)
             ? EventArtifactUrl(_playEvent, "preview")
             : EventArtifactUrl(_playEvent, "clip");
 
@@ -2038,6 +2076,13 @@
     {
         _playSpeed = s;
         await JS.InvokeVoidAsync("neolink.eventPlayer", "event-player-video", PlayerUrl, s);
+    }
+
+    private async Task SetPlayStreamAsync(bool sd)
+    {
+        _playSd = sd;
+        try { await JS.InvokeVoidAsync("neolink.lsSet", "neolink.eventSd", sd ? "1" : "0"); } catch { }
+        await JS.InvokeVoidAsync("neolink.eventPlayer", "event-player-video", PlayerUrl, _playSpeed);
     }
 
     private void OpenEvent(ApiEvent ev) { _playEvent = ev; _playSpeed = 1; }
@@ -2336,11 +2381,13 @@
     }
 
     private static string CamHeadTitle(ApiCamera cam) =>
-        cam.Online
-            ? "Open full view (main stream) — drag the card onto a tile to add it to the wall"
-            : cam.Asleep
-                ? "Battery camera sleeping to save power — opening a stream reconnects (it must be awake to answer)"
-                : "Camera unreachable — reconnecting";
+        cam.Privacy
+            ? "Privacy mode is on — the camera is dark on purpose until it is switched back"
+            : cam.Online
+                ? "Open full view (main stream) — drag the card onto a tile to add it to the wall"
+                : cam.Asleep
+                    ? "Battery camera sleeping to save power — opening a stream reconnects (it must be awake to answer)"
+                    : "Camera unreachable — reconnecting";
 
     private void ChangeStream(int index, ApiCamera camera, string? path)
     {
