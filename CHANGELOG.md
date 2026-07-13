@@ -21,6 +21,28 @@ in the README). Paste the matching section below into the GitHub release.
 - **Beta channel**: pushes to the `beta` branch publish
   `ghcr.io/borexola/neolink.net:beta`, a rolling pre-release image users can opt
   into to test new features without affecting the stable `latest`/release tags.
+- **Storage in Home Assistant**: the Neolink.NET Server MQTT device gains
+  per-tier free/used sensors (main always; clips/archive only when those tiers
+  are configured — no phantom sensors, and removing a tier clears its sensors
+  from HA) plus a **Storage full** `problem` binary_sensor that turns ON when a
+  recording drive runs out of space, so an automation can notify even with the
+  web UI closed.
+- **Startup warning for mis-mounted tiers**: the server logs a warning when
+  separately-configured storage tiers report identical capacity — the signature
+  of a Docker bind mount that never attached to its drive and fell back to the
+  container's root filesystem.
+
+### Fixed
+
+- **Stale "Siren (Press)" button in Home Assistant**: an early build exposed the
+  siren as a momentary MQTT button; it has been a latched switch for a while, but
+  the old retained discovery config lingered so HA kept showing a dead button.
+  The bridge now deletes it on connect. Neolink publishes exactly a **Siren**
+  switch (works) and a read-only **Siren sounding** sensor.
+- **Privacy mode over-detected** on cameras that advertise `<sleep>` in DeviceInfo
+  but don't actually support it (e.g. the RLC "Elite" WiFi line). Detection now
+  also requires the channel's `remoteAbility` support flag, mirroring reolink_aio
+  (the library Home Assistant ships).
 
 ## 0.8.7
 

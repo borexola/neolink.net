@@ -141,6 +141,35 @@ public static class SelfTest
             Assert(!Streaming.CameraControl.SupportFlag(null, "ptzMode"), "no Support xml = unsupported");
         });
 
+        Test("channel support flag reads per-channel item then host fallback", () =>
+        {
+            // Privacy mode is gated on remoteAbility being >0 for the channel
+            // (the reolink_aio discriminator that keeps <sleep>-advertising but
+            // non-supporting cameras — e.g. RLC "Elite" — out of the privacy UI).
+            var host = System.Xml.Linq.XElement.Parse(
+                "<Support version=\"1.1\"><remoteAbility>1</remoteAbility></Support>");
+            Assert(Streaming.CameraControl.ChannelSupportFlag(host, 0, "remoteAbility"),
+                "host-level remoteAbility=1 supported");
+
+            var perChan = System.Xml.Linq.XElement.Parse(
+                "<Support version=\"1.1\">" +
+                "<item><chnID>0</chnID><remoteAbility>1</remoteAbility></item>" +
+                "<item><chnID>1</chnID><remoteAbility>0</remoteAbility></item></Support>");
+            Assert(Streaming.CameraControl.ChannelSupportFlag(perChan, 0, "remoteAbility"),
+                "channel 0 remoteAbility=1 supported");
+            Assert(!Streaming.CameraControl.ChannelSupportFlag(perChan, 1, "remoteAbility"),
+                "channel 1 remoteAbility=0 unsupported");
+
+            // The Elite case: <sleep> is advertised elsewhere but remoteAbility is
+            // absent → the second gate fails → privacy stays off.
+            var elite = System.Xml.Linq.XElement.Parse(
+                "<Support version=\"1.1\"><ptzMode>none</ptzMode></Support>");
+            Assert(!Streaming.CameraControl.ChannelSupportFlag(elite, 0, "remoteAbility"),
+                "absent remoteAbility = unsupported (Elite stays out of privacy UI)");
+            Assert(!Streaming.CameraControl.ChannelSupportFlag(null, 0, "remoteAbility"),
+                "no Support xml = unsupported");
+        });
+
         Test("extension parse", () =>
         {
             var xml = "<?xml version=\"1.0\" encoding=\"UTF-8\" ?>\n<Extension version=\"1.1\">\n<binaryData>1</binaryData>\n</Extension>\n";
@@ -753,6 +782,23 @@ public static class SelfTest
                 var blind = new Recording.StorageLocations(
                     new Config.RecordingConfig { Path = mainP }, probe: _ => null);
                 Assert(blind.HasRoom(Recording.StorageRole.Main), "unreadable volume does not block recording");
+
+                // Shared-volume detection: distinct tier paths that report the same
+                // capacity (a mis-mounted Docker volume that fell back to root) warn.
+                const long GB2 = 1024L * 1024 * 1024;
+                var collided = new Recording.StorageLocations(
+                    new Config.RecordingConfig { Path = mainP, ClipsPath = clipsP, ArchivePath = archiveP },
+                    // Main is genuinely separate; clips and archive both fell back to
+                    // the same (root) filesystem, so they report byte-identical stats.
+                    probe: p => Path.GetFullPath(p) == Path.GetFullPath(mainP)
+                        ? (2000 * GB2, 1000 * GB2)
+                        : (500 * GB2, 200 * GB2));
+                var warnings = collided.SharedVolumeWarnings().ToList();
+                AssertEq(warnings.Count, 1);
+                Assert(warnings[0].Contains("Clips") && warnings[0].Contains("Archive"),
+                    "clips + archive flagged as the same filesystem");
+                // Genuinely-distinct capacities raise nothing.
+                Assert(!full.SharedVolumeWarnings().Any(), "healthy distinct tiers do not warn");
             }
             finally
             {
@@ -1002,6 +1048,41 @@ public static class SelfTest
                 new { name = "X", icon = (string?)null, unit_of_measurement = (string?)null },
                 Mqtt.HomeAssistantMqtt.DiscoveryJson);
             AssertEq(json, "{\"name\":\"X\"}");
+        });
+
+        Test("HA storage tiers announced only when configured", () =>
+        {
+            // "Careful not to send non-existent storage": a single-folder install
+            // gets no clips/archive sensors; each optional tier appears only when
+            // its path is separately configured.
+            var baseDir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            var main = Path.Combine(baseDir, "rec");
+            var clips = Path.Combine(baseDir, "clips");
+            var arch = Path.Combine(baseDir, "arch");
+            try
+            {
+                (long, long)? probe(string p) => (1000L, 500L);
+
+                var plain = new Recording.StorageLocations(
+                    new Config.RecordingConfig { Path = main }, probe: probe);
+                AssertEq(Mqtt.HomeAssistantMqtt.StorageTierKeys(plain).Count(), 0);
+
+                var clipsOnly = new Recording.StorageLocations(
+                    new Config.RecordingConfig { Path = main, ClipsPath = clips }, probe: probe);
+                var k1 = Mqtt.HomeAssistantMqtt.StorageTierKeys(clipsOnly).Select(t => t.Key).ToList();
+                Assert(k1.SequenceEqual(new[] { "clips" }), "clips tier only, no archive");
+
+                var both = new Recording.StorageLocations(
+                    new Config.RecordingConfig { Path = main, ClipsPath = clips, ArchivePath = arch }, probe: probe);
+                var k2 = Mqtt.HomeAssistantMqtt.StorageTierKeys(both).Select(t => t.Key).ToList();
+                Assert(k2.SequenceEqual(new[] { "clips", "archive" }), "both optional tiers");
+
+                AssertEq(Mqtt.HomeAssistantMqtt.StorageTierKeys(null).Count(), 0);
+            }
+            finally
+            {
+                try { Directory.Delete(baseDir, recursive: true); } catch { }
+            }
         });
 
         Test("config editor: read-modify-write with validation", () =>

@@ -42,13 +42,15 @@ namespace Neolink.Mqtt;
 ///                    {web-ui}/events?event={id}
 ///   • select:        night vision (auto/on/off)         (IR-capable cameras)
 ///   • light:         floodlight                         (cameras with a spotlight)
-///   • button:        reboot, siren, and PTZ steps       (per capability)
+///   • button:        reboot and PTZ steps               (per capability)
 ///   • camera:        latest snapshot                    (when the camera supports it)
 ///
 /// The SERVER also reports itself: a "Neolink.NET Server" device with health
 /// sensors straight off the monitor page (CPU, memory, disk, recordings size,
 /// write rate, viewers, cameras online/recording, start time), published every
-/// mqtt.stats_interval seconds (default 60; 0 turns the device off).
+/// mqtt.stats_interval seconds (default 60; 0 turns the device off). With split
+/// storage configured it also carries per-tier free/used sensors (clips/archive,
+/// only for tiers that exist) and a "Storage full" problem binary_sensor.
 ///
 /// Availability is two-level (HA marks entities unavailable when either is off):
 /// a bridge-wide Last-Will topic and a per-camera online topic. Commands from HA
@@ -118,6 +120,11 @@ public sealed class HomeAssistantMqtt
     /// <summary>Resource sampler feeding the server's own HA device; when null
     /// (or stats_interval is 0) the server device is not announced.</summary>
     public Web.SystemMonitor? Monitor { get; init; }
+
+    /// <summary>Configured storage tiers, for the per-tier HA sensors. Only the
+    /// tiers that actually exist are published (a plain single-folder install
+    /// gets none of the clips/archive sensors).</summary>
+    public Recording.StorageLocations? Storage { get; init; }
 
     private bool ServerStatsEnabled => Monitor != null && _cfg.StatsIntervalSeconds > 0;
 
@@ -252,32 +259,98 @@ public sealed class HomeAssistantMqtt
         sw_version = _version,
     };
 
+    /// <summary>The OPTIONAL storage tiers configured beyond the main recordings
+    /// volume (which is already the disk_free/disk_used_pct sensors). "clips"
+    /// and/or "archive" — nothing for a plain single-folder install, so HA never
+    /// shows sensors for storage the user doesn't actually have. Internal/static
+    /// so the self-tests can pin the "only what exists" contract.</summary>
+    internal static IEnumerable<(string Key, string Label)> StorageTierKeys(Recording.StorageLocations? storage)
+    {
+        if (storage == null) yield break;
+        if (storage.HasClipsTier) yield return ("clips", "Clips");
+        if (storage.HasArchiveTier) yield return ("archive", "Archive");
+    }
+
+    private IEnumerable<(string Key, string Label)> StorageTiers() => StorageTierKeys(Storage);
+
+    private Task AnnounceServerSensorAsync(string key, string name, string? unit,
+        string? deviceClass, string? icon, bool diagnostic, CancellationToken ct)
+    {
+        var config = new
+        {
+            name,
+            unique_id = $"neolink_server_{key}",
+            state_topic = ServerTopic(key),
+            unit_of_measurement = unit,
+            device_class = deviceClass,
+            // Numeric gauges chart as measurements; the timestamp doesn't.
+            state_class = deviceClass == "timestamp" ? null : "measurement",
+            icon,
+            entity_category = diagnostic ? "diagnostic" : (string?)null,
+            device = ServerDevice(),
+            availability = new object[] { new { topic = _availabilityTopic } },
+            availability_mode = "all",
+        };
+        return PublishAsync($"{_cfg.DiscoveryPrefix}/sensor/neolink_server/{key}/config",
+            JsonSerializer.Serialize(config, DiscoveryJson), ct);
+    }
+
     private async Task AnnounceServerAsync(CancellationToken ct)
     {
         if (!_cfg.Discovery) return;
         foreach (var s in ServerSensors)
+            await AnnounceServerSensorAsync(s.Key, s.Name, s.Unit, s.DeviceClass, s.Icon, s.Diagnostic, ct)
+                .ConfigureAwait(false);
+
+        // Per-tier storage sensors — only the tiers that actually exist.
+        foreach (var (key, label) in StorageTiers())
         {
-            var config = new
+            await AnnounceServerSensorAsync($"{key}_free", $"{label} free", "GB", null, "mdi:harddisk", false, ct)
+                .ConfigureAwait(false);
+            await AnnounceServerSensorAsync($"{key}_used_pct", $"{label} used", "%", null, "mdi:harddisk", false, ct)
+                .ConfigureAwait(false);
+        }
+        // Aggregate "any recording drive is out of space" alarm — the unattended
+        // hook so an automation can notify even when nobody has the web UI open.
+        if (Storage != null)
+        {
+            var full = new
             {
-                name = s.Name,
-                unique_id = $"neolink_server_{s.Key}",
-                state_topic = ServerTopic(s.Key),
-                unit_of_measurement = s.Unit,
-                device_class = s.DeviceClass,
-                // Numeric gauges chart as measurements; the timestamp doesn't.
-                state_class = s.DeviceClass == "timestamp" ? null : "measurement",
-                icon = s.Icon,
-                entity_category = s.Diagnostic ? "diagnostic" : null,
+                name = "Storage full",
+                unique_id = "neolink_server_storage_full",
+                state_topic = ServerTopic("storage_full"),
+                device_class = "problem",
+                payload_on = "ON",
+                payload_off = "OFF",
+                icon = "mdi:harddisk-remove",
                 device = ServerDevice(),
                 availability = new object[] { new { topic = _availabilityTopic } },
                 availability_mode = "all",
             };
-            await PublishAsync($"{_cfg.DiscoveryPrefix}/sensor/neolink_server/{s.Key}/config",
-                JsonSerializer.Serialize(config, DiscoveryJson), ct).ConfigureAwait(false);
+            await PublishAsync($"{_cfg.DiscoveryPrefix}/binary_sensor/neolink_server/storage_full/config",
+                JsonSerializer.Serialize(full, DiscoveryJson), ct).ConfigureAwait(false);
         }
+
+        // Remove retained discovery for optional storage entities that are NOT
+        // configured right now, so dropping a tier (or turning recording off)
+        // never leaves a phantom sensor behind in HA.
+        var present = StorageTiers().Select(t => t.Key).ToHashSet();
+        foreach (var tier in new[] { "clips", "archive" })
+        {
+            if (present.Contains(tier)) continue;
+            await ClearServerEntityAsync("sensor", $"{tier}_free", ct).ConfigureAwait(false);
+            await ClearServerEntityAsync("sensor", $"{tier}_used_pct", ct).ConfigureAwait(false);
+        }
+        if (Storage == null)
+            await ClearServerEntityAsync("binary_sensor", "storage_full", ct).ConfigureAwait(false);
+
         await PublishAsync(ServerTopic("started"), Web.SystemMonitor.Started.ToString("o"), ct)
             .ConfigureAwait(false);
     }
+
+    /// <summary>Deletes a retained server-device discovery config (empty payload).</summary>
+    private Task ClearServerEntityAsync(string component, string key, CancellationToken ct) =>
+        PublishAsync($"{_cfg.DiscoveryPrefix}/{component}/neolink_server/{key}/config", "", ct);
 
     private async Task PublishServerStatsAsync(CancellationToken ct)
     {
@@ -285,6 +358,28 @@ public sealed class HomeAssistantMqtt
         int online = _cameras.Values.Count(c => c.Online);
         foreach (var (key, value) in ServerStatePayloads(sample, online))
             await PublishAsync(ServerTopic(key), value, ct).ConfigureAwait(false);
+        await PublishStorageTiersAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>Publishes free/used for each optional tier and the aggregate
+    /// storage-full flag. Only configured, readable tiers get values.</summary>
+    private async Task PublishStorageTiersAsync(CancellationToken ct)
+    {
+        if (Storage == null) return;
+        const double GB = 1024.0 * 1024 * 1024;
+        var sample = Storage.Sample();
+        await PublishAsync(ServerTopic("storage_full"), sample.Any(s => s.Full) ? "ON" : "OFF", ct)
+            .ConfigureAwait(false);
+        foreach (var st in sample)
+        {
+            // Main is the disk_free/disk_used_pct sensors already.
+            var key = st.Role.ToString().ToLowerInvariant();
+            if (key == "main" || !st.Online || st.TotalBytes <= 0) continue;
+            await PublishAsync(ServerTopic($"{key}_free"), (st.FreeBytes / GB).ToString("0.#"), ct)
+                .ConfigureAwait(false);
+            await PublishAsync(ServerTopic($"{key}_used_pct"), st.UsedPercent.ToString("0.#"), ct)
+                .ConfigureAwait(false);
+        }
     }
 
     private async Task ServerStatsLoopAsync(CancellationToken ct)
@@ -540,7 +635,13 @@ internal sealed class CameraBridge
         // one the camera's own status pushes (msg 547) feed, so HA tracks reality
         // even when the siren was set off by the camera's own detection rules.
         if (f.Siren)
+        {
             await AnnounceEntityAsync("switch", "siren_switch", SirenSwitchConfig(), ct).ConfigureAwait(false);
+            // Legacy cleanup: an early build exposed the siren as a momentary
+            // BUTTON. It is a latched switch now; delete the stale retained
+            // discovery config so HA drops the dead "Siren (Press)" button.
+            await ClearEntityAsync("button", "siren", ct).ConfigureAwait(false);
+        }
         if (f.Privacy)
             await AnnounceEntityAsync("switch", "privacy_mode", PrivacySwitchConfig(), ct).ConfigureAwait(false);
         if (_hasIr)
@@ -562,6 +663,16 @@ internal sealed class CameraBridge
         if (!_hub.Config.Discovery) return Task.CompletedTask;
         var topic = $"{_hub.Config.DiscoveryPrefix}/{component}/neolink_{Id}/{objectId}/config";
         return _hub.PublishAsync(topic, JsonSerializer.Serialize(config, HomeAssistantMqtt.DiscoveryJson), ct);
+    }
+
+    /// <summary>Removes an entity HA still has from an older version of this bridge:
+    /// an empty RETAINED payload on its discovery-config topic tells HA to delete
+    /// it. No-op when the topic was never published (nothing retained there).</summary>
+    private Task ClearEntityAsync(string component, string objectId, CancellationToken ct)
+    {
+        if (!_hub.Config.Discovery) return Task.CompletedTask;
+        var topic = $"{_hub.Config.DiscoveryPrefix}/{component}/neolink_{Id}/{objectId}/config";
+        return _hub.PublishAsync(topic, "", ct);
     }
 
     /// <summary>The device block shared by every entity so HA groups them under one device.</summary>

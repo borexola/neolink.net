@@ -174,11 +174,17 @@ public sealed class CameraControl : ICameraControl
             var talkTask = TryAsync(() => camera.GetTalkAbilityAsync(ProbeTimeout, ct));
             var zoomTask = TryAsync(() => camera.GetZoomFocusAsync(ProbeTimeout, ct));
             var floodTask = TryAsync(() => camera.GetFloodlightTasksAsync(ProbeTimeout, ct));
-            // Privacy mode is only real when the login DeviceInfo advertises a
-            // <sleep> element (Reolink's support signal — E1/E-series/doorbell).
-            // Other firmware happily ANSWERS the state query but ignores writes,
-            // so probing the query alone over-detects.
-            var privacyTask = camera.DeviceInfo?.HasSleep == true
+            // Privacy mode needs BOTH of Reolink's support signals (mirroring
+            // reolink_aio, which is what Home Assistant ships):
+            //   1. the login DeviceInfo advertises a <sleep> element, AND
+            //   2. this channel's Support flags carry remoteAbility > 0.
+            // Either alone over-detects: some non-battery firmwares (e.g. the
+            // RLC "Elite" WiFi line) include <sleep> in DeviceInfo as a status
+            // field and answer the 574 state query — but ignore writes. Only
+            // cameras passing both gates get the (beta) privacy section.
+            bool sleepAd = camera.DeviceInfo?.HasSleep == true;
+            bool remoteAbility = ChannelSupportFlag(support, camera.ChannelId, "remoteAbility");
+            var privacyTask = sleepAd && remoteAbility
                 ? ProbeValueAsync(() => camera.GetPrivacyModeAsync(ProbeTimeout, ct))
                 : Task.FromResult<bool?>(null);
             await Task.WhenAll(ledTask, pirTask, batteryTask, talkTask, zoomTask, floodTask, privacyTask).ConfigureAwait(false);
@@ -200,6 +206,9 @@ public sealed class CameraControl : ICameraControl
                      $"(ptz={ptz}, led={led}, pir={pir}, battery={battery}, talk={talk}" +
                      $", zoom={zoom}, siren={siren}, floodlight={floodlight}, privacy={privacy}" +
                      $"{(version != null && version.Model.Length > 0 ? $", model={version.Model}" : "")})");
+            if (sleepAd != remoteAbility)
+                Log.Debug($"{CameraName}: privacy gate — DeviceInfo<sleep>={sleepAd}, " +
+                          $"remoteAbility={remoteAbility} (both required; mismatch means privacy stays off)");
             return _caps;
         }, ct);
 
@@ -432,6 +441,22 @@ public sealed class CameraControl : ICameraControl
     internal static bool SupportFlag(XElement? support, string name)
     {
         var text = support?.Element(name)?.Value.Trim();
+        if (string.IsNullOrEmpty(text) || text.Equals("none", StringComparison.OrdinalIgnoreCase))
+            return false;
+        return !uint.TryParse(text, out var value) || value != 0;
+    }
+
+    /// <summary>A per-channel Support flag: reads the channel's &lt;item&gt; block
+    /// (matched by &lt;chnID&gt;) first, then falls back to the host-level element.
+    /// Standalone cameras keep their per-channel flags in item 0; NVRs carry one
+    /// item per attached camera.</summary>
+    internal static bool ChannelSupportFlag(XElement? support, int channel, string name)
+    {
+        if (support == null) return false;
+        var item = support.Elements("item")
+            .FirstOrDefault(i => (int?)i.Element("chnID") == channel);
+        var el = item?.Element(name) ?? support.Element(name);
+        var text = el?.Value.Trim();
         if (string.IsNullOrEmpty(text) || text.Equals("none", StringComparison.OrdinalIgnoreCase))
             return false;
         return !uint.TryParse(text, out var value) || value != 0;

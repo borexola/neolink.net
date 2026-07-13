@@ -182,6 +182,10 @@ if (config.Recording is { } recCfg)
             Log.Info($"Recording: event clips go to the fast tier at {storage.ClipsRoot}");
         if (storage.ArchiveRoot is { } archRoot)
             Log.Info($"Recording: archive tier at {archRoot} — cameras opt in from the web UI");
+        // Catch the common Docker footgun where separate tier paths silently land
+        // on the same (root) filesystem because their bind mounts never attached.
+        foreach (var warn in storage.SharedVolumeWarnings())
+            Log.Warn($"Storage: {warn}");
         // Per-camera lifecycle: the cleanup pass sees storage-directory names, so map
         // them back to camera names to look up each camera's settings. Archiving is
         // a per-camera opt-in and needs the archive tier to exist.
@@ -379,7 +383,7 @@ if (config.WebPort > 0 || config.Mqtt is { StatsIntervalSeconds: > 0 })
 // motion for MQTT-only setups (recording off).
 if (config.Mqtt is { } mqttCfg)
 {
-    mqtt = new HomeAssistantMqtt(mqttCfg, webCameras, Version) { Monitor = monitor };
+    mqtt = new HomeAssistantMqtt(mqttCfg, webCameras, Version) { Monitor = monitor, Storage = storage };
 }
 foreach (var (primary, name, recorderSink) in motionTargets)
 {

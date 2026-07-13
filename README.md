@@ -43,6 +43,29 @@ The cameras are unmodified and no Reolink NVR is required.
 
 *All screenshots show synthetic demo footage.*
 
+## Lightweight by design — the camera does the heavy lifting
+
+Neolink runs no object detection of its own: it never decodes, transcodes, or
+analyses a single video frame for motion or AI. All of that already happens *on
+the camera*, whose dedicated silicon detects motion and classifies people,
+vehicles and animals in real time. Neolink simply **listens for the alarm
+messages the camera pushes** over the Baichuan connection (the same events that
+drive Reolink's own app) and relays them to Home Assistant as MQTT sensors — and
+doorbell button presses as MQTT events. That means:
+
+- **No GPU, no Coral, no CPU-hungry inference** — unlike setups where a server
+  re-analyses every stream, Neolink adds essentially zero processing load. It
+  runs comfortably on a Raspberry Pi or a small NAS container.
+- **Event-driven, not polled** — sensors fire the instant the camera sees
+  something, with no scan interval and no per-frame work.
+- **AI is only as good as the camera** — person/vehicle/animal labels come from
+  the camera's firmware, so enable the detection types you want in the Reolink
+  app and Neolink surfaces exactly those.
+
+The trade-off is that detection quality and available classes are whatever your
+camera model provides (rather than a tunable server-side model like Frigate's);
+in exchange you get an integration light enough to leave running forever.
+
 ## Features
 
 **RTSP bridge**
@@ -524,28 +547,6 @@ config, so a **device per camera** appears automatically — no YAML in HA.
 
 ![A camera's Home Assistant device page: controls (floodlight, night vision, PTZ, privacy mode, siren, reboot), detection sensors and an activity feed — all auto-discovered over MQTT](docs/home-assistant.png)
 
-**Lightweight by design — the camera does the heavy lifting.** Neolink runs no
-object detection of its own: it never decodes, transcodes, or analyses a single
-video frame for motion or AI. All of that already happens *on the camera*, whose
-dedicated silicon detects motion and classifies people, vehicles and animals in
-real time. Neolink simply **listens for the alarm messages the camera pushes**
-over the Baichuan connection (the same events that drive Reolink's own app) and
-relays them to Home Assistant as MQTT sensors — and doorbell button presses as
-MQTT events. That means:
-
-- **No GPU, no Coral, no CPU-hungry inference** — unlike setups where a server
-  re-analyses every stream, Neolink adds essentially zero processing load. It
-  runs comfortably on a Raspberry Pi or a small NAS container.
-- **Event-driven, not polled** — sensors fire the instant the camera sees
-  something, with no scan interval and no per-frame work.
-- **AI is only as good as the camera** — person/vehicle/animal labels come from
-  the camera's firmware, so enable the detection types you want in the Reolink
-  app and Neolink surfaces exactly those.
-
-The trade-off is that detection quality and available classes are whatever your
-camera model provides (rather than a tunable server-side model like Frigate's);
-in exchange you get an integration light enough to leave running forever.
-
 ```json
 "mqtt": {
   "broker": "192.168.1.10",
@@ -578,12 +579,28 @@ in exchange you get an integration light enough to leave running forever.
 | Recording | `binary_sensor` | ON while the server is writing this camera's footage right now — an event clip (detection or on-demand) or a continuous segment |
 | Battery | `sensor` | Battery cameras; charge status + temperature as attributes |
 | Wi-Fi signal | `sensor` | Diagnostic; RSSI in dBm from the camera's own status pushes (Wi-Fi cameras) |
-| Siren | `binary_sensor` | Cameras that report their siren state (appears on the first status push) |
+| Siren | `switch` | Sound the siren until turned off (audio-alarm cameras); state follows the camera's own siren pushes, so it stays honest even when the camera's rules trigger it |
+| Siren sounding | `binary_sensor` | Read-only: ON while the siren is sounding (appears on the first status push) |
 | Night vision | `select` | `auto` / `on` / `off` |
 | Floodlight | `light` | Cameras with a spotlight |
 | PIR sensor | `switch` | Enable/disable the PIR |
 | Reboot, Pan up/down/left/right | `button` | PTZ buttons on pan-tilt cameras |
 | Snapshot | `camera` | Latest JPEG, refreshed periodically (when the camera supports snapshots) |
+
+A separate **Neolink.NET Server** device carries the server's own health
+(published every `stats_interval` seconds): CPU, memory, recordings size, write
+rate, viewers, cameras online/recording, uptime, and storage:
+
+| Entity | Type | Notes |
+|---|---|---|
+| Storage free / Storage used | `sensor` | The main recordings volume (`recording.path`) |
+| Clips free / Clips used | `sensor` | Only when a separate `clips_path` is configured |
+| Archive free / Archive used | `sensor` | Only when a separate `archive_path` is configured |
+| Storage full | `binary_sensor` (`problem`) | ON when any recording drive is out of space and recording to it has stopped — the hook for an unattended "free up space" notification even when nobody has the web UI open |
+
+Only storage that actually exists is published: a plain single-folder install
+gets no clips/archive sensors, and removing a tier later clears its sensors from
+HA automatically.
 
 **Doorbell presses** are published to `{base_topic}/{camera}/doorbell` with the
 payload `{"event_type":"press"}`, so non-HA consumers (Node-RED, scripts) can
@@ -800,6 +817,10 @@ docker workflow builds the multi-arch images with that exact version baked in
 (`-p:Version` from the tag), so every release increments the reported version
 without a code change. Untagged builds report the csproj version.
 
+Pushing to the **`beta` branch** publishes `ghcr.io/borexola/neolink.net:beta`
+— a rolling pre-release channel, separate from `latest` and the version tags —
+for trying new features before a stable release.
+
 ## Self-tests & development
 
 ```bash
@@ -831,7 +852,7 @@ change between test builds; only the `VERSION` label varies. Keep that label
 label without one would see every release as an update:
 
 ```bash
-docker build -t neolink.net:test --build-arg VERSION=0.8.6-test .
+docker build -t neolink.net:test --build-arg VERSION=0.8.8-test .
 
 # sanity checks: the right version AND the right code (the suite runs in-image)
 docker run --rm --entrypoint dotnet neolink.net:test neolink.net.dll --version

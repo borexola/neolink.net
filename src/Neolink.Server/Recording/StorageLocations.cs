@@ -110,6 +110,23 @@ public sealed class StorageLocations
         }
     }
 
+    /// <summary>Configured-distinct tiers that report byte-identical capacity — a
+    /// strong hint they actually resolve to the SAME filesystem. The usual cause
+    /// is a Docker bind mount that never attached to the intended drive (the drive
+    /// wasn't mounted when the container started, or the container wasn't
+    /// recreated), so the path sits on the container's root overlay instead.
+    /// One human-readable warning per colliding group; empty when all is well.</summary>
+    public IEnumerable<string> SharedVolumeWarnings() =>
+        Sample()
+            .Where(s => s.Online && s.TotalBytes > 0)
+            .GroupBy(s => (s.TotalBytes, s.FreeBytes))
+            .Where(g => g.Count() > 1)
+            .Select(g =>
+                $"{string.Join(" and ", g.Select(s => $"{s.Label} ({s.Path})"))} report identical " +
+                "capacity — they are probably on the SAME filesystem, not the separate drives you " +
+                "configured. In Docker, recreate the container (docker compose up -d --force-recreate) " +
+                "and make sure the drives are mounted before Docker starts.");
+
     /// <summary>Capacity reading of every distinct location.</summary>
     public List<StorageStatus> Sample() =>
         Locations.Select(l =>
