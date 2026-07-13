@@ -233,6 +233,25 @@ public static class SelfTest
             }
         });
 
+        Test("config with zero cameras loads (first-run web UI boots empty)", () =>
+        {
+            // A fresh install must NOT crash on an empty camera list — the web UI
+            // boots so the user can add cameras. Regression guard for the
+            // frictionless first-run (auto-created starter config).
+            var tmp = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}.json");
+            File.WriteAllText(tmp, """{ "web_port": 8655, "cameras": [] }""");
+            try
+            {
+                var cfg = NeolinkConfig.Load(tmp); // must not throw
+                AssertEq(cfg.Cameras.Count, 0);
+                AssertEq(cfg.WebPort, 8655);
+            }
+            finally
+            {
+                File.Delete(tmp);
+            }
+        });
+
         Test("h264 annex-b NAL splitting", () =>
         {
             var stream = new byte[] { 0, 0, 0, 1, 0x67, 1, 2, 3, 0, 0, 1, 0x68, 9, 8, 0, 0, 0, 1, 0x65, 5, 5, 5 };

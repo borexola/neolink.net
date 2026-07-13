@@ -160,6 +160,7 @@ Available tags:
 | `latest` | most recent build of `main` |
 | `0.6.0`, `0.6` | a specific release (created from `v0.6.0` git tags) — pin these in production |
 | `main` | same as `latest`, explicit branch tag |
+| `beta` | rolling pre-release test channel (built from the `beta` branch) — try new features early; not for production |
 
 Docker selects the right architecture (x86-64 server, Raspberry Pi 4/5, ARM NAS)
 automatically. Verify the pull:
@@ -183,6 +184,11 @@ curl -o config/config.json https://raw.githubusercontent.com/borexola/neolink.ne
 ```
 
 Edit it: camera names, IP addresses, and credentials (same login as the Reolink app).
+
+> **New to it?** You can skip this step. If `config.json` doesn't exist on
+> first start, Neolink writes a commented starter config and boots straight to
+> the web UI (empty, no crash-loop) — then edit `config.json` to add your
+> cameras and restart. Handy for one-click installs (Unraid, Portainer).
 
 ### 3. Run
 
@@ -224,6 +230,12 @@ services:
       - "8655:8655"   # web UI + API; remove if webui:false and API unused
     volumes:
       - ./config:/config   # holds config.json + web-UI settings.json
+      # Recording storage — uncomment and set "recording": { "path": "/recordings" } in config.json:
+      # - ./recordings:/recordings
+      # Optional tiered storage (see "Tiered storage" below). Map a volume for EVERY tier
+      # path you set, or that footage lands inside the container and is lost on recreate:
+      # - /mnt/fast-ssd/neolink:/clips     # fast SSD tier  → "clips_path": "/clips"
+      # - /mnt/bigdisk/neolink:/archive    # cold archive   → "archive_path": "/archive"
     # For RTSP over UDP transport, use host networking instead of port maps:
     # network_mode: host
 ```
@@ -234,6 +246,17 @@ Then:
 docker compose up -d
 docker compose logs -f    # shows the rtsp:// and web UI URLs
 ```
+
+### Unraid
+
+An Unraid [Community Applications](https://forums.unraid.net/topic/38582-plug-in-community-applications/)
+template ships in [`unraid/`](unraid/). Add
+`https://github.com/borexola/neolink.net` under **Apps → Settings → Template
+Repositories**, then search **Neolink.NET** in *Apps* — or paste the raw
+[template URL](https://raw.githubusercontent.com/borexola/neolink.net/main/unraid/neolink.net.xml)
+into **Docker → Add Container**. First start writes a starter config and opens
+the web UI; edit `config.json` in the Config share to add cameras. See
+[unraid/README.md](unraid/README.md).
 
 ### Upgrading
 
@@ -338,8 +361,8 @@ the original Rust neolink are also accepted.
 > filters reset; **(2)** the `recording.path` directory — lose it and footage
 > *and the reviewed/dismissed state* (stored in each event's `event.json`) reset,
 > so previously dismissed events reappear; **(3)** `config.json` itself. The
-> docker-compose example mounts (1)+(3) via `./config:/config` and (2) via
-> `./recordings:/recordings`.
+> docker-compose example mounts (1)+(3) via `./config:/config`; uncomment its
+> `./recordings:/recordings` line for (2) when you turn on recording.
 
 ### Web UI sign-in
 

@@ -2,7 +2,10 @@ name: docker
 
 on:
   push:
-    branches: [main]
+    # main -> :latest (+ the release tags below). beta -> :beta, a rolling test
+    # channel users can opt into (ghcr.io/.../neolink.net:beta) without touching
+    # stable; the :beta tag comes from the type=ref,event=branch rule below.
+    branches: [main, beta]
     tags: ["v*"]
   workflow_dispatch:
 

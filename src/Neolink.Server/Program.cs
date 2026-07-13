@@ -72,6 +72,27 @@ if (configPath == null)
     Log.Info($"Using config file: {Path.GetFullPath(configPath)}");
 }
 
+// First run with an explicit --config path that doesn't exist yet (the Docker /
+// Unraid / add-on case): write a commented starter config so the container boots
+// straight to the web UI instead of crash-looping on a missing file. The user
+// edits it to add cameras and restarts. Only reached with an explicit --config
+// path — the working-directory search above returns only files that exist.
+if (!File.Exists(configPath))
+{
+    try
+    {
+        var full = Path.GetFullPath(configPath);
+        Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+        File.WriteAllText(full, StarterConfig());
+        Log.Info($"No config file found — wrote a starter config to {full}. " +
+                 "Edit it to add your cameras (see the comments inside), then restart.");
+    }
+    catch (Exception ex)
+    {
+        return Fail($"No config at '{configPath}', and a starter could not be created there: {ex.Message}");
+    }
+}
+
 NeolinkConfig config;
 try
 {
@@ -531,6 +552,39 @@ static int Fail(string message)
     Console.Error.WriteLine("Run with --help for usage.");
     return 2;
 }
+
+// Written on first run when --config points at a file that doesn't exist yet, so
+// a fresh container boots to the web UI instead of crash-looping. Cameras start
+// empty (the app runs, the wall is empty); the user fills in a block and restarts.
+// The loader accepts // comments and trailing commas, so this stays valid as-is.
+static string StarterConfig() =>
+    """
+    {
+      // Neolink.NET wrote this starter config because none existed here.
+      // Add your cameras below, then restart. Full reference + all options:
+      // https://github.com/borexola/neolink.net (see config.example.json)
+
+      "bind": "0.0.0.0",
+      "bind_port": 8654,   // RTSP
+      "web_port": 8655,    // web UI + API
+      "webui": true,
+
+      // One entry per camera. Uncomment a block and fill in your camera's IP and
+      // the same username/password you use in the Reolink app. Until you add at
+      // least one, the web UI runs but shows no cameras.
+      "cameras": [
+        // {
+        //   "name": "driveway",
+        //   "username": "admin",
+        //   "password": "CHANGE-ME",
+        //   "address": "192.168.1.187:9000"
+        // }
+      ]
+
+      // To record, add a recording block (and map a volume at the path):
+      // ,"recording": { "path": "/recordings" }
+    }
+    """;
 
 static void PrintHelp()
 {

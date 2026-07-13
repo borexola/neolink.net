@@ -112,7 +112,11 @@
         }
         else if (_cameras.Count == 0)
         {
-            <div class="notice">No cameras yet…</div>
+            <div class="notice">
+                <b>No cameras yet.</b> Add them to <code>config.json</code> (the Docker
+                <code>/config</code> mount), then restart the server.
+                <a href="https://github.com/borexola/neolink.net#configuration" target="_blank" rel="noopener">Setup guide →</a>
+            </div>
         }
 
         @foreach (var cam in _cameras)

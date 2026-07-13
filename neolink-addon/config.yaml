@@ -4,7 +4,7 @@
 # pulls ghcr.io/borexola/neolink.net-addon-{arch}:<version>, which the docker
 # workflow publishes on every tag. Version here ≠ tag ⇒ users see no update.
 name: Neolink.NET
-version: "0.8.7"
+version: "0.8.8"
 slug: neolink
 description: >-
   Reolink camera bridge — live RTSP restreaming, a full web UI with recording

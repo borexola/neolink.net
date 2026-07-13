@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>Neolink.NET</Name>
+  <Repository>ghcr.io/borexola/neolink.net:latest</Repository>
+  <Registry>https://github.com/borexola/neolink.net/pkgs/container/neolink.net</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/borexola/neolink.net/issues</Support>
+  <Project>https://github.com/borexola/neolink.net</Project>
+  <Overview>Neolink.NET bridges Reolink cameras that speak the Baichuan protocol (TCP 9000) into standard RTSP streams for any NVR (Frigate, Blue Iris, VLC, Scrypted), a built-in browser UI with live view, motion/AI event review, a scrubbable timeline and recording, plus native Home Assistant entities over MQTT. No cloud, no Reolink app, zero native dependencies.[br][br][b]Setup:[/b] Just install &#8212; on first start Neolink writes a starter config.json into the Config folder and the web UI comes straight up. Open the [b]WebUI[/b] (port 8655) to create your admin account. To add cameras, edit [b]config.json[/b] in the Config path (default /mnt/user/appdata/neolink): uncomment the example camera block and set each camera's IP and the same username/password you use in the Reolink app, then restart the container.[br][br][b]Ports:[/b] 8654 RTSP (rtsp://[UNRAID-IP]:8654/&lt;camera-name&gt;), 8655 web UI + HTTP/WebSocket API.[br][b]Docs &amp; full config reference:[/b] https://github.com/borexola/neolink.net</Overview>
+  <Category>HomeAutomation: MediaApp:Video MediaServer:Video Tools:Utilities</Category>
+  <WebUI>http://[IP]:[PORT:8655]/</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/borexola/neolink.net/main/unraid/neolink.net.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/borexola/neolink.net/main/unraid/neolink.net.png</Icon>
+  <ExtraParams/>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+  <ExtraSearchTerms>reolink rtsp baichuan camera nvr frigate home assistant</ExtraSearchTerms>
+  <Config Name="WebUI + API Port" Target="8655" Default="8655" Mode="tcp" Description="Web interface and HTTP/WebSocket API. Open this in a browser to set up, watch and manage cameras." Type="Port" Display="always" Required="true" Mask="false">8655</Config>
+  <Config Name="RTSP Port" Target="8654" Default="8654" Mode="tcp" Description="RTSP restream for NVRs and players (Frigate, Blue Iris, VLC). rtsp://[UNRAID-IP]:8654/&lt;camera-name&gt;" Type="Port" Display="always" Required="true" Mask="false">8654</Config>
+  <Config Name="Config" Target="/config" Default="/mnt/user/appdata/neolink" Mode="rw" Description="Holds config.json (which YOU create before first start &#8212; see the Overview) plus the web UI state (users.json, settings.json). Keep this on the cache/SSD; it stays small." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/neolink</Config>
+  <Config Name="Recordings" Target="/recordings" Default="/mnt/user/recordings/neolink" Mode="rw" Description="Where event clips and 24/7 footage are written (enable per camera in the web UI, and add recording.path = /recordings to config.json). Point this at an array share with plenty of space." Type="Path" Display="always" Required="false" Mask="false">/mnt/user/recordings/neolink</Config>
+  <Config Name="Clips (fast tier, optional)" Target="/clips" Default="" Mode="rw" Description="Optional SSD tier for event clips (config.json recording.clips_path = /clips). Leave empty unless you use tiered storage." Type="Path" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="Archive (cold tier, optional)" Target="/archive" Default="" Mode="rw" Description="Optional cold tier that expired footage MOVES to instead of being deleted (config.json recording.archive_path = /archive). Use a different, larger disk. Leave empty unless you use archiving." Type="Path" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="Time Zone (TZ)" Target="TZ" Default="Etc/UTC" Mode="" Description="tz database name, e.g. Europe/London or America/New_York. Match your Unraid timezone so recording timestamps and the UI clock line up." Type="Variable" Display="always" Required="false" Mask="false">Etc/UTC</Config>
+</Container>

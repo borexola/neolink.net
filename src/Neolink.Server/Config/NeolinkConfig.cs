@@ -431,8 +431,12 @@ public sealed class NeolinkConfig
                 throw new FormatException($"Invalid or reserved username \"{u.Name}\"");
         }
 
+        // Zero cameras is allowed, not fatal: a fresh install boots to the web UI
+        // (empty wall) so the user can set up and add cameras to the config,
+        // rather than the process crash-looping on a first-run config.
         if (Cameras.Count == 0)
-            throw new FormatException("No cameras defined in the config file");
+            Log.Warn("No cameras configured yet — the web UI will run but show no cameras. " +
+                     "Add at least one camera to the config file and restart.");
 
         foreach (var cam in Cameras)
         {

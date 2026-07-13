@@ -4,6 +4,24 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
+## 0.8.8
+
+### New
+
+- **Frictionless first run**: if the configured `config.json` doesn't exist yet,
+  Neolink now writes a commented starter config and boots straight to the web UI
+  instead of exiting. A fresh install (Docker, Unraid, Portainer) comes up with
+  an empty camera wall and a "add cameras to config.json" hint rather than
+  crash-looping on a missing file — you edit the config to add cameras and
+  restart. A configuration with zero cameras is no longer a fatal error, just a
+  logged warning.
+- **Unraid Community Applications template** ([`unraid/`](unraid/)): a ready
+  template plus icon so Neolink.NET can be installed from the Unraid app store
+  (or added today via a template-repository URL).
+- **Beta channel**: pushes to the `beta` branch publish
+  `ghcr.io/borexola/neolink.net:beta`, a rolling pre-release image users can opt
+  into to test new features without affecting the stable `latest`/release tags.
+
 ## 0.8.7
 
 ### New
