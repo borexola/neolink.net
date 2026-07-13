@@ -100,7 +100,7 @@ in exchange you get an integration light enough to leave running forever.
   battery status, and — where the camera supports them — PTZ (press-and-hold pad),
   optical zoom & focus sliders, status LED / floodlight toggles with brightness and
   auto-at-night mode, PIR on/off, a latched siren (sounds until you stop it),
-  privacy mode (beta), and reboot. Device settings **stage** and are sent only on
+  privacy mode, and reboot. Device settings **stage** and are sent only on
   "Apply to camera" — with an up-front warning when a change restarts the stream
   or can reboot the camera
 - **Battery cameras** (Argus etc.) are auto-detected: charge badge in the sidebar,

@@ -191,7 +191,9 @@
             <div class="campanel-section">
                 <div class="campanel-section-title">@UiIcon.Render("sun", 13) LIGHTS</div>
                 @* LedState semantics (per the BC protocol): "state" drives the IR
-                   night-vision LEDs, "lightState" the little status/power LED. *@
+                   night-vision LEDs. "lightState" is the white spotlight on cameras
+                   that have one (its on/off) and the little status LED on those that
+                   don't — so it's labelled by the floodlight capability below. *@
                 @if (Str(_led, "state") is { Length: > 0 } irState)
                 {
                     <div class="control-row">
@@ -204,11 +206,12 @@
                         </select>
                     </div>
                 }
-                @if (Str(_led, "lightState") is { Length: > 0 } statusLed)
+                @if (Str(_led, "lightState") is { Length: > 0 } lightState)
                 {
-                    var shownLed = _pendingStatusLed ?? statusLed;
+                    var shownLed = _pendingStatusLed ?? lightState;
+                    var isFloodlight = _caps.Features?.Floodlight == true;
                     <div class="control-row">
-                        <span>Status LED @PendingMark(_pendingStatusLed)</span>
+                        <span>@(isFloodlight ? "Floodlight" : "Status LED") @PendingMark(_pendingStatusLed)</span>
                         <button class="chip @(shownLed == "open" ? "" : "chip-off") @(_pendingStatusLed != null ? "chip-pending" : "")"
                                 disabled="@_applying" @onclick="StageStatusLedToggle">
                             @(shownLed == "open" ? "on" : "off")
@@ -218,7 +221,7 @@
                 @if (_caps.Features?.Floodlight == true && _floodlight is { } flCur)
                 {
                     @* The spotlight's BEHAVIOR (staged like other device settings);
-                       the on/off toggle above drives it directly. *@
+                       the Floodlight on/off toggle above drives it directly. *@
                     <div class="control-row">
                         <span>Floodlight brightness @PendingMark(_pendingFlBrightness?.ToString())</span>
                         <input class="zf-slider @(_pendingFlBrightness != null ? "input-pending" : "")"
@@ -264,7 +267,7 @@
         @if (_caps.Features?.Privacy == true)
         {
             <div class="campanel-section">
-                <div class="campanel-section-title">@UiIcon.Render("eye-off", 13) PRIVACY MODE <span class="beta-tag">BETA</span></div>
+                <div class="campanel-section-title">@UiIcon.Render("eye-off", 13) PRIVACY MODE</div>
                 <div class="control-row">
                     <span>Camera dark (no video, no detections)</span>
                     @if (_privacyBusy)
