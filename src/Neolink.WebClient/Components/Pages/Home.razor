@@ -999,44 +999,19 @@
                                     @if (_notif.Cameras.Count > 0)
                                     {
                                         <div class="notice small">Per-camera override — blank uses the default above, <b>0</b> never alerts for that camera:</div>
-                                        @foreach (var cam in _notif.Cameras)
-                                        {
-                                            <div class="control-row"><span>@cam</span>
-                                                <input class="ret-input" type="number" min="0" max="1440"
-                                                       placeholder="@_notif.OfflineThresholdMinutes"
-                                                       value="@(_notif.CameraOfflineOverrides.TryGetValue(cam, out var ov) ? ov.ToString() : "")"
-                                                       @onchange="e => SetCameraOverride(cam, (string?)e.Value)" /></div>
-                                        }
+                                        <div class="cam-override-list">
+                                            @foreach (var cam in _notif.Cameras)
+                                            {
+                                                <div class="control-row"><span>@cam</span>
+                                                    <input class="ret-input" type="number" min="0" max="1440"
+                                                           placeholder="@_notif.OfflineThresholdMinutes"
+                                                           value="@(_notif.CameraOfflineOverrides.TryGetValue(cam, out var ov) ? ov.ToString() : "")"
+                                                           @onchange="e => SetCameraOverride(cam, (string?)e.Value)" /></div>
+                                            }
+                                        </div>
                                     }
                                 }
 
-                                @if (NotifDirty)
-                                {
-                                    <div class="notice pending">Unsaved changes — click <b>Save notifications</b> to apply them.</div>
-                                }
-                                <div class="control-row" style="margin-top:6px;">
-                                    <button class="chip" disabled="@(_notifBusy || NotifHasErrors)" @onclick="SendTestNotificationAsync">
-                                        @(_notifTesting ? "Sending…" : "Send test email")</button>
-                                    <span class="tile-spacer"></span>
-                                    <button class="chip @(NotifDirty ? "chip-active" : "")" disabled="@(_notifBusy || NotifHasErrors)" @onclick="SaveNotificationsAsync">
-                                        @(_notifSaving ? "Saving…" : "Save notifications")</button>
-                                </div>
-                            }
-                            else
-                            {
-                                @if (NotifDirty)
-                                {
-                                    <div class="notice pending">Unsaved change — click <b>Save</b> to apply it.</div>
-                                }
-                                <div class="control-row">
-                                    <span class="tile-spacer"></span>
-                                    <button class="chip @(NotifDirty ? "chip-active" : "")" disabled="@_notifBusy" @onclick="SaveNotificationsAsync">
-                                        @(_notifSaving ? "Saving…" : "Save")</button>
-                                </div>
-                            }
-                            @if (_notifStatus != null)
-                            {
-                                <div class="notice small @(_notifError ? "error" : "")">@_notifStatus</div>
                             }
                         </div>
                     }
@@ -1051,36 +1026,62 @@
                 </div>
 
                 <div class="settings-foot">
-                    @if (_adminError != null)
+                    @if (_settingsTab == "notifications" && _notif != null)
                     {
-                        <div class="notice error">@_adminError</div>
-                    }
-                    @if (_adminStatus != null)
-                    {
-                        <div class="notice">@_adminStatus</div>
-                    }
-                    @if (AdminPendingCount is var pending and > 0)
-                    {
-                        <div class="notice pending">
-                            @pending unsaved change@(pending == 1 ? "" : "s") — nothing is written until
-                            you click <b>Save to config.json</b>. Closing this panel discards them.
+                        @* Notifications save to notifications.json — pinned here so the
+                           buttons stay in view no matter how long the camera list gets. *@
+                        @if (_notifStatus != null)
+                        {
+                            <div class="notice small @(_notifError ? "error" : "")">@_notifStatus</div>
+                        }
+                        @if (NotifDirty)
+                        {
+                            <div class="notice pending">Unsaved changes — click <b>@(_notif.Enabled ? "Save notifications" : "Save")</b> to apply them.</div>
+                        }
+                        <div class="settings-foot-btns">
+                            @if (_notif.Enabled)
+                            {
+                                <button class="chip" disabled="@(_notifBusy || NotifHasErrors)" @onclick="SendTestNotificationAsync">
+                                    @(_notifTesting ? "Sending…" : "Send test email")</button>
+                            }
+                            <span class="tile-spacer"></span>
+                            <button class="chip @(NotifDirty ? "chip-active" : "")" disabled="@(_notifBusy || NotifHasErrors)" @onclick="SaveNotificationsAsync">
+                                @(_notifSaving ? "Saving…" : (_notif.Enabled ? "Save notifications" : "Save"))</button>
                         </div>
                     }
-                    <div class="settings-foot-btns">
-                        <button class="chip @(AdminPendingCount > 0 ? "chip-active" : "")" disabled="@(!_adminWritable)"
-                                @onclick="SaveServerSettingsAsync">Save to config.json</button>
-                        <span class="tile-spacer"></span>
-                        @if (!_confirmRestart)
+                    else
+                    {
+                        @if (_adminError != null)
                         {
-                            <button class="chip chip-danger" title="Stop the service so the restart policy brings it back — needed to apply saved changes"
-                                    @onclick="() => _confirmRestart = true">Restart service…</button>
+                            <div class="notice error">@_adminError</div>
                         }
-                        else
+                        @if (_adminStatus != null)
                         {
-                            <button class="chip chip-danger" @onclick="RestartServiceAsync">Confirm restart</button>
-                            <button class="chip" @onclick="() => _confirmRestart = false">Cancel</button>
+                            <div class="notice">@_adminStatus</div>
                         }
-                    </div>
+                        @if (AdminPendingCount is var pending and > 0)
+                        {
+                            <div class="notice pending">
+                                @pending unsaved change@(pending == 1 ? "" : "s") — nothing is written until
+                                you click <b>Save to config.json</b>. Closing this panel discards them.
+                            </div>
+                        }
+                        <div class="settings-foot-btns">
+                            <button class="chip @(AdminPendingCount > 0 ? "chip-active" : "")" disabled="@(!_adminWritable)"
+                                    @onclick="SaveServerSettingsAsync">Save to config.json</button>
+                            <span class="tile-spacer"></span>
+                            @if (!_confirmRestart)
+                            {
+                                <button class="chip chip-danger" title="Stop the service so the restart policy brings it back — needed to apply saved changes"
+                                        @onclick="() => _confirmRestart = true">Restart service…</button>
+                            }
+                            else
+                            {
+                                <button class="chip chip-danger" @onclick="RestartServiceAsync">Confirm restart</button>
+                                <button class="chip" @onclick="() => _confirmRestart = false">Cancel</button>
+                            }
+                        </div>
+                    }
                 </div>
             }
         </aside>

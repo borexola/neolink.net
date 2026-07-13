@@ -3653,6 +3653,14 @@ select.input-pending {
 .notif-input:focus { border-color: var(--accent); }
 .notif-input::placeholder { color: var(--muted); }
 
+/* Per-camera offline overrides: scroll within a bounded box so a long camera
+   list never pushes the (now footer-pinned) save/test actions out of view. */
+.cam-override-list {
+    max-height: 200px;
+    overflow-y: auto;
+    padding-right: 2px;
+}
+
 /* Invalid email field + its inline reason, and the "edited but unsaved" accent
    on config.json fields (mirrors the header badge / footer note). */
 .notif-input.input-error,
