@@ -1,20 +1,16 @@
 # Unraid template
 
-`neolink.net.xml` is a [Community Applications](https://forums.unraid.net/topic/38582-plug-in-community-applications/)
-(CA) template for running Neolink.NET on Unraid. `neolink.net.png` is the store
-icon (source: `logo.svg`).
+`neolink.net.xml` is a Docker template for running Neolink.NET on Unraid.
+`neolink.net.png` is the icon (source: `logo.svg`).
 
-## Getting it into the CA "app store"
+This is a **self-serve** template: add it to your own Unraid server with the
+steps below. It is intentionally not submitted to the Community Applications
+store — there is no store listing to maintain. (Anyone is welcome to submit it
+to CA; it just isn't something this project runs.)
 
-1. This template and its icon already live in the public repo.
-2. Request inclusion: post the URL of this repository in the **Community
-   Applications** support thread on the Unraid forums (linked above) and ask
-   for the template to be added to the feed. A moderator adds the repo; after
-   that, searching **Neolink.NET** in *Apps* installs it for everyone.
+## Installing on Unraid
 
-## Installing it today (before CA inclusion)
-
-Anyone can run it now without waiting for the store:
+Either way works and needs nothing from the project maintainer:
 
 - **Apps → Settings → Template Repositories** → add
   `https://github.com/borexola/neolink.net` → **Save**. Neolink.NET then shows
