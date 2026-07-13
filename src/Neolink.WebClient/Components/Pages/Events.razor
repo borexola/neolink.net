@@ -163,7 +163,7 @@
                         }
                         else
                         {
-                            <span class="event-sub">marked reviewed on close</span>
+                            <span class="event-sub">marking as reviewed…</span>
                         }
                     </div>
                 }
@@ -434,12 +434,13 @@
         await SelectAsync(ev);
     }
 
-    private Task SelectAsync(ApiEvent ev)
+    private async Task SelectAsync(ApiEvent ev)
     {
         // _speed deliberately survives: the user's last pick applies to every event.
         _selected = ev;
         if (ev.HasClip) _pendingVideoUrl = PlayerUrl(ev); // attach after the <video> renders
-        return Task.CompletedTask;
+        // Viewing an event is reviewing it: mark it the moment it's opened, not on close.
+        if (!ev.Reviewed) await MarkReviewedAsync(ev);
     }
 
     private async Task SetSpeedAsync(double s)
@@ -463,7 +464,8 @@
             await JS.InvokeVoidAsync("neolink.eventPlayer", "ev-video", PlayerUrl(ev), _speed);
     }
 
-    /// <summary>Leaving an event marks it reviewed — the same "seen it" semantics as the live strip.</summary>
+    /// <summary>Closing just clears the selection; the event was already marked
+    /// reviewed when it was opened. The guard is a fallback if that POST failed.</summary>
     private async Task CloseAsync()
     {
         var ev = _selected;
