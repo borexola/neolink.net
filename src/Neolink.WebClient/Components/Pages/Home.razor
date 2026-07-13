@@ -800,7 +800,10 @@
 
     @if (_showServerSettings)
     {
-        <div class="backdrop panel-backdrop" @onclick="() => _showServerSettings = false"></div>
+        @* No @onclick on the dim wall (and Esc is ignored — escInit only targets
+           .quick-view): staged edits must not be lost to a stray click, so only
+           the header ✕ closes this panel. *@
+        <div class="backdrop panel-backdrop"></div>
         @* Head and foot are pinned; only the sections scroll. The unsaved state
            lives in BOTH: a badge in the header and the save bar in the footer,
            so it can never scroll out of sight. *@
