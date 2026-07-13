@@ -646,8 +646,13 @@ internal sealed class CameraBridge
             await AnnounceEntityAsync("switch", "privacy_mode", PrivacySwitchConfig(), ct).ConfigureAwait(false);
         if (_hasIr)
             await AnnounceEntityAsync("select", "ir", IrSelectConfig(), ct).ConfigureAwait(false);
-        if (_hasFloodlight)
+        if (f.Floodlight)
             await AnnounceEntityAsync("light", "floodlight", FloodlightConfig(), ct).ConfigureAwait(false);
+        else
+            // Not every camera has a spotlight (e.g. the E1 Pro reports a status-LED
+            // lightState but no real floodlight). Clear any floodlight a looser build
+            // announced so HA drops the dead entity instead of keeping it retained.
+            await ClearEntityAsync("light", "floodlight", ct).ConfigureAwait(false);
         if (f.Pir)
             await AnnounceEntityAsync("switch", "pir", SwitchConfig("PIR sensor", "pir"), ct).ConfigureAwait(false);
         if (f.Ptz)
@@ -712,8 +717,11 @@ internal sealed class CameraBridge
         payload_off = "OFF",
         device_class = "motion",
         // The smart labels aren't plain motion — give them a telling icon.
+        // (motion/person keep the device_class default, which reads as a person.)
         icon = label switch
         {
+            "vehicle" => "mdi:car",
+            "animal" => "mdi:paw",
             "package" => "mdi:package-variant-closed",
             "line-crossing" => "mdi:vector-line",
             "intrusion" => "mdi:shield-alert-outline",
@@ -1119,6 +1127,9 @@ internal sealed class CameraBridge
             {
                 _model = caps.Version?.Model;
                 if (f.Led) await ProbeLedAsync(ct).ConfigureAwait(false);
+                // The real spotlight capability (FloodlightTask answered), not the
+                // status-LED lightState — gates both discovery and state publishing.
+                _hasFloodlight = f.Floodlight;
                 _hasSnapshot = await ProbeSnapshotAsync(ct).ConfigureAwait(false);
                 _featuresAnnounced = true;
                 await AnnounceAsync(ct).ConfigureAwait(false);
@@ -1192,7 +1203,8 @@ internal sealed class CameraBridge
         var led = await TryAsync(() => _control.GetLedStateAsync(ct)).ConfigureAwait(false);
         if (led == null) return;
         _hasIr = Str(led, "state") is { Length: > 0 };
-        _hasFloodlight = Str(led, "lightState") is { Length: > 0 };
+        // _hasFloodlight is NOT inferred from lightState here — a status LED reports
+        // it too. It's set from the FloodlightTask capability by the caller.
     }
 
     private async Task<bool> ProbeSnapshotAsync(CancellationToken ct)
