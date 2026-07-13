@@ -57,7 +57,7 @@ public sealed class EventRecorder
     public EventRecorder(string camera, IStreamHub hub, ICameraControl control,
         EventStore store, RecordingConfig cfg, RecordingSettings settings,
         IStreamHub? previewHub = null, IReadOnlyDictionary<string, IStreamHub>? hubsByKind = null,
-        Func<bool>? hasRoom = null)
+        Func<bool>? hasRoom = null, Action<string>? onWriteError = null)
     {
         _camera = camera;
         _hub = hub;
@@ -68,10 +68,12 @@ public sealed class EventRecorder
         _cfg = cfg;
         _settings = settings;
         _hasRoom = hasRoom;
+        _onWriteError = onWriteError;
     }
 
     /// <summary>Free-space guard for the clips tier; null = never blocks.</summary>
     private readonly Func<bool>? _hasRoom;
+    private readonly Action<string>? _onWriteError;
     private bool _fullLogged;
 
     /// <summary>The hub clips are cut from right now: the user's per-camera stream
@@ -585,6 +587,7 @@ public sealed class EventRecorder
             catch (Exception ex)
             {
                 Log.Warn($"{_camera}: cannot start clip: {ex.Message}");
+                _onWriteError?.Invoke(_camera);
                 _writer?.Dispose();
                 _writer = null;
             }

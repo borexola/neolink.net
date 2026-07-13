@@ -267,7 +267,13 @@
                 <div class="campanel-section-title">@UiIcon.Render("eye-off", 13) PRIVACY MODE <span class="beta-tag">BETA</span></div>
                 <div class="control-row">
                     <span>Camera dark (no video, no detections)</span>
-                    @if (_privacyOn == true)
+                    @if (_privacyBusy)
+                    {
+                        @* Spinner while the write is in flight — the buttons are gone
+                           so a slow camera can't be double-toggled; caps at 10s. *@
+                        <span class="chip chip-off" aria-busy="true"><span class="btn-spinner"></span>Switching…</span>
+                    }
+                    else if (_privacyOn == true)
                     {
                         <button class="chip chip-active" @onclick="() => SetPrivacyAsync(false)">on — click to wake</button>
                     }
@@ -590,6 +596,7 @@
     private bool _confirmReboot;
     private bool _confirmSiren;
     private bool _confirmPrivacy;
+    private bool _privacyBusy;   // a privacy-mode write is in flight (spinner shown)
     private bool? _sirenOn;   // last known state (pushes / this panel's own actions)
     private bool? _privacyOn;
     private int _ptzSpeed = 32;
@@ -825,7 +832,7 @@
         _encCurrent = null;
         _zoomShown = _focusShown = null;
         _sirenOn = _privacyOn = null;
-        _confirmReboot = _confirmSiren = _confirmPrivacy = false;
+        _confirmReboot = _confirmSiren = _confirmPrivacy = _privacyBusy = false;
         DiscardPending(); // switching cameras must not carry staged edits across
         StateHasChanged();
 
@@ -887,13 +894,26 @@
 
     private async Task SetPrivacyAsync(bool on)
     {
+        if (_privacyBusy) return; // ignore repeat clicks while a switch is in flight
         _confirmPrivacy = false;
-        if (await PostAsync("privacy", new { on }))
+        _privacyBusy = true;
+        _status = null;
+        try
         {
-            _privacyOn = on;
-            _status = on
-                ? "Privacy mode ON — the camera goes dark until switched back."
-                : "Privacy mode off — the camera wakes and video resumes shortly.";
+            // The write blocks until the camera acknowledges (msg 575). Cap the
+            // wait at 10s so a slow/offline camera can't hang the spinner forever.
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            if (await PostAsync("privacy", new { on }, cts.Token))
+            {
+                _privacyOn = on;
+                _status = on
+                    ? "Privacy mode ON — the camera goes dark until switched back."
+                    : "Privacy mode off — the camera wakes and video resumes shortly.";
+            }
+        }
+        finally
+        {
+            _privacyBusy = false;
         }
     }
 
@@ -1114,14 +1134,14 @@
         }
     }
 
-    private async Task<bool> PostAsync(string path, object body)
+    private async Task<bool> PostAsync(string path, object body, CancellationToken ct = default)
     {
         _status = null;
         try
         {
             var req = NewRequest(HttpMethod.Post, path);
             req.Content = JsonContent.Create(body);
-            using var res = await Http.SendAsync(req);
+            using var res = await Http.SendAsync(req, ct);
             if (res.IsSuccessStatusCode)
             {
                 _error = null;
@@ -1130,6 +1150,11 @@
             _error = res.StatusCode == System.Net.HttpStatusCode.Unauthorized
                 ? "Not authorized — set your credentials under server settings (⚙)."
                 : await ReadErrorAsync(res) ?? $"Request failed ({(int)res.StatusCode})";
+            return false;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            _error = "Timed out waiting for the camera to confirm — it may be slow or offline. Check its state and try again.";
             return false;
         }
         catch (Exception ex)

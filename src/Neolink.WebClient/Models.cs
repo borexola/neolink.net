@@ -91,6 +91,28 @@ public sealed record ApiStorageLocation(string Role, string Label, string Path,
 /// <summary>GET /api/admin/config — the editable server settings.</summary>
 public sealed record ApiAdminConfig(string Path, bool Writable, JsonElement Settings);
 
+/// <summary>GET/PUT /api/admin/notifications — email alert settings. The SMTP
+/// password is never returned (only HasPassword); it is sent write-only on PUT.</summary>
+public sealed class ApiNotifications
+{
+    public bool Enabled { get; set; }
+    public string Recipient { get; set; } = "";
+    public string SmtpHost { get; set; } = "";
+    public int SmtpPort { get; set; } = 587;
+    public string Security { get; set; } = "starttls";
+    public string Username { get; set; } = "";
+    public bool HasPassword { get; set; }
+    public string From { get; set; } = "";
+    public string FromName { get; set; } = "Neolink.NET";
+    public bool AlertStorage { get; set; } = true;
+    public bool AlertOverload { get; set; }
+    public bool AlertCameraOffline { get; set; }
+    public bool AlertWriteFailure { get; set; }
+    public int OfflineThresholdMinutes { get; set; } = 10;
+    public Dictionary<string, int> CameraOfflineOverrides { get; set; } = new();
+    public List<string> Cameras { get; set; } = new();
+}
+
 /// <summary>GET /api/auth/status — whether/how the UI must authenticate.</summary>
 public sealed record ApiAuthStatus(bool Enabled, bool SetupRequired, bool ResetAvailable,
     string? User, bool Admin);
@@ -246,6 +268,7 @@ public static class UiIcon
             "eye-off" => "<path d=\"M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94\"/><path d=\"M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19\"/><line x1=\"1\" y1=\"1\" x2=\"23\" y2=\"23\"/>",
             "wrench" => "<path d=\"M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z\"/>",
             "archive" => "<polyline points=\"21 8 21 21 3 21 3 8\"/><rect x=\"1\" y=\"3\" width=\"22\" height=\"5\"/><line x1=\"10\" y1=\"12\" x2=\"14\" y2=\"12\"/>",
+            "bell" => "<path d=\"M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9\"/><path d=\"M13.73 21a2 2 0 0 1-3.46 0\"/>",
             _ => "",
         };
         return new MarkupString(

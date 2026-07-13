@@ -63,6 +63,8 @@ public sealed class WebApiOptions
     public UpdateChecker? Updates { get; init; }
     /// <summary>Process/disk resource sampler feeding the UI's monitor page.</summary>
     public SystemMonitor? Monitor { get; init; }
+    /// <summary>Email-notification service (config store + test send); admin only.</summary>
+    public Neolink.Notifications.Notifier? Notifier { get; init; }
     /// <summary>Captured server log lines for the UI's live log stream (admin only).</summary>
     public LogBuffer? Logs { get; init; }
     /// <summary>Gracefully stops the process; the supervisor (docker/systemd) restarts it.</summary>
@@ -104,6 +106,13 @@ public static class WebApi
     private sealed record StreamSettingsRequest(string? Stream, uint? Width, uint? Height,
         uint? Framerate, uint? Bitrate);
     private sealed record ReviewRequest(bool? Reviewed);
+    /// <summary>Notification settings update. Password is WRITE-ONLY: null keeps the
+    /// stored one, "" clears it, a value sets it. It is never returned by GET.</summary>
+    private sealed record NotificationRequest(bool? Enabled, string? Recipient,
+        string? SmtpHost, int? SmtpPort, string? Security, string? Username, string? Password,
+        string? From, string? FromName,
+        bool? AlertStorage, bool? AlertOverload, bool? AlertCameraOffline, bool? AlertWriteFailure,
+        int? OfflineThresholdMinutes, Dictionary<string, int>? CameraOfflineOverrides);
     /// <summary>Retention fields: null = unchanged, negative = back to the server default, 0 = keep forever.
     /// RecordStream: null = unchanged, "" = back to the server default, else a served stream kind.
     /// Capture schedule: applied only while ScheduleEnabled; ScheduleDays null = unchanged,
@@ -461,6 +470,89 @@ public static class WebApi
                 note = "shutting down — the restart policy (docker / systemd) brings the service back",
             });
         });
+
+        // Email notifications (admin only). The SMTP password is never returned —
+        // GET reports only whether one is stored; PUT takes it write-only.
+        if (o.Notifier is { } notifier)
+        {
+            object ShapeNotifications()
+            {
+                var s = notifier.Store.Snapshot();
+                return new
+                {
+                    enabled = s.Enabled,
+                    recipient = s.Recipient,
+                    smtpHost = s.SmtpHost,
+                    smtpPort = s.SmtpPort,
+                    security = s.Security.ToString().ToLowerInvariant(),
+                    username = s.Username,
+                    hasPassword = notifier.Store.HasPassword,
+                    from = s.From,
+                    fromName = s.FromName,
+                    alertStorage = s.AlertStorage,
+                    alertOverload = s.AlertOverload,
+                    alertCameraOffline = s.AlertCameraOffline,
+                    alertWriteFailure = s.AlertWriteFailure,
+                    offlineThresholdMinutes = s.OfflineThresholdMinutes,
+                    cameraOfflineOverrides = s.CameraOfflineOverrides,
+                    cameras = cameras.Select(c => c.Name).ToList(),
+                };
+            }
+
+            static Neolink.Notifications.SmtpSecurity ParseSecurity(string? v, Neolink.Notifications.SmtpSecurity fallback) =>
+                v?.ToLowerInvariant() switch
+                {
+                    "starttls" => Neolink.Notifications.SmtpSecurity.StartTls,
+                    "ssl" => Neolink.Notifications.SmtpSecurity.Ssl,
+                    "none" => Neolink.Notifications.SmtpSecurity.None,
+                    _ => fallback,
+                };
+
+            Neolink.Notifications.NotificationSettings MergedFrom(NotificationRequest req)
+            {
+                var cur = notifier.Store.Snapshot();
+                return new Neolink.Notifications.NotificationSettings
+                {
+                    Enabled = req.Enabled ?? cur.Enabled,
+                    Recipient = (req.Recipient ?? cur.Recipient).Trim(),
+                    SmtpHost = (req.SmtpHost ?? cur.SmtpHost).Trim(),
+                    SmtpPort = Math.Clamp(req.SmtpPort ?? cur.SmtpPort, 1, 65535),
+                    Security = ParseSecurity(req.Security, cur.Security),
+                    Username = req.Username ?? cur.Username,
+                    From = (req.From ?? cur.From).Trim(),
+                    FromName = req.FromName ?? cur.FromName,
+                    AlertStorage = req.AlertStorage ?? cur.AlertStorage,
+                    AlertOverload = req.AlertOverload ?? cur.AlertOverload,
+                    AlertCameraOffline = req.AlertCameraOffline ?? cur.AlertCameraOffline,
+                    AlertWriteFailure = req.AlertWriteFailure ?? cur.AlertWriteFailure,
+                    OfflineThresholdMinutes = Math.Clamp(req.OfflineThresholdMinutes ?? cur.OfflineThresholdMinutes, 0, 1440),
+                    CameraOfflineOverrides = req.CameraOfflineOverrides != null
+                        ? new(req.CameraOfflineOverrides, StringComparer.OrdinalIgnoreCase)
+                        : cur.CameraOfflineOverrides,
+                };
+            }
+
+            app.MapGet("/api/admin/notifications", (HttpContext ctx) =>
+                AdminOnly(ctx) ?? Results.Json(ShapeNotifications()));
+
+            app.MapPut("/api/admin/notifications", (NotificationRequest req, HttpContext ctx) =>
+            {
+                if (AdminOnly(ctx) is { } denied) return denied;
+                notifier.Store.Save(MergedFrom(req), req.Password); // password write-only
+                return Results.Json(ShapeNotifications());
+            });
+
+            app.MapPost("/api/admin/notifications/test", async (NotificationRequest req, HttpContext ctx) =>
+            {
+                if (AdminOnly(ctx) is { } denied) return denied;
+                // Test with the posted (possibly unsaved) settings so the user can
+                // verify before saving; password null = use the stored one.
+                var error = await notifier.SendTestAsync(MergedFrom(req), req.Password, ctx.RequestAborted);
+                return error == null
+                    ? Results.Json(new { ok = true })
+                    : Results.Json(new { error }, statusCode: 502);
+            });
+        }
 
         // Per-user UI settings: an opaque JSON blob the client owns.
         app.MapGet("/api/me/settings", (HttpContext ctx) =>

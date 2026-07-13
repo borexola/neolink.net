@@ -216,6 +216,16 @@ if (config.Recording is { } recCfg)
     }
 }
 
+// Email notifications for critical alerts (opt-in, configured in the web UI).
+// Fully isolated: the notifier and its alert monitor run on their own tasks and
+// swallow every failure, so a mis-set or unreachable mail server can never affect
+// recording, streaming or MQTT. The SMTP password is encrypted at rest.
+var secretProtector = new Neolink.Notifications.SecretProtector(stateDir);
+var notificationStore = new Neolink.Notifications.NotificationStore(stateDir, secretProtector);
+var notifier = new Neolink.Notifications.Notifier(notificationStore, Environment.MachineName);
+var recordingHealth = new Neolink.Recording.RecordingHealth();
+tasks.Add(Task.Run(() => notifier.RunAsync(shutdown.Token)));
+
 // Motion pushes fan out to the recorder and/or the MQTT bridge; wired after both
 // exist (the bridge needs the camera list, built below).
 var motionTargets = new List<(CameraService Primary, string Name, Action<MotionPush>? RecorderSink)>();
@@ -322,7 +332,8 @@ foreach (var cam in config.Cameras)
                 if (previewStream == recordStream) previewStream = null;
                 var recorder = new EventRecorder(cam.Name, recordStream.Hub, control, eventStore,
                     config.Recording, recordingSettings, previewStream?.Hub, hubsByKind,
-                    hasRoom: storage == null ? null : () => storage.HasRoom(StorageRole.Clips));
+                    hasRoom: storage == null ? null : () => storage.HasRoom(StorageRole.Clips),
+                    onWriteError: recordingHealth.MarkWriteError);
                 recorderSink = recorder.OnMotion;
                 eventRecorder = recorder;
                 tasks.Add(Task.Run(() => recorder.RunAsync(shutdown.Token)));
@@ -334,7 +345,8 @@ foreach (var cam in config.Cameras)
             {
                 var continuous = new ContinuousRecorder(cam.Name, recordStream.Hub, eventStore,
                     recordingSettings, config.Recording, hubsByKind,
-                    hasRoom: storage == null ? null : () => storage.HasRoom(StorageRole.Main));
+                    hasRoom: storage == null ? null : () => storage.HasRoom(StorageRole.Main),
+                    onWriteError: recordingHealth.MarkWriteError);
                 continuousRecorder = continuous;
                 tasks.Add(Task.Run(() => continuous.RunAsync(shutdown.Token)));
             }
@@ -376,6 +388,15 @@ if (config.WebPort > 0 || config.Mqtt is { StatsIntervalSeconds: > 0 })
     var mon = monitor;
     tasks.Add(Task.Run(() => mon.RunAsync(shutdown.Token)));
 }
+
+// Alert monitor: polls health and feeds the notifier (storage full, sustained
+// overload, cameras offline past their threshold, recording write failures).
+var alertMonitor = new Neolink.Notifications.AlertMonitor(
+    notifier, Environment.MachineName, storage, monitor,
+    cameras: () => webCameras.Select(c => new Neolink.Notifications.CameraHealth(
+        c.Name, c.Control.Online, c.Asleep?.Invoke() ?? false)),
+    recording: recordingHealth);
+tasks.Add(Task.Run(() => alertMonitor.RunAsync(shutdown.Token)));
 
 // MQTT / Home Assistant bridge (single connection for all cameras), then wire
 // motion: the camera's alarm push goes to the recorder and/or the bridge. The
@@ -441,6 +462,7 @@ if (config.WebPort > 0)
         ConfigPath = Path.GetFullPath(configPath),
         Updates = updates,
         Monitor = monitor,
+        Notifier = notifier,
         Logs = logBuffer,
         // Graceful shutdown; docker's restart policy (or systemd) starts us again.
         RestartRequested = () =>

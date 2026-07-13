@@ -19,6 +19,12 @@ src/Neolink/
 /src/Neolink.Server/users.json
 /src/Neolink.Server/settings.json
 
+# Notification subsystem runtime state — the AES key must NEVER be committed
+# (it decrypts the stored SMTP password); notifications.json holds that encrypted
+# secret. Ignored anywhere in the tree in case the server is run from the repo.
+secret.key
+notifications.json
+
 # local docker test images (docker save output)
 neolink-*.tar
 

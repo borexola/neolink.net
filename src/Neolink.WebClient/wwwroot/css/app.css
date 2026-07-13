@@ -724,6 +724,19 @@ video[data-live="1"] ~ .tile-status { display: none; }
     to { transform: rotate(360deg); }
 }
 
+/* Small inline spinner for an in-flight chip action (e.g. the privacy switch). */
+.btn-spinner {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    border: 2px solid color-mix(in srgb, var(--text) 30%, transparent);
+    border-top-color: var(--accent);
+    animation: reconnect-spin 0.8s linear infinite;
+    vertical-align: -2px;
+    margin-right: 6px;
+}
+
 /* One message block per state */
 .reconnect-when-show,
 .reconnect-when-failed,
@@ -1419,6 +1432,58 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     align-items: center;
     gap: 8px;
     flex-wrap: wrap;
+}
+
+/* Server settings: roomier and organised into top tabs so each section is short.
+   Two-class selector so it beats the reused .auth-panel width (defined later). */
+.settings-panel.settings-wide { width: min(760px, 96vw); }
+
+.settings-tabs {
+    flex: 0 0 auto;
+    display: flex;
+    gap: 4px;
+    border-bottom: 1px solid var(--line);
+    margin: 2px -2px 8px;
+    padding: 0 2px 8px;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+
+.settings-tabs::-webkit-scrollbar { display: none; }
+
+.settings-tab {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    color: var(--muted);
+    padding: 6px 12px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.12s ease, color 0.12s ease;
+}
+
+.settings-tab:hover { color: var(--text); background: var(--panel-2); }
+
+.settings-tab.active {
+    color: var(--text);
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+}
+
+.settings-tab .nl-icon { opacity: 0.75; vertical-align: -2px; }
+
+/* Unsaved-changes marker on the Notifications tab (its own save target) */
+.settings-tab .tab-dot {
+    color: var(--accent);
+    font-size: 9px;
+    margin-left: 5px;
+    vertical-align: 1px;
 }
 
 /* Pending-edits badge in the settings header (hover for the full story) */
@@ -2927,6 +2992,26 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 
 .admin-field input:focus { border-color: var(--accent); }
 
+/* Dropdown variant (constrained config values, e.g. record stream) — matches the
+   text inputs so the row reads consistently. */
+.admin-select {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 13px;
+    width: 190px;
+    max-width: 48%;
+    outline: none;
+    cursor: pointer;
+}
+.admin-select:focus { border-color: var(--accent); }
+.admin-field.edited .admin-select {
+    border-color: var(--accent);
+    box-shadow: inset 2px 0 0 var(--accent);
+}
+
 /* Strip filter drawer (under the events bar): lit chips show, dimmed chips hide */
 .strip-filter {
     display: flex;
@@ -3551,6 +3636,41 @@ select.input-pending {
 
 .ret-input:focus { border-color: var(--accent); }
 .ret-input::placeholder { color: var(--muted); }
+
+/* Wider text input for the notifications form (emails, hostnames, passwords). */
+.notif-input {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 12px;
+    width: 230px;
+    max-width: 58%;
+    outline: none;
+}
+
+.notif-input:focus { border-color: var(--accent); }
+.notif-input::placeholder { color: var(--muted); }
+
+/* Invalid email field + its inline reason, and the "edited but unsaved" accent
+   on config.json fields (mirrors the header badge / footer note). */
+.notif-input.input-error,
+.admin-field input.input-error { border-color: var(--err); }
+.notif-input.input-error:focus { border-color: var(--err); }
+
+.field-error {
+    color: var(--err);
+    font-size: 11px;
+    margin: -2px 0 4px;
+    text-align: right;
+}
+
+.admin-field.edited input {
+    border-color: var(--accent);
+    box-shadow: inset 2px 0 0 var(--accent);
+}
+.control-row.edited .chip.edited { box-shadow: inset 2px 0 0 var(--accent); }
 
 /* Full-bleed hairline splitting a campanel section into halves (event-based
    recording above, continuous below) */

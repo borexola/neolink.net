@@ -31,6 +31,7 @@ public sealed class ContinuousRecorder
     private readonly double _segmentSeconds;
     private readonly long _maxSegmentBytes;
     private readonly Func<bool>? _hasRoom;
+    private readonly Action<string>? _onWriteError;
     private volatile bool _writing;
     private bool _fullLogged;
 
@@ -44,7 +45,7 @@ public sealed class ContinuousRecorder
     public ContinuousRecorder(string camera, IStreamHub hub, EventStore store,
         RecordingSettings settings, RecordingConfig cfg,
         IReadOnlyDictionary<string, IStreamHub>? hubsByKind = null,
-        Func<bool>? hasRoom = null)
+        Func<bool>? hasRoom = null, Action<string>? onWriteError = null)
     {
         _camera = camera;
         _hub = hub;
@@ -54,6 +55,7 @@ public sealed class ContinuousRecorder
         _segmentSeconds = cfg.SegmentMinutes * 60.0;
         _maxSegmentBytes = (long)cfg.MaxSegmentSizeMb * 1024 * 1024;
         _hasRoom = hasRoom;
+        _onWriteError = onWriteError;
     }
 
     /// <summary>The stream taped right now: the user's per-camera choice when set (and served).</summary>
@@ -175,6 +177,7 @@ public sealed class ContinuousRecorder
                     catch (Exception ex)
                     {
                         Log.Warn($"{_camera}: cannot start recording segment: {ex.Message}");
+                        _onWriteError?.Invoke(_camera);
                         retryAfter = DateTime.UtcNow + WriteErrorBackoff;
                         continue;
                     }
@@ -185,9 +188,11 @@ public sealed class ContinuousRecorder
                 writer.Add(v, gap);
                 if (writer.Faulted)
                 {
-                    // Disk full/gone — the writer already logged why.
+                    // A write error while there IS free space (the guard above would
+                    // have skipped a full volume): a failing/disconnected drive.
                     writer.Dispose();
                     writer = null;
+                    _onWriteError?.Invoke(_camera);
                     retryAfter = DateTime.UtcNow + WriteErrorBackoff;
                 }
                 _writing = writer != null;

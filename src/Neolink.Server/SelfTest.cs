@@ -1085,6 +1085,82 @@ public static class SelfTest
             }
         });
 
+        Test("secret protector: AES-256-GCM round-trip + tamper detection", () =>
+        {
+            var key = new byte[32];
+            for (int i = 0; i < 32; i++) key[i] = (byte)(i * 7 + 1);
+            var p = new Notifications.SecretProtector(key);
+
+            var token = p.Protect("hunter2!@#");
+            AssertEq(p.Unprotect(token), "hunter2!@#");
+            // Ciphertext is not the plaintext, and two encryptions differ (random nonce).
+            Assert(!token.Contains("hunter2"), "token does not leak the plaintext");
+            Assert(p.Protect("hunter2!@#") != token, "each encryption uses a fresh nonce");
+            // Empty round-trips; blank/garbage tokens degrade to null (never throw).
+            AssertEq(p.Unprotect(p.Protect("")), "");
+            Assert(p.Unprotect(null) == null && p.Unprotect("") == null, "null/empty token -> null");
+            Assert(p.Unprotect("not-base64!!") == null, "garbage token -> null");
+
+            // Tampering (flip a ciphertext byte) is rejected by the GCM tag.
+            var raw = Convert.FromBase64String(token);
+            raw[^1] ^= 0xFF;
+            Assert(p.Unprotect(Convert.ToBase64String(raw)) == null, "tampered token -> null");
+
+            // A different key cannot read it.
+            var other = new byte[32];
+            Array.Fill(other, (byte)9);
+            Assert(new Notifications.SecretProtector(other).Unprotect(token) == null, "wrong key -> null");
+        });
+
+        Test("notification store: password encrypted + write-only", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var key = new byte[32];
+                Array.Fill(key, (byte)5);
+                var prot = new Notifications.SecretProtector(key);
+                var store = new Notifications.NotificationStore(dir, prot);
+
+                var s = new Notifications.NotificationSettings
+                {
+                    Enabled = true, Recipient = "a@b.com", SmtpHost = "smtp.x", Username = "u",
+                };
+                store.Save(s, "topsecret");                    // set the password
+                AssertEq(store.SmtpPassword(), "topsecret");
+                Assert(store.HasPassword, "password recorded");
+
+                // On disk it is ciphertext, never the plaintext.
+                var raw = File.ReadAllText(Path.Combine(dir, "notifications.json"));
+                Assert(!raw.Contains("topsecret"), "password not stored in plaintext");
+                Assert(raw.Contains("passwordEnc"), "password stored as an encrypted token");
+
+                // null keeps it, "" clears it (write-only semantics).
+                store.Save(s.Clone(), null);
+                AssertEq(store.SmtpPassword(), "topsecret");
+                store.Save(s.Clone(), "");
+                AssertEq(store.SmtpPassword(), "");
+                Assert(!store.HasPassword, "cleared password");
+
+                // Reload from disk decrypts correctly with the same key.
+                store.Save(s.Clone(), "again");
+                var reopened = new Notifications.NotificationStore(dir, prot);
+                AssertEq(reopened.SmtpPassword(), "again");
+                Assert(reopened.Snapshot().Enabled, "settings persisted");
+
+                // Per-camera offline threshold: override wins, else the default.
+                var cfg = new Notifications.NotificationSettings { OfflineThresholdMinutes = 10 };
+                cfg.CameraOfflineOverrides["Driveway"] = 3;
+                AssertEq(cfg.OfflineMinutesFor("Driveway"), 3);
+                AssertEq(cfg.OfflineMinutesFor("Backyard"), 10);
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+        });
+
         Test("config editor: read-modify-write with validation", () =>
         {
             var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");

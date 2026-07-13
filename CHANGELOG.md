@@ -48,6 +48,19 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### New
 
+- **Email notifications for critical alerts (opt-in)**: configure one recipient
+  and your SMTP server under Server settings → Notifications, and Neolink emails
+  you when a recording drive fills up, the server is sustainedly overloaded, a
+  camera goes offline past its (per-camera) threshold, or recording fails to
+  write to disk — each with a "resolved" follow-up and de-duplication so you get
+  one email per incident, not a flood. STARTTLS (587) and SSL/TLS (465) are both
+  supported via a dependency-free SMTP client, and the whole subsystem runs
+  isolated on its own task, swallowing every error so a misconfigured mail server
+  can never affect recording, streaming or MQTT. The SMTP password is encrypted
+  at rest (AES-256-GCM; key from an owner-only `secret.key` in the state dir or
+  the `NEOLINK_SECRET_KEY` env var), write-only in the UI, and never returned by
+  the API.
+
 - **Tiered storage** — all optional, zero config changes required; a plain
   `recording.path` install behaves exactly as before:
   - **Fast clips tier** (`"clips_path"`): point it at an SSD and new event

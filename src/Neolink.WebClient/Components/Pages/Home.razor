@@ -804,7 +804,7 @@
         @* Head and foot are pinned; only the sections scroll. The unsaved state
            lives in BOTH: a badge in the header and the save bar in the footer,
            so it can never scroll out of sight. *@
-        <aside class="campanel auth-panel settings-panel" role="dialog" aria-label="Server settings">
+        <aside class="campanel auth-panel settings-panel settings-wide" role="dialog" aria-label="Server settings">
             <div class="campanel-head">
                 <span class="campanel-title">🛠 SERVER SETTINGS</span>
                 @if (_adminConfig != null && AdminPendingCount is var pend and > 0)
@@ -831,16 +831,46 @@
             }
             else
             {
+                <div class="settings-tabs" role="tablist">
+                    <button class="settings-tab @(_settingsTab == "general" ? "active" : "")" role="tab"
+                            @onclick='() => _settingsTab = "general"'>@UiIcon.Render("gear", 13) General</button>
+                    @if (_adminHasRecording)
+                    {
+                        <button class="settings-tab @(_settingsTab == "recording" ? "active" : "")" role="tab"
+                                @onclick='() => _settingsTab = "recording"'>@UiIcon.Render("rec", 13) Recording</button>
+                    }
+                    @if (_adminHasMqtt)
+                    {
+                        <button class="settings-tab @(_settingsTab == "mqtt" ? "active" : "")" role="tab"
+                                @onclick='() => _settingsTab = "mqtt"'>@UiIcon.Render("activity", 13) Home Assistant</button>
+                    }
+                    @if (_notif != null)
+                    {
+                        <button class="settings-tab @(_settingsTab == "notifications" ? "active" : "")" role="tab"
+                                @onclick='() => _settingsTab = "notifications"'>
+                            @UiIcon.Render("bell", 13) Notifications
+                            @if (NotifDirty)
+                            {
+                                <span class="tab-dot" title="Unsaved changes">●</span>
+                            }
+                        </button>
+                    }
+                </div>
                 <div class="settings-body">
-                    <div class="notice small">
-                        Editing <code>@_adminConfigPath</code>.
-                        @if (!_adminWritable)
-                        {
-                            <b> Read-only — the file cannot be written (check the mount).</b>
-                        }
-                        Changes are saved to the file and take effect after a restart. Comments in the file are not preserved.
-                    </div>
+                    @if (_settingsTab != "notifications")
+                    {
+                        <div class="notice small">
+                            Editing <code>@_adminConfigPath</code>.
+                            @if (!_adminWritable)
+                            {
+                                <b> Read-only — the file cannot be written (check the mount).</b>
+                            }
+                            Changes are saved to the file and take effect after a restart. Comments in the file are not preserved.
+                        </div>
+                    }
 
+                    @if (_settingsTab == "general")
+                    {
                     <div class="campanel-section">
                         <div class="campanel-section-title">NETWORK</div>
                         @AdminField("Bind address", "bind", "text")
@@ -868,8 +898,9 @@
                             mic button will report that a secure connection is required.
                         </div>
                     </div>
+                    }
 
-                    @if (_adminHasRecording)
+                    @if (_settingsTab == "recording" && _adminHasRecording)
                     {
                         <div class="campanel-section">
                             <div class="campanel-section-title">RECORDING</div>
@@ -878,13 +909,13 @@
                             @AdminField("Pre-roll (seconds)", "recording.preSeconds", "number")
                             @AdminField("Post-roll (seconds)", "recording.postSeconds", "number")
                             @AdminField("Max clip length (seconds)", "recording.maxClipSeconds", "number")
-                            @AdminField("Record stream (auto|mainStream|subStream)", "recording.stream", "text")
+                            @AdminSelect("Record stream", "recording.stream", "auto", "mainStream", "subStream", "externStream")
                             @AdminField("Segment length (minutes)", "recording.segmentMinutes", "number")
                             @AdminField("Continuous retention (days, blank = event value)", "recording.continuousRetentionDays", "number")
                         </div>
                     }
 
-                    @if (_adminHasMqtt)
+                    @if (_settingsTab == "mqtt" && _adminHasMqtt)
                     {
                         <div class="campanel-section">
                             <div class="campanel-section-title">MQTT / HOME ASSISTANT</div>
@@ -898,10 +929,125 @@
                         </div>
                     }
 
-                    <div class="notice small">
-                        Restart stops the service; your container/systemd restart policy brings it back within seconds
-                        (needed to apply saved changes). The UI reconnects automatically.
-                    </div>
+                    @if (_settingsTab == "notifications" && _notif != null)
+                    {
+                        <div class="campanel-section">
+                            <div class="campanel-section-title">@UiIcon.Render("bell", 13) NOTIFICATIONS</div>
+                            <div class="notice small">
+                                Email alerts for critical events — saved here and applied immediately (no restart).
+                                The SMTP password is <b>encrypted at rest</b>, but anyone with full access to the
+                                server's files could still decrypt it (unavoidable for sending email), so prefer a
+                                provider <b>app password</b> over your main account password.
+                            </div>
+                            <div class="control-row">
+                                <span>Send email alerts</span>
+                                <button class="chip @(_notif.Enabled ? "" : "chip-off")"
+                                        @onclick="() => _notif.Enabled = !_notif.Enabled">@(_notif.Enabled ? "on" : "off")</button>
+                            </div>
+                            @if (_notif.Enabled)
+                            {
+                                <div class="control-row"><span>Send alerts to</span>
+                                    <input class="notif-input @(NotifRecipientInvalid ? "input-error" : "")" type="email"
+                                           placeholder="you@example.com" @bind="_notif.Recipient" @bind:event="oninput" /></div>
+                                @if (NotifRecipientInvalid)
+                                {
+                                    <div class="field-error">Enter a valid email address for alerts (e.g. you@example.com).</div>
+                                }
+
+                                <div class="campanel-subtitle">SMTP SERVER</div>
+                                <div class="control-row"><span>Host</span>
+                                    <input class="notif-input" placeholder="smtp.gmail.com" @bind="_notif.SmtpHost" /></div>
+                                <div class="control-row"><span>Port</span>
+                                    <input class="ret-input" type="number" min="1" max="65535" @bind="_notif.SmtpPort" /></div>
+                                <div class="control-row"><span>Security</span>
+                                    <select class="event-filter" @bind="_notif.Security">
+                                        <option value="starttls">STARTTLS (587)</option>
+                                        <option value="ssl">SSL/TLS (465)</option>
+                                        <option value="none">None</option>
+                                    </select></div>
+                                <div class="control-row"><span>Username</span>
+                                    <input class="notif-input @(NotifUsernameInvalid ? "input-error" : "")" autocomplete="off"
+                                           @bind="_notif.Username" @bind:event="oninput" /></div>
+                                @if (NotifUsernameInvalid)
+                                {
+                                    <div class="field-error">This looks like an email address but isn't a valid one.</div>
+                                }
+                                <div class="control-row"><span>Password</span>
+                                    <input class="notif-input" type="password" autocomplete="new-password"
+                                           placeholder="@(_notif.HasPassword ? "•••• stored — blank keeps it" : "app password")"
+                                           @bind="_notifPassword" /></div>
+                                <div class="control-row"><span>From (blank = username)</span>
+                                    <input class="notif-input @(NotifFromInvalid ? "input-error" : "")"
+                                           @bind="_notif.From" @bind:event="oninput" /></div>
+                                @if (NotifFromInvalid)
+                                {
+                                    <div class="field-error">Enter a valid email address, or leave blank to use the username.</div>
+                                }
+                                <div class="control-row"><span>From name</span>
+                                    <input class="notif-input" @bind="_notif.FromName" /></div>
+
+                                <div class="campanel-divider"></div>
+                                <div class="campanel-subtitle">ALERTS</div>
+                                @NotifToggle("Storage full / recovered", _notif.AlertStorage, v => _notif.AlertStorage = v)
+                                @NotifToggle("Server overload", _notif.AlertOverload, v => _notif.AlertOverload = v)
+                                @NotifToggle("Recording write failures", _notif.AlertWriteFailure, v => _notif.AlertWriteFailure = v)
+                                @NotifToggle("Camera offline / back online", _notif.AlertCameraOffline, v => _notif.AlertCameraOffline = v)
+                                @if (_notif.AlertCameraOffline)
+                                {
+                                    <div class="control-row"><span>Camera offline after (minutes)</span>
+                                        <input class="ret-input" type="number" min="1" max="1440" @bind="_notif.OfflineThresholdMinutes" /></div>
+                                    @if (_notif.Cameras.Count > 0)
+                                    {
+                                        <div class="notice small">Per-camera override — blank uses the default above, <b>0</b> never alerts for that camera:</div>
+                                        @foreach (var cam in _notif.Cameras)
+                                        {
+                                            <div class="control-row"><span>@cam</span>
+                                                <input class="ret-input" type="number" min="0" max="1440"
+                                                       placeholder="@_notif.OfflineThresholdMinutes"
+                                                       value="@(_notif.CameraOfflineOverrides.TryGetValue(cam, out var ov) ? ov.ToString() : "")"
+                                                       @onchange="e => SetCameraOverride(cam, (string?)e.Value)" /></div>
+                                        }
+                                    }
+                                }
+
+                                @if (NotifDirty)
+                                {
+                                    <div class="notice pending">Unsaved changes — click <b>Save notifications</b> to apply them.</div>
+                                }
+                                <div class="control-row" style="margin-top:6px;">
+                                    <button class="chip" disabled="@(_notifBusy || NotifHasErrors)" @onclick="SendTestNotificationAsync">
+                                        @(_notifTesting ? "Sending…" : "Send test email")</button>
+                                    <span class="tile-spacer"></span>
+                                    <button class="chip @(NotifDirty ? "chip-active" : "")" disabled="@(_notifBusy || NotifHasErrors)" @onclick="SaveNotificationsAsync">
+                                        @(_notifSaving ? "Saving…" : "Save notifications")</button>
+                                </div>
+                            }
+                            else
+                            {
+                                @if (NotifDirty)
+                                {
+                                    <div class="notice pending">Unsaved change — click <b>Save</b> to apply it.</div>
+                                }
+                                <div class="control-row">
+                                    <span class="tile-spacer"></span>
+                                    <button class="chip @(NotifDirty ? "chip-active" : "")" disabled="@_notifBusy" @onclick="SaveNotificationsAsync">
+                                        @(_notifSaving ? "Saving…" : "Save")</button>
+                                </div>
+                            }
+                            @if (_notifStatus != null)
+                            {
+                                <div class="notice small @(_notifError ? "error" : "")">@_notifStatus</div>
+                            }
+                        </div>
+                    }
+
+                    @if (_settingsTab != "notifications")
+                    {
+                        <div class="notice small">
+                            Restart stops the service; your container/systemd restart policy brings it back within seconds
+                            (needed to apply saved changes). The UI reconnects automatically.
+                        </div>
+                    }
                 </div>
 
                 <div class="settings-foot">
@@ -1084,8 +1230,146 @@
     private string? _adminError;
     private string? _adminStatus;
     private bool _confirmRestart;
+    private string _settingsTab = "general";
     private readonly Dictionary<string, string> _adminEdits = new();
     private ApiEvent? _playEvent;
+
+    // Email notifications (loaded with the server-settings panel; saved separately).
+    private ApiNotifications? _notif;
+    private string _notifPassword = "";
+    private string? _notifStatus;
+    private bool _notifError, _notifSaving, _notifTesting;
+    private bool _notifBusy => _notifSaving || _notifTesting;
+
+    // Email-shape check (local@domain.tld) so a typo in an address field is caught
+    // before a save silently ships alerts nowhere.
+    private static readonly System.Text.RegularExpressions.Regex EmailRx =
+        new(@"^[^@\s]+@[^@\s]+\.[^@\s]+$", System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static bool IsEmail(string? s) =>
+        !string.IsNullOrWhiteSpace(s) && EmailRx.IsMatch(s.Trim());
+
+    // Recipient is required (every alert goes there); From is optional but must be
+    // an address when set; Username is only email-checked when it looks like one —
+    // many providers use a plain login or an API token instead.
+    private bool NotifRecipientInvalid => _notif is { Enabled: true } && !IsEmail(_notif.Recipient);
+    private bool NotifFromInvalid => _notif is { Enabled: true }
+        && !string.IsNullOrWhiteSpace(_notif.From) && !IsEmail(_notif.From);
+    private bool NotifUsernameInvalid => _notif is { Enabled: true }
+        && _notif.Username.Contains('@') && !IsEmail(_notif.Username);
+    private bool NotifHasErrors => NotifRecipientInvalid || NotifFromInvalid || NotifUsernameInvalid;
+
+    // Unsaved-change tracking for the notifications tab (it saves to notifications.json
+    // separately, so it has its own signal rather than the config badge). The signature
+    // is a fingerprint of the editable state, taken on load and after each save; a
+    // freshly-typed password counts as a change too.
+    private string _notifSignature = "";
+    private string NotifSig() => _notif == null ? "" : System.Text.Json.JsonSerializer.Serialize(NotifBody());
+    private bool NotifDirty => _notif != null && NotifSig() != _notifSignature;
+
+    private RenderFragment NotifToggle(string label, bool value, Action<bool> set) => __b =>
+    {
+        __b.OpenElement(0, "div");
+        __b.AddAttribute(1, "class", "control-row");
+        __b.OpenElement(2, "span");
+        __b.AddContent(3, label);
+        __b.CloseElement();
+        __b.OpenElement(4, "button");
+        __b.AddAttribute(5, "class", "chip " + (value ? "" : "chip-off"));
+        __b.AddAttribute(6, "onclick", EventCallback.Factory.Create(this, () => set(!value)));
+        __b.AddContent(7, value ? "on" : "off");
+        __b.CloseElement();
+        __b.CloseElement();
+    };
+
+    private object NotifBody() => new
+    {
+        enabled = _notif!.Enabled,
+        recipient = _notif.Recipient,
+        smtpHost = _notif.SmtpHost,
+        smtpPort = _notif.SmtpPort,
+        security = _notif.Security,
+        username = _notif.Username,
+        // Write-only: send the typed value, else null to keep the stored one.
+        password = string.IsNullOrEmpty(_notifPassword) ? null : _notifPassword,
+        from = _notif.From,
+        fromName = _notif.FromName,
+        alertStorage = _notif.AlertStorage,
+        alertOverload = _notif.AlertOverload,
+        alertCameraOffline = _notif.AlertCameraOffline,
+        alertWriteFailure = _notif.AlertWriteFailure,
+        offlineThresholdMinutes = _notif.OfflineThresholdMinutes,
+        cameraOfflineOverrides = _notif.CameraOfflineOverrides,
+    };
+
+    private void SetCameraOverride(string cam, string? raw)
+    {
+        if (_notif == null) return;
+        if (int.TryParse(raw?.Trim(), out var m) && m >= 0) _notif.CameraOfflineOverrides[cam] = m;
+        else _notif.CameraOfflineOverrides.Remove(cam); // blank = use the default
+    }
+
+    private async Task SaveNotificationsAsync()
+    {
+        if (_notif == null || _notifBusy) return;
+        if (_notif.Enabled && NotifHasErrors)
+        {
+            _notifError = true; _notifStatus = "Fix the highlighted email address first.";
+            return;
+        }
+        _notifSaving = true; _notifStatus = null;
+        try
+        {
+            var req = ApiRequest(HttpMethod.Put, "/api/admin/notifications");
+            req.Content = JsonContent.Create(NotifBody());
+            using var res = await Http.SendAsync(req);
+            if (res.IsSuccessStatusCode)
+            {
+                _notif = await res.Content.ReadFromJsonAsync<ApiNotifications>();
+                _notifPassword = "";
+                _notifSignature = NotifSig(); // saved state is the new baseline
+                _notifError = false;
+                _notifStatus = "Notification settings saved.";
+            }
+            else
+            {
+                _notifError = true;
+                _notifStatus = "Save failed (" + (int)res.StatusCode + ").";
+            }
+        }
+        catch (Exception ex) { _notifError = true; _notifStatus = ex.Message; }
+        finally { _notifSaving = false; }
+    }
+
+    private async Task SendTestNotificationAsync()
+    {
+        if (_notif == null || _notifBusy) return;
+        if (_notif.Enabled && NotifHasErrors)
+        {
+            _notifError = true; _notifStatus = "Fix the highlighted email address first.";
+            return;
+        }
+        _notifTesting = true; _notifStatus = null;
+        try
+        {
+            var req = ApiRequest(HttpMethod.Post, "/api/admin/notifications/test");
+            req.Content = JsonContent.Create(NotifBody());
+            using var res = await Http.SendAsync(req);
+            if (res.IsSuccessStatusCode)
+            {
+                _notifError = false;
+                _notifStatus = "Test email sent — check the recipient inbox.";
+            }
+            else
+            {
+                _notifError = true;
+                var err = await res.Content.ReadFromJsonAsync<JsonElement>();
+                _notifStatus = "Test failed: " +
+                    (err.TryGetProperty("error", out var e) ? e.GetString() : "the mail server rejected it.");
+            }
+        }
+        catch (Exception ex) { _notifError = true; _notifStatus = "Test failed: " + ex.Message; }
+        finally { _notifTesting = false; }
+    }
 
     // Web-UI authentication (enabled once the first account exists server-side)
     private string? _authToken;
@@ -1643,7 +1927,19 @@
         _adminError = _adminStatus = null;
         _adminConfig = null;
         _confirmRestart = false;
+        _settingsTab = "general";
         _adminEdits.Clear();
+        _notif = null; _notifStatus = null; _notifPassword = "";
+        try
+        {
+            using var nres = await Http.SendAsync(ApiRequest(HttpMethod.Get, "/api/admin/notifications"));
+            if (nres.IsSuccessStatusCode)
+            {
+                _notif = await nres.Content.ReadFromJsonAsync<ApiNotifications>();
+                _notifSignature = NotifSig(); // baseline for the unsaved-change signal
+            }
+        }
+        catch { /* notifications section just stays hidden */ }
         try
         {
             using var res = await Http.SendAsync(ApiRequest(HttpMethod.Get, "/api/admin/config"));
@@ -1701,15 +1997,19 @@
 
     private RenderFragment AdminField(string label, string path, string type) => builder =>
     {
+        // "edited" once the field differs from the saved file: highlights the input
+        // and (via AdminPendingCount) drives the header badge + footer note live.
+        bool edited = AdminValue(path) != AdminRawValue(path);
         builder.OpenElement(0, "label");
-        builder.AddAttribute(1, "class", "admin-field");
+        builder.AddAttribute(1, "class", "admin-field" + (edited ? " edited" : ""));
         builder.OpenElement(2, "span");
         builder.AddContent(3, label);
         builder.CloseElement();
         builder.OpenElement(4, "input");
         builder.AddAttribute(5, "type", type);
         builder.AddAttribute(6, "value", AdminValue(path));
-        builder.AddAttribute(7, "onchange",
+        // oninput (not onchange) so the unsaved signal appears as you type, not on blur.
+        builder.AddAttribute(7, "oninput",
             EventCallback.Factory.Create<ChangeEventArgs>(this, e => _adminEdits[path] = e.Value?.ToString() ?? ""));
         builder.CloseElement();
         builder.CloseElement();
@@ -1717,17 +2017,47 @@
 
     private RenderFragment AdminToggle(string label, string path) => builder =>
     {
+        bool edited = AdminValue(path) != AdminRawValue(path);
         builder.OpenElement(0, "div");
-        builder.AddAttribute(1, "class", "control-row");
+        builder.AddAttribute(1, "class", "control-row" + (edited ? " edited" : ""));
         builder.OpenElement(2, "span");
         builder.AddContent(3, label);
         builder.CloseElement();
         bool on = AdminBool(path);
         builder.OpenElement(4, "button");
-        builder.AddAttribute(5, "class", $"chip {(on ? "" : "chip-off")}");
+        builder.AddAttribute(5, "class", $"chip {(on ? "" : "chip-off")}{(edited ? " edited" : "")}");
         builder.AddAttribute(6, "onclick",
             EventCallback.Factory.Create(this, () => _adminEdits[path] = (!on).ToString().ToLowerInvariant()));
         builder.AddContent(7, on ? "on" : "off");
+        builder.CloseElement();
+        builder.CloseElement();
+    };
+
+    /// <summary>A config field constrained to a fixed set of values — a dropdown so
+    /// the user can't mistype (e.g. recording.stream). Shares the edited-highlight.</summary>
+    private RenderFragment AdminSelect(string label, string path, params string[] options) => builder =>
+    {
+        var cur = AdminValue(path);
+        if (string.IsNullOrEmpty(cur)) cur = options.Length > 0 ? options[0] : "";
+        bool edited = _adminEdits.TryGetValue(path, out var e) && e != AdminRawValue(path);
+        builder.OpenElement(0, "label");
+        builder.AddAttribute(1, "class", "admin-field" + (edited ? " edited" : ""));
+        builder.OpenElement(2, "span");
+        builder.AddContent(3, label);
+        builder.CloseElement();
+        builder.OpenElement(4, "select");
+        builder.AddAttribute(5, "class", "admin-select");
+        builder.AddAttribute(6, "value", cur);
+        builder.AddAttribute(7, "onchange",
+            EventCallback.Factory.Create<ChangeEventArgs>(this, ev => _adminEdits[path] = ev.Value?.ToString() ?? ""));
+        var seq = 8;
+        foreach (var opt in options)
+        {
+            builder.OpenElement(seq++, "option");
+            builder.AddAttribute(seq++, "value", opt);
+            builder.AddContent(seq++, opt);
+            builder.CloseElement();
+        }
         builder.CloseElement();
         builder.CloseElement();
     };
