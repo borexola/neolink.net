@@ -644,6 +644,12 @@ internal sealed class CameraBridge
         }
         if (f.Privacy)
             await AnnounceEntityAsync("switch", "privacy_mode", PrivacySwitchConfig(), ct).ConfigureAwait(false);
+        else
+            // Only cameras that actually support privacy mode (DeviceInfo <sleep> AND
+            // the channel's remoteAbility flag) get the switch. Clear a stale one an
+            // over-detecting build announced (e.g. the RLC Elite WiFi line) so HA
+            // drops the lingering switch instead of keeping it retained.
+            await ClearEntityAsync("switch", "privacy_mode", ct).ConfigureAwait(false);
         if (_hasIr)
             await AnnounceEntityAsync("select", "ir", IrSelectConfig(), ct).ConfigureAwait(false);
         if (f.Floodlight)
