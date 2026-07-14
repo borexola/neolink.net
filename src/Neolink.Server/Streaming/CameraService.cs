@@ -238,7 +238,11 @@ public sealed class CameraService : ILiveCameraSource
         });
 
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        var videoTask = Task.Run(() => camera.StartVideoAsync(_kind, binary.Writer, linked.Token), CancellationToken.None);
+        // Privacy mode (E1 Pro etc.) makes the camera go dark: no video is expected,
+        // and losing the connection over it would make the camera — and the privacy
+        // switch itself — Unavailable in Home Assistant. Hold the connection instead.
+        var videoTask = Task.Run(() => camera.StartVideoAsync(_kind, binary.Writer,
+            () => _privacyOn == 1, linked.Token), CancellationToken.None);
 
         var reader = new MediaFrameReader(binary.Reader);
         long frames = 0;

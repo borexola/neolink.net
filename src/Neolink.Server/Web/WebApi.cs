@@ -937,11 +937,17 @@ public static class WebApi
             }));
 
         // Privacy mode: the camera goes dark (no video, no detections) until
-        // switched back. GET reads live from the camera.
+        // switched back. Prefer the pushed state (what the tile shows): while the
+        // camera is dark it often stops answering the live sleep-state read, which
+        // would make the settings panel wrongly show "off". Fall back to a live read
+        // only when nothing has been pushed yet.
         app.MapGet("/api/cameras/{name}/privacy", (string name, HttpContext ctx) =>
             ExecAsync(name, ctx, mutating: false, async (control, reqCt) =>
             {
-                var on = await control.GetPrivacyModeAsync(reqCt);
+                var pushed = cameras
+                    .FirstOrDefault(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase))
+                    ?.PrivacyOn?.Invoke();
+                var on = pushed ?? await control.GetPrivacyModeAsync(reqCt);
                 return on == null
                     ? Results.Json(new { error = "privacy mode is not supported by this camera" }, statusCode: 404)
                     : Results.Json(new { on });

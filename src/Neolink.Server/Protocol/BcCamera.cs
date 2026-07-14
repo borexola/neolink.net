@@ -147,7 +147,8 @@ public sealed class BcCamera : IBcCamera
     /// Requests the video stream and pumps the raw binary sub-stream chunks into
     /// <paramref name="binaryOut"/> until cancelled or the connection drops.
     /// </summary>
-    public async Task StartVideoAsync(StreamKind stream, ChannelWriter<byte[]> binaryOut, CancellationToken ct)
+    public async Task StartVideoAsync(StreamKind stream, ChannelWriter<byte[]> binaryOut,
+        Func<bool>? stallTolerable, CancellationToken ct)
     {
         using var sub = _conn.Subscribe(BcConstants.MsgIdVideo);
 
@@ -191,6 +192,7 @@ public sealed class BcCamera : IBcCamera
 
         try
         {
+            bool holding = false;
             while (!ct.IsCancellationRequested)
             {
                 BcMessage msg;
@@ -200,7 +202,26 @@ public sealed class BcCamera : IBcCamera
                 }
                 catch (TimeoutException)
                 {
+                    // No video for 15s. If the camera is dark on purpose (privacy
+                    // mode), that is expected — keep the connection (and thus control
+                    // commands, e.g. turning privacy off) alive instead of tearing it
+                    // down and reconnecting in a loop. A genuine disconnect surfaces
+                    // as a socket error, not a timeout, so it still reconnects.
+                    if (stallTolerable?.Invoke() == true)
+                    {
+                        if (!holding)
+                        {
+                            holding = true;
+                            Log.Info($"{_logTag}: no video — camera is in privacy mode; holding the connection");
+                        }
+                        continue;
+                    }
                     throw new IOException("Video stream stalled (no data for 15s)");
+                }
+                if (holding)
+                {
+                    holding = false;
+                    Log.Info($"{_logTag}: privacy mode off — video resumed");
                 }
                 if (msg.Binary is { Length: > 0 } bin)
                     await binaryOut.WriteAsync(bin, ct).ConfigureAwait(false);

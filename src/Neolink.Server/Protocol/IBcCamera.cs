@@ -30,8 +30,12 @@ public interface IBcCamera : IAsyncDisposable
     /// <summary>
     /// Requests the video stream and pumps the raw binary sub-stream chunks into
     /// <paramref name="binaryOut"/> until cancelled or the connection drops.
+    /// When <paramref name="stallTolerable"/> returns true, a 15s no-video gap is
+    /// treated as expected (the camera is dark on purpose, e.g. privacy mode) and
+    /// the connection is held open instead of failing — so control stays available.
     /// </summary>
-    Task StartVideoAsync(StreamKind stream, ChannelWriter<byte[]> binaryOut, CancellationToken ct);
+    Task StartVideoAsync(StreamKind stream, ChannelWriter<byte[]> binaryOut,
+        Func<bool>? stallTolerable, CancellationToken ct);
 
     Task PingAsync(CancellationToken ct);
 

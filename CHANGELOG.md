@@ -41,6 +41,17 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Fixed
 
+- **Privacy mode no longer flaps the camera offline**: on cameras that go fully dark
+  in privacy mode (E1 Pro and similar), the absence of video was mistaken for a
+  stalled stream, so Neolink reconnected every ~15s — flapping the status between
+  online and offline and, worse, marking the camera (and every entity, including the
+  privacy switch itself) Unavailable in Home Assistant, which made turning privacy
+  back off unreliable. When privacy mode is on, the missing video is now treated as
+  expected: the connection is held open, the camera stays online, and control stays
+  available. A genuine disconnect (a socket error, not just silence) still reconnects.
+  The camera-settings panel also now reflects privacy mode correctly — it reads the
+  same pushed state the tile does, instead of a live query the camera stops answering
+  while it is dark (which made the panel show "off" during an active privacy session).
 - **Events mark as reviewed on open**: a clip now counts as reviewed the moment you
   open it, not when you close or advance past it (close/advance stay as a fallback).
 - **Home Assistant entity accuracy**: Vehicle and Animal detections get proper
