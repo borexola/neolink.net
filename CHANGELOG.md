@@ -53,7 +53,9 @@ in the README). Paste the matching section below into the GitHub release.
   ~30s while dark instead of just going quiet, a short grace period on the Home
   Assistant availability keeps every entity Available across those brief reconnects —
   including the moment privacy switches back off — rather than flapping the whole
-  camera Unavailable and back.
+  camera Unavailable and back. The reconnect churn while dark is now announced once
+  as a warning, with the per-reconnect chatter dropped to debug, so the log stays
+  readable during a long privacy session.
   The camera-settings panel also now reflects privacy mode correctly — it reads the
   same pushed state the tile does, instead of a live query the camera stops answering
   while it is dark (which made the panel show "off" during an active privacy session).

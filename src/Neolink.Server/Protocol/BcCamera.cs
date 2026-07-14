@@ -212,7 +212,7 @@ public sealed class BcCamera : IBcCamera
                         if (!holding)
                         {
                             holding = true;
-                            Log.Info($"{_logTag}: no video — camera is in privacy mode; holding the connection");
+                            Log.Debug($"{_logTag}: no video — camera is in privacy mode; holding the connection");
                         }
                         continue;
                     }
@@ -221,7 +221,7 @@ public sealed class BcCamera : IBcCamera
                 if (holding)
                 {
                     holding = false;
-                    Log.Info($"{_logTag}: privacy mode off — video resumed");
+                    Log.Debug($"{_logTag}: privacy mode off — video resumed");
                 }
                 if (msg.Binary is { Length: > 0 } bin)
                     await binaryOut.WriteAsync(bin, ct).ConfigureAwait(false);

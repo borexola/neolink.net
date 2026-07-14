@@ -54,6 +54,7 @@ public sealed class CameraService : ILiveCameraSource
     private volatile BatteryPush? _battery;
     private volatile int _sirenOn = -1;    // from msg 547 pushes: -1 unknown, 0 off, 1 on
     private volatile int _privacyOn = -1;  // from msg 623 pushes: -1 unknown, 0 off, 1 on
+    private volatile bool _privacyLoop;    // dark + reconnecting: log it once, then quiet the churn
     private volatile bool _parked;
     private bool _sleepHintLogged;
 
@@ -199,7 +200,13 @@ public sealed class CameraService : ILiveCameraSource
                     _sleepHintLogged = true;
                     hint = " (a sleeping battery camera is unreachable until it wakes itself — PIR motion or the Reolink app)";
                 }
-                Log.Error($"{Tag}: {Log.Flatten(ex)}; retrying in {backoff.TotalSeconds:0}s{hint}");
+                // Privacy-mode churn (dark camera closing the connection) is expected
+                // and already announced once as a warning — keep the per-retry line at
+                // Debug so it doesn't flood the log.
+                if (_privacyLoop)
+                    Log.Debug($"{Tag}: privacy reconnect: {Log.Flatten(ex)}; retrying in {backoff.TotalSeconds:0}s");
+                else
+                    Log.Error($"{Tag}: {Log.Flatten(ex)}; retrying in {backoff.TotalSeconds:0}s{hint}");
             }
 
             try
@@ -220,14 +227,32 @@ public sealed class CameraService : ILiveCameraSource
     /// </summary>
     private async Task<bool> StreamOnceAsync(CancellationToken ct, Action onFrame)
     {
-        Log.Info($"{Tag}: connecting to {_config.Host}:{_config.Port}");
+        // While the camera is dark (privacy mode) some models (E1 Pro) keep closing
+        // and reopening the connection. Announce that once as a warning, then route
+        // the per-reconnect chatter to Debug so it doesn't flood the log. `Note`
+        // logs at Info normally, Debug while the privacy loop is active.
+        void Note(string m) { if (_privacyLoop) Log.Debug(m); else Log.Info(m); }
+        bool StallTolerable()
+        {
+            if (_privacyOn != 1) return false;
+            if (!_privacyLoop)
+            {
+                _privacyLoop = true;
+                Log.Warn($"{Tag}: in privacy mode — no video until it is turned off. The camera may keep " +
+                         "closing and reopening the connection while dark; that is expected, control still " +
+                         "works (e.g. turning privacy off), and reconnect logging is quieted until video resumes.");
+            }
+            return true;
+        }
+
+        Note($"{Tag}: connecting to {_config.Host}:{_config.Port}");
         await using IBcCamera camera = await BcCamera.ConnectAsync(_config.Host, _config.Port, _config.ChannelId, ct,
             tag: Tag).ConfigureAwait(false);
 
-        Log.Info($"{Tag}: logging in as '{_config.Username}'");
+        Note($"{Tag}: logging in as '{_config.Username}'");
         await camera.LoginAsync(_config.Username, _config.Password, ct).ConfigureAwait(false);
         var res = camera.DeviceInfo;
-        Log.Info($"{Tag}: logged in{(res != null && res.Width > 0 ? $", camera reports {res.Width}x{res.Height}" : "")}");
+        Note($"{Tag}: logged in{(res != null && res.Width > 0 ? $", camera reports {res.Width}x{res.Height}" : "")}");
 
         await ProbeBatteryAsync(camera, ct).ConfigureAwait(false);
 
@@ -242,7 +267,7 @@ public sealed class CameraService : ILiveCameraSource
         // and losing the connection over it would make the camera — and the privacy
         // switch itself — Unavailable in Home Assistant. Hold the connection instead.
         var videoTask = Task.Run(() => camera.StartVideoAsync(_kind, binary.Writer,
-            () => _privacyOn == 1, linked.Token), CancellationToken.None);
+            StallTolerable, linked.Token), CancellationToken.None);
 
         var reader = new MediaFrameReader(binary.Reader);
         long frames = 0;
@@ -281,6 +306,11 @@ public sealed class CameraService : ILiveCameraSource
                     throw new IOException("video stream ended");
                 }
 
+                if (_privacyLoop)
+                {
+                    _privacyLoop = false;
+                    Log.Info($"{Tag}: privacy mode off — video resumed");
+                }
                 if (++frames == 1)
                 {
                     Log.Info($"{Tag}: receiving media");
