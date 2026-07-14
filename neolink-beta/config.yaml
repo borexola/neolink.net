@@ -1,0 +1,53 @@
+# Beta channel of the Neolink.NET add-on. Tracks the rolling :beta image the
+# docker workflow builds from the `beta` branch. Manifest-only (the :beta image
+# already contains the launcher) — it just points HA at that image tag.
+#
+# Ingress-only, no published ports, so it installs ALONGSIDE the stable add-on
+# without a 8654/8655 clash: use it to try the web UI and the HA sidebar. If you
+# also need this instance's RTSP/API reachable, add a `ports:` block and stop the
+# stable add-on first.
+#
+# NOTE: this file must live on the branch HA reads (the repo's default branch) to
+# appear in the store — the beta CODE + workflow change live on the `beta` branch,
+# this pointer lives on `main`. Rolling :beta means HA won't auto-detect a new
+# build (the version string stays "beta"); reinstall the add-on to pull a fresh one.
+name: Neolink.NET (beta)
+version: "beta"
+slug: neolink_beta
+description: >-
+  Rolling beta of Neolink.NET — try new features (served in the Home Assistant
+  sidebar via ingress) before they reach a stable release. Installs alongside the
+  stable add-on.
+url: https://github.com/borexola/neolink.net
+arch:
+  - amd64
+  - aarch64
+image: ghcr.io/borexola/neolink.net-addon-{arch}
+startup: services
+boot: manual
+hassio_api: true
+services:
+  - mqtt:want
+map:
+  # Separate /config from the stable add-on, so beta gets its own config.json
+  # and never disturbs your production setup.
+  - addon_config:rw
+  - media:rw
+  - share:rw
+ingress: true
+ingress_port: 8655
+panel_icon: mdi:cctv
+panel_title: Neolink beta
+options:
+  cameras: []
+  auto_mqtt: true
+  log_verbose: false
+schema:
+  cameras:
+    - name: str
+      address: str
+      username: str
+      password: password?
+      always_on: bool?
+  auto_mqtt: bool
+  log_verbose: bool
