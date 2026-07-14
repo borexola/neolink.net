@@ -73,6 +73,19 @@ public sealed class ReolinkHttpApi : IDisposable
     public Task SetEncAsync(JsonObject enc, CancellationToken ct) =>
         ExecAsync("SetEnc", new JsonObject { ["Enc"] = enc.DeepClone() }, ct);
 
+    /// <summary>Reads the white-LED / spotlight config (state 0|1, mode, bright 0-100).
+    /// Baichuan can't do this on cameras that lack a FloodlightTask (e.g. Lumus).</summary>
+    public async Task<JsonObject> GetWhiteLedAsync(CancellationToken ct)
+    {
+        var value = await ExecAsync("GetWhiteLed", new JsonObject { ["channel"] = _channelId }, ct).ConfigureAwait(false);
+        return value?["WhiteLed"] as JsonObject
+            ?? throw new ReolinkApiException("GetWhiteLed reply carries no WhiteLed settings");
+    }
+
+    /// <summary>Writes the white-LED config; pass a (modified) object from <see cref="GetWhiteLedAsync"/>.</summary>
+    public Task SetWhiteLedAsync(JsonObject whiteLed, CancellationToken ct) =>
+        ExecAsync("SetWhiteLed", new JsonObject { ["WhiteLed"] = whiteLed.DeepClone() }, ct);
+
     // ------------------------------------------------------------------ plumbing
 
     private async Task<JsonNode?> ExecAsync(string cmd, JsonObject param, CancellationToken ct)

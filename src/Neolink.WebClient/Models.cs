@@ -37,7 +37,12 @@ public sealed record ApiVersion(string? Name, string? Model, string? Serial, str
 
 public sealed record ApiFeatures(bool Ptz, bool Led, bool Pir, bool Battery,
     bool StreamSettings = false, bool Reboot = true,
-    bool Zoom = false, bool Siren = false, bool Floodlight = false, bool Privacy = false);
+    bool Zoom = false, bool Siren = false, bool Floodlight = false, bool Privacy = false,
+    bool WhiteLed = false, bool Spotlight = false);
+
+/// <summary>GET/POST /api/cameras/{name}/whiteled — spotlight brightness (0-100),
+/// on/off and auto mode, over the camera's HTTP API.</summary>
+public sealed record ApiWhiteLed(int Bright, bool On, int Mode);
 
 /// <summary>GET /api/cameras/{name}/zoomfocus — absolute positions with their ranges.</summary>
 public sealed record ApiZoomPos(long Cur, long Min, long Max);

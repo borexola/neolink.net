@@ -82,6 +82,11 @@ public sealed class GenericCameraControl : ICameraControl
     public Task SetFloodlightTasksAsync(XElement task, CancellationToken ct) =>
         throw new NotSupportedException("floodlight control is not available for generic RTSP cameras");
 
+    public Task<WhiteLedState?> GetWhiteLedAsync(CancellationToken ct) => Task.FromResult<WhiteLedState?>(null);
+
+    public Task SetWhiteLedAsync(int? bright, bool? on, int? mode, CancellationToken ct) =>
+        throw new NotSupportedException("white-LED control is not available for generic RTSP cameras");
+
     public Task TalkAsync(int sampleRate, System.Threading.Channels.ChannelReader<byte[]> pcm, CancellationToken ct) =>
         throw new NotSupportedException("two-way talk is not available for generic RTSP cameras");
 }

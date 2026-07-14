@@ -100,6 +100,7 @@ public static class WebApi
     private sealed record PtzRequest(string? Command, float? Speed);
     private sealed record ZoomFocusRequest(uint? Zoom, uint? Focus);
     private sealed record FloodlightRequest(int? Brightness, bool? Auto);
+    private sealed record WhiteLedRequest(int? Brightness, bool? On, int? Mode);
     private sealed record SirenRequest(bool? On);
     private sealed record PrivacyRequest(bool? On);
     private sealed record RecordOnDemandRequest(bool Active);
@@ -756,6 +757,8 @@ public static class WebApi
                         zoom = caps.Features.Zoom,
                         siren = caps.Features.Siren,
                         floodlight = caps.Features.Floodlight,
+                        whiteLed = caps.Features.WhiteLed,
+                        spotlight = caps.Features.Spotlight,
                         privacy = caps.Features.Privacy,
                         streamSettings = control.CanSetStreamSettings,
                         // Baichuan-only: a generic RTSP camera can't be told to reboot
@@ -983,6 +986,30 @@ public static class WebApi
                     task.SetElementValue("enable", auto ? 1 : 0);
                 await control.SetFloodlightTasksAsync(task, reqCt);
                 return Results.Json(ShapeFloodlight(task));
+            }));
+
+        // White LED / spotlight (cameras that expose it over the HTTP API, e.g. the
+        // Lumus / Elite lines that answer no Baichuan FloodlightTask): brightness,
+        // on/off, and the auto mode. Read-modify-write preserves the schedule.
+        app.MapGet("/api/cameras/{name}/whiteled", (string name, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: false, async (control, reqCt) =>
+            {
+                var wl = await control.GetWhiteLedAsync(reqCt);
+                return wl == null
+                    ? Results.Json(new { error = "no white LED on this camera (or its HTTP API is unreachable)" }, statusCode: 404)
+                    : Results.Json(new { bright = wl.Bright, on = wl.On, mode = wl.Mode });
+            }));
+
+        app.MapPost("/api/cameras/{name}/whiteled", (string name, WhiteLedRequest req, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: true, async (control, reqCt) =>
+            {
+                if (req.Brightness == null && req.On == null && req.Mode == null)
+                    return Results.Json(new { error = "provide brightness (0-100), on (bool) and/or mode (int)" }, statusCode: 400);
+                await control.SetWhiteLedAsync(req.Brightness, req.On, req.Mode, reqCt);
+                var wl = await control.GetWhiteLedAsync(reqCt);
+                return wl == null
+                    ? Results.Json(new { ok = true })
+                    : Results.Json(new { bright = wl.Bright, on = wl.On, mode = wl.Mode });
             }));
 
         // On-demand clip capture: start records ONE clip capped at

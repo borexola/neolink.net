@@ -288,9 +288,14 @@ foreach (var cam in config.Cameras)
 
         // Control commands (capabilities, PTZ, LED, ...) ride the primary stream's
         // connection — cameras have session limits, so no extra login is spent.
-        // Stream encode settings are written via the camera's HTTP API when configured.
-        var httpApi = cam.HttpAddress == null ? null
-            : new ReolinkHttpApi(cam.HttpAddress, cam.Username, cam.Password, cam.ChannelId);
+        // Some controls (stream encode writes, white-LED brightness) go over the
+        // camera's HTTP API. Use an explicit http_address when set, otherwise derive
+        // it from the Baichuan host (same box, port 80) — UID-only cameras have no
+        // host and get none. Unreachable HTTP just fails those calls gracefully.
+        var httpAddr = cam.HttpAddress
+            ?? (string.IsNullOrWhiteSpace(cam.Host) ? null : cam.Host);
+        var httpApi = httpAddr == null ? null
+            : new ReolinkHttpApi(httpAddr, cam.Username, cam.Password, cam.ChannelId);
         var primary = primaryService
             ?? throw new InvalidOperationException($"camera '{cam.Name}' has no streams");
         control = new CameraControl(primary, httpApi);

@@ -18,7 +18,12 @@ public sealed class CameraOfflineException : Exception
 
 /// <summary>Features a camera was found to support, discovered by probing.</summary>
 public sealed record CameraFeatures(bool Ptz, bool Led, bool Pir, bool Battery, bool Talk,
-    bool Zoom = false, bool Siren = false, bool Floodlight = false, bool Privacy = false);
+    bool Zoom = false, bool Siren = false, bool Floodlight = false, bool Privacy = false,
+    bool WhiteLed = false, bool Spotlight = false);
+
+/// <summary>White-LED / spotlight state read over the HTTP API (brightness 0-100,
+/// on/off, and the auto mode: 0 off, 1 night-auto, 2 always-on, 3 schedule).</summary>
+public sealed record WhiteLedState(int Bright, bool On, int Mode);
 
 /// <summary>One stream's current encode selection (Baichuan stream naming).</summary>
 public sealed record StreamEncSetting(string Stream, uint Width, uint Height, uint Framerate, uint Bitrate);
@@ -87,6 +92,14 @@ public interface ICameraControl
 
     /// <summary>Writes back a (modified) &lt;FloodlightTask&gt; from <see cref="GetFloodlightTasksAsync"/>.</summary>
     Task SetFloodlightTasksAsync(XElement task, CancellationToken ct);
+
+    /// <summary>The white-LED / spotlight state over the HTTP API, or null when the
+    /// camera has no white LED or its HTTP API is unreachable.</summary>
+    Task<WhiteLedState?> GetWhiteLedAsync(CancellationToken ct);
+
+    /// <summary>Sets the white-LED brightness (0-100), on/off and/or auto mode; a null
+    /// field is left unchanged. Preserves the camera's schedule and AI-detect config.</summary>
+    Task SetWhiteLedAsync(int? bright, bool? on, int? mode, CancellationToken ct);
 
     /// <summary>
     /// Two-way talk: streams 16-bit LE mono PCM chunks at <paramref name="sampleRate"/>
@@ -174,6 +187,13 @@ public sealed class CameraControl : ICameraControl
             var talkTask = TryAsync(() => camera.GetTalkAbilityAsync(ProbeTimeout, ct));
             var zoomTask = TryAsync(() => camera.GetZoomFocusAsync(ProbeTimeout, ct));
             var floodTask = TryAsync(() => camera.GetFloodlightTasksAsync(ProbeTimeout, ct));
+            // White-LED / spotlight over the HTTP API (Lumus, Elite, ... — cameras
+            // that don't answer the Baichuan FloodlightTask). Runs in parallel with
+            // the BC probes and shares their timeout, so an unreachable HTTP port
+            // (port 80 closed) doesn't slow discovery.
+            var whiteLedTask = _httpApi == null
+                ? Task.FromResult<WhiteLedState?>(null)
+                : ProbeWhiteLedAsync(ct);
             // Privacy mode needs BOTH of Reolink's support signals (mirroring
             // reolink_aio, which is what Home Assistant ships):
             //   1. the login DeviceInfo advertises a <sleep> element, AND
@@ -187,7 +207,7 @@ public sealed class CameraControl : ICameraControl
             var privacyTask = sleepAd && remoteAbility
                 ? ProbeValueAsync(() => camera.GetPrivacyModeAsync(ProbeTimeout, ct))
                 : Task.FromResult<bool?>(null);
-            await Task.WhenAll(ledTask, pirTask, batteryTask, talkTask, zoomTask, floodTask, privacyTask).ConfigureAwait(false);
+            await Task.WhenAll(ledTask, pirTask, batteryTask, talkTask, zoomTask, floodTask, privacyTask, whiteLedTask).ConfigureAwait(false);
             bool led = ledTask.Result;
             bool pir = pirTask.Result;
             bool battery = batteryTask.Result;
@@ -198,13 +218,21 @@ public sealed class CameraControl : ICameraControl
             bool zoom = ZoomMax(zoomTask.Result) > 0;
             bool floodlight = floodTask.Result != null;
             bool privacy = privacyTask.Result != null; // camera answered the sleep query
+            // A physical white spotlight is advertised by ledCtrl bit 2 in Support —
+            // this picks out the Lumus/Elite lines and leaves status-LED-only models
+            // (E1 Pro) and the doorbell out. Its ON/OFF rides the Baichuan lightState
+            // toggle; brightness is only reachable when the HTTP read also succeeded.
+            bool spotlight = !floodlight
+                && (ChannelSupportValue(support, camera.ChannelId, "ledCtrl") & 4) != 0;
+            bool whiteLed = spotlight && whiteLedTask.Result != null;
 
             _caps = new CameraCapabilities(version, support, new CameraFeatures(
-                ptz, led, pir, battery, talk, zoom, siren, floodlight, privacy));
+                ptz, led, pir, battery, talk, zoom, siren, floodlight, privacy, whiteLed, spotlight));
             _capsSession = camera;
             Log.Info($"{CameraName}: capabilities discovered " +
                      $"(ptz={ptz}, led={led}, pir={pir}, battery={battery}, talk={talk}" +
                      $", zoom={zoom}, siren={siren}, floodlight={floodlight}, privacy={privacy}" +
+                     $", spotlight={spotlight}, whiteLed={whiteLed}" +
                      $"{(version != null && version.Model.Length > 0 ? $", model={version.Model}" : "")})");
             if (sleepAd != remoteAbility)
                 Log.Debug($"{CameraName}: privacy gate — DeviceInfo<sleep>={sleepAd}, " +
@@ -354,6 +382,42 @@ public sealed class CameraControl : ICameraControl
             return null;
         }, ct);
 
+    // ------------------------------------------------------------ white LED (HTTP)
+
+    /// <summary>4-second-capped probe (the BC probes' budget) so a closed HTTP port
+    /// doesn't stall capability discovery.</summary>
+    private async Task<WhiteLedState?> ProbeWhiteLedAsync(CancellationToken ct)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(ProbeTimeout);
+        try { return ParseWhiteLed(await _httpApi!.GetWhiteLedAsync(cts.Token).ConfigureAwait(false)); }
+        catch { return null; }
+    }
+
+    private static WhiteLedState ParseWhiteLed(System.Text.Json.Nodes.JsonObject wl) => new(
+        Bright: Math.Clamp((int?)wl["bright"] ?? 0, 0, 100),
+        On: ((int?)wl["state"] ?? 0) != 0,
+        Mode: (int?)wl["mode"] ?? 0);
+
+    public async Task<WhiteLedState?> GetWhiteLedAsync(CancellationToken ct)
+    {
+        if (_httpApi == null) return null;
+        try { return ParseWhiteLed(await _httpApi.GetWhiteLedAsync(ct).ConfigureAwait(false)); }
+        catch (Exception ex) when (ex is ReolinkApiException or IOException or TimeoutException) { return null; }
+    }
+
+    public async Task SetWhiteLedAsync(int? bright, bool? on, int? mode, CancellationToken ct)
+    {
+        if (_httpApi == null) throw new InvalidOperationException("camera has no HTTP API for the white LED");
+        // Read-modify-write so the camera's schedule and AI-detect config ride along.
+        var wl = await _httpApi.GetWhiteLedAsync(ct).ConfigureAwait(false);
+        if (bright is { } b) wl["bright"] = Math.Clamp(b, 0, 100);
+        if (on is { } o) wl["state"] = o ? 1 : 0;
+        if (mode is { } m) wl["mode"] = m;
+        await _httpApi.SetWhiteLedAsync(wl, ct).ConfigureAwait(false);
+        Log.Info($"{CameraName}: white LED set (bright={bright}, on={on}, mode={mode})");
+    }
+
     public Task RebootAsync(CancellationToken ct) =>
         WithCameraAsync<object?>(async camera =>
         {
@@ -450,6 +514,16 @@ public sealed class CameraControl : ICameraControl
     /// (matched by &lt;chnID&gt;) first, then falls back to the host-level element.
     /// Standalone cameras keep their per-channel flags in item 0; NVRs carry one
     /// item per attached camera.</summary>
+    /// <summary>The integer value of a channel Support flag (0 when absent), for
+    /// bitmask abilities like ledCtrl.</summary>
+    internal static uint ChannelSupportValue(XElement? support, int channel, string name)
+    {
+        if (support == null) return 0;
+        var item = support.Elements("item").FirstOrDefault(i => (int?)i.Element("chnID") == channel);
+        var text = (item?.Element(name) ?? support.Element(name))?.Value.Trim();
+        return uint.TryParse(text, out var v) ? v : 0;
+    }
+
     internal static bool ChannelSupportFlag(XElement? support, int channel, string name)
     {
         if (support == null) return false;

@@ -209,9 +209,11 @@
                 @if (Str(_led, "lightState") is { Length: > 0 } lightState)
                 {
                     var shownLed = _pendingStatusLed ?? lightState;
-                    var isFloodlight = _caps.Features?.Floodlight == true;
+                    // lightState is the floodlight on/off on floodlight cams, otherwise
+                    // the little status LED (the white spotlight is the HTTP white LED).
+                    var lightLabel = _caps.Features?.Floodlight == true ? "Floodlight" : "Status LED";
                     <div class="control-row">
-                        <span>@(isFloodlight ? "Floodlight" : "Status LED") @PendingMark(_pendingStatusLed)</span>
+                        <span>@lightLabel @PendingMark(_pendingStatusLed)</span>
                         <button class="chip @(shownLed == "open" ? "" : "chip-off") @(_pendingStatusLed != null ? "chip-pending" : "")"
                                 disabled="@_applying" @onclick="StageStatusLedToggle">
                             @(shownLed == "open" ? "on" : "off")
@@ -237,6 +239,30 @@
                             @((_pendingFlAuto ?? flCur.Auto) ? "on" : "off")
                         </button>
                     </div>
+                }
+                @* The white spotlight over the HTTP API (Elite, ...): its on/off is the
+                   white-LED mode; brightness only matters (and only shows) while it's on. *@
+                @if (_caps.Features?.WhiteLed == true && _whiteLed is { } wl)
+                {
+                    var spotOn = _pendingWlAuto ?? (wl.Mode != 0);
+                    <div class="control-row">
+                        <span>Spotlight @PendingMark(_pendingWlAuto?.ToString())</span>
+                        <button class="chip @(spotOn ? "" : "chip-off") @(_pendingWlAuto != null ? "chip-pending" : "")"
+                                disabled="@_applying" @onclick="StageWlAutoToggle">
+                            @(spotOn ? "on" : "off")
+                        </button>
+                    </div>
+                    @if (spotOn)
+                    {
+                        <div class="control-row">
+                            <span>Spotlight brightness @PendingMark(_pendingWlBright?.ToString())</span>
+                            <input class="zf-slider @(_pendingWlBright != null ? "input-pending" : "")"
+                                   type="range" min="0" max="100" step="1"
+                                   disabled="@_applying" value="@(_pendingWlBright ?? wl.Bright)"
+                                   @oninput="e => StageWlBright(long.Parse((string)e.Value!))" />
+                            <span class="zf-pos">@(_pendingWlBright ?? wl.Bright)</span>
+                        </div>
+                    }
                 }
             </div>
         }
@@ -593,6 +619,7 @@
     private JsonElement? _pir;
     private ApiZoomFocus? _zoomFocus;
     private ApiFloodlight? _floodlight;
+    private ApiWhiteLed? _whiteLed;
     private bool _loading;
     private string? _error;
     private string? _status;
@@ -631,12 +658,15 @@
     private bool? _pendingPir;
     private long? _pendingFlBrightness;
     private bool? _pendingFlAuto;
+    private long? _pendingWlBright;      // white-LED brightness (0-100)
+    private bool? _pendingWlAuto;        // white-LED "on automatically at night" (mode)
     private bool _applying;
 
     private int PendingCount =>
         _pendingStreams.Count + (_pendingIr != null ? 1 : 0)
         + (_pendingStatusLed != null ? 1 : 0) + (_pendingPir != null ? 1 : 0)
-        + (_pendingFlBrightness != null ? 1 : 0) + (_pendingFlAuto != null ? 1 : 0);
+        + (_pendingFlBrightness != null ? 1 : 0) + (_pendingFlAuto != null ? 1 : 0)
+        + (_pendingWlBright != null ? 1 : 0) + (_pendingWlAuto != null ? 1 : 0);
 
     /// <summary>Any staged change that interrupts the device when applied.</summary>
     private bool PendingDisruptive => _pendingStreams.Count > 0;
@@ -742,6 +772,16 @@
         _pendingFlAuto = target == _floodlight?.Auto ? null : target;
     }
 
+    private void StageWlBright(long value) =>
+        _pendingWlBright = value == _whiteLed?.Bright ? null : value;
+
+    private void StageWlAutoToggle()
+    {
+        bool cur = _whiteLed is { } wl && wl.Mode != 0;
+        var target = !(_pendingWlAuto ?? cur);
+        _pendingWlAuto = target == cur ? null : target;
+    }
+
     private void DiscardPending()
     {
         _pendingStreams.Clear();
@@ -749,6 +789,8 @@
         _pendingPir = null;
         _pendingFlBrightness = null;
         _pendingFlAuto = null;
+        _pendingWlBright = null;
+        _pendingWlAuto = null;
     }
 
     /// <summary>Sends the staged changes one at a time (the camera answers control
@@ -782,6 +824,17 @@
                 _pendingFlAuto = null;
                 applied.Add("floodlight behavior");
             }
+            if ((_pendingWlBright != null || _pendingWlAuto != null)
+                && await PostAsync("whiteled", new
+                {
+                    brightness = _pendingWlBright,
+                    mode = _pendingWlAuto is { } a ? (a ? 1 : 0) : (int?)null,
+                }))
+            {
+                _pendingWlBright = null;
+                _pendingWlAuto = null;
+                applied.Add("spotlight");
+            }
             // The disruptive ones go LAST: the quick settings land before the
             // stream restarts make the camera briefly deaf to commands.
             foreach (var (kind, ps) in _pendingStreams.ToList())
@@ -807,6 +860,7 @@
             if (_caps?.Features?.Led == true) _led = await GetAsync<JsonElement?>("led");
             if (_caps?.Features?.Pir == true) _pir = await GetAsync<JsonElement?>("pir");
             if (_caps?.Features?.Floodlight == true) _floodlight = await GetAsync<ApiFloodlight?>("floodlight");
+            if (_caps?.Features?.WhiteLed == true) _whiteLed = await GetAsync<ApiWhiteLed?>("whiteled");
             if (_caps?.Features?.StreamSettings == true) _encCurrent = await GetAsync<List<ApiStreamEnc>?>("settings/stream");
         }
         finally
@@ -832,6 +886,7 @@
         _battery = _led = _pir = null;
         _zoomFocus = null;
         _floodlight = null;
+        _whiteLed = null;
         _encCurrent = null;
         _zoomShown = _focusShown = null;
         _sirenOn = _privacyOn = null;
@@ -851,6 +906,7 @@
             if (_caps.Features?.Pir == true) _pir = await GetAsync<JsonElement?>("pir");
             if (_caps.Features?.Zoom == true) _zoomFocus = await GetAsync<ApiZoomFocus?>("zoomfocus");
             if (_caps.Features?.Floodlight == true) _floodlight = await GetAsync<ApiFloodlight?>("floodlight");
+            if (_caps.Features?.WhiteLed == true) _whiteLed = await GetAsync<ApiWhiteLed?>("whiteled");
             if (_caps.Features?.StreamSettings == true) _encCurrent = await GetAsync<List<ApiStreamEnc>?>("settings/stream");
             if (_caps.Features?.Siren == true) _sirenOn = (await GetAsync<JsonElement?>("siren"))?.TryGetProperty("on", out var so) == true && so.ValueKind != JsonValueKind.Null ? so.GetBoolean() : null;
             if (_caps.Features?.Privacy == true) _privacyOn = (await GetAsync<JsonElement?>("privacy"))?.TryGetProperty("on", out var po) == true && po.ValueKind != JsonValueKind.Null ? po.GetBoolean() : null;
