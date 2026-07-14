@@ -14,6 +14,10 @@ public sealed class RtspMount
     public required IStreamHub Hub { get; init; }
     /// <summary>Users allowed to access this mount; null means no authentication required.</summary>
     public HashSet<string>? PermittedUsers { get; init; }
+
+    /// <summary>Camera control that backs the RTSP audio backchannel (two-way talk)
+    /// for this mount, or null when talk is disabled or the source has no speaker.</summary>
+    public ICameraControl? Talk { get; set; }
 }
 
 /// <summary>Pure .NET RTSP server (RFC 2326 subset: OPTIONS/DESCRIBE/SETUP/PLAY/PAUSE/GET_PARAMETER/TEARDOWN).</summary>

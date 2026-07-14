@@ -43,10 +43,13 @@ public sealed class RtspConnection
 
                 if (first == '$')
                 {
-                    // Interleaved client data (usually RTCP receiver reports) — consume and ignore.
+                    // Interleaved client data: RTCP receiver reports (ignored) or, on a
+                    // backchannel channel, G.711 audio the client is talking to the camera.
                     var head = await ReadExactAsync(4, ct).ConfigureAwait(false);
+                    byte channel = head[1];
                     int len = (head[2] << 8) | head[3];
-                    await ReadExactAsync(len, ct).ConfigureAwait(false);
+                    var payload = await ReadExactAsync(len, ct).ConfigureAwait(false);
+                    RouteInterleaved(channel, payload);
                     continue;
                 }
 
@@ -190,11 +193,36 @@ public sealed class RtspConnection
             return;
         }
 
-        string sdp = Sdp.Build(mount.Hub, mount.Hub.Name);
+        // ONVIF backchannel is opt-in: only add the sendonly talk track when the
+        // client asks for it (Require: ...backchannel) AND the camera has a speaker.
+        // Plain players (VLC, ffmpeg, go2rtc without backchannel) never send the
+        // header, so their SDP is unchanged.
+        bool backchannel = false;
+        if (WantsBackchannel(req) && mount.Talk != null)
+        {
+            try
+            {
+                var caps = await mount.Talk.GetCapabilitiesAsync(ct).ConfigureAwait(false);
+                backchannel = caps.Features.Talk;
+            }
+            catch (Exception ex)
+            {
+                Log.Debug($"{mount.Hub.Name}: backchannel capability probe failed: {Log.Flatten(ex)}");
+            }
+        }
+
+        string sdp = Sdp.Build(mount.Hub, mount.Hub.Name, backchannel);
         string contentBase = req.Uri.TrimEnd('/') + "/";
         await RespondAsync(req, 200, "OK",
             $"Content-Base: {contentBase}\r\nContent-Type: application/sdp",
             body: Encoding.ASCII.GetBytes(sdp), ct: ct).ConfigureAwait(false);
+    }
+
+    /// <summary>Whether the request opts into the ONVIF two-way-talk backchannel.</summary>
+    private static bool WantsBackchannel(RtspRequest req)
+    {
+        var require = req.Header("Require");
+        return require != null && require.Contains("backchannel", StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task HandleSetupAsync(RtspRequest req, CancellationToken ct)
@@ -206,7 +234,7 @@ public sealed class RtspConnection
             return;
         }
         if (!await CheckAuthAsync(req, mount, ct).ConfigureAwait(false)) return;
-        if (trackId is not (0 or 1)) trackId = 0;
+        if (trackId is not (0 or 1 or Sdp.BackchannelTrackId)) trackId = 0;
 
         var transportHeader = req.Header("Transport");
         if (transportHeader == null)
@@ -233,28 +261,44 @@ public sealed class RtspConnection
 
         var spec = ParseTransport(transportHeader);
         string responseTransport;
-        var packetizer = new RtpPacketizer(trackId == 0 ? Sdp.VideoPayloadType : Sdp.AudioPayloadType);
 
-        if (spec.Tcp)
+        if (trackId == Sdp.BackchannelTrackId)
         {
-            int ch = spec.InterleavedRtp ?? trackId * 2;
-            session.SetTrack(trackId, TrackTransport.ForTcp((byte)ch, packetizer));
-            responseTransport = $"RTP/AVP/TCP;unicast;interleaved={ch}-{ch + 1};ssrc={packetizer.Ssrc:X8}";
-        }
-        else if (spec.ClientRtpPort.HasValue)
-        {
-            var remoteIp = ((IPEndPoint)_client.Client.RemoteEndPoint!).Address;
-            var target = new IPEndPoint(remoteIp, spec.ClientRtpPort.Value);
-            var (transport, rtpPort, rtcpPort) = TrackTransport.ForUdp(target, packetizer);
-            session.SetTrack(trackId, transport);
-            responseTransport =
-                $"RTP/AVP;unicast;client_port={spec.ClientRtpPort}-{spec.ClientRtpPort + 1};" +
-                $"server_port={rtpPort}-{rtcpPort};ssrc={packetizer.Ssrc:X8}";
+            // Backchannel: the client SENDS G.711 audio to us. Only TCP-interleaved
+            // is accepted (go2rtc's default; forces a retry for the rare UDP case).
+            if (mount.Talk == null || !spec.Tcp)
+            {
+                await RespondAsync(req, 461, "Unsupported Transport", sessionId: session.Id, ct: ct).ConfigureAwait(false);
+                return;
+            }
+            int ch = spec.InterleavedRtp ?? Sdp.BackchannelTrackId * 2;
+            session.SetupBackchannel((byte)ch, mount.Talk);
+            responseTransport = $"RTP/AVP/TCP;unicast;mode=record;interleaved={ch}-{ch + 1}";
         }
         else
         {
-            await RespondAsync(req, 461, "Unsupported Transport", ct: ct).ConfigureAwait(false);
-            return;
+            var packetizer = new RtpPacketizer(trackId == 0 ? Sdp.VideoPayloadType : Sdp.AudioPayloadType);
+            if (spec.Tcp)
+            {
+                int ch = spec.InterleavedRtp ?? trackId * 2;
+                session.SetTrack(trackId, TrackTransport.ForTcp((byte)ch, packetizer));
+                responseTransport = $"RTP/AVP/TCP;unicast;interleaved={ch}-{ch + 1};ssrc={packetizer.Ssrc:X8}";
+            }
+            else if (spec.ClientRtpPort.HasValue)
+            {
+                var remoteIp = ((IPEndPoint)_client.Client.RemoteEndPoint!).Address;
+                var target = new IPEndPoint(remoteIp, spec.ClientRtpPort.Value);
+                var (transport, rtpPort, rtcpPort) = TrackTransport.ForUdp(target, packetizer);
+                session.SetTrack(trackId, transport);
+                responseTransport =
+                    $"RTP/AVP;unicast;client_port={spec.ClientRtpPort}-{spec.ClientRtpPort + 1};" +
+                    $"server_port={rtpPort}-{rtcpPort};ssrc={packetizer.Ssrc:X8}";
+            }
+            else
+            {
+                await RespondAsync(req, 461, "Unsupported Transport", ct: ct).ConfigureAwait(false);
+                return;
+            }
         }
 
         await RespondAsync(req, 200, "OK",
@@ -335,6 +379,18 @@ public sealed class RtspConnection
             _sessions.Remove(session.Id);
         }
         await RespondAsync(req, 200, "OK", sessionId: session?.Id, ct: ct).ConfigureAwait(false);
+    }
+
+    /// <summary>Routes an interleaved client frame to the backchannel receiver that
+    /// owns its channel; anything else (RTCP receiver reports) is ignored.</summary>
+    private void RouteInterleaved(byte channel, byte[] rtpPacket)
+    {
+        foreach (var s in _sessions.Values)
+            if (s.BackchannelChannel == channel)
+            {
+                s.FeedBackchannel(rtpPacket);
+                return;
+            }
     }
 
     private RtspSession? FindSession(RtspRequest req)
@@ -504,10 +560,14 @@ internal sealed class RtspSession
     public TrackTransport? Audio { get; private set; }
     public bool Playing => _pumpTask is { IsCompleted: false };
 
+    /// <summary>Interleaved channel the client sends backchannel audio on, or null.</summary>
+    public byte? BackchannelChannel { get; private set; }
+
     private readonly RtspConnection _conn;
     private readonly RtspMount _mount;
     private CancellationTokenSource? _pumpCts;
     private Task? _pumpTask;
+    private BackchannelReceiver? _backchannel;
 
     public RtspSession(RtspConnection conn, RtspMount mount)
     {
@@ -521,8 +581,20 @@ internal sealed class RtspSession
         else Audio = transport;
     }
 
+    /// <summary>Registers a two-way-talk receive track on an interleaved channel.</summary>
+    public void SetupBackchannel(byte channel, ICameraControl talk)
+    {
+        BackchannelChannel = channel;
+        _backchannel = new BackchannelReceiver(talk);
+    }
+
+    public void FeedBackchannel(byte[] rtpPacket) => _backchannel?.OnRtp(rtpPacket);
+
     public void Play(CancellationToken ct)
     {
+        // The backchannel is tied to the connection lifetime, not the media pump, so
+        // PAUSE doesn't cut talk; it ends on TEARDOWN or disconnect (via Stop).
+        _backchannel?.Start(ct);
         if (Playing) return;
         _pumpCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var token = _pumpCts.Token;
@@ -539,6 +611,7 @@ internal sealed class RtspSession
     {
         _pumpCts?.Cancel();
         _pumpTask = null;
+        _backchannel?.Stop();
         Video?.Close();
         Audio?.Close();
     }

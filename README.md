@@ -354,6 +354,25 @@ configured they are open, like everything else. Feature discovery is live: the
 server probes the camera once per connection and the web UI only shows the
 controls the camera actually supports.
 
+### RTSP audio backchannel (two-way talk without the web UI)
+
+Cameras with a speaker also expose an **ONVIF Profile-T audio backchannel** on the
+same RTSP mount, so [go2rtc](https://github.com/AlexxIT/go2rtc), Home Assistant's
+WebRTC Camera and other ONVIF-aware clients can talk through the camera. A client
+that sends `Require: www.onvif.org/ver20/backchannel` on `DESCRIBE` is offered an
+extra sendonly `PCMU/8000` track; the G.711 audio it streams is decoded and fed to
+the same talk pipeline the web UI's mic button uses. Plain players (VLC, ffmpeg)
+never see the extra track — it only appears when a client asks for it.
+
+It rides the two-way-talk opt-in: set `"ui": { "talk": true }` (or *Server settings
+→ Web UI → Two-way talk*). Example go2rtc source:
+
+```yaml
+streams:
+  driveway:
+    - rtsp://<neolink-host>:8654/driveway#backchannel=1
+```
+
 ## Configuration
 
 JSON with comments and trailing commas allowed — see

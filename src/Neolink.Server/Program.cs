@@ -268,12 +268,19 @@ foreach (var cam in config.Cameras)
 
         // Stagger the streams of one camera by 2s each so their logins don't collide.
         int streamIndex = 0;
+        var camMounts = new List<RtspMount>();
         void AddStream(StreamKind kind, string suffix, bool alsoRoot)
         {
             var hub = new StreamHub($"{cam.Name} {suffix}");
-            server.AddMount(new RtspMount { Path = $"/{cam.Name}/{suffix}", Hub = hub, PermittedUsers = permitted });
+            var mount = new RtspMount { Path = $"/{cam.Name}/{suffix}", Hub = hub, PermittedUsers = permitted };
+            server.AddMount(mount);
+            camMounts.Add(mount);
             if (alsoRoot)
-                server.AddMount(new RtspMount { Path = $"/{cam.Name}", Hub = hub, PermittedUsers = permitted });
+            {
+                var rootMount = new RtspMount { Path = $"/{cam.Name}", Hub = hub, PermittedUsers = permitted };
+                server.AddMount(rootMount);
+                camMounts.Add(rootMount);
+            }
             webStreams.Add(new WebStreamInfo(suffix, $"/{cam.Name}/{suffix}", hub));
             var service = new CameraService(cam, kind, hub, TimeSpan.FromSeconds(2 * streamIndex++));
             primaryService ??= service;
@@ -299,6 +306,12 @@ foreach (var cam in config.Cameras)
         var primary = primaryService
             ?? throw new InvalidOperationException($"camera '{cam.Name}' has no streams");
         control = new CameraControl(primary, httpApi);
+
+        // Two-way talk is opt-in (ui.talk). When on, this camera's RTSP mounts can
+        // serve an ONVIF audio backchannel (go2rtc / HA WebRTC) — DESCRIBE still
+        // gates the SDP track on the camera actually having a speaker.
+        if (config.Ui.Talk)
+            foreach (var m in camMounts) m.Talk = control;
     }
     if (webStreams.Count == 0)
         throw new InvalidOperationException($"camera '{cam.Name}' has no streams");

@@ -587,6 +587,180 @@ public static class SelfTest
             AssertEq(frames48.Count, 10); // 4800/3 = 1600 samples out = 10×160
         });
 
+        Test("g711 backchannel: decode + RTP depacketize", () =>
+        {
+            // Zero-crossing companded codes must decode to (near) silence.
+            AssertEq(G711.MuLawToLinear(0xFF), (short)0);
+            AssertEq(G711.MuLawToLinear(0x7F), (short)0);
+            AssertEq(G711.ALawToLinear(0xD5), (short)8);
+            AssertEq(G711.ALawToLinear(0x55), (short)-8);
+
+            // A 440 Hz sine encoded to µ-law then decoded must reconstruct the tone
+            // (µ-law is logarithmic, so a few percent RMS error is expected).
+            static byte MuLawEncode(short pcm)
+            {
+                const int bias = 0x84, clip = 32635;
+                int sign = (pcm >> 8) & 0x80;
+                int mag = Math.Min((sign != 0 ? -pcm : pcm), clip) + bias;
+                int exp = 7;
+                for (int mask = 0x4000; (mag & mask) == 0 && exp > 0; mask >>= 1) exp--;
+                int mantissa = (mag >> (exp + 3)) & 0x0F;
+                return (byte)~(sign | (exp << 4) | mantissa);
+            }
+
+            const int n = 800; // 100 ms at 8 kHz
+            var ulaw = new byte[n];
+            var orig = new short[n];
+            for (int i = 0; i < n; i++)
+            {
+                short s = (short)(Math.Sin(2 * Math.PI * 440 * i / 8000.0) * 12000);
+                orig[i] = s;
+                ulaw[i] = MuLawEncode(s);
+            }
+
+            // Wrap the payload in an RTP packet (PT 0, one CSRC, no extension/padding)
+            // and run it through the receiver's real depacketizer.
+            var packet = new byte[12 + 4 + n];
+            packet[0] = 0x81;   // v2, CC=1
+            packet[1] = 0x00;   // PT 0 = PCMU
+            ulaw.CopyTo(packet, 16);
+            var pcm = Rtsp.BackchannelReceiver.Depacketize(packet);
+            Assert(pcm != null && pcm.Length == n * 2, "depacketized PCM has one 16-bit sample per code");
+
+            double errSq = 0, sigSq = 0;
+            for (int i = 0; i < n; i++)
+            {
+                short got = (short)(pcm![i * 2] | (pcm[i * 2 + 1] << 8));
+                errSq += (double)(orig[i] - got) * (orig[i] - got);
+                sigSq += (double)orig[i] * orig[i];
+            }
+            Assert(Math.Sqrt(errSq / sigSq) < 0.06, "µ-law round-trip reconstructs the tone");
+
+            // A short/garbage frame must be dropped, not throw.
+            Assert(Rtsp.BackchannelReceiver.Depacketize(new byte[] { 0x80, 0x00 }) == null, "runt RTP frame ignored");
+        });
+
+        Test("rtsp backchannel: DESCRIBE gate → SETUP → talk end-to-end", () =>
+        {
+            // A real StreamHub made DESCRIBE-ready with one H264 keyframe (SPS+PPS+IDR)
+            // plus an ADPCM block so the audio probe resolves immediately.
+            var hub = new Streaming.StreamHub("cam");
+            var annexB = new byte[]
+            {
+                0, 0, 0, 1, 0x67, 66, 0, 30,      // SPS
+                0, 0, 1, 0x68, 0xCE, 0x3C, 0x80,  // PPS
+                0, 0, 0, 1, 0x65, 5, 5, 5,        // IDR
+            };
+            hub.PublishVideo(new VideoFrame(VideoCodec.H264, true, 0, null, annexB));
+            hub.PublishAdpcm(new AdpcmFrame(new byte[] { 0, 0, 0, 0 }));
+
+            var control = new BackchannelStub("cam");
+            var server = new Rtsp.RtspServer(new Dictionary<string, string>());
+            server.AddMount(new Rtsp.RtspMount { Path = "/cam", Hub = hub, Talk = control });
+
+            int port = FreeTcpPort();
+            using var serverCts = new CancellationTokenSource();
+            var serverTask = Task.Run(() => server.RunAsync("127.0.0.1", port, serverCts.Token));
+
+            using var tcp = new System.Net.Sockets.TcpClient();
+            tcp.Connect(System.Net.IPAddress.Loopback, port);
+            var ns = tcp.GetStream();
+            ns.ReadTimeout = 5000;
+            string baseUri = $"rtsp://127.0.0.1:{port}/cam";
+            int cseq = 1;
+
+            void WriteText(string s)
+            {
+                var b = Encoding.ASCII.GetBytes(s);
+                ns.Write(b, 0, b.Length);
+                ns.Flush();
+            }
+
+            (int code, Dictionary<string, string> headers, string body) ReadResponse()
+            {
+                var hb = new List<byte>();
+                while (true)
+                {
+                    int b = ns.ReadByte();
+                    if (b < 0) break;
+                    hb.Add((byte)b);
+                    int n = hb.Count;
+                    if (n >= 4 && hb[n - 4] == 13 && hb[n - 3] == 10 && hb[n - 2] == 13 && hb[n - 1] == 10) break;
+                }
+                var lines = Encoding.ASCII.GetString(hb.ToArray()).Split("\r\n");
+                int code = int.Parse(lines[0].Split(' ')[1]);
+                var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var line in lines.Skip(1))
+                {
+                    int c = line.IndexOf(':');
+                    if (c > 0) headers[line[..c].Trim()] = line[(c + 1)..].Trim();
+                }
+                string body = "";
+                if (headers.TryGetValue("Content-Length", out var cls) && int.TryParse(cls, out var cl) && cl > 0)
+                {
+                    var buf = new byte[cl];
+                    int done = 0;
+                    while (done < cl) { int r = ns.Read(buf, done, cl - done); if (r <= 0) break; done += r; }
+                    body = Encoding.ASCII.GetString(buf);
+                }
+                return (code, headers, body);
+            }
+
+            // DESCRIBE with the ONVIF backchannel Require: the SDP must gain a
+            // sendonly µ-law track on trackID=2.
+            WriteText($"DESCRIBE {baseUri} RTSP/1.0\r\nCSeq: {cseq++}\r\nAccept: application/sdp\r\n" +
+                      "Require: www.onvif.org/ver20/backchannel\r\n\r\n");
+            var (dc, _, sdp) = ReadResponse();
+            AssertEq(dc, 200);
+            Assert(sdp.Contains("m=audio 0 RTP/AVP 0"), "backchannel PCMU track present");
+            Assert(sdp.Contains("a=sendonly"), "backchannel is sendonly");
+            Assert(sdp.Contains("trackID=2"), "backchannel is trackID=2");
+
+            // A plain DESCRIBE (no Require) must NOT advertise the backchannel.
+            WriteText($"DESCRIBE {baseUri} RTSP/1.0\r\nCSeq: {cseq++}\r\nAccept: application/sdp\r\n\r\n");
+            var (pdc, _, plainSdp) = ReadResponse();
+            AssertEq(pdc, 200);
+            Assert(!plainSdp.Contains("a=sendonly"), "plain players get no backchannel track");
+
+            // SETUP the backchannel receive track over TCP interleaved.
+            WriteText($"SETUP {baseUri}/trackID=2 RTSP/1.0\r\nCSeq: {cseq++}\r\n" +
+                      "Transport: RTP/AVP/TCP;unicast;interleaved=4-5;mode=record\r\n\r\n");
+            var (sc, sh, _) = ReadResponse();
+            AssertEq(sc, 200);
+            Assert(sh["Transport"].Contains("interleaved=4-5"), "echoes the interleaved channel");
+            Assert(sh["Transport"].Contains("mode=record"), "backchannel is record mode");
+            string session = sh["Session"].Split(';')[0].Trim();
+
+            // PLAY opens the talk session.
+            WriteText($"PLAY {baseUri} RTSP/1.0\r\nCSeq: {cseq++}\r\nSession: {session}\r\n\r\n");
+            AssertEq(ReadResponse().code, 200);
+
+            // Push one interleaved G.711 µ-law RTP packet on the backchannel channel.
+            var ulaw = new byte[] { 0x00, 0x10, 0x40, 0x7F, 0xFF, 0x80, 0xAA, 0x55 };
+            var rtp = new byte[12 + ulaw.Length];
+            rtp[0] = 0x80; // v2, no CSRC
+            rtp[1] = 0x00; // PT 0 = PCMU
+            ulaw.CopyTo(rtp, 12);
+            var frame = new byte[4 + rtp.Length];
+            frame[0] = 0x24;                       // '$'
+            frame[1] = 4;                          // interleaved channel 4
+            frame[2] = (byte)(rtp.Length >> 8);
+            frame[3] = (byte)(rtp.Length & 0xFF);
+            rtp.CopyTo(frame, 4);
+            ns.Write(frame, 0, frame.Length);
+            ns.Flush();
+
+            Assert(control.FirstAudio.Wait(TimeSpan.FromSeconds(5)), "the camera received backchannel audio");
+            AssertEq(control.SampleRate, 8000);
+            byte[] got;
+            lock (control.Received) got = control.Received.ToArray();
+            var want = G711.ToPcm16(ulaw, aLaw: false);
+            Assert(got.Length >= want.Length, "at least one decoded PCM chunk arrived");
+            AssertSeq(got.AsSpan(0, want.Length).ToArray(), want);
+
+            serverCts.Cancel();
+        });
+
         Test("camera availability tracking", () =>
         {
             var av = new Web.CameraAvailability();
@@ -1931,14 +2105,14 @@ public static class SelfTest
 
     /// <summary>An always-online camera that supports nothing — the API test only
     /// needs a control surface to exist, not to do anything.</summary>
-    private sealed class StubCameraControl(string name) : Streaming.ICameraControl
+    private class StubCameraControl(string name) : Streaming.ICameraControl
     {
         public string CameraName => name;
         public bool Online => true;
         public bool CanSetStreamSettings => false;
         public Task<IReadOnlyList<Streaming.StreamEncSetting>?> GetStreamSettingsAsync(CancellationToken ct) =>
             Task.FromResult<IReadOnlyList<Streaming.StreamEncSetting>?>(null);
-        public Task<Streaming.CameraCapabilities> GetCapabilitiesAsync(CancellationToken ct) =>
+        public virtual Task<Streaming.CameraCapabilities> GetCapabilitiesAsync(CancellationToken ct) =>
             throw new NotSupportedException();
         public Task<Bc.Xml.StreamInfoListXml?> GetStreamInfoAsync(CancellationToken ct) =>
             Task.FromResult<Bc.Xml.StreamInfoListXml?>(null);
@@ -1966,8 +2140,32 @@ public static class SelfTest
         public Task SetFloodlightTasksAsync(System.Xml.Linq.XElement task, CancellationToken ct) => Task.CompletedTask;
         public Task<Streaming.WhiteLedState?> GetWhiteLedAsync(CancellationToken ct) => Task.FromResult<Streaming.WhiteLedState?>(null);
         public Task SetWhiteLedAsync(int? bright, bool? on, int? mode, CancellationToken ct) => Task.CompletedTask;
-        public Task TalkAsync(int sampleRate, ChannelReader<byte[]> pcm, CancellationToken ct) =>
+        public virtual Task TalkAsync(int sampleRate, ChannelReader<byte[]> pcm, CancellationToken ct) =>
             throw new NotSupportedException();
+    }
+
+    /// <summary>A talk-capable camera that records the PCM streamed to its speaker,
+    /// for the RTSP audio-backchannel integration test.</summary>
+    private sealed class BackchannelStub(string name) : StubCameraControl(name)
+    {
+        public int SampleRate;
+        public readonly List<byte> Received = new();
+        private readonly TaskCompletionSource _got = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Task FirstAudio => _got.Task;
+
+        public override Task<Streaming.CameraCapabilities> GetCapabilitiesAsync(CancellationToken ct) =>
+            Task.FromResult(new Streaming.CameraCapabilities(null, null,
+                new Streaming.CameraFeatures(Ptz: false, Led: false, Pir: false, Battery: false, Talk: true)));
+
+        public override async Task TalkAsync(int sampleRate, ChannelReader<byte[]> pcm, CancellationToken ct)
+        {
+            SampleRate = sampleRate;
+            await foreach (var chunk in pcm.ReadAllAsync(ct).ConfigureAwait(false))
+            {
+                lock (Received) Received.AddRange(chunk);
+                _got.TrySetResult();
+            }
+        }
     }
 
     private static BcContext NewContext()

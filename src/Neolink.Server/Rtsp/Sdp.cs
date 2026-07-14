@@ -12,7 +12,13 @@ public static class Sdp
     public const byte VideoPayloadType = 96;
     public const byte AudioPayloadType = 97;
 
-    public static string Build(IStreamHub hub, string sessionName)
+    /// <summary>Static payload type for the µ-law (PCMU) audio backchannel track.</summary>
+    public const byte BackchannelPayloadType = 0;
+
+    /// <summary>trackID used for the ONVIF audio backchannel (0 = video, 1 = audio out).</summary>
+    public const int BackchannelTrackId = 2;
+
+    public static string Build(IStreamHub hub, string sessionName, bool backchannel = false)
     {
         var sb = new StringBuilder();
         long sid = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
@@ -63,6 +69,17 @@ public static class Sdp
                 sb.Append($"a=rtpmap:{AudioPayloadType} L16/{audio.SampleRate}/{audio.Channels}\r\n");
             }
             sb.Append("a=control:trackID=1\r\n");
+        }
+
+        if (backchannel)
+        {
+            // ONVIF Profile-T audio backchannel: an 8 kHz µ-law track the CLIENT
+            // sends on (a=sendonly is read from the client's perspective, per the
+            // ONVIF convention go2rtc and camera firmware interoperate with).
+            sb.Append($"m=audio 0 RTP/AVP {BackchannelPayloadType}\r\n");
+            sb.Append($"a=rtpmap:{BackchannelPayloadType} PCMU/8000\r\n");
+            sb.Append($"a=control:trackID={BackchannelTrackId}\r\n");
+            sb.Append("a=sendonly\r\n");
         }
 
         return sb.ToString();
