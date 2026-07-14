@@ -1595,9 +1595,17 @@
         await InvokeAsync(StateHasChanged);
     }
 
+    /// <summary>The default same-origin server is re-derived from the page on every
+    /// load, so it is never persisted — that keeps a rotating reverse-proxy prefix
+    /// (e.g. a Home Assistant ingress token) out of saved state, where it would go
+    /// stale. Only an explicitly chosen remote server is stored.</summary>
+    private bool ServerIsDefault =>
+        string.IsNullOrWhiteSpace(_server) ||
+        string.Equals(_server.TrimEnd('/'), _origin.TrimEnd('/'), StringComparison.OrdinalIgnoreCase);
+
     private PersistedView SnapshotView() => new()
     {
-        Server = _server, User = _user, Pass = _pass,
+        Server = ServerIsDefault ? "" : _server, User = _user, Pass = _pass,
         Mode = _mode, Count = _count, Slots = _slots, Backup = _backup,
         MaxIndex = _maxIndex, MaxPrevKind = _maxPrevKind, MaxPrevPath = _maxPrevPath,
         MaxPrevCamera = _maxPrevCamera, MaxSetKind = _maxSetKind,

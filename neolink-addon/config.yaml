@@ -35,6 +35,15 @@ ports:
 ports_description:
   8654/tcp: RTSP server (VLC, Frigate, other NVRs)
   8655/tcp: Web UI + HTTP API
+# Ingress: show the web UI in Home Assistant's sidebar and serve it through the
+# Supervisor's authenticated proxy (no exposed port needed). The app reads the
+# X-Ingress-Path header to serve under HA's per-session sub-path. Direct access on
+# 8655 and the "Open Web UI" button still work; set panel_admin:false to show the
+# sidebar entry to non-admin users too.
+ingress: true
+ingress_port: 8655
+panel_icon: mdi:cctv
+panel_title: Neolink
 webui: http://[HOST]:[PORT:8655]
 watchdog: tcp://[HOST]:[PORT:8655]
 options:

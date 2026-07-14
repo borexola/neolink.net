@@ -1575,8 +1575,13 @@
         },
 
         defaultServer() {
-            // The UI is served by Neolink.Server itself: API is on the same origin.
-            return location.origin;
+            // The UI is served by Neolink.Server itself, so the API is on the same
+            // origin. Under a base-path proxy (e.g. Home Assistant ingress) the
+            // <base href> carries the prefix; fold it in so {server}/api/... and the
+            // stream/talk WebSockets stay inside the proxied scope. With <base href="/">
+            // the prefix is empty and this returns the bare origin, as before.
+            const prefix = new URL(document.baseURI).pathname.replace(/\/+$/, "");
+            return location.origin + prefix;
         },
         lsGet(key) { return localStorage.getItem(key); },
         lsSet(key, value) { localStorage.setItem(key, value); },

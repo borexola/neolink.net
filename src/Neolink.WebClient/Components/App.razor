@@ -5,7 +5,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Neolink.NET</title>
-    <base href="/" />
+    <base href="@BaseHref" />
     <link rel="stylesheet" href="_content/Neolink.WebClient/css/app.css" />
     @* App icon: SVG for modern browsers, PNG for Safari/iOS and the home-screen
        shortcut. Relative hrefs resolve against <base href="/"> so they work on
@@ -53,3 +53,29 @@
 </body>
 
 </html>
+
+@code {
+    // A reverse proxy that serves the UI under a path prefix (notably Home Assistant
+    // ingress, which puts a per-session token in the path) sends that prefix in
+    // X-Ingress-Path. The <base href> must carry it so every relative asset, the
+    // Blazor SignalR endpoint and the API calls resolve inside the proxied scope.
+    // Absent the header we serve from the root, unchanged.
+    [CascadingParameter] public Microsoft.AspNetCore.Http.HttpContext? HttpContext { get; set; }
+
+    private string BaseHref
+    {
+        get
+        {
+            var prefix = HttpContext?.Request.Headers["X-Ingress-Path"].ToString();
+            // Only trust a plain absolute path (HA ingress sends /api/hassio_ingress/<token>).
+            // Reject anything that could retarget <base> to another origin — a
+            // protocol-relative //host, a scheme (contains ':'), or CR/LF — and fall
+            // back to the root, so a spoofed header on a directly-exposed instance
+            // can't hijack where the browser loads assets and the API from.
+            if (string.IsNullOrEmpty(prefix) || prefix[0] != '/' || prefix.StartsWith("//")
+                || prefix.Contains(':') || prefix.Contains('\r') || prefix.Contains('\n'))
+                return "/";
+            return $"{prefix.TrimEnd('/')}/";
+        }
+    }
+}
