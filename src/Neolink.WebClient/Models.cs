@@ -38,11 +38,30 @@ public sealed record ApiVersion(string? Name, string? Model, string? Serial, str
 public sealed record ApiFeatures(bool Ptz, bool Led, bool Pir, bool Battery,
     bool StreamSettings = false, bool Reboot = true,
     bool Zoom = false, bool Siren = false, bool Floodlight = false, bool Privacy = false,
-    bool WhiteLed = false, bool Spotlight = false);
+    bool WhiteLed = false, bool Spotlight = false, bool Doorbell = false);
 
 /// <summary>GET/POST /api/cameras/{name}/whiteled — spotlight brightness (0-100),
 /// on/off and auto mode, over the camera's HTTP API.</summary>
 public sealed record ApiWhiteLed(int Bright, bool On, int Mode);
+
+/// <summary>GET /api/cameras/{name}/httpfeatures — the HTTP-API extras (beta).
+/// Null members = that feature is absent on this camera.</summary>
+public sealed record ApiHttpFeatures(ApiImageSettings? Image, int? Volume, int? WifiSignal,
+    List<ApiPtzPreset>? PtzPresets, List<ApiQuickReply>? QuickReplies, bool? AutoTrack,
+    List<ApiSdCard>? SdCards);
+
+/// <summary>Picture adjustments (0-255, 128 neutral) + ISP config; null = not reported.</summary>
+public sealed record ApiImageSettings(int? Bright, int? Contrast, int? Saturation, int? Hue, int? Sharpen,
+    string? DayNight, string? AntiFlicker, bool? Flip, bool? Mirror);
+
+/// <summary>One PTZ preset slot; disabled slots are free for saving.</summary>
+public sealed record ApiPtzPreset(int Id, string Name, bool Enabled);
+
+/// <summary>One doorbell quick-reply audio file.</summary>
+public sealed record ApiQuickReply(int Id, string Name);
+
+/// <summary>One SD-card slot on the camera (sizes in MB).</summary>
+public sealed record ApiSdCard(int Id, long TotalMb, long FreeMb, bool Formatted, bool Mounted);
 
 /// <summary>GET /api/cameras/{name}/zoomfocus — absolute positions with their ranges.</summary>
 public sealed record ApiZoomPos(long Cur, long Min, long Max);
@@ -95,6 +114,12 @@ public sealed record ApiStorageLocation(string Role, string Label, string Path,
 
 /// <summary>GET /api/admin/config — the editable server settings.</summary>
 public sealed record ApiAdminConfig(string Path, bool Writable, JsonElement Settings);
+
+/// <summary>GET /api/admin/cameras — configured cameras for the settings editor.
+/// Passwords are never included (only HasPassword); RTSP URLs come masked.</summary>
+public sealed record ApiAdminCamera(string Name, string Type, string? Address, string? Username,
+    bool HasPassword, int ChannelId, string? HttpAddress, string? RtspMain, string? RtspSub);
+public sealed record ApiAdminCameras(bool Writable, List<ApiAdminCamera> Cameras);
 
 /// <summary>GET/PUT /api/admin/notifications — email alert settings. The SMTP
 /// password is never returned (only HasPassword); it is sent write-only on PUT.</summary>

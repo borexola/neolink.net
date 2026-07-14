@@ -12,8 +12,9 @@ namespace Neolink.Config;
 /// candidate is validated through the normal <see cref="NeolinkConfig.Load"/>
 /// before it replaces the file (atomically, keeping a .bak of the previous
 /// version). Comments do NOT survive a rewrite — the UI says so.
-/// Cameras and RTSP users are deliberately not editable here; they are lists
-/// with credentials and deserve a text editor.
+/// RTSP users are deliberately not editable here (credentials in a list deserve
+/// a text editor); cameras ARE editable via the camera helpers below, with
+/// passwords handled write-only by the API layer.
 /// </summary>
 public static class ConfigEditor
 {
@@ -148,5 +149,75 @@ public static class ConfigEditor
                 return existing;
         }
         return null;
+    }
+
+    // ------------------------------------------------------------------ cameras
+
+    /// <summary>The cameras array (any key spelling), created on demand.</summary>
+    public static JsonArray Cameras(JsonObject root)
+    {
+        string Normalized(string k) => k.Replace("_", "").Replace("-", "").ToLowerInvariant();
+        foreach (var kv in root)
+        {
+            if (Normalized(kv.Key) == "cameras" && kv.Value is JsonArray existing)
+                return existing;
+        }
+        var cams = new JsonArray();
+        root["cameras"] = cams;
+        return cams;
+    }
+
+    /// <summary>One camera entry by name (case-insensitive, any key spelling).</summary>
+    public static JsonObject? FindCamera(JsonArray cameras, string name) =>
+        cameras.OfType<JsonObject>().FirstOrDefault(c =>
+            string.Equals(GetString(c, "name"), name, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>A string field of a camera entry, tolerant of key spellings.</summary>
+    public static string? GetString(JsonObject obj, string key)
+    {
+        string Normalized(string k) => k.Replace("_", "").Replace("-", "").ToLowerInvariant();
+        var target = Normalized(key);
+        foreach (var kv in obj)
+        {
+            if (Normalized(kv.Key) == target && kv.Value is JsonValue v && v.TryGetValue<string>(out var s))
+                return s;
+        }
+        return null;
+    }
+
+    /// <summary>Validates a "host" or "host:port" address: null = fine, otherwise
+    /// the reason it is not.</summary>
+    public static string? HostPortError(string address)
+    {
+        address = address.Trim();
+        if (address.Length == 0) return "address is required";
+        if (address.Contains("://")) return "address must be a bare host or host:port, not a URL";
+        if (address.Any(char.IsWhiteSpace)) return "address must not contain spaces";
+        string host = address;
+        int colon = address.LastIndexOf(':');
+        if (colon > address.LastIndexOf(']')) // tolerate [IPv6]:port
+        {
+            host = address[..colon];
+            if (!int.TryParse(address[(colon + 1)..], out var p) || p is < 1 or > 65535)
+                return "port must be 1-65535";
+        }
+        host = host.Trim('[', ']');
+        if (host.Length == 0 || Uri.CheckHostName(host) == UriHostNameType.Unknown)
+            return $"\"{host}\" is not a valid host name or IP address";
+        return null;
+    }
+
+    /// <summary>An RTSP URL safe to show in the UI: the userinfo password (if any)
+    /// is replaced with ****. Round-trip contract: a client that sends the masked
+    /// value back means "keep the stored one".</summary>
+    public static string? MaskRtspPassword(string? url)
+    {
+        if (string.IsNullOrEmpty(url)) return url;
+        int at = url.IndexOf('@');
+        int scheme = url.IndexOf("://", StringComparison.Ordinal);
+        if (at < 0 || scheme < 0 || at < scheme) return url;
+        int colon = url.IndexOf(':', scheme + 3);
+        if (colon < 0 || colon > at) return url; // no password part
+        return url[..(colon + 1)] + "****" + url[at..];
     }
 }

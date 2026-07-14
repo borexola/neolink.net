@@ -15,9 +15,9 @@ public sealed class ReolinkApiException : Exception
 
 /// <summary>
 /// Minimal client for the documented Reolink HTTP API (POST /api.cgi with a JSON
-/// command array). Used only for what Baichuan cannot do — today that is writing
-/// stream encode settings (GetEnc/SetEnc); the BC set-encode message format is
-/// unverified, and the reference Rust neolink implements no setter either.
+/// command array). Used only for what Baichuan cannot do: stream encode settings,
+/// the white-LED/spotlight, picture/ISP adjustments, speaker volume, Wi-Fi signal,
+/// PTZ presets, quick replies, AI auto-tracking and SD-card status.
 ///
 /// Sessions are token-based: cmd=Login yields a token with a lease time that every
 /// later call carries as a query parameter. The token is cached and renewed shortly
@@ -61,6 +61,10 @@ public sealed class ReolinkHttpApi : IDisposable
 
     public void Dispose() => _http.Dispose();
 
+    /// <summary>The channel this client addresses — for callers composing minimal
+    /// write payloads ({"channel": n, "field": value}).</summary>
+    public byte ChannelId => _channelId;
+
     /// <summary>Reads the current encode settings (per-stream resolution/framerate/bitrate).</summary>
     public async Task<JsonObject> GetEncAsync(CancellationToken ct)
     {
@@ -85,6 +89,139 @@ public sealed class ReolinkHttpApi : IDisposable
     /// <summary>Writes the white-LED config; pass a (modified) object from <see cref="GetWhiteLedAsync"/>.</summary>
     public Task SetWhiteLedAsync(JsonObject whiteLed, CancellationToken ct) =>
         ExecAsync("SetWhiteLed", new JsonObject { ["WhiteLed"] = whiteLed.DeepClone() }, ct);
+
+    /// <summary>Reads the picture adjustments (bright/contrast/saturation/hue/sharpen, 0-255).</summary>
+    public async Task<JsonObject> GetImageAsync(CancellationToken ct)
+    {
+        var value = await ExecAsync("GetImage", new JsonObject { ["channel"] = _channelId }, ct).ConfigureAwait(false);
+        return value?["Image"] as JsonObject
+            ?? throw new ReolinkApiException("GetImage reply carries no Image settings");
+    }
+
+    /// <summary>Writes picture adjustments; pass a (modified) object from <see cref="GetImageAsync"/>.</summary>
+    public Task SetImageAsync(JsonObject image, CancellationToken ct) =>
+        ExecAsync("SetImage", new JsonObject { ["Image"] = image.DeepClone() }, ct);
+
+    /// <summary>Reads the ISP config (day/night mode, anti-flicker, flip/mirror, ...).</summary>
+    public async Task<JsonObject> GetIspAsync(CancellationToken ct)
+    {
+        var value = await ExecAsync("GetIsp", new JsonObject { ["channel"] = _channelId }, ct).ConfigureAwait(false);
+        return value?["Isp"] as JsonObject
+            ?? throw new ReolinkApiException("GetIsp reply carries no Isp settings");
+    }
+
+    /// <summary>Writes the ISP config; pass a (modified) object from <see cref="GetIspAsync"/>.</summary>
+    public Task SetIspAsync(JsonObject isp, CancellationToken ct) =>
+        ExecAsync("SetIsp", new JsonObject { ["Isp"] = isp.DeepClone() }, ct);
+
+    /// <summary>Reads the audio config (speaker volume 0-100, ...).</summary>
+    public async Task<JsonObject> GetAudioCfgAsync(CancellationToken ct)
+    {
+        var value = await ExecAsync("GetAudioCfg", new JsonObject { ["channel"] = _channelId }, ct).ConfigureAwait(false);
+        return value?["AudioCfg"] as JsonObject
+            ?? throw new ReolinkApiException("GetAudioCfg reply carries no AudioCfg settings");
+    }
+
+    /// <summary>Writes the audio config; pass a (modified) object from <see cref="GetAudioCfgAsync"/>.</summary>
+    public Task SetAudioCfgAsync(JsonObject audioCfg, CancellationToken ct) =>
+        ExecAsync("SetAudioCfg", new JsonObject { ["AudioCfg"] = audioCfg.DeepClone() }, ct);
+
+    /// <summary>The camera's Wi-Fi signal reading, or null when it reports none.
+    /// Firmwares differ: some report bars (0-4), others dBm (negative).</summary>
+    public async Task<int?> GetWifiSignalAsync(CancellationToken ct)
+    {
+        var value = await ExecAsync("GetWifiSignal", new JsonObject { ["channel"] = _channelId }, ct).ConfigureAwait(false);
+        return (int?)value?["signal"] ?? (int?)value?["WifiSignal"]?["signal"];
+    }
+
+    /// <summary>The camera's saved PTZ presets (id/name/enable), or an empty array.</summary>
+    public async Task<JsonArray> GetPtzPresetsAsync(CancellationToken ct)
+    {
+        var value = await ExecAsync("GetPtzPreset", new JsonObject { ["channel"] = _channelId }, ct).ConfigureAwait(false);
+        return value?["PtzPreset"] as JsonArray ?? new JsonArray();
+    }
+
+    /// <summary>Saves the camera's CURRENT position as preset <paramref name="id"/>.</summary>
+    public Task SetPtzPresetAsync(int id, string name, CancellationToken ct) =>
+        ExecAsync("SetPtzPreset", new JsonObject
+        {
+            ["PtzPreset"] = new JsonObject
+            {
+                ["channel"] = _channelId,
+                ["enable"] = 1,
+                ["id"] = id,
+                ["name"] = name,
+            },
+        }, ct);
+
+    /// <summary>Drives the camera to a saved preset position.</summary>
+    public Task PtzToPresetAsync(int id, int speed, CancellationToken ct) =>
+        ExecAsync("PtzCtrl", new JsonObject
+        {
+            ["channel"] = _channelId,
+            ["op"] = "ToPos",
+            ["speed"] = speed,
+            ["id"] = id,
+        }, ct);
+
+    /// <summary>The doorbell's quick-reply audio files (id/fileName), or an empty array.</summary>
+    public async Task<JsonArray> GetAudioFileListAsync(CancellationToken ct)
+    {
+        var value = await ExecAsync("GetAudioFileList", new JsonObject { ["channel"] = _channelId }, ct).ConfigureAwait(false);
+        return value?["AudioFileList"] as JsonArray ?? new JsonArray();
+    }
+
+    /// <summary>Plays a quick-reply audio file through the camera's speaker.</summary>
+    public Task QuickReplyPlayAsync(int id, CancellationToken ct) =>
+        ExecAsync("QuickReplyPlay", new JsonObject { ["channel"] = _channelId, ["id"] = id }, ct);
+
+    /// <summary>Reads the doorbell's auto-reply config: which quick-reply file plays
+    /// by itself when a ring goes unanswered (fileId -1 = off) and after how long.</summary>
+    public async Task<JsonObject> GetAutoReplyAsync(CancellationToken ct)
+    {
+        var value = await ExecAsync("GetAutoReply", new JsonObject { ["channel"] = _channelId }, ct).ConfigureAwait(false);
+        return value?["AutoReply"] as JsonObject
+            ?? throw new ReolinkApiException("GetAutoReply reply carries no AutoReply settings");
+    }
+
+    /// <summary>Writes the auto-reply config; pass a (modified) object from <see cref="GetAutoReplyAsync"/>.</summary>
+    public Task SetAutoReplyAsync(JsonObject autoReply, CancellationToken ct) =>
+        ExecAsync("SetAutoReply", new JsonObject { ["AutoReply"] = autoReply.DeepClone() }, ct);
+
+    /// <summary>Reads the camera's ability table for this account — the authoritative
+    /// "does this model actually have the feature" source (config reads often carry
+    /// fields for features the hardware lacks).</summary>
+    public async Task<JsonObject> GetAbilityAsync(CancellationToken ct)
+    {
+        var value = await ExecAsync("GetAbility",
+            new JsonObject { ["User"] = new JsonObject { ["userName"] = _username } }, ct).ConfigureAwait(false);
+        return value?["Ability"] as JsonObject
+            ?? throw new ReolinkApiException("GetAbility reply carries no Ability table");
+    }
+
+    /// <summary>Reads the AI config (auto-tracking et al.). Firmwares differ on whether
+    /// the value is wrapped in an "AiCfg" object; the returned object is the unwrapped
+    /// config and <paramref name="wrapped"/> says which shape to write back.</summary>
+    public async Task<(JsonObject Cfg, bool Wrapped)> GetAiCfgAsync(CancellationToken ct)
+    {
+        var value = await ExecAsync("GetAiCfg", new JsonObject { ["channel"] = _channelId }, ct).ConfigureAwait(false);
+        if (value?["AiCfg"] is JsonObject wrappedCfg) return (wrappedCfg, true);
+        return (value as JsonObject
+            ?? throw new ReolinkApiException("GetAiCfg reply carries no AI config"), false);
+    }
+
+    /// <summary>Writes the AI config; pass the (modified) object and shape from <see cref="GetAiCfgAsync"/>.</summary>
+    public Task SetAiCfgAsync(JsonObject cfg, bool wrapped, CancellationToken ct) =>
+        ExecAsync("SetAiCfg", wrapped
+            ? new JsonObject { ["AiCfg"] = cfg.DeepClone() }
+            : (JsonObject)cfg.DeepClone(), ct);
+
+    /// <summary>The camera's storage (SD card) slots, or an empty array when none.</summary>
+    public async Task<JsonArray> GetHddInfoAsync(CancellationToken ct)
+    {
+        var value = await ExecAsync("GetHddInfo", new JsonObject(), ct).ConfigureAwait(false);
+        return value?["HddInfo"] as JsonArray ?? new JsonArray();
+    }
 
     // ------------------------------------------------------------------ plumbing
 
@@ -147,6 +284,15 @@ public sealed class ReolinkHttpApi : IDisposable
 
     private sealed record Reply(int Code, int RspCode, string? Detail, JsonNode? Value);
 
+    /// <summary>Wire serialization for the camera. The default encoder escapes
+    /// HTML-sensitive characters — dayNight "Black&amp;White" would go out with a
+    /// & escape. Camera firmware JSON parsers don't decode those escapes and
+    /// silently ignore the value, so everything must go over as literal UTF-8.</summary>
+    internal static readonly JsonSerializerOptions WireJson = new()
+    {
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
+
     private async Task<Reply> PostAsync(string url, string cmd, JsonNode param, CancellationToken ct)
     {
         var body = new JsonArray(new JsonObject
@@ -155,7 +301,7 @@ public sealed class ReolinkHttpApi : IDisposable
             ["action"] = 0,
             ["param"] = param,
         });
-        using var content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
+        using var content = new StringContent(body.ToJsonString(WireJson), Encoding.UTF8, "application/json");
 
         HttpResponseMessage res;
         try

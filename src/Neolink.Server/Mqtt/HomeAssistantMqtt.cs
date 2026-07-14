@@ -44,6 +44,19 @@ namespace Neolink.Mqtt;
 ///   • light:         floodlight                         (cameras with a spotlight)
 ///   • button:        reboot and PTZ steps               (per capability)
 ///   • camera:        latest snapshot                    (when the camera supports it)
+///   • number:        speaker volume 0-100, beta         (via the camera's HTTP API)
+///   • switch:        auto-tracking, beta                (GetAbility-gated, HTTP API)
+///   • select:        PTZ preset — picking one moves the
+///                    camera there, beta                 (via the camera's HTTP API)
+///   • light:         spotlight (on/off + brightness), beta (white-LED cameras
+///                    without a FloodlightTask: Lumus/Elite)
+///   • number:        IR brightness 0-100, beta          (cameras reporting it)
+///   • switch:        doorbell light, beta               (video doorbells)
+///   • select:        play quick reply, beta             (video doorbells; picking
+///                                                        an option plays it)
+///   • number/select/switch: picture settings, beta      (brightness/contrast/
+///                    saturation/hue/sharpness, day-night, anti-flicker, flip,
+///                    mirror — per what the camera reports; config category)
 ///
 /// The SERVER also reports itself: a "Neolink.NET Server" device with health
 /// sensors straight off the monitor page (CPU, memory, disk, recordings size,
@@ -444,6 +457,18 @@ internal sealed class CameraBridge
     private int? _wifiDbm;
     private bool? _sirenOn, _floodlightOn;
     private bool _hasFloodlight, _hasIr, _hasSnapshot;
+    // HTTP-API extras (beta): probed once when the camera first comes online.
+    private bool _hasVolume, _hasAutoTrack;
+    private IReadOnlyList<PtzPresetInfo>? _presets;
+    private IReadOnlyList<QuickReplyFile>? _quickReplies;
+    private ImageSettings? _imgCaps;      // which picture fields this camera reports
+    private bool _hasSpotlight, _hasWhiteLedBrightness, _isDoorbell, _ptzCapable;
+    private bool _hasIrBrightness, _hasDoorbellLight; // from the LedState probe
+    /// <summary>The extras probe saw a working HTTP API. False keeps it retrying on
+    /// the slow cadence — some cameras' HTTP side boots later than Baichuan, and one
+    /// missed probe must not hide the entities until the bridge restarts.</summary>
+    private bool _httpExtrasKnown;
+    private DateTime _lastHttpPublish = DateTime.MinValue;
     private string? _model;
     private DateTime _lastSnapshot = DateTime.MinValue;
     private bool _lastOnline;
@@ -669,7 +694,86 @@ internal sealed class CameraBridge
                     ButtonConfig($"Pan {dir}", $"ptz_{dir}", null), ct).ConfigureAwait(false);
         if (_hasSnapshot)
             await AnnounceEntityAsync("camera", "snapshot", CameraConfig(), ct).ConfigureAwait(false);
+        // HTTP-API extras (beta), gated on the one-time probe. Unsupported ones are
+        // actively CLEARED: an earlier build (or a config change) may have left a
+        // retained discovery config on the broker, and HA would keep the dead entity.
+        if (_hasVolume)
+            await AnnounceEntityAsync("number", "volume", NumberConfig("Volume", "volume", 0, 100, "mdi:volume-high"), ct).ConfigureAwait(false);
+        else
+            await ClearEntityAsync("number", "volume", ct).ConfigureAwait(false);
+        if (_hasAutoTrack)
+            await AnnounceEntityAsync("switch", "auto_track", SwitchConfig("Auto-tracking", "auto_track"), ct).ConfigureAwait(false);
+        else
+            await ClearEntityAsync("switch", "auto_track", ct).ConfigureAwait(false);
+        // Gated on real PTZ ability too — never trust the preset list alone.
+        if (f.Ptz && _presets?.Any(p => p.Enabled) == true)
+            await AnnounceEntityAsync("select", "ptz_preset", PtzPresetSelectConfig(), ct).ConfigureAwait(false);
+        else
+            await ClearEntityAsync("select", "ptz_preset", ct).ConfigureAwait(false);
+        // The white spotlight (Lumus/Elite — no FloodlightTask): on/off rides the
+        // Baichuan light state; brightness rides the HTTP white LED when available.
+        if (_hasSpotlight)
+            await AnnounceEntityAsync("light", "spotlight", SpotlightConfig(), ct).ConfigureAwait(false);
+        else
+            await ClearEntityAsync("light", "spotlight", ct).ConfigureAwait(false);
+        if (_hasIrBrightness)
+            await AnnounceEntityAsync("number", "ir_brightness",
+                NumberConfig("IR brightness", "ir_brightness", 0, 100, "mdi:brightness-6"), ct).ConfigureAwait(false);
+        else
+            await ClearEntityAsync("number", "ir_brightness", ct).ConfigureAwait(false);
+        if (_isDoorbell && _hasDoorbellLight)
+            await AnnounceEntityAsync("switch", "doorbell_light",
+                SwitchConfig("Doorbell light", "doorbell_light", "mdi:alarm-light-outline"), ct).ConfigureAwait(false);
+        else
+            await ClearEntityAsync("switch", "doorbell_light", ct).ConfigureAwait(false);
+        if (_isDoorbell && _quickReplies is { Count: > 0 })
+            await AnnounceEntityAsync("select", "quick_reply", QuickReplySelectConfig(), ct).ConfigureAwait(false);
+        else
+            await ClearEntityAsync("select", "quick_reply", ct).ConfigureAwait(false);
+        // Retired: an earlier beta announced a "default reply" pair here; the
+        // clears drop the dead entities from brokers that still retain them.
+        await ClearEntityAsync("select", "auto_reply", ct).ConfigureAwait(false);
+        await ClearEntityAsync("number", "auto_reply_time", ct).ConfigureAwait(false);
+        // Picture settings: one entity per field the camera reports.
+        foreach (var (key, label, cur) in PictureSliders())
+        {
+            if (cur != null)
+                await AnnounceEntityAsync("number", key,
+                    NumberConfig(label, key, 0, 255, "mdi:image-edit-outline"), ct).ConfigureAwait(false);
+            else
+                await ClearEntityAsync("number", key, ct).ConfigureAwait(false);
+        }
+        if (_imgCaps?.DayNight != null)
+            await AnnounceEntityAsync("select", "day_night", SelectConfig("Day / night mode", "day_night",
+                new[] { "Auto", "Color", "Black&White" }, "mdi:theme-light-dark"), ct).ConfigureAwait(false);
+        else
+            await ClearEntityAsync("select", "day_night", ct).ConfigureAwait(false);
+        if (_imgCaps?.AntiFlicker != null)
+            await AnnounceEntityAsync("select", "anti_flicker", SelectConfig("Anti-flicker", "anti_flicker",
+                new[] { "Outdoor", "50HZ", "60HZ" }, "mdi:sine-wave"), ct).ConfigureAwait(false);
+        else
+            await ClearEntityAsync("select", "anti_flicker", ct).ConfigureAwait(false);
+        if (_imgCaps?.Flip != null)
+            await AnnounceEntityAsync("switch", "img_flip",
+                SwitchConfig("Flip image", "img_flip", "mdi:flip-vertical", "config"), ct).ConfigureAwait(false);
+        else
+            await ClearEntityAsync("switch", "img_flip", ct).ConfigureAwait(false);
+        if (_imgCaps?.Mirror != null)
+            await AnnounceEntityAsync("switch", "img_mirror",
+                SwitchConfig("Mirror image", "img_mirror", "mdi:flip-horizontal", "config"), ct).ConfigureAwait(false);
+        else
+            await ClearEntityAsync("switch", "img_mirror", ct).ConfigureAwait(false);
     }
+
+    /// <summary>The picture sliders and whether this camera reports each (null = absent).</summary>
+    private (string Key, string Label, int? Cur)[] PictureSliders() => new[]
+    {
+        ("img_bright", "Image brightness", _imgCaps?.Bright),
+        ("img_contrast", "Image contrast", _imgCaps?.Contrast),
+        ("img_saturation", "Image saturation", _imgCaps?.Saturation),
+        ("img_hue", "Image hue", _imgCaps?.Hue),
+        ("img_sharpen", "Image sharpness", _imgCaps?.Sharpen),
+    };
 
     private Task AnnounceEntityAsync(string component, string objectId, object config, CancellationToken ct)
     {
@@ -847,7 +951,88 @@ internal sealed class CameraBridge
         availability_mode = "all",
     };
 
-    private object SwitchConfig(string name, string entity) => new
+    /// <summary>A config-category slider number entity (beta HTTP-API controls).</summary>
+    private object NumberConfig(string name, string entity, int min, int max, string? icon) => new
+    {
+        name,
+        unique_id = $"neolink_{Id}_{entity}",
+        state_topic = StateTopic(entity),
+        command_topic = CommandTopic(entity),
+        min,
+        max,
+        step = 1,
+        mode = "slider",
+        icon,
+        entity_category = "config",
+        device = Device(),
+        availability = Availability(),
+        availability_mode = "all",
+    };
+
+    /// <summary>A config-category select whose options are the camera's own API values
+    /// — published and commanded verbatim, so no mapping can drift.</summary>
+    private object SelectConfig(string name, string entity, string[] options, string? icon) => new
+    {
+        name,
+        unique_id = $"neolink_{Id}_{entity}",
+        state_topic = StateTopic(entity),
+        command_topic = CommandTopic(entity),
+        options,
+        icon,
+        entity_category = "config",
+        device = Device(),
+        availability = Availability(),
+        availability_mode = "all",
+    };
+
+    /// <summary>Saved PTZ positions as a select; picking one drives the camera there (beta).</summary>
+    private object PtzPresetSelectConfig() => new
+    {
+        name = "PTZ preset",
+        unique_id = $"neolink_{Id}_ptz_preset",
+        state_topic = StateTopic("ptz_preset"),
+        command_topic = CommandTopic("ptz_preset"),
+        options = _presets!.Where(p => p.Enabled).Select(p => p.Name).ToArray(),
+        icon = "mdi:crosshairs-gps",
+        device = Device(),
+        availability = Availability(),
+        availability_mode = "all",
+    };
+
+    /// <summary>The doorbell's quick replies; picking one PLAYS it on the speaker (beta).</summary>
+    private object QuickReplySelectConfig() => new
+    {
+        name = "Play quick reply",
+        unique_id = $"neolink_{Id}_quick_reply",
+        state_topic = StateTopic("quick_reply"),
+        command_topic = CommandTopic("quick_reply"),
+        options = _quickReplies!.Select(q => q.Name).ToArray(),
+        icon = "mdi:message-reply-text-outline",
+        device = Device(),
+        availability = Availability(),
+        availability_mode = "all",
+    };
+
+    /// <summary>The white spotlight (Lumus/Elite): on/off rides the Baichuan light
+    /// state, brightness (when the camera has the HTTP white LED) 0-100 (beta).</summary>
+    private object SpotlightConfig() => new
+    {
+        name = "Spotlight",
+        unique_id = $"neolink_{Id}_spotlight",
+        state_topic = StateTopic("spotlight"),
+        command_topic = CommandTopic("spotlight"),
+        payload_on = "ON",
+        payload_off = "OFF",
+        brightness_state_topic = _hasWhiteLedBrightness ? StateTopic("spotlight_brightness") : null,
+        brightness_command_topic = _hasWhiteLedBrightness ? CommandTopic("spotlight_brightness") : null,
+        brightness_scale = _hasWhiteLedBrightness ? 100 : (int?)null,
+        icon = "mdi:spotlight-beam",
+        device = Device(),
+        availability = Availability(),
+        availability_mode = "all",
+    };
+
+    private object SwitchConfig(string name, string entity, string? icon = null, string? category = null) => new
     {
         name,
         unique_id = $"neolink_{Id}_{entity}",
@@ -855,6 +1040,8 @@ internal sealed class CameraBridge
         command_topic = CommandTopic(entity),
         payload_on = "ON",
         payload_off = "OFF",
+        icon,
+        entity_category = category,
         device = Device(),
         availability = Availability(),
         availability_mode = "all",
@@ -1139,8 +1326,12 @@ internal sealed class CameraBridge
                 // status-LED lightState — gates both discovery and state publishing.
                 _hasFloodlight = f.Floodlight;
                 _hasSnapshot = await ProbeSnapshotAsync(ct).ConfigureAwait(false);
+                // HTTP-API extras (beta): one combined probe decides which of the
+                // volume/auto-track/preset/picture/quick-reply entities exist here.
+                await ProbeHttpExtrasAsync(f, ct).ConfigureAwait(false);
                 _featuresAnnounced = true;
                 await AnnounceAsync(ct).ConfigureAwait(false);
+                await PublishHttpExtrasAsync(ct).ConfigureAwait(false);
             }
         }
 
@@ -1151,6 +1342,101 @@ internal sealed class CameraBridge
         if (feat?.Pir == true) await PublishPirAsync(ct).ConfigureAwait(false);
         if (_hasSnapshot && DateTime.UtcNow - _lastSnapshot > TimeSpan.FromMinutes(2))
             await PublishSnapshotAsync(ct).ConfigureAwait(false);
+        // The HTTP-API states change rarely and cost a few camera HTTP calls, so
+        // they refresh on a slower cadence (commands re-publish immediately).
+        if (DateTime.UtcNow - _lastHttpPublish > TimeSpan.FromMinutes(5))
+        {
+            if (!_httpExtrasKnown && feat is { } f2)
+            {
+                // The first probe ran while the camera's HTTP API was still down —
+                // keep retrying on this cadence and announce once it answers.
+                _lastHttpPublish = DateTime.UtcNow;
+                if (await ProbeHttpExtrasAsync(f2, ct).ConfigureAwait(false))
+                {
+                    await AnnounceFeaturesAsync(ct).ConfigureAwait(false);
+                    await PublishHttpExtrasAsync(ct).ConfigureAwait(false);
+                }
+            }
+            else if (_hasVolume || _hasAutoTrack || _imgCaps != null
+                     || _hasWhiteLedBrightness || _presets != null)
+            {
+                await PublishHttpExtrasAsync(ct).ConfigureAwait(false);
+            }
+        }
+    }
+
+    /// <summary>Probes the HTTP-API extras once and records which entities this
+    /// camera gets. Returns true when the probe saw a working HTTP API at all.</summary>
+    private async Task<bool> ProbeHttpExtrasAsync(CameraFeatures f, CancellationToken ct)
+    {
+        var extras = await TryAsync(() => _control.GetHttpFeaturesAsync(ct)).ConfigureAwait(false);
+        _hasVolume = extras?.Volume != null;
+        _hasAutoTrack = extras?.AutoTrack != null;
+        _presets = extras?.PtzPresets;
+        _quickReplies = extras?.QuickReplies;
+        _imgCaps = extras?.Image;
+        _hasSpotlight = f.Spotlight && !f.Floodlight;
+        _hasWhiteLedBrightness = f.WhiteLed;
+        _isDoorbell = f.Doorbell;
+        _ptzCapable = f.Ptz;
+        _httpExtrasKnown = extras != null && (extras.Volume != null || extras.AutoTrack != null
+            || extras.Image != null || extras.PtzPresets != null || extras.QuickReplies != null
+            || extras.WifiSignal != null || extras.SdCards != null);
+        return _httpExtrasKnown;
+    }
+
+    /// <summary>Publishes the volume / auto-track / picture / spotlight-brightness
+    /// states read over the HTTP API.</summary>
+    private async Task PublishHttpExtrasAsync(CancellationToken ct)
+    {
+        _lastHttpPublish = DateTime.UtcNow;
+        try
+        {
+            if (_hasVolume && await _control.GetVolumeAsync(ct).ConfigureAwait(false) is { } vol)
+                await _hub.PublishAsync(StateTopic("volume"), vol.ToString(), ct).ConfigureAwait(false);
+            if (_hasAutoTrack && await _control.GetAutoTrackAsync(ct).ConfigureAwait(false) is { } track)
+                await _hub.PublishAsync(StateTopic("auto_track"), track ? "ON" : "OFF", ct).ConfigureAwait(false);
+            if (_imgCaps != null && await _control.GetImageSettingsAsync(ct).ConfigureAwait(false) is { } img)
+            {
+                foreach (var (key, value) in new (string, int?)[]
+                {
+                    ("img_bright", img.Bright), ("img_contrast", img.Contrast),
+                    ("img_saturation", img.Saturation), ("img_hue", img.Hue),
+                    ("img_sharpen", img.Sharpen),
+                })
+                    if (value is { } v)
+                        await _hub.PublishAsync(StateTopic(key), v.ToString(), ct).ConfigureAwait(false);
+                if (img.DayNight is { Length: > 0 } dn)
+                    await _hub.PublishAsync(StateTopic("day_night"), dn, ct).ConfigureAwait(false);
+                if (img.AntiFlicker is { Length: > 0 } af)
+                    await _hub.PublishAsync(StateTopic("anti_flicker"), af, ct).ConfigureAwait(false);
+                if (img.Flip is { } flip)
+                    await _hub.PublishAsync(StateTopic("img_flip"), flip ? "ON" : "OFF", ct).ConfigureAwait(false);
+                if (img.Mirror is { } mirror)
+                    await _hub.PublishAsync(StateTopic("img_mirror"), mirror ? "ON" : "OFF", ct).ConfigureAwait(false);
+            }
+            if (_hasWhiteLedBrightness && await _control.GetWhiteLedAsync(ct).ConfigureAwait(false) is { } wl)
+                await _hub.PublishAsync(StateTopic("spotlight_brightness"), wl.Bright.ToString(), ct).ConfigureAwait(false);
+            // Preset names can change (the panel saves new ones) — refresh the list
+            // and re-announce the select so its options never go stale.
+            if (_presets != null && await _control.GetPtzPresetsAsync(ct).ConfigureAwait(false) is { } fresh)
+            {
+                bool changed = !fresh.Where(p => p.Enabled).Select(p => p.Name)
+                    .SequenceEqual(_presets.Where(p => p.Enabled).Select(p => p.Name));
+                _presets = fresh;
+                if (changed)
+                {
+                    if (_ptzCapable && fresh.Any(p => p.Enabled))
+                        await AnnounceEntityAsync("select", "ptz_preset", PtzPresetSelectConfig(), ct).ConfigureAwait(false);
+                    else
+                        await ClearEntityAsync("select", "ptz_preset", ct).ConfigureAwait(false);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"MQTT: HTTP-extra state read for '{Id}' failed: {Log.Flatten(ex)}");
+        }
     }
 
     /// <summary>How long a dropped connection is tolerated before HA is told the
@@ -1205,6 +1491,14 @@ internal sealed class CameraBridge
             _floodlightOn = fl == "open"; // keep the push edge-detector in sync with the poll
             await _hub.PublishAsync(StateTopic("floodlight"), _floodlightOn.Value ? "ON" : "OFF", ct).ConfigureAwait(false);
         }
+        // The beta LedState-backed entities (spotlight cams have no floodlight, so
+        // lightState is free to feed the spotlight here).
+        if (_hasSpotlight && Str(led, "lightState") is { Length: > 0 } sp)
+            await _hub.PublishAsync(StateTopic("spotlight"), sp == "open" ? "ON" : "OFF", ct).ConfigureAwait(false);
+        if (_hasIrBrightness && Num(led, "IRLedBrightness") is { } irb)
+            await _hub.PublishAsync(StateTopic("ir_brightness"), irb.ToString(), ct).ConfigureAwait(false);
+        if (_isDoorbell && _hasDoorbellLight && Str(led, "doorbellLightState") is { Length: > 0 } dbl)
+            await _hub.PublishAsync(StateTopic("doorbell_light"), dbl == "open" ? "ON" : "OFF", ct).ConfigureAwait(false);
     }
 
     private async Task PublishPirAsync(CancellationToken ct)
@@ -1232,6 +1526,10 @@ internal sealed class CameraBridge
         _hasIr = Str(led, "state") is { Length: > 0 };
         // _hasFloodlight is NOT inferred from lightState here — a status LED reports
         // it too. It's set from the FloodlightTask capability by the caller.
+        _hasIrBrightness = Num(led, "IRLedBrightness") != null;
+        // The field alone doesn't gate the entity — the Elite reports one without
+        // having the light; the announce also requires the doorbell capability.
+        _hasDoorbellLight = Str(led, "doorbellLightState") is { Length: > 0 };
     }
 
     private async Task<bool> ProbeSnapshotAsync(CancellationToken ct)
@@ -1266,11 +1564,11 @@ internal sealed class CameraBridge
                     await _hub.PublishAsync(StateTopic("privacy_mode"), payload == "ON" ? "ON" : "OFF", ct).ConfigureAwait(false);
                     break;
                 case "ir":
-                    await _control.SetLedStateAsync(HaToIr(payload), null, ct).ConfigureAwait(false);
+                    await _control.SetLedStateAsync(HaToIr(payload), null, null, null, ct).ConfigureAwait(false);
                     await PublishLedAsync(ct).ConfigureAwait(false);
                     break;
                 case "floodlight":
-                    await _control.SetLedStateAsync(null, payload == "ON" ? "open" : "close", ct).ConfigureAwait(false);
+                    await _control.SetLedStateAsync(null, payload == "ON" ? "open" : "close", null, null, ct).ConfigureAwait(false);
                     await PublishLedAsync(ct).ConfigureAwait(false);
                     break;
                 case "pir":
@@ -1282,6 +1580,75 @@ internal sealed class CameraBridge
                     break;
                 case "ptz_up" or "ptz_down" or "ptz_left" or "ptz_right" when payload == "PRESS":
                     await PtzStepAsync(entity["ptz_".Length..], ct).ConfigureAwait(false);
+                    break;
+                case "volume" when int.TryParse(payload, out var vol):
+                    vol = Math.Clamp(vol, 0, 100);
+                    await _control.SetVolumeAsync(vol, ct).ConfigureAwait(false);
+                    await _hub.PublishAsync(StateTopic("volume"), vol.ToString(), ct).ConfigureAwait(false);
+                    break;
+                case "auto_track":
+                    await _control.SetAutoTrackAsync(payload == "ON", ct).ConfigureAwait(false);
+                    await _hub.PublishAsync(StateTopic("auto_track"), payload == "ON" ? "ON" : "OFF", ct).ConfigureAwait(false);
+                    break;
+                case "ptz_preset":
+                    if (_presets?.FirstOrDefault(p => p.Enabled && p.Name == payload) is { } preset)
+                    {
+                        await _control.PtzToPresetAsync(preset.Id, ct).ConfigureAwait(false);
+                        await _hub.PublishAsync(StateTopic("ptz_preset"), preset.Name, ct).ConfigureAwait(false);
+                    }
+                    break;
+                case "spotlight":
+                    await _control.SetLedStateAsync(null, payload == "ON" ? "open" : "close", null, null, ct).ConfigureAwait(false);
+                    await PublishLedAsync(ct).ConfigureAwait(false);
+                    break;
+                case "spotlight_brightness" when int.TryParse(payload, out var sb):
+                    sb = Math.Clamp(sb, 0, 100);
+                    await _control.SetWhiteLedAsync(sb, null, null, ct).ConfigureAwait(false);
+                    await _hub.PublishAsync(StateTopic("spotlight_brightness"), sb.ToString(), ct).ConfigureAwait(false);
+                    break;
+                case "ir_brightness" when int.TryParse(payload, out var irb):
+                    await _control.SetLedStateAsync(null, null, null, Math.Clamp(irb, 0, 100), ct).ConfigureAwait(false);
+                    await PublishLedAsync(ct).ConfigureAwait(false);
+                    break;
+                case "doorbell_light":
+                    await _control.SetLedStateAsync(null, null, payload == "ON" ? "open" : "close", null, ct).ConfigureAwait(false);
+                    await PublishLedAsync(ct).ConfigureAwait(false);
+                    break;
+                case "quick_reply":
+                    if (_quickReplies?.FirstOrDefault(q => q.Name == payload) is { } reply)
+                    {
+                        await _control.PlayQuickReplyAsync(reply.Id, ct).ConfigureAwait(false);
+                        await _hub.PublishAsync(StateTopic("quick_reply"), reply.Name, ct).ConfigureAwait(false);
+                    }
+                    break;
+                case "img_bright" or "img_contrast" or "img_saturation" or "img_hue" or "img_sharpen"
+                    when int.TryParse(payload, out var iv):
+                    iv = Math.Clamp(iv, 0, 255);
+                    await _control.SetImageSettingsAsync(
+                        entity == "img_bright" ? iv : null,
+                        entity == "img_contrast" ? iv : null,
+                        entity == "img_saturation" ? iv : null,
+                        entity == "img_hue" ? iv : null,
+                        entity == "img_sharpen" ? iv : null,
+                        null, null, null, null, ct).ConfigureAwait(false);
+                    await _hub.PublishAsync(StateTopic(entity), iv.ToString(), ct).ConfigureAwait(false);
+                    break;
+                case "day_night" when payload is "Auto" or "Color" or "Black&White":
+                    await _control.SetImageSettingsAsync(null, null, null, null, null,
+                        payload, null, null, null, ct).ConfigureAwait(false);
+                    await _hub.PublishAsync(StateTopic("day_night"), payload, ct).ConfigureAwait(false);
+                    break;
+                case "anti_flicker" when payload is "Outdoor" or "50HZ" or "60HZ":
+                    await _control.SetImageSettingsAsync(null, null, null, null, null,
+                        null, payload, null, null, ct).ConfigureAwait(false);
+                    await _hub.PublishAsync(StateTopic("anti_flicker"), payload, ct).ConfigureAwait(false);
+                    break;
+                case "img_flip" or "img_mirror":
+                    bool flipOn = payload == "ON";
+                    await _control.SetImageSettingsAsync(null, null, null, null, null, null, null,
+                        entity == "img_flip" ? flipOn : null,
+                        entity == "img_mirror" ? flipOn : null, ct).ConfigureAwait(false);
+                    await _hub.PublishAsync(StateTopic(entity), flipOn ? "ON" : "OFF", ct).ConfigureAwait(false);
                     break;
             }
         }

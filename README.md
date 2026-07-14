@@ -432,12 +432,16 @@ password? Set `"reset_admin_password": true` in the config, restart, use
 
 The admin also gets ⚙ → **Server settings…**: a form that edits most of
 `config.json` (network ports, web UI, recording) and writes it back to the file
-(atomically, keeping a `.bak`; comments are not preserved, and cameras/RTSP
-users still need a text editor). Saved changes apply on the next restart, which
-the admin can trigger with **Restart service…** — the process exits and your
-container/systemd restart policy brings it back within seconds while the UI
-reconnects on its own. When a newer release exists on GitHub, a dismissable
-banner links to it.
+(atomically, keeping a `.bak`; comments are not preserved, and RTSP users still
+need a text editor). The **Cameras** tab (beta) adds, edits and deletes cameras
+from the same panel — Reolink and generic RTSP alike — with live validation, a
+**Test connection** button (a real Baichuan login for Reolink; an RTSP
+round-trip for generic URLs), and write-only passwords: a stored password is
+never sent to the browser, and leaving the field blank keeps it. Saved changes
+apply on the next restart, which the admin can trigger with **Restart
+service…** — the process exits and your container/systemd restart policy brings
+it back within seconds while the UI reconnects on its own. When a newer release
+exists on GitHub, a dismissable banner links to it.
 
 ### Recording (`"recording": { ... }`)
 
@@ -610,6 +614,14 @@ config, so a **device per camera** appears automatically — no YAML in HA.
 | PIR sensor | `switch` | Enable/disable the PIR |
 | Reboot, Pan up/down/left/right | `button` | PTZ buttons on pan-tilt cameras |
 | Snapshot | `camera` | Latest JPEG, refreshed periodically (when the camera supports snapshots) |
+| Volume (beta) | `number` | Speaker volume 0-100 via the camera's HTTP API — governs sirens, alerts and two-way talk |
+| Auto-tracking (beta) | `switch` | Follow detected subjects, on cameras that support AI tracking |
+| PTZ preset (beta) | `select` | The camera's saved positions; picking one moves the camera there |
+| Spotlight (beta) | `light` | White-LED cameras (Lumus/Elite): on/off, plus brightness where the HTTP white LED answers |
+| IR brightness (beta) | `number` | Infrared LED intensity 0-100, on cameras that report it |
+| Doorbell light (beta) | `switch` | The doorbell's button light |
+| Play quick reply (beta) | `select` | Video doorbells: picking a pre-recorded message plays it through the speaker |
+| Picture settings (beta) | `number`/`select`/`switch` | Image brightness/contrast/saturation/hue/sharpness, day/night mode, anti-flicker, flip and mirror — per what the camera reports (config category) |
 
 A separate **Neolink.NET Server** device carries the server's own health
 (published every `stats_interval` seconds): CPU, memory, recordings size, write

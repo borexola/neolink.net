@@ -1350,17 +1350,110 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 
 /* Camera settings dialog: roomier than the base panel, with the section cards
    flowing masonry-style into two columns (cards never split across columns).
-   Below the breakpoint it falls back to the familiar single column. */
-.campanel-wide { width: min(1080px, 94vw); }
+   Below the breakpoint it falls back to the familiar single column.
+   FIXED height from the moment it opens — no snap when content loads, no
+   resize when switching tabs; only the body scrolls, keeping the header,
+   device strip and tabs in view. */
+.campanel-wide {
+    width: min(1080px, 94vw);
+    height: min(880px, 92vh);
+    overflow: hidden;
+}
+.campanel-wide .campanel-head { position: static; top: auto; }
+.campanel-wide .campanel-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 2px; /* focus rings aren't clipped by the scroll edge */
+}
 
-.campanel-body {
+/* The always-visible identity strip under the panel header. */
+.campanel-devbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 16px;
+    padding: 2px 2px 6px;
+    border-bottom: 1px solid var(--line);
+    font-size: 12px;
+    color: var(--muted);
+    flex: 0 0 auto;
+}
+.campanel-devbar .devbar-model {
+    color: var(--text);
+    font-weight: 600;
+}
+
+/* Tiny caption before each vital, so "v3.0.0.6460…" reads as a firmware
+   version instead of a random string. */
+.campanel-devbar .devbar-k {
+    text-transform: uppercase;
+    font-size: 10px;
+    letter-spacing: 1px;
+    opacity: 0.65;
+    margin-right: 5px;
+}
+.campanel-tabs { flex: 0 0 auto; }
+
+/* The masonry columns live on an INNER wrapper, not the scroll container: CSS
+   columns size themselves to their element's height, and inside a fixed-height
+   scroller that capped the columns at the visible area — fragmenting cards
+   (break-inside notwithstanding) and clipping them mid-card. The wrapper grows
+   with its content, so cards stay whole and the body scrolls past them. */
+.campanel-cols {
     columns: 2;
     column-gap: 12px;
 }
 
-.campanel-body > * {
+.campanel-cols > * {
     break-inside: avoid;
     margin: 0 0 12px;
+}
+
+/* Single-card tabs (Recording) use the full width instead of a half-empty grid. */
+.campanel-cols.one-col { columns: 1; }
+
+/* Camera-panel forms get the same label-column treatment as the server
+   settings: the control sits right next to its label and lines up between
+   rows instead of drifting to the card's far edge (worst on the full-width
+   Recording tab). Third column holds slider value readouts. */
+.campanel-wide .campanel-cols .control-row {
+    display: grid;
+    grid-template-columns: minmax(150px, 230px) minmax(0, 1fr) auto;
+    align-items: center;
+    justify-items: start;
+    column-gap: 12px;
+}
+
+/* Sliders and wide selects fill the control column up to the readout. */
+.campanel-wide .campanel-cols .control-row > .zf-slider,
+.campanel-wide .campanel-cols .control-row > .qr-select { width: 100%; }
+
+/* Label-less control strips (quick-reply play, preset save) stay inline. */
+.campanel-wide .campanel-cols .control-row.row-inline {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.campanel-wide .campanel-cols .control-row.row-inline > .qr-select { width: auto; flex: 1 1 auto; }
+
+/* PHONES: the label-column grid needs width it doesn't have — the label track
+   resolves toward its 230px max and squeezes the control into overflow (labels
+   were clipping off the left edge). Fall back to the original label-left /
+   control-right row, which reads well at this width. */
+@media (max-width: 640px) {
+    .campanel-wide .campanel-cols .control-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+    .campanel-wide .campanel-cols .control-row > .zf-slider {
+        width: auto;
+        flex: 1 1 120px;
+    }
+    .campanel-wide .campanel-cols .control-row > .qr-select { width: auto; flex: 1 1 auto; }
 }
 
 .campanel-body .campanel-section { transition: border-color 0.15s ease; }
@@ -1370,7 +1463,7 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 }
 
 @media (max-width: 860px) {
-    .campanel-body { columns: 1; }
+    .campanel-cols { columns: 1; }
 }
 
 /* Staged-edits bar: pinned to the panel's bottom edge (mirror of .campanel-head)
@@ -1435,21 +1528,89 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 }
 
 /* Server settings: roomier and organised into top tabs so each section is short.
-   Two-class selector so it beats the reused .auth-panel width (defined later). */
-.settings-panel.settings-wide { width: min(760px, 96vw); }
+   Two-class selector so it beats the reused .auth-panel width (defined later).
+   The HEIGHT is fixed (not content-driven): switching tabs must not resize the
+   dialog — the body scrolls inside instead. */
+.settings-panel.settings-wide {
+    /* wide enough for all seven tabs on one line on a desktop screen */
+    width: min(880px, 96vw);
+    height: min(700px, 90vh);
+}
 
 .settings-tabs {
     flex: 0 0 auto;
     display: flex;
+    /* Tabs WRAP instead of overflowing: a hidden horizontal scrollbar silently
+       cut off the last tab whenever the row outgrew the panel. */
+    flex-wrap: wrap;
     gap: 4px;
     border-bottom: 1px solid var(--line);
     margin: 2px -2px 8px;
     padding: 0 2px 8px;
-    overflow-x: auto;
-    scrollbar-width: none;
 }
 
-.settings-tabs::-webkit-scrollbar { display: none; }
+/* ---- Server-settings forms: label column + adjacent control ----
+   The old space-between rows flung every control to the far edge of the (now
+   880px) dialog and scattered multi-button rows. A fixed label column keeps
+   each control right next to its label, and action clusters line up between
+   rows. Scoped to the settings panel — the camera panel's narrow masonry
+   columns read fine with space-between. */
+.settings-panel .settings-body .control-row,
+.settings-panel .settings-body .admin-field {
+    display: grid;
+    grid-template-columns: minmax(170px, 280px) 1fr;
+    align-items: center;
+    justify-items: start;
+    column-gap: 14px;
+}
+
+.settings-panel .settings-body .admin-field input {
+    width: min(100%, 340px);
+    max-width: none;
+}
+
+.settings-panel .settings-body .control-row > input,
+.settings-panel .settings-body .control-row > select {
+    width: min(100%, 340px);
+}
+
+/* Action clusters in rows (users/cameras lists, confirm/cancel pairs):
+   grouped, gapped, aligned as one unit in the control column. */
+.row-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+/* The add-user composite (two inputs + button) is one inline strip, not a form row. */
+.settings-panel .user-add-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding: 3px 0;
+    font-size: 13px;
+}
+
+/* PHONES: same fallback as the camera panel — the fixed label track starves
+   the control column at this width, so revert to label-left / control-right. */
+@media (max-width: 640px) {
+    .settings-panel .settings-body .control-row,
+    .settings-panel .settings-body .admin-field {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+    .settings-panel .settings-body .admin-field input,
+    .settings-panel .settings-body .control-row > input,
+    .settings-panel .settings-body .control-row > select {
+        width: 190px;
+        max-width: 55%;
+    }
+}
 
 .settings-tab {
     flex: 0 0 auto;
@@ -3520,13 +3681,6 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 .auth-box input:focus { border-color: var(--accent); }
 .auth-btn { justify-content: center; padding: 8px; font-size: 14px; margin-top: 6px; }
 
-.auth-row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-top: 10px;
-    flex-wrap: wrap;
-}
 
 .auth-panel { width: min(460px, 94vw); }
 
@@ -3576,6 +3730,47 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 .chip.chip-pending {
     border: 1px dashed #e8b054;
     color: #e8b054;
+}
+
+/* Recording settings wrap in a fieldset so a non-admin gets them read-only
+   (disabled) in one stroke — the API enforces the same rule server-side. */
+.rec-lock {
+    border: 0;
+    padding: 0;
+    margin: 0;
+    min-width: 0;
+}
+.rec-lock[disabled] { opacity: 0.65; }
+
+/* Quick-reply message selects: take the row's free width so long message names
+   stay readable instead of truncating at the browser's default select width. */
+.qr-select {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+/* Action feedback toast: floats at the panel's bottom edge, green = applied,
+   red = rejected; dismisses itself after a few seconds. */
+.campanel-toast {
+    position: absolute;
+    left: 50%;
+    bottom: 14px;
+    transform: translateX(-50%);
+    max-width: calc(100% - 28px);
+    padding: 8px 14px;
+    border-radius: 8px;
+    font-size: 13px;
+    color: #fff;
+    z-index: 5;
+    box-shadow: 0 4px 18px rgb(0 0 0 / 40%);
+    animation: toast-in 160ms ease-out;
+    pointer-events: none;
+}
+.campanel-toast.toast-ok { background: #1d7a46; }
+.campanel-toast.toast-err { background: #9e2b2b; }
+@keyframes toast-in {
+    from { opacity: 0; transform: translate(-50%, 6px); }
+    to { opacity: 1; transform: translate(-50%, 0); }
 }
 
 select.input-pending {

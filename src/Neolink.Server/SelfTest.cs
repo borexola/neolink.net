@@ -1293,6 +1293,181 @@ public static class SelfTest
                 "never-online = offline now");
         });
 
+        Test("HTTP-API extras: preset/quick-reply/SD/auto-track/image parsing", () =>
+        {
+            static System.Text.Json.Nodes.JsonArray Arr(string json) =>
+                (System.Text.Json.Nodes.JsonArray)System.Text.Json.Nodes.JsonNode.Parse(json)!;
+            static System.Text.Json.Nodes.JsonObject Obj(string json) =>
+                (System.Text.Json.Nodes.JsonObject)System.Text.Json.Nodes.JsonNode.Parse(json)!;
+
+            // PTZ presets: free + saved slots kept (ordered by id), junk ids dropped.
+            var presets = Streaming.CameraControl.ParsePtzPresets(Arr(
+                """
+                [{"channel":0,"enable":1,"id":1,"name":"Door"},
+                 {"channel":0,"enable":0,"id":0,"name":"pos0"},
+                 {"channel":0,"enable":1,"id":-1,"name":"junk"}]
+                """));
+            AssertEq(presets.Count, 2);
+            Assert(presets[0] is { Id: 0, Enabled: false }, "slot 0 is free");
+            Assert(presets[1] is { Id: 1, Name: "Door", Enabled: true }, "saved preset parsed");
+
+            // Quick replies: negative ids and blank names dropped, names trimmed.
+            var replies = Streaming.CameraControl.ParseQuickReplies(Arr(
+                """
+                [{"id":0,"fileName":" Leave the package "},{"id":-1,"fileName":"x"},{"id":2,"fileName":"  "}]
+                """));
+            AssertEq(replies.Count, 1);
+            Assert(replies[0] is { Id: 0, Name: "Leave the package" }, "reply parsed + trimmed");
+
+            // SD cards: "capacity" = total MB, "size" = remaining MB.
+            var cards = Streaming.CameraControl.ParseSdCards(Arr(
+                """
+                [{"capacity":30298,"format":1,"id":0,"mount":1,"size":25169,"storageType":1}]
+                """));
+            AssertEq(cards.Count, 1);
+            Assert(cards[0] is { Id: 0, TotalMb: 30298, FreeMb: 25169, Formatted: true, Mounted: true },
+                "SD slot parsed");
+
+            // Auto-track flag: either firmware key works; neither = feature absent.
+            AssertEq(Streaming.CameraControl.AutoTrackValue(Obj("""{"aiTrack":1,"channel":0}""")), true);
+            AssertEq(Streaming.CameraControl.AutoTrackValue(Obj("""{"bSmartTrack":0,"channel":0}""")), false);
+            Assert(Streaming.CameraControl.AutoTrackValue(Obj("""{"channel":0}""")) == null,
+                "no tracking key -> null");
+
+            // Auto-reply (doorbell default message): fileId -1 = off; a reply
+            // without a fileId means the feature is absent.
+            AssertEq(Streaming.CameraControl.ParseAutoReply(Obj(
+                """{"channel":0,"enable":1,"fileId":2,"timeout":25}""")),
+                new Streaming.AutoReplyState(2, 25));
+            AssertEq(Streaming.CameraControl.ParseAutoReply(Obj(
+                """{"channel":0,"fileId":-1,"timeout":30}""")),
+                new Streaming.AutoReplyState(-1, 30));
+            Assert(Streaming.CameraControl.ParseAutoReply(Obj("""{"channel":0}""")) == null,
+                "no fileId -> feature absent");
+
+            // The auto-track ABILITY gate: only GetAbility's supportAITrack decides —
+            // a config that merely carries an aiTrack field must not enable the feature.
+            Assert(Streaming.CameraControl.SupportsAiTrack(Obj(
+                """{"abilityChn":[{"supportAITrack":{"permit":6,"ver":1}}]}"""), 0),
+                "supportAITrack ver>0 = supported");
+            Assert(!Streaming.CameraControl.SupportsAiTrack(Obj(
+                """{"abilityChn":[{"supportAITrack":{"permit":6,"ver":0}}]}"""), 0),
+                "ver 0 = not supported");
+            Assert(!Streaming.CameraControl.SupportsAiTrack(Obj(
+                """{"abilityChn":[{"videoClip":{"permit":6,"ver":1}}]}"""), 0),
+                "no supportAITrack entry = not supported");
+            Assert(!Streaming.CameraControl.SupportsAiTrack(Obj("""{}"""), 0),
+                "no ability channels = not supported");
+
+            // Wire JSON to the camera must keep "&" literal: the default encoder's
+            // & escape is valid JSON, but camera firmware parsers don't decode
+            // it and silently ignore the value (observed with dayNight Black&White).
+            var wire = new System.Text.Json.Nodes.JsonObject { ["dayNight"] = "Black&White" }
+                .ToJsonString(Protocol.ReolinkHttpApi.WireJson);
+            Assert(wire.Contains("Black&White"), "ampersand goes over the wire literally");
+            Assert(!wire.Contains("u0026"), "no unicode escape in wire JSON");
+
+            // Image settings: the Image half alone still yields sliders; the ISP half
+            // adds day/night + flip/mirror when present.
+            var img = Obj("""{"bright":128,"contrast":140,"saturation":128,"hue":128,"sharpen":96}""");
+            var isp = Obj("""{"dayNight":"Auto","antiFlicker":"Outdoor","rotation":0,"mirroring":1}""");
+            var s = Streaming.CameraControl.ParseImageSettings(img, isp);
+            Assert(s is { Bright: 128, Contrast: 140, Sharpen: 96, DayNight: "Auto", Flip: false, Mirror: true },
+                "both halves parsed");
+            var s2 = Streaming.CameraControl.ParseImageSettings(img, null);
+            Assert(s2 is { Bright: 128, DayNight: null, Flip: null, Mirror: null },
+                "missing ISP half -> null extras");
+        });
+
+        Test("config editor: camera add/edit/delete round-trip + masking", () =>
+        {
+            // RTSP password masking: only the userinfo password is hidden, and
+            // URLs without one pass through untouched.
+            AssertEq(Config.ConfigEditor.MaskRtspPassword("rtsp://u:secret@10.0.0.5:554/live"),
+                "rtsp://u:****@10.0.0.5:554/live");
+            AssertEq(Config.ConfigEditor.MaskRtspPassword("rtsp://10.0.0.5/live"), "rtsp://10.0.0.5/live");
+            AssertEq(Config.ConfigEditor.MaskRtspPassword("rtsp://user@10.0.0.5/live"), "rtsp://user@10.0.0.5/live");
+            Assert(Config.ConfigEditor.MaskRtspPassword(null) == null, "null passes through");
+
+            // host[:port] validation.
+            Assert(Config.ConfigEditor.HostPortError("192.168.1.50") == null, "bare IP ok");
+            Assert(Config.ConfigEditor.HostPortError("cam.local:9000") == null, "host:port ok");
+            Assert(Config.ConfigEditor.HostPortError("") != null, "empty rejected");
+            Assert(Config.ConfigEditor.HostPortError("http://x") != null, "URL rejected");
+            Assert(Config.ConfigEditor.HostPortError("host:99999") != null, "bad port rejected");
+            Assert(Config.ConfigEditor.HostPortError("a b") != null, "spaces rejected");
+
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            var cfgPath = Path.Combine(dir, "config.json");
+            try
+            {
+                File.WriteAllText(cfgPath, """
+                    { "cameras": [ { "name": "Old", "address": "10.0.0.9", "username": "admin", "password": "hunter2" } ] }
+                    """);
+
+                // Add a camera; the stored password of "Old" must survive untouched.
+                Config.ConfigEditor.Apply(cfgPath, root =>
+                {
+                    var cams = Config.ConfigEditor.Cameras(root);
+                    var cam = new System.Text.Json.Nodes.JsonObject();
+                    cams.Add(cam);
+                    Config.ConfigEditor.Set(cam, "name", "New");
+                    Config.ConfigEditor.Set(cam, "address", "10.0.0.10:9000");
+                    Config.ConfigEditor.Set(cam, "username", "admin");
+                });
+                var cfg = Config.NeolinkConfig.Load(cfgPath);
+                AssertEq(cfg.Cameras.Count, 2);
+                AssertEq(cfg.Cameras[0].Password, "hunter2");
+                AssertEq(cfg.Cameras[1].Name, "New");
+                AssertEq(cfg.Cameras[1].Port, 9000);
+
+                // Edit "Old" without sending a password (write-only semantics: the
+                // key is simply not touched) — it must still be there afterwards.
+                Config.ConfigEditor.Apply(cfgPath, root =>
+                {
+                    var cams = Config.ConfigEditor.Cameras(root);
+                    var cam = Config.ConfigEditor.FindCamera(cams, "old")!; // case-insensitive
+                    Config.ConfigEditor.Set(cam, "address", "10.0.0.99");
+                });
+                cfg = Config.NeolinkConfig.Load(cfgPath);
+                AssertEq(cfg.Cameras[0].Host, "10.0.0.99");
+                AssertEq(cfg.Cameras[0].Password, "hunter2");
+
+                // A duplicate name must fail validation and leave the file intact.
+                bool rejected = false;
+                try
+                {
+                    Config.ConfigEditor.Apply(cfgPath, root =>
+                    {
+                        var cams = Config.ConfigEditor.Cameras(root);
+                        var cam = new System.Text.Json.Nodes.JsonObject();
+                        cams.Add(cam);
+                        Config.ConfigEditor.Set(cam, "name", "new"); // dupe, other case
+                        Config.ConfigEditor.Set(cam, "address", "10.0.0.11");
+                        Config.ConfigEditor.Set(cam, "username", "admin");
+                    });
+                }
+                catch (FormatException) { rejected = true; }
+                Assert(rejected, "duplicate camera name rejected by validation");
+                AssertEq(Config.NeolinkConfig.Load(cfgPath).Cameras.Count, 2);
+
+                // Delete round-trip.
+                Config.ConfigEditor.Apply(cfgPath, root =>
+                {
+                    var cams = Config.ConfigEditor.Cameras(root);
+                    cams.Remove(Config.ConfigEditor.FindCamera(cams, "New")!);
+                });
+                cfg = Config.NeolinkConfig.Load(cfgPath);
+                AssertEq(cfg.Cameras.Count, 1);
+                AssertEq(cfg.Cameras[0].Name, "Old");
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+        });
+
         Test("secret protector: AES-256-GCM round-trip + tamper detection", () =>
         {
             var key = new byte[32];
@@ -2157,7 +2332,8 @@ public static class SelfTest
         public Task<byte[]?> SnapshotAsync(CancellationToken ct) => Task.FromResult<byte[]?>(null);
         public Task<System.Xml.Linq.XElement?> GetLedStateAsync(CancellationToken ct) =>
             Task.FromResult<System.Xml.Linq.XElement?>(null);
-        public Task SetLedStateAsync(string? state, string? lightState, CancellationToken ct) => Task.CompletedTask;
+        public Task SetLedStateAsync(string? state, string? lightState,
+            string? doorbellLightState, int? irBrightness, CancellationToken ct) => Task.CompletedTask;
         public Task<System.Xml.Linq.XElement?> GetPirStateAsync(CancellationToken ct) =>
             Task.FromResult<System.Xml.Linq.XElement?>(null);
         public Task SetPirEnabledAsync(bool enabled, CancellationToken ct) => Task.CompletedTask;
@@ -2174,6 +2350,29 @@ public static class SelfTest
         public Task SetFloodlightTasksAsync(System.Xml.Linq.XElement task, CancellationToken ct) => Task.CompletedTask;
         public Task<Streaming.WhiteLedState?> GetWhiteLedAsync(CancellationToken ct) => Task.FromResult<Streaming.WhiteLedState?>(null);
         public Task SetWhiteLedAsync(int? bright, bool? on, int? mode, CancellationToken ct) => Task.CompletedTask;
+        public Task<Streaming.HttpFeatures?> GetHttpFeaturesAsync(CancellationToken ct) =>
+            Task.FromResult<Streaming.HttpFeatures?>(null);
+        public Task<Streaming.ImageSettings?> GetImageSettingsAsync(CancellationToken ct) =>
+            Task.FromResult<Streaming.ImageSettings?>(null);
+        public Task SetImageSettingsAsync(int? bright, int? contrast, int? saturation, int? hue, int? sharpen,
+            string? dayNight, string? antiFlicker, bool? flip, bool? mirror, CancellationToken ct) => Task.CompletedTask;
+        public Task<int?> GetVolumeAsync(CancellationToken ct) => Task.FromResult<int?>(null);
+        public Task SetVolumeAsync(int volume, CancellationToken ct) => Task.CompletedTask;
+        public Task<int?> GetWifiSignalAsync(CancellationToken ct) => Task.FromResult<int?>(null);
+        public Task<IReadOnlyList<Streaming.PtzPresetInfo>?> GetPtzPresetsAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<Streaming.PtzPresetInfo>?>(null);
+        public Task PtzToPresetAsync(int id, CancellationToken ct) => Task.CompletedTask;
+        public Task SavePtzPresetAsync(int id, string name, CancellationToken ct) => Task.CompletedTask;
+        public Task<IReadOnlyList<Streaming.QuickReplyFile>?> GetQuickRepliesAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<Streaming.QuickReplyFile>?>(null);
+        public Task PlayQuickReplyAsync(int id, CancellationToken ct) => Task.CompletedTask;
+        public Task<Streaming.AutoReplyState?> GetAutoReplyAsync(CancellationToken ct) =>
+            Task.FromResult<Streaming.AutoReplyState?>(null);
+        public Task SetAutoReplyAsync(int? fileId, int? timeoutSeconds, CancellationToken ct) => Task.CompletedTask;
+        public Task<bool?> GetAutoTrackAsync(CancellationToken ct) => Task.FromResult<bool?>(null);
+        public Task SetAutoTrackAsync(bool on, CancellationToken ct) => Task.CompletedTask;
+        public Task<IReadOnlyList<Streaming.SdCardInfo>?> GetSdCardsAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<Streaming.SdCardInfo>?>(null);
         public virtual Task TalkAsync(int sampleRate, ChannelReader<byte[]> pcm, CancellationToken ct) =>
             throw new NotSupportedException();
     }

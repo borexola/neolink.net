@@ -1,5 +1,6 @@
 @using System.Text.Json
 @using System.Net.Http.Headers
+@implements IDisposable
 @inject HttpClient Http
 
 @* Per-camera settings/control dialog. Everything shown is discovered from the
@@ -30,21 +31,57 @@
     }
     else if (_caps != null)
     {
-        @* Masonry body: sections flow into two columns on wide screens (one on
-           mobile) — each card keeps its grouping and never splits across columns. *@
-        <div class="campanel-body">
-        <div class="campanel-section">
-            <div class="campanel-section-title">@UiIcon.Render("info", 13) DEVICE</div>
-            <table class="kv">
-                @if (!string.IsNullOrEmpty(_caps.Version?.Model)) { <tr><td>Model</td><td>@_caps.Version!.Model</td></tr> }
-                @if (!string.IsNullOrEmpty(_caps.Version?.Name)) { <tr><td>Name</td><td>@_caps.Version!.Name</td></tr> }
-                @if (!string.IsNullOrEmpty(_caps.Version?.Firmware)) { <tr><td>Firmware</td><td>@_caps.Version!.Firmware</td></tr> }
-                @if (!string.IsNullOrEmpty(_caps.Version?.Hardware)) { <tr><td>Hardware</td><td>@_caps.Version!.Hardware</td></tr> }
-                @if (!string.IsNullOrEmpty(_caps.Version?.Serial)) { <tr><td>Serial</td><td>@_caps.Version!.Serial</td></tr> }
-                @if (!string.IsNullOrEmpty(_caps.Version?.Build)) { <tr><td>Build</td><td>@_caps.Version!.Build</td></tr> }
-            </table>
+        @* Identity strip: the camera's vitals stay in view while the tab body
+           scrolls below — no more hunting for "which firmware was this again".
+           Generic RTSP cameras report none of this, so the strip stays away. *@
+        @if (_caps.Version != null || _http?.WifiSignal != null || _http?.SdCards is { Count: > 0 })
+        {
+        <div class="campanel-devbar">
+            @if (!string.IsNullOrEmpty(_caps.Version?.Model)) { <span class="devbar-item devbar-model" title="Model">@_caps.Version!.Model</span> }
+            @if (!string.IsNullOrEmpty(_caps.Version?.Firmware)) { <span class="devbar-item"><span class="devbar-k">Firmware</span>@_caps.Version!.Firmware</span> }
+            @if (!string.IsNullOrEmpty(_caps.Version?.Hardware)) { <span class="devbar-item"><span class="devbar-k">Hardware</span>@_caps.Version!.Hardware</span> }
+            @if (!string.IsNullOrEmpty(_caps.Version?.Serial)) { <span class="devbar-item"><span class="devbar-k">Serial</span>@_caps.Version!.Serial</span> }
+            @if (_http?.WifiSignal is { } wifi) { <span class="devbar-item"><span class="devbar-k">Wi-Fi</span>@WifiLabel(wifi)</span> }
+            @if (_http?.SdCards is { Count: > 0 } cards)
+            {
+                foreach (var card in cards)
+                {
+                    <span class="devbar-item"><span class="devbar-k">SD card</span>@SdLabel(card)</span>
+                }
+            }
+        </div>
+        }
+
+        <div class="settings-tabs campanel-tabs" role="tablist">
+            @* Recording leads and is the default: it's the most-visited tab. *@
+            @if (_recording != null)
+            {
+                <button class="settings-tab @(_camTab == "recording" ? "active" : "")" role="tab"
+                        @onclick='() => _camTab = "recording"'>@UiIcon.Render("rec", 13) Recording</button>
+            }
+            @* A generic RTSP camera has no device controls at all — don't offer an
+               empty tab when the recording one exists. *@
+            @if (HasDeviceControls || _recording == null)
+            {
+                <button class="settings-tab @(_camTab == "controls" ? "active" : "")" role="tab"
+                        @onclick='() => _camTab = "controls"'>
+                    @UiIcon.Render("gear", 13) Camera settings
+                    @if (PendingCount > 0)
+                    {
+                        <span class="tab-dot" title="Unsaved changes">●</span>
+                    }
+                </button>
+            }
         </div>
 
+        @* Masonry body: sections flow into two columns on wide screens (one on
+           mobile) — each card keeps its grouping and never splits across columns.
+           The columns live on the inner wrapper so the body can scroll; the
+           Recording tab is one big card and gets the full width. *@
+        <div class="campanel-body">
+        <div class="campanel-cols @(_camTab == "recording" ? "one-col" : "")">
+        @if (_camTab == "controls")
+        {
         @if (_profiles is { Count: > 0 })
         {
             var canSetStream = _caps.Features?.StreamSettings == true;
@@ -154,6 +191,30 @@
                         <input type="range" min="1" max="64" @bind="_ptzSpeed" @bind:event="oninput" />
                     </label>
                 </div>
+                @if (_http?.PtzPresets is { } presets)
+                {
+                    var saved = presets.Where(p => p.Enabled).ToList();
+                    <div class="campanel-divider"></div>
+                    <div class="campanel-subtitle">@UiIcon.Render("move", 12) PRESETS <span class="beta-tag">BETA</span></div>
+                    @if (saved.Count > 0)
+                    {
+                        <div class="stream-options">
+                            @foreach (var p in saved)
+                            {
+                                <button class="chip" disabled="@_presetBusy"
+                                        title="Move the camera to this saved position"
+                                        @onclick="() => GoToPresetAsync(p.Id)">@p.Name</button>
+                            }
+                        </div>
+                    }
+                    <div class="control-row row-inline">
+                        <input class="ret-input" style="width:14ch" type="text" maxlength="31"
+                               placeholder="name this position" @bind="_newPresetName" />
+                        <button class="chip" disabled="@(_presetBusy || string.IsNullOrWhiteSpace(_newPresetName))"
+                                title="Saves where the camera points right now"
+                                @onclick="SavePresetAsync">Save current</button>
+                    </div>
+                }
             </div>
         }
 
@@ -264,6 +325,143 @@
                         </div>
                     }
                 }
+                @* Gated on real doorbell ability (Support doorbellVersion), not just the
+                   field: the Elite WiFi line reports a doorbellLightState it doesn't have. *@
+                @if (_caps.Features?.Doorbell == true && Str(_led, "doorbellLightState") is { Length: > 0 } dbLight)
+                {
+                    var shownDb = _pendingDoorbellLed ?? dbLight;
+                    <div class="control-row">
+                        <span>Doorbell light <span class="beta-tag">BETA</span> @PendingMark(_pendingDoorbellLed)</span>
+                        <button class="chip @(shownDb == "open" ? "" : "chip-off") @(_pendingDoorbellLed != null ? "chip-pending" : "")"
+                                disabled="@_applying" @onclick="StageDoorbellLedToggle">
+                            @(shownDb == "open" ? "on" : "off")
+                        </button>
+                    </div>
+                }
+                @if (Num(_led, "IRLedBrightness") is { } irCur)
+                {
+                    <div class="control-row">
+                        <span>Infrared brightness <span class="beta-tag">BETA</span> @PendingMark(_pendingIrBright?.ToString())</span>
+                        <input class="zf-slider @(_pendingIrBright != null ? "input-pending" : "")"
+                               type="range" min="0" max="100" step="1"
+                               disabled="@_applying" value="@(_pendingIrBright ?? irCur)"
+                               @oninput="e => StageIrBright(long.Parse((string)e.Value!))" />
+                        <span class="zf-pos">@(_pendingIrBright ?? irCur)</span>
+                    </div>
+                }
+            </div>
+        }
+
+        @if (_http?.Image is { } img)
+        {
+            <div class="campanel-section">
+                <div class="campanel-section-title">@UiIcon.Render("film", 13) PICTURE <span class="beta-tag">BETA</span></div>
+                @PictureSlider("Brightness", img.Bright, _pendingBright, StageBright)
+                @PictureSlider("Contrast", img.Contrast, _pendingContrast, StageContrast)
+                @PictureSlider("Saturation", img.Saturation, _pendingSaturation, StageSaturation)
+                @PictureSlider("Hue", img.Hue, _pendingHue, StageHue)
+                @PictureSlider("Sharpness", img.Sharpen, _pendingSharpen, StageSharpen)
+                @if (img.DayNight is { Length: > 0 })
+                {
+                    <div class="control-row">
+                        <span>Day / night mode @PendingMark(_pendingDayNight)</span>
+                        <select class="@(_pendingDayNight != null ? "input-pending" : "")"
+                                value="@(_pendingDayNight ?? img.DayNight)"
+                                disabled="@_applying" @onchange='e => StageDayNight((string?)e.Value)'>
+                            <option value="Auto">auto</option>
+                            <option value="Color">always color</option>
+                            @* Value must come from C#: Blazor does NOT decode HTML
+                               entities in attribute values, so value="Black&amp;White"
+                               would send the literal "&amp;" to the API. *@
+                            <option value="@DayNightBw">always black &amp; white</option>
+                        </select>
+                    </div>
+                }
+                @if (img.AntiFlicker is { Length: > 0 })
+                {
+                    <div class="control-row">
+                        <span>Anti-flicker @PendingMark(_pendingAntiFlicker)</span>
+                        <select class="@(_pendingAntiFlicker != null ? "input-pending" : "")"
+                                value="@(_pendingAntiFlicker ?? img.AntiFlicker)"
+                                disabled="@_applying" @onchange='e => StageAntiFlicker((string?)e.Value)'>
+                            <option value="Outdoor">outdoor</option>
+                            <option value="50HZ">50 Hz</option>
+                            <option value="60HZ">60 Hz</option>
+                        </select>
+                    </div>
+                }
+                @if (img.Flip is { } flipCur)
+                {
+                    var shownFlip = _pendingFlip ?? flipCur;
+                    <div class="control-row">
+                        <span>Flip upside-down @PendingMark(_pendingFlip?.ToString())</span>
+                        <button class="chip @(shownFlip ? "" : "chip-off") @(_pendingFlip != null ? "chip-pending" : "")"
+                                disabled="@_applying" @onclick="StageFlipToggle">
+                            @(shownFlip ? "on" : "off")
+                        </button>
+                    </div>
+                }
+                @if (img.Mirror is { } mirrorCur)
+                {
+                    var shownMirror = _pendingMirror ?? mirrorCur;
+                    <div class="control-row">
+                        <span>Mirror horizontally @PendingMark(_pendingMirror?.ToString())</span>
+                        <button class="chip @(shownMirror ? "" : "chip-off") @(_pendingMirror != null ? "chip-pending" : "")"
+                                disabled="@_applying" @onclick="StageMirrorToggle">
+                            @(shownMirror ? "on" : "off")
+                        </button>
+                    </div>
+                }
+                <div class="notice small">Read from the camera. 128 is neutral for the sliders; changes stage until applied below.</div>
+            </div>
+        }
+
+        @if (_http?.Volume is { } vol)
+        {
+            <div class="campanel-section">
+                <div class="campanel-section-title">@UiIcon.Render("siren", 13) SPEAKER <span class="beta-tag">BETA</span></div>
+                <div class="control-row">
+                    <span>Volume @PendingMark(_pendingVolume?.ToString())</span>
+                    <input class="zf-slider @(_pendingVolume != null ? "input-pending" : "")"
+                           type="range" min="0" max="100" step="1"
+                           disabled="@_applying" value="@(_pendingVolume ?? vol)"
+                           @oninput="e => StageVolume(long.Parse((string)e.Value!))" />
+                    <span class="zf-pos">@(_pendingVolume ?? vol)</span>
+                </div>
+                <div class="notice small">How loud the camera's speaker plays — sirens, alerts and two-way talk alike.</div>
+            </div>
+        }
+
+        @if (_http?.AutoTrack is { } track)
+        {
+            <div class="campanel-section">
+                <div class="campanel-section-title">@UiIcon.Render("activity", 13) AUTO-TRACKING <span class="beta-tag">BETA</span></div>
+                <div class="control-row">
+                    <span>Follow detected subjects @PendingMark(_pendingAutoTrack?.ToString())</span>
+                    <button class="chip @((_pendingAutoTrack ?? track) ? "" : "chip-off") @(_pendingAutoTrack != null ? "chip-pending" : "")"
+                            disabled="@_applying" @onclick="StageAutoTrackToggle">
+                        @((_pendingAutoTrack ?? track) ? "on" : "off")
+                    </button>
+                </div>
+            </div>
+        }
+
+        @if (_caps.Features?.Doorbell == true && _http?.QuickReplies is { Count: > 0 } replies)
+        {
+            <div class="campanel-section">
+                <div class="campanel-section-title">@UiIcon.Render("bell", 13) QUICK REPLY <span class="beta-tag">BETA</span></div>
+                <div class="control-row row-inline">
+                    <select class="qr-select" @bind="_quickReplyId">
+                        @foreach (var r in replies)
+                        {
+                            <option value="@r.Id">@r.Name</option>
+                        }
+                    </select>
+                    <button class="chip" disabled="@_quickReplyBusy" @onclick="PlayQuickReplyAsync">
+                        @(_quickReplyBusy ? "Playing…" : "Play")
+                    </button>
+                </div>
+                <div class="notice small">Plays the selected pre-recorded message through the camera's speaker.</div>
             </div>
         }
 
@@ -283,8 +481,10 @@
                     }
                     else
                     {
-                        <button class="chip chip-danger" @onclick="() => SirenAsync(true)">Confirm — sounds until stopped</button>
-                        <button class="chip" @onclick="() => _confirmSiren = false">Cancel</button>
+                        <span class="row-actions">
+                            <button class="chip chip-danger" @onclick="() => SirenAsync(true)">Confirm — sounds until stopped</button>
+                            <button class="chip" @onclick="() => _confirmSiren = false">Cancel</button>
+                        </span>
                     }
                 </div>
             </div>
@@ -312,8 +512,10 @@
                     }
                     else
                     {
-                        <button class="chip chip-danger" @onclick="() => SetPrivacyAsync(true)">Confirm — stops video &amp; recording</button>
-                        <button class="chip" @onclick="() => _confirmPrivacy = false">Cancel</button>
+                        <span class="row-actions">
+                            <button class="chip chip-danger" @onclick="() => SetPrivacyAsync(true)">Confirm — stops video &amp; recording</button>
+                            <button class="chip" @onclick="() => _confirmPrivacy = false">Cancel</button>
+                        </span>
                     }
                 </div>
                 @if (_privacyOn == true)
@@ -338,7 +540,9 @@
             </div>
         }
 
-        @if (_recording != null)
+        }
+
+        @if (_camTab == "recording" && _recording != null)
         {
             <div class="campanel-section">
                 <div class="campanel-section-title">@UiIcon.Render("rec", 13) RECORDING</div>
@@ -347,6 +551,11 @@
                     camera's streams. Nothing here is sent to the camera or changes its own
                     (SD-card) recording.
                 </div>
+                @if (!CanEditRecording)
+                {
+                    <div class="notice small">Only an <b>admin</b> can change recording settings — shown read-only.</div>
+                }
+                <fieldset class="rec-lock" disabled="@(!CanEditRecording)">
                 @if ((_recording.AvailableStreams?.Count ?? 0) > 1)
                 {
                     <div class="control-row">
@@ -537,10 +746,11 @@
                         }
                     </div>
                 }
+                </fieldset>
             </div>
         }
 
-        @if (_caps.Features?.Reboot != false)
+        @if (_camTab == "controls" && _caps.Features?.Reboot != false)
         {
             <div class="campanel-section">
                 <div class="campanel-section-title">@UiIcon.Render("wrench", 13) MAINTENANCE</div>
@@ -552,17 +762,20 @@
                     }
                     else
                     {
-                        <button class="chip chip-danger" @onclick="RebootAsync">Confirm reboot</button>
-                        <button class="chip" @onclick="() => _confirmReboot = false">Cancel</button>
+                        <span class="row-actions">
+                            <button class="chip chip-danger" @onclick="RebootAsync">Confirm reboot</button>
+                            <button class="chip" @onclick="() => _confirmReboot = false">Cancel</button>
+                        </span>
                     }
                 </div>
             </div>
         }
+        </div> @* /campanel-cols *@
         </div> @* /campanel-body *@
 
-        @if (_status != null)
+        @if (_toast != null)
         {
-            <div class="notice">@_status</div>
+            <div class="campanel-toast @(_toastError ? "toast-err" : "toast-ok")" role="status">@_toast</div>
         }
 
         @* Staged device edits: nothing above is sent to the camera until Apply.
@@ -609,6 +822,9 @@
     [Parameter] public string? Pass { get; set; }
     /// <summary>Web-UI session token; when present it supersedes the Basic credentials.</summary>
     [Parameter] public string? Token { get; set; }
+    /// <summary>Recording settings persist server-side, so only admins may change
+    /// them once accounts exist (mirrors the API's gate); false renders them read-only.</summary>
+    [Parameter] public bool CanEditRecording { get; set; } = true;
     [Parameter] public EventCallback OnClose { get; set; }
 
     private ApiCapabilities? _caps;
@@ -620,9 +836,27 @@
     private ApiZoomFocus? _zoomFocus;
     private ApiFloodlight? _floodlight;
     private ApiWhiteLed? _whiteLed;
+    private ApiHttpFeatures? _http;
+    /// <summary>The camera API's black-and-white day/night value ("Black&amp;White").</summary>
+    private const string DayNightBw = "Black&White";
+    /// <summary>Panel tab: "controls" (device) or "recording" (server-side).</summary>
+    private string _camTab = "controls";
+
+    /// <summary>Whether the Camera settings tab has anything to show — false for
+    /// generic RTSP cameras (no Baichuan/HTTP control surface at all).</summary>
+    private bool HasDeviceControls =>
+        _profiles is { Count: > 0 } || _http != null
+        || _caps?.Features is { } f && (f.Battery || f.Ptz || f.Zoom || f.Led || f.Siren
+            || f.Privacy || f.Pir || f.Reboot);
     private bool _loading;
     private string? _error;
-    private string? _status;
+    // Action feedback: a green (applied) / red (rejected) toast at the panel's
+    // bottom edge that dismisses itself. The sequence number keeps a stale
+    // dismiss timer from clearing a newer toast.
+    private string? _toast;
+    private bool _toastError;
+    private int _toastSeq;
+    private bool _disposed;
     private bool _confirmReboot;
     private bool _confirmSiren;
     private bool _confirmPrivacy;
@@ -660,16 +894,37 @@
     private bool? _pendingFlAuto;
     private long? _pendingWlBright;      // white-LED brightness (0-100)
     private bool? _pendingWlAuto;        // white-LED "on automatically at night" (mode)
+    // HTTP-API extras (beta) — staged like the rest.
+    private long? _pendingBright, _pendingContrast, _pendingSaturation, _pendingHue, _pendingSharpen;
+    private string? _pendingDayNight, _pendingAntiFlicker;
+    private bool? _pendingFlip, _pendingMirror;
+    private long? _pendingVolume;
+    private bool? _pendingAutoTrack;
+    private long? _pendingIrBright;      // LedState IRLedBrightness (0-100)
+    private string? _pendingDoorbellLed; // LedState doorbellLightState
+    private string _newPresetName = "";
+    private bool _presetBusy;
+    private int _quickReplyId;
+    private bool _quickReplyBusy;
     private bool _applying;
 
     private int PendingCount =>
         _pendingStreams.Count + (_pendingIr != null ? 1 : 0)
         + (_pendingStatusLed != null ? 1 : 0) + (_pendingPir != null ? 1 : 0)
         + (_pendingFlBrightness != null ? 1 : 0) + (_pendingFlAuto != null ? 1 : 0)
-        + (_pendingWlBright != null ? 1 : 0) + (_pendingWlAuto != null ? 1 : 0);
+        + (_pendingWlBright != null ? 1 : 0) + (_pendingWlAuto != null ? 1 : 0)
+        + (_pendingBright != null ? 1 : 0) + (_pendingContrast != null ? 1 : 0)
+        + (_pendingSaturation != null ? 1 : 0) + (_pendingHue != null ? 1 : 0)
+        + (_pendingSharpen != null ? 1 : 0)
+        + (_pendingDayNight != null ? 1 : 0) + (_pendingAntiFlicker != null ? 1 : 0)
+        + (_pendingFlip != null ? 1 : 0) + (_pendingMirror != null ? 1 : 0)
+        + (_pendingVolume != null ? 1 : 0) + (_pendingAutoTrack != null ? 1 : 0)
+        + (_pendingIrBright != null ? 1 : 0) + (_pendingDoorbellLed != null ? 1 : 0);
 
-    /// <summary>Any staged change that interrupts the device when applied.</summary>
-    private bool PendingDisruptive => _pendingStreams.Count > 0;
+    /// <summary>Any staged change that interrupts the device when applied.
+    /// Flip/mirror make the camera restart its video pipeline, like a profile write.</summary>
+    private bool PendingDisruptive =>
+        _pendingStreams.Count > 0 || _pendingFlip != null || _pendingMirror != null;
 
     /// <summary>A resolution change (not just fps/bitrate) makes some models fully
     /// reboot. "Same resolution" is checked against the camera's reported encode
@@ -782,6 +1037,76 @@
         _pendingWlAuto = target == cur ? null : target;
     }
 
+    // ---- HTTP-API extras (beta): staged the same way ----
+
+    private void StageBright(long v) => _pendingBright = v == _http?.Image?.Bright ? null : v;
+    private void StageContrast(long v) => _pendingContrast = v == _http?.Image?.Contrast ? null : v;
+    private void StageSaturation(long v) => _pendingSaturation = v == _http?.Image?.Saturation ? null : v;
+    private void StageHue(long v) => _pendingHue = v == _http?.Image?.Hue ? null : v;
+    private void StageSharpen(long v) => _pendingSharpen = v == _http?.Image?.Sharpen ? null : v;
+
+    private void StageDayNight(string? v) =>
+        _pendingDayNight = v == null || v == _http?.Image?.DayNight ? null : v;
+
+    private void StageAntiFlicker(string? v) =>
+        _pendingAntiFlicker = v == null || v == _http?.Image?.AntiFlicker ? null : v;
+
+    private void StageFlipToggle()
+    {
+        var cur = _http?.Image?.Flip ?? false;
+        var target = !(_pendingFlip ?? cur);
+        _pendingFlip = target == cur ? null : target;
+    }
+
+    private void StageMirrorToggle()
+    {
+        var cur = _http?.Image?.Mirror ?? false;
+        var target = !(_pendingMirror ?? cur);
+        _pendingMirror = target == cur ? null : target;
+    }
+
+    private void StageVolume(long v) => _pendingVolume = v == _http?.Volume ? null : v;
+
+    private void StageAutoTrackToggle()
+    {
+        var cur = _http?.AutoTrack ?? false;
+        var target = !(_pendingAutoTrack ?? cur);
+        _pendingAutoTrack = target == cur ? null : target;
+    }
+
+    private void StageIrBright(long v) => _pendingIrBright = v == Num(_led, "IRLedBrightness") ? null : v;
+
+    private void StageDoorbellLedToggle()
+    {
+        var cur = Str(_led, "doorbellLightState");
+        var target = (_pendingDoorbellLed ?? cur) == "open" ? "close" : "open";
+        _pendingDoorbellLed = target == cur ? null : target;
+    }
+
+    /// <summary>One 0-255 picture slider row (skipped when the camera lacks the field).</summary>
+    private RenderFragment PictureSlider(string label, int? cur, long? pending, Action<long> stage) => __builder =>
+    {
+        @if (cur is { } c)
+        {
+            <div class="control-row">
+                <span>@label @PendingMark(pending?.ToString())</span>
+                <input class="zf-slider @(pending != null ? "input-pending" : "")"
+                       type="range" min="0" max="255" step="1"
+                       disabled="@_applying" value="@(pending ?? c)"
+                       @oninput="e => stage(long.Parse((string)e.Value!))" />
+                <span class="zf-pos">@(pending ?? c)</span>
+            </div>
+        }
+    };
+
+    private static string WifiLabel(int signal) =>
+        signal < 0 ? $"{signal} dBm" : signal <= 4 ? $"{signal} / 4 bars" : signal.ToString();
+
+    private static string SdLabel(ApiSdCard card) =>
+        !card.Mounted ? "not mounted"
+        : !card.Formatted ? "not formatted"
+        : $"{card.FreeMb / 1024.0:0.#} GB free of {card.TotalMb / 1024.0:0.#} GB";
+
     private void DiscardPending()
     {
         _pendingStreams.Clear();
@@ -791,6 +1116,13 @@
         _pendingFlAuto = null;
         _pendingWlBright = null;
         _pendingWlAuto = null;
+        _pendingBright = _pendingContrast = _pendingSaturation = _pendingHue = _pendingSharpen = null;
+        _pendingDayNight = _pendingAntiFlicker = null;
+        _pendingFlip = _pendingMirror = null;
+        _pendingVolume = null;
+        _pendingAutoTrack = null;
+        _pendingIrBright = null;
+        _pendingDoorbellLed = null;
     }
 
     /// <summary>Sends the staged changes one at a time (the camera answers control
@@ -835,6 +1167,47 @@
                 _pendingWlAuto = null;
                 applied.Add("spotlight");
             }
+            if (_pendingDoorbellLed is { } dbl && await PostAsync("led", new { doorbellLightState = dbl }))
+            {
+                _pendingDoorbellLed = null;
+                applied.Add("doorbell light");
+            }
+            if (_pendingIrBright is { } irb && await PostAsync("led", new { irBrightness = irb }))
+            {
+                _pendingIrBright = null;
+                applied.Add("IR brightness");
+            }
+            if ((_pendingBright != null || _pendingContrast != null || _pendingSaturation != null
+                 || _pendingHue != null || _pendingSharpen != null || _pendingDayNight != null
+                 || _pendingAntiFlicker != null || _pendingFlip != null || _pendingMirror != null)
+                && await PostAsync("image", new
+                {
+                    bright = _pendingBright,
+                    contrast = _pendingContrast,
+                    saturation = _pendingSaturation,
+                    hue = _pendingHue,
+                    sharpen = _pendingSharpen,
+                    dayNight = _pendingDayNight,
+                    antiFlicker = _pendingAntiFlicker,
+                    flip = _pendingFlip,
+                    mirror = _pendingMirror,
+                }))
+            {
+                _pendingBright = _pendingContrast = _pendingSaturation = _pendingHue = _pendingSharpen = null;
+                _pendingDayNight = _pendingAntiFlicker = null;
+                _pendingFlip = _pendingMirror = null;
+                applied.Add("picture");
+            }
+            if (_pendingVolume is { } pv && await PostAsync("volume", new { volume = pv }))
+            {
+                _pendingVolume = null;
+                applied.Add("speaker volume");
+            }
+            if (_pendingAutoTrack is { } pat && await PostAsync("autotrack", new { on = pat }))
+            {
+                _pendingAutoTrack = null;
+                applied.Add("auto-tracking");
+            }
             // The disruptive ones go LAST: the quick settings land before the
             // stream restarts make the camera briefly deaf to commands.
             foreach (var (kind, ps) in _pendingStreams.ToList())
@@ -853,8 +1226,13 @@
                             "(the camera restarts the stream; video resumes shortly)");
             }
 
-            if (applied.Count > 0)
-                _status = "Applied: " + string.Join(", ", applied) + ".";
+            if (applied.Count > 0 && PendingCount == 0)
+                ShowToast("Applied: " + string.Join(", ", applied) + ".");
+            else if (applied.Count > 0)
+                // Something in the batch failed (its own red toast already showed);
+                // say what DID land so the retry scope is clear.
+                ShowToast("Applied: " + string.Join(", ", applied) +
+                          " — the rest failed and stays staged for retry.", error: true);
 
             // Refresh what the camera now reports (best-effort).
             if (_caps?.Features?.Led == true) _led = await GetAsync<JsonElement?>("led");
@@ -862,6 +1240,7 @@
             if (_caps?.Features?.Floodlight == true) _floodlight = await GetAsync<ApiFloodlight?>("floodlight");
             if (_caps?.Features?.WhiteLed == true) _whiteLed = await GetAsync<ApiWhiteLed?>("whiteled");
             if (_caps?.Features?.StreamSettings == true) _encCurrent = await GetAsync<List<ApiStreamEnc>?>("settings/stream");
+            if (_http != null) _http = await GetAsync<ApiHttpFeatures?>("httpfeatures") ?? _http;
         }
         finally
         {
@@ -879,7 +1258,7 @@
     private async Task LoadAsync()
     {
         _loading = true;
-        _error = _status = null;
+        _error = _toast = null;
         _caps = null;
         _recording = null;
         _profiles = null;
@@ -887,9 +1266,14 @@
         _zoomFocus = null;
         _floodlight = null;
         _whiteLed = null;
+        _http = null;
         _encCurrent = null;
         _zoomShown = _focusShown = null;
         _sirenOn = _privacyOn = null;
+        _newPresetName = "";
+        _presetBusy = _quickReplyBusy = false;
+        _quickReplyId = 0;
+        _camTab = "controls";
         _confirmReboot = _confirmSiren = _confirmPrivacy = _privacyBusy = false;
         DiscardPending(); // switching cameras must not carry staged edits across
         StateHasChanged();
@@ -900,6 +1284,9 @@
         if (_caps is { Online: true })
         {
             _recording = await GetAsync<ApiRecordingSettings>("recording"); // null when the server records nothing
+            // Recording is the panel's default tab — chosen HERE (first load) so
+            // the remaining queries fill the other tab in the background.
+            if (_recording != null) _camTab = "recording";
             _profiles = (await GetAsync<ApiStreamProfiles>("streaminfo"))?.Profiles;
             if (_caps.Features?.Battery == true) _battery = await GetAsync<JsonElement?>("battery");
             if (_caps.Features?.Led == true) _led = await GetAsync<JsonElement?>("led");
@@ -910,11 +1297,36 @@
             if (_caps.Features?.StreamSettings == true) _encCurrent = await GetAsync<List<ApiStreamEnc>?>("settings/stream");
             if (_caps.Features?.Siren == true) _sirenOn = (await GetAsync<JsonElement?>("siren"))?.TryGetProperty("on", out var so) == true && so.ValueKind != JsonValueKind.Null ? so.GetBoolean() : null;
             if (_caps.Features?.Privacy == true) _privacyOn = (await GetAsync<JsonElement?>("privacy"))?.TryGetProperty("on", out var po) == true && po.ValueKind != JsonValueKind.Null ? po.GetBoolean() : null;
+            // The HTTP-API extras (beta): one combined read; 404/null just hides them.
+            if (_caps.Features?.StreamSettings == true)
+            {
+                _http = await GetAsync<ApiHttpFeatures?>("httpfeatures");
+                _quickReplyId = _http?.QuickReplies?.FirstOrDefault()?.Id ?? 0;
+            }
         }
         _loading = false;
     }
 
     private Task CloseAsync() => OnClose.InvokeAsync();
+
+    public void Dispose() => _disposed = true;
+
+    /// <summary>Shows the bottom-of-panel feedback toast; it replaces any current
+    /// one and dismisses itself after 5 seconds.</summary>
+    private void ShowToast(string message, bool error = false)
+    {
+        _toast = message;
+        _toastError = error;
+        _ = DismissToastLaterAsync(++_toastSeq);
+    }
+
+    private async Task DismissToastLaterAsync(int seq)
+    {
+        await Task.Delay(TimeSpan.FromSeconds(5));
+        if (_disposed || seq != _toastSeq) return;
+        _toast = null;
+        await InvokeAsync(StateHasChanged);
+    }
 
     // ------------------------------------------------------------ actions
 
@@ -947,7 +1359,7 @@
         if (await PostAsync("siren", new { on }))
         {
             _sirenOn = on;
-            _status = on ? "Siren ON — it sounds until you stop it." : "Siren stopped.";
+            ShowToast(on ? "Siren ON — it sounds until you stop it." : "Siren stopped.");
         }
     }
 
@@ -956,7 +1368,7 @@
         if (_privacyBusy) return; // ignore repeat clicks while a switch is in flight
         _confirmPrivacy = false;
         _privacyBusy = true;
-        _status = null;
+        _toast = null;
         try
         {
             // The write blocks until the camera acknowledges (msg 575). Cap the
@@ -965,9 +1377,9 @@
             if (await PostAsync("privacy", new { on }, cts.Token))
             {
                 _privacyOn = on;
-                _status = on
+                ShowToast(on
                     ? "Privacy mode ON — the camera goes dark until switched back."
-                    : "Privacy mode off — the camera wakes and video resumes shortly.";
+                    : "Privacy mode off — the camera wakes and video resumes shortly.");
             }
         }
         finally
@@ -1110,7 +1522,7 @@
         if (days.Count == 0)
         {
             // No days = capture nothing, which is what the events switch is for.
-            _status = "At least one day stays selected — to stop capturing entirely, turn off detection events.";
+            ShowToast("At least one day stays selected — to stop capturing entirely, turn off detection events.", error: true);
             return;
         }
         await SetRecordingAsync(scheduleDays: days);
@@ -1156,7 +1568,68 @@
     {
         _confirmReboot = false;
         if (await PostAsync("reboot", new { }))
-            _status = "Reboot accepted — the camera will drop offline for a minute.";
+            ShowToast("Reboot accepted — the camera will drop offline for a minute.");
+    }
+
+    // ------------------------------------------------ HTTP-API extras (beta)
+
+    private async Task GoToPresetAsync(int id)
+    {
+        if (_presetBusy) return;
+        _presetBusy = true;
+        try
+        {
+            if (await PostAsync("ptzpreset", new { id }))
+                ShowToast("Moving to the preset position.");
+        }
+        finally
+        {
+            _presetBusy = false;
+        }
+    }
+
+    /// <summary>Saves the current position: an existing preset with the same name is
+    /// overwritten, otherwise the first free slot is used.</summary>
+    private async Task SavePresetAsync()
+    {
+        var name = _newPresetName.Trim();
+        if (name.Length == 0 || _presetBusy || _http?.PtzPresets is not { } presets) return;
+        var slot = presets.FirstOrDefault(p => p.Enabled && string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase))
+                   ?? presets.FirstOrDefault(p => !p.Enabled);
+        if (slot == null)
+        {
+            ShowToast("All preset slots are taken — reuse an existing preset's name to overwrite it.", error: true);
+            return;
+        }
+        _presetBusy = true;
+        try
+        {
+            if (await PostAsync("ptzpreset", new { id = slot.Id, name, save = true }))
+            {
+                _newPresetName = "";
+                ShowToast($"Saved this position as \"{name}\".");
+                _http = await GetAsync<ApiHttpFeatures?>("httpfeatures") ?? _http;
+            }
+        }
+        finally
+        {
+            _presetBusy = false;
+        }
+    }
+
+    private async Task PlayQuickReplyAsync()
+    {
+        if (_quickReplyBusy) return;
+        _quickReplyBusy = true;
+        try
+        {
+            if (await PostAsync("quickreply", new { id = _quickReplyId }))
+                ShowToast("Playing the quick reply on the camera.");
+        }
+        finally
+        {
+            _quickReplyBusy = false;
+        }
     }
 
     // ------------------------------------------------------------ HTTP helpers
@@ -1195,7 +1668,7 @@
 
     private async Task<bool> PostAsync(string path, object body, CancellationToken ct = default)
     {
-        _status = null;
+        _toast = null;
         try
         {
             var req = NewRequest(HttpMethod.Post, path);
@@ -1206,19 +1679,19 @@
                 _error = null;
                 return true;
             }
-            _error = res.StatusCode == System.Net.HttpStatusCode.Unauthorized
+            ShowToast(res.StatusCode == System.Net.HttpStatusCode.Unauthorized
                 ? "Not authorized — set your credentials under server settings (⚙)."
-                : await ReadErrorAsync(res) ?? $"Request failed ({(int)res.StatusCode})";
+                : await ReadErrorAsync(res) ?? $"Request failed ({(int)res.StatusCode})", error: true);
             return false;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            _error = "Timed out waiting for the camera to confirm — it may be slow or offline. Check its state and try again.";
+            ShowToast("Timed out waiting for the camera to confirm — it may be slow or offline. Check its state and try again.", error: true);
             return false;
         }
         catch (Exception ex)
         {
-            _error = $"Cannot reach {Server}: {ex.Message}";
+            ShowToast($"Cannot reach {Server}: {ex.Message}", error: true);
             return false;
         }
     }

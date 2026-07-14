@@ -23,7 +23,7 @@
                   @onclick="RestoreView">
                 <span class="brand-dot"></span> NEOLINK<span class="brand-net">.NET</span>
             </span>
-            <button class="icon-btn" title="Server settings" @onclick="() => _showSettings = !_showSettings">@UiIcon.Render("gear", 18)</button>
+            <button class="icon-btn" title="Server settings" @onclick="OpenServerSettingsAsync">@UiIcon.Render("gear", 18)</button>
         </div>
 
         @if (_setupRequired && !_secWarnDismissed)
@@ -69,37 +69,6 @@
             </div>
         }
 
-        @if (_showSettings)
-        {
-            <div class="settings">
-                <label>Server API</label>
-                <input @bind="_server" @bind:after="OnServerChangedAsync" placeholder="http://host:8655" />
-                <label>Control user (optional)</label>
-                <input @bind="_user" @bind:after="SaveAsync" placeholder="username" autocomplete="off" />
-                <label>Control password</label>
-                <input type="password" @bind="_pass" @bind:after="SaveAsync" placeholder="password" autocomplete="off" />
-
-                @if (_authUser != null)
-                {
-                    <div class="auth-row">
-                        <span class="event-sub">@UiIcon.Render("user", 11) @_authUser@(_authAdmin ? " · admin" : "")</span>
-                        @if (_authAdmin)
-                        {
-                            <button class="chip" @onclick="OpenUsersAsync">Users…</button>
-                            <button class="chip" @onclick="OpenServerSettingsAsync">Server settings…</button>
-                        }
-                        <button class="chip chip-off" @onclick="LogoutAsync">Sign out</button>
-                    </div>
-                }
-                else if (_setupRequired)
-                {
-                    <div class="auth-row">
-                        <button class="chip" title="Create the admin account and require sign-in"
-                                @onclick="() => { _loginError = null; _showSetupPrompt = true; }">🔐 Enable login…</button>
-                    </div>
-                }
-            </div>
-        }
 
         <div class="section-title">
             CAMERAS
@@ -330,7 +299,16 @@
         <div class="toolbar">
             <button class="tool-btn menu-btn" title="Cameras" @onclick="() => _sidebarOpen = !_sidebarOpen">@UiIcon.Render("menu", 16)</button>
 
-            @* Saved layouts sits first (right after the menu) so it stays reachable
+            @* Restore view leads the toolbar while a maximize is active: it's the
+               one action the user is most likely after, so it must not hide behind
+               a horizontal scroll on a phone. *@
+            @if (_backup != null || _maxIndex != null)
+            {
+                <button class="tool-btn back" @onclick="RestoreView">@UiIcon.Render("collapse", 14) Restore view</button>
+                <span class="tool-sep"></span>
+            }
+
+            @* Saved layouts sits next (right after the menu) so it stays reachable
                on a narrow phone toolbar without scrolling. Always says "Layout"; the
                loaded layout's name rides along as a value. *@
             <button class="tool-btn layouts-btn @(_showLayouts ? "active" : "")"
@@ -369,11 +347,6 @@
                 <button class="tool-btn" @onclick="() => SetCount(_count + 1)">+</button>
             }
 
-            @if (_backup != null || _maxIndex != null)
-            {
-                <span class="tool-sep"></span>
-                <button class="tool-btn back" @onclick="RestoreView">@UiIcon.Render("collapse", 14) Restore view</button>
-            }
 
             @if (_eventsSupported)
             {
@@ -594,6 +567,7 @@
         <CameraPanel Server="@ApiBase" CameraName="@_panelCamera"
                      Camera="_cameras.FirstOrDefault(c => c.Name == _panelCamera)"
                      User="@_user" Pass="@_pass" Token="@_authToken"
+                     CanEditRecording="@(!_authEnabled || _authAdmin)"
                      OnClose="() => _panelCamera = null" />
     }
 
@@ -750,56 +724,6 @@
         </div>
     }
 
-    @if (_showUsersPanel)
-    {
-        <div class="backdrop panel-backdrop" @onclick="() => _showUsersPanel = false"></div>
-        <aside class="campanel auth-panel" role="dialog" aria-label="User management">
-            <div class="campanel-head">
-                <span class="campanel-title">👥 USERS</span>
-                <span class="tile-spacer"></span>
-                <button class="icon-btn" title="Close" @onclick="() => _showUsersPanel = false">✕</button>
-            </div>
-            @if (_usersError != null)
-            {
-                <div class="notice error">@_usersError</div>
-            }
-            @foreach (var u in _uiUsers)
-            {
-                <div class="control-row user-row" @key="u.Name">
-                    <span>@UiIcon.Render(u.Admin ? "shield" : "user", 12) @u.Name@(u.Admin ? " · admin" : "")</span>
-                    @if (_pwEditUser == u.Name)
-                    {
-                        <input class="user-pass-input" type="password" placeholder="new password (min 8)"
-                               @bind="_pwEditPass" autocomplete="new-password" />
-                        <button class="chip" @onclick="() => SetUserPasswordAsync(u.Name)">save</button>
-                        <button class="chip chip-off" @onclick="() => _pwEditUser = null">cancel</button>
-                    }
-                    else
-                    {
-                        <button class="chip" @onclick="() => { _pwEditUser = u.Name; _pwEditPass = string.Empty; }">password…</button>
-                        @if (!u.Admin)
-                        {
-                            <button class="chip chip-danger" @onclick="() => DeleteUserAsync(u.Name)">delete</button>
-                        }
-                    }
-                </div>
-            }
-            <div class="campanel-section">
-                <div class="campanel-section-title">ADD USER</div>
-                <div class="control-row user-row">
-                    <input class="user-pass-input" placeholder="username" @bind="_newUserName" autocomplete="off" />
-                    <input class="user-pass-input" type="password" placeholder="password (min 8)"
-                           @bind="_newUserPass" autocomplete="new-password" />
-                    <button class="chip" @onclick="AddUserAsync">add</button>
-                </div>
-                <div class="notice small">
-                    New accounts are normal users: they can view and control cameras and review events,
-                    but cannot manage users. Each account keeps its own layout and filters.
-                </div>
-            </div>
-        </aside>
-    }
-
     @if (_showServerSettings)
     {
         @* No @onclick on the dim wall (and Esc is ignored — escInit only targets
@@ -823,22 +747,18 @@
                 <button class="icon-btn" title="Close" @onclick="() => _showServerSettings = false">✕</button>
             </div>
 
-            @if (_adminConfig == null)
-            {
-                @if (_adminError != null)
-                {
-                    <div class="notice error">@_adminError</div>
-                }
-                else
-                {
-                    <div class="notice">Loading…</div>
-                }
-            }
-            else
-            {
                 <div class="settings-tabs" role="tablist">
-                    <button class="settings-tab @(_settingsTab == "general" ? "active" : "")" role="tab"
-                            @onclick='() => _settingsTab = "general"'>@UiIcon.Render("gear", 13) General</button>
+                    @if (_authAdmin)
+                    {
+                        <button class="settings-tab @(_settingsTab == "general" ? "active" : "")" role="tab"
+                                @onclick='() => _settingsTab = "general"'>@UiIcon.Render("gear", 13) General</button>
+                        <button class="settings-tab @(_settingsTab == "cameras" ? "active" : "")" role="tab"
+                                @onclick="OpenCamerasTabAsync">@UiIcon.Render("film", 13) Cameras</button>
+                        <button class="settings-tab @(_settingsTab == "users" ? "active" : "")" role="tab"
+                                @onclick="SelectUsersTabAsync">@UiIcon.Render("user", 13) Users</button>
+                    }
+                    <button class="settings-tab @(_settingsTab == "connection" ? "active" : "")" role="tab"
+                            @onclick='() => _settingsTab = "connection"'>@UiIcon.Render("activity", 13) Connection</button>
                     @if (_adminHasRecording)
                     {
                         <button class="settings-tab @(_settingsTab == "recording" ? "active" : "")" role="tab"
@@ -862,7 +782,117 @@
                     }
                 </div>
                 <div class="settings-body">
-                    @if (_settingsTab != "notifications")
+                    @if (_settingsTab == "connection")
+                    {
+                        <div class="campanel-section">
+                            <div class="campanel-section-title">@UiIcon.Render("activity", 13) SERVER CONNECTION</div>
+                            <div class="notice small">
+                                These settings belong to <b>this browser</b> — they are stored locally
+                                (per device, per profile) and never written to the server's config.json.
+                            </div>
+                            <div class="control-row"><span>Server API URL</span>
+                                <input class="notif-input" placeholder="blank = this server"
+                                       @bind="_server" @bind:after="OnServerChangedAsync" /></div>
+                            <div class="notice small">
+                                Where this page sends its API calls and pulls video from.
+                                <b>Leave it blank in normal setups</b> — the UI automatically talks to
+                                the server that served it. Set it only when this UI runs somewhere else
+                                than the Neolink server (a dev build, a separately hosted copy) or you
+                                want this browser to control a <i>different</i> Neolink instance, e.g.
+                                <code>http://192.168.1.10:8655</code>.
+                            </div>
+                            <div class="campanel-divider"></div>
+                            <div class="campanel-subtitle">CONTROL CREDENTIALS (LEGACY)</div>
+                            <div class="control-row"><span>Username</span>
+                                <input class="notif-input" placeholder="username" autocomplete="off"
+                                       @bind="_user" @bind:after="SaveAsync" /></div>
+                            <div class="control-row"><span>Password</span>
+                                <input class="notif-input" type="password" placeholder="password" autocomplete="off"
+                                       @bind="_pass" @bind:after="SaveAsync" /></div>
+                            <div class="notice small">
+                                Only for servers <b>without web sign-in</b> that define an RTSP
+                                <code>"users"</code> list in config.json: control actions (PTZ, camera
+                                settings, reboot) then need these credentials — the same
+                                username/password as the RTSP streams, sent as HTTP Basic. Once you are
+                                <b>signed in to the web UI, your session covers control actions and
+                                these fields are ignored</b> — leave them blank. The password is stored
+                                in this browser's local storage, so don't fill it on a shared machine.
+                            </div>
+                            @if (_setupRequired)
+                            {
+                                <div class="campanel-divider"></div>
+                                <div class="control-row">
+                                    <span>Web sign-in is currently disabled</span>
+                                    <button class="chip" title="Create the admin account and require sign-in"
+                                            @onclick="() => { _loginError = null; _showSetupPrompt = true; _showServerSettings = false; }">Enable login…</button>
+                                </div>
+                            }
+                        </div>
+                    }
+
+                    @if (_settingsTab == "users")
+                    {
+                        <div class="campanel-section">
+                            <div class="campanel-section-title">@UiIcon.Render("user", 13) USERS</div>
+                            <div class="notice small">
+                                Web-UI accounts (users.json) — separate from the RTSP
+                                <code>"users"</code> list in config.json. Changes apply immediately.
+                            </div>
+                            @if (_usersError != null)
+                            {
+                                <div class="notice error">@_usersError</div>
+                            }
+                            @foreach (var u in _uiUsers)
+                            {
+                                <div class="control-row user-row" @key="u.Name">
+                                    <span>@UiIcon.Render(u.Admin ? "shield" : "user", 12) @u.Name@(u.Admin ? " · admin" : "")</span>
+                                    <span class="row-actions">
+                                        @if (_pwEditUser == u.Name)
+                                        {
+                                            <input class="user-pass-input" type="password" placeholder="new password (min 8)"
+                                                   @bind="_pwEditPass" autocomplete="new-password" />
+                                            <button class="chip" @onclick="() => SetUserPasswordAsync(u.Name)">save</button>
+                                            <button class="chip chip-off" @onclick="() => _pwEditUser = null">cancel</button>
+                                        }
+                                        else
+                                        {
+                                            <button class="chip" @onclick="() => { _pwEditUser = u.Name; _pwEditPass = string.Empty; }">password…</button>
+                                            @if (!u.Admin)
+                                            {
+                                                <button class="chip chip-danger" @onclick="() => DeleteUserAsync(u.Name)">delete</button>
+                                            }
+                                        }
+                                    </span>
+                                </div>
+                            }
+                            <div class="campanel-divider"></div>
+                            <div class="campanel-subtitle">ADD USER</div>
+                            <div class="user-add-row">
+                                <input class="user-pass-input" placeholder="username" @bind="_newUserName" autocomplete="off" />
+                                <input class="user-pass-input" type="password" placeholder="password (min 8)"
+                                       @bind="_newUserPass" autocomplete="new-password" />
+                                <button class="chip" @onclick="AddUserAsync">add</button>
+                            </div>
+                            <div class="notice small">
+                                New accounts are normal users: they can view and control cameras and review events,
+                                but cannot manage users or server settings. Each account keeps its own layout and filters.
+                            </div>
+                        </div>
+                    }
+
+                    @if (_settingsTab is not ("connection" or "users") && _adminConfig == null)
+                    {
+                        @if (_adminError != null)
+                        {
+                            <div class="notice error">@_adminError</div>
+                        }
+                        else
+                        {
+                            <div class="notice">Loading…</div>
+                        }
+                    }
+
+                    @if (_adminConfig != null && _settingsTab is not ("notifications" or "connection" or "users"))
                     {
                         <div class="notice small">
                             Editing <code>@_adminConfigPath</code>.
@@ -874,7 +904,7 @@
                         </div>
                     }
 
-                    @if (_settingsTab == "general")
+                    @if (_settingsTab == "general" && _adminConfig != null)
                     {
                     <div class="campanel-section">
                         <div class="campanel-section-title">NETWORK</div>
@@ -903,6 +933,113 @@
                             mic button will report that a secure connection is required.
                         </div>
                     </div>
+                    }
+
+                    @if (_settingsTab == "cameras")
+                    {
+                        <div class="campanel-section">
+                            <div class="campanel-section-title">@UiIcon.Render("film", 13) CAMERAS <span class="beta-tag">BETA</span></div>
+                            @if (_adminCams == null)
+                            {
+                                <div class="notice small">Loading cameras…</div>
+                            }
+                            else if (_camEdit == null)
+                            {
+                                @foreach (var cam in _adminCams)
+                                {
+                                    <div class="control-row">
+                                        <span><b>@cam.Name</b>&nbsp;<span class="event-sub">@(cam.Type == "rtsp" ? "generic RTSP" : $"Reolink · {cam.Address}")</span></span>
+                                        <span class="row-actions">
+                                            <button class="chip" disabled="@(!_adminCamsWritable)" @onclick="() => EditCamera(cam)">Edit</button>
+                                            @if (_camDeleteConfirm == cam.Name)
+                                            {
+                                                <button class="chip chip-danger" @onclick="() => DeleteCameraAsync(cam.Name)">Confirm delete</button>
+                                                <button class="chip" @onclick="() => _camDeleteConfirm = null">Cancel</button>
+                                            }
+                                            else
+                                            {
+                                                <button class="chip" disabled="@(!_adminCamsWritable)"
+                                                        @onclick="() => _camDeleteConfirm = cam.Name">Delete…</button>
+                                            }
+                                        </span>
+                                    </div>
+                                }
+                                @if (_adminCams.Count == 0)
+                                {
+                                    <div class="notice small">No cameras configured yet — add your first one below.</div>
+                                }
+                                <div class="settings-foot-btns">
+                                    <span class="tile-spacer"></span>
+                                    <button class="chip chip-active" disabled="@(!_adminCamsWritable)" @onclick="AddCamera">Add camera…</button>
+                                </div>
+                            }
+                            else
+                            {
+                                var e = _camEdit;
+                                <div class="campanel-subtitle">@(e.OriginalName == null ? "ADD CAMERA" : $"EDIT \"{e.OriginalName}\"")</div>
+                                <div class="control-row"><span>Type</span>
+                                    <select class="event-filter" value="@e.Type"
+                                            @onchange='ev => { e.Type = (string?)ev.Value ?? "reolink"; _camTestResult = null; }'>
+                                        <option value="reolink">Reolink (Baichuan)</option>
+                                        <option value="rtsp">Generic RTSP</option>
+                                    </select></div>
+                                <div class="control-row"><span>Name</span>
+                                    <input class="notif-input @(CamNameError != null ? "input-error" : "")" maxlength="64"
+                                           placeholder="Driveway" @bind="e.Name" @bind:event="oninput" /></div>
+                                @if (CamNameError != null) { <div class="field-error">@CamNameError</div> }
+                                @if (e.Type == "reolink")
+                                {
+                                    <div class="control-row"><span>Address</span>
+                                        <input class="notif-input @(CamAddressError != null ? "input-error" : "")"
+                                               placeholder="192.168.1.50 (port 9000 assumed)" @bind="e.Address" @bind:event="oninput" /></div>
+                                    @if (CamAddressError != null) { <div class="field-error">@CamAddressError</div> }
+                                    <div class="control-row"><span>Username</span>
+                                        <input class="notif-input @(CamUsernameError != null ? "input-error" : "")" autocomplete="off"
+                                               placeholder="admin" @bind="e.Username" @bind:event="oninput" /></div>
+                                    @if (CamUsernameError != null) { <div class="field-error">@CamUsernameError</div> }
+                                    <div class="control-row"><span>Password</span>
+                                        <input class="notif-input" type="password" autocomplete="new-password"
+                                               placeholder="@(e.HasPassword ? "•••• stored — blank keeps it" : "camera password")"
+                                               @bind="e.Password" /></div>
+                                    <div class="control-row"><span>HTTP address (blank = derived)</span>
+                                        <input class="notif-input" placeholder="usually blank" @bind="e.HttpAddress" /></div>
+                                    <div class="control-row"><span>Channel (NVR only; 0 = standalone)</span>
+                                        <input class="ret-input" type="number" min="0" max="255" @bind="e.ChannelId" /></div>
+                                }
+                                else
+                                {
+                                    <div class="control-row"><span>Main RTSP URL</span>
+                                        <input class="notif-input @(CamRtspError != null ? "input-error" : "")"
+                                               placeholder="rtsp://user:pass@host:554/path" @bind="e.RtspMain" @bind:event="oninput" /></div>
+                                    <div class="control-row"><span>Sub RTSP URL (optional)</span>
+                                        <input class="notif-input" placeholder="rtsp://…" @bind="e.RtspSub" @bind:event="oninput" /></div>
+                                    @if (CamRtspError != null) { <div class="field-error">@CamRtspError</div> }
+                                    <div class="notice small">
+                                        Put credentials inside the URL (rtsp://user:pass@host/path). A stored
+                                        password shows as <b>****</b> — leave the URL untouched to keep it.
+                                    </div>
+                                }
+                                <div class="settings-foot-btns">
+                                    <button class="chip" disabled="@(_camTestBusy || CamFormError != null)" @onclick="TestCameraAsync">
+                                        @(_camTestBusy ? "Testing…" : "Test connection")</button>
+                                    <span class="tile-spacer"></span>
+                                    <button class="chip" @onclick="CancelCameraEdit">Cancel</button>
+                                    <button class="chip chip-active" disabled="@(_camSaveBusy || CamFormError != null || !_adminCamsWritable)"
+                                            @onclick="SaveCameraAsync">@(_camSaveBusy ? "Saving…" : "Save camera")</button>
+                                </div>
+                            }
+                            @if (_camTestResult != null)
+                            {
+                                <div class="notice small @(_camTestOk ? "" : "error")">@_camTestResult</div>
+                            }
+                            @if (_camsNeedRestart)
+                            {
+                                <div class="notice warn small">
+                                    Camera changes are saved to <code>config.json</code> — <b>restart the
+                                    service</b> (button below) to apply them.
+                                </div>
+                            }
+                        </div>
                     }
 
                     @if (_settingsTab == "recording" && _adminHasRecording)
@@ -1021,7 +1158,7 @@
                         </div>
                     }
 
-                    @if (_settingsTab != "notifications")
+                    @if (_adminConfig != null && _settingsTab is not ("notifications" or "connection" or "users"))
                     {
                         <div class="notice small">
                             Restart stops the service; your container/systemd restart policy brings it back within seconds
@@ -1054,7 +1191,22 @@
                                 @(_notifSaving ? "Saving…" : (_notif.Enabled ? "Save notifications" : "Save"))</button>
                         </div>
                     }
-                    else
+                    else if (_settingsTab is "connection" or "users")
+                    {
+                        <div class="settings-foot-btns">
+                            <span class="event-sub">
+                                @(_settingsTab == "connection"
+                                    ? "Saved instantly — these settings live in this browser only."
+                                    : "User changes apply immediately; no restart needed.")
+                            </span>
+                            <span class="tile-spacer"></span>
+                            @if (_authUser != null)
+                            {
+                                <button class="chip chip-off" @onclick="LogoutAsync">Sign out</button>
+                            }
+                        </div>
+                    }
+                    else if (_adminConfig != null)
                     {
                         @if (_adminError != null)
                         {
@@ -1072,8 +1224,13 @@
                             </div>
                         }
                         <div class="settings-foot-btns">
-                            <button class="chip @(AdminPendingCount > 0 ? "chip-active" : "")" disabled="@(!_adminWritable)"
-                                    @onclick="SaveServerSettingsAsync">Save to config.json</button>
+                            @if (_settingsTab != "cameras")
+                            {
+                                @* Cameras save themselves (their own Save button above);
+                                   this button only writes the field edits. *@
+                                <button class="chip @(AdminPendingCount > 0 ? "chip-active" : "")" disabled="@(!_adminWritable)"
+                                        @onclick="SaveServerSettingsAsync">Save to config.json</button>
+                            }
                             <span class="tile-spacer"></span>
                             @if (!_confirmRestart)
                             {
@@ -1088,7 +1245,6 @@
                         </div>
                     }
                 </div>
-            }
         </aside>
     }
 
@@ -1198,7 +1354,6 @@
     private string? _user;
     private string? _pass;
     private string? _error;
-    private bool _showSettings;
     private bool _loaded;
     private bool _sidebarOpen;
     private string? _panelCamera;
@@ -1393,8 +1548,7 @@
     private string _resetPass = "";
     private string? _loginError;
 
-    // Admin user management
-    private bool _showUsersPanel;
+    // Admin user management (the Users tab in the server-settings panel)
     private readonly List<ApiUserInfo> _uiUsers = new();
     private string _newUserName = "";
     private string _newUserPass = "";
@@ -1830,7 +1984,7 @@
         _authToken = null;
         _authUser = null;
         _authAdmin = false;
-        _showUsersPanel = false;
+        _showServerSettings = false; // admin tabs are gone with the session
         await JS.InvokeVoidAsync("neolink.lsSet", "neolink.auth", "");
         _showLogin = _authEnabled;
     }
@@ -1857,9 +2011,10 @@
 
     // ------------------------------------------------------------ user management (admin)
 
-    private async Task OpenUsersAsync()
+    private async Task SelectUsersTabAsync()
     {
-        _showUsersPanel = true;
+        _settingsTab = "users";
+        _pwEditUser = null;
         await LoadUsersAsync();
     }
 
@@ -1941,9 +2096,17 @@
         _adminError = _adminStatus = null;
         _adminConfig = null;
         _confirmRestart = false;
-        _settingsTab = "general";
         _adminEdits.Clear();
+        _adminCams = null; _camEdit = null; _camTestResult = null; _camDeleteConfirm = null;
         _notif = null; _notifStatus = null; _notifPassword = "";
+        // Non-admins (and open installs) get the Connection tab; the admin-only
+        // tabs and their loads are skipped entirely.
+        if (!_authAdmin)
+        {
+            _settingsTab = "connection";
+            return;
+        }
+        _settingsTab = "general";
         try
         {
             using var nres = await Http.SendAsync(ApiRequest(HttpMethod.Get, "/api/admin/notifications"));
@@ -1975,6 +2138,245 @@
         catch (Exception ex)
         {
             _adminError = ex.Message;
+        }
+    }
+
+    // ------------------------------------------------------------ camera editing (beta)
+
+    private List<ApiAdminCamera>? _adminCams;
+    private bool _adminCamsWritable;
+    private CamEdit? _camEdit;
+    private string? _camDeleteConfirm;
+    private bool _camTestBusy, _camSaveBusy, _camsNeedRestart;
+    private string? _camTestResult;
+    private bool _camTestOk;
+
+    /// <summary>The add/edit form buffer. Password is write-only: blank keeps the
+    /// stored one (or none); the server never sends passwords to the browser.</summary>
+    private sealed class CamEdit
+    {
+        public string? OriginalName;
+        public string Type = "reolink";
+        public string Name = "";
+        public string Address = "";
+        public string Username = "admin";
+        public string Password = "";
+        public string HttpAddress = "";
+        public int ChannelId;
+        public string RtspMain = "";
+        public string RtspSub = "";
+        public bool HasPassword;
+    }
+
+    private async Task OpenCamerasTabAsync()
+    {
+        _settingsTab = "cameras";
+        if (_adminCams == null) await LoadAdminCamerasAsync();
+    }
+
+    private async Task LoadAdminCamerasAsync()
+    {
+        try
+        {
+            using var res = await Http.SendAsync(ApiRequest(HttpMethod.Get, "/api/admin/cameras"));
+            if (!res.IsSuccessStatusCode)
+            {
+                _camTestOk = false;
+                _camTestResult = await ApiErrorAsync(res) ?? $"Cannot load cameras ({(int)res.StatusCode})";
+                _adminCams = new();
+                return;
+            }
+            var payload = await res.Content.ReadFromJsonAsync<ApiAdminCameras>();
+            _adminCams = payload?.Cameras ?? new();
+            _adminCamsWritable = payload?.Writable ?? false;
+        }
+        catch (Exception ex)
+        {
+            _camTestOk = false;
+            _camTestResult = ex.Message;
+            _adminCams = new();
+        }
+    }
+
+    private void AddCamera()
+    {
+        _camTestResult = null;
+        _camDeleteConfirm = null;
+        _camEdit = new CamEdit();
+    }
+
+    private void EditCamera(ApiAdminCamera cam)
+    {
+        _camTestResult = null;
+        _camDeleteConfirm = null;
+        _camEdit = new CamEdit
+        {
+            OriginalName = cam.Name,
+            Name = cam.Name,
+            Type = cam.Type,
+            Address = cam.Address ?? "",
+            Username = cam.Username ?? "",
+            HttpAddress = cam.HttpAddress ?? "",
+            ChannelId = cam.ChannelId,
+            RtspMain = cam.RtspMain ?? "",
+            RtspSub = cam.RtspSub ?? "",
+            HasPassword = cam.HasPassword,
+        };
+    }
+
+    private void CancelCameraEdit()
+    {
+        _camEdit = null;
+        _camTestResult = null;
+    }
+
+    // ---- validation: live, field-by-field, mirroring the server's rules ----
+
+    private string? CamNameError => _camEdit is not { } e ? null
+        : string.IsNullOrWhiteSpace(e.Name) ? "A name is required."
+        : e.Name.Trim().Length > 64 ? "Keep the name under 64 characters."
+        : e.Name.IndexOfAny("/\\:*?\"<>|".ToCharArray()) >= 0 ? "The name must not contain / \\ : * ? \" < > |"
+        : _adminCams?.Any(c => !string.Equals(c.Name, e.OriginalName, StringComparison.OrdinalIgnoreCase)
+                            && string.Equals(c.Name, e.Name.Trim(), StringComparison.OrdinalIgnoreCase)) == true
+            ? "A camera with this name already exists."
+            : null;
+
+    private string? CamAddressError =>
+        _camEdit is { Type: "reolink" } e ? HostPortClientError(e.Address) : null;
+
+    private static string? HostPortClientError(string address)
+    {
+        address = address.Trim();
+        if (address.Length == 0) return "An address is required — the camera's IP or hostname.";
+        if (address.Contains("://")) return "Enter a bare host or host:port, not a URL.";
+        if (address.Any(char.IsWhiteSpace)) return "The address must not contain spaces.";
+        int colon = address.LastIndexOf(':');
+        if (colon > address.LastIndexOf(']')
+            && (!int.TryParse(address[(colon + 1)..], out var p) || p is < 1 or > 65535))
+            return "The port must be 1-65535.";
+        return null;
+    }
+
+    private string? CamUsernameError =>
+        _camEdit is { Type: "reolink" } e && string.IsNullOrWhiteSpace(e.Username)
+            ? "A username is required (usually admin)." : null;
+
+    private string? CamRtspError
+    {
+        get
+        {
+            if (_camEdit is not { Type: "rtsp" } e) return null;
+            if (string.IsNullOrWhiteSpace(e.RtspMain) && string.IsNullOrWhiteSpace(e.RtspSub))
+                return "Provide at least one rtsp:// URL.";
+            foreach (var url in new[] { e.RtspMain, e.RtspSub })
+            {
+                if (!string.IsNullOrWhiteSpace(url) && !url.Contains("****")
+                    && (!url.StartsWith("rtsp://", StringComparison.OrdinalIgnoreCase)
+                        || !Uri.TryCreate(url.Trim(), UriKind.Absolute, out _)))
+                    return "RTSP URLs must be valid and start with rtsp://";
+            }
+            return null;
+        }
+    }
+
+    private string? CamFormError => CamNameError ?? CamAddressError ?? CamUsernameError ?? CamRtspError;
+
+    private object CamRequestBody(CamEdit e, bool forSave) => new
+    {
+        originalName = forSave ? e.OriginalName : null,
+        name = forSave ? e.Name.Trim() : e.OriginalName, // the test uses the stored entry for fallbacks
+        type = e.Type,
+        address = e.Type == "reolink" ? e.Address.Trim() : null,
+        username = e.Type == "reolink" ? e.Username.Trim() : null,
+        // Write-only: blank means "keep the stored password" (or none on a new camera).
+        password = e.Type == "reolink" && e.Password.Length > 0 ? e.Password : null,
+        channelId = e.Type == "reolink" ? e.ChannelId : (int?)null,
+        httpAddress = forSave && e.Type == "reolink" ? e.HttpAddress.Trim() : null,
+        rtspMain = e.Type == "rtsp" ? e.RtspMain.Trim() : null,
+        rtspSub = e.Type == "rtsp" ? e.RtspSub.Trim() : null,
+    };
+
+    private async Task TestCameraAsync()
+    {
+        if (_camEdit is not { } e || _camTestBusy || CamFormError != null) return;
+        _camTestBusy = true;
+        _camTestResult = null;
+        try
+        {
+            var req = ApiRequest(HttpMethod.Post, "/api/admin/cameras/test");
+            req.Content = JsonContent.Create(CamRequestBody(e, forSave: false));
+            using var res = await Http.SendAsync(req);
+            var el = await res.Content.ReadFromJsonAsync<JsonElement>();
+            _camTestOk = el.TryGetProperty("ok", out var ok) && ok.ValueKind == JsonValueKind.True;
+            _camTestResult = el.TryGetProperty("message", out var msg) ? msg.GetString()
+                : el.TryGetProperty("error", out var err) ? err.GetString()
+                : $"no reply ({(int)res.StatusCode})";
+        }
+        catch (Exception ex)
+        {
+            _camTestOk = false;
+            _camTestResult = ex.Message;
+        }
+        finally
+        {
+            _camTestBusy = false;
+        }
+    }
+
+    private async Task SaveCameraAsync()
+    {
+        if (_camEdit is not { } e || _camSaveBusy || CamFormError != null) return;
+        _camSaveBusy = true;
+        try
+        {
+            var req = ApiRequest(HttpMethod.Post, "/api/admin/cameras");
+            req.Content = JsonContent.Create(CamRequestBody(e, forSave: true));
+            using var res = await Http.SendAsync(req);
+            if (!res.IsSuccessStatusCode)
+            {
+                _camTestOk = false;
+                _camTestResult = await ApiErrorAsync(res) ?? $"Save failed ({(int)res.StatusCode})";
+                return;
+            }
+            _camEdit = null;
+            _camTestResult = null;
+            _camsNeedRestart = true;
+            await LoadAdminCamerasAsync();
+        }
+        catch (Exception ex)
+        {
+            _camTestOk = false;
+            _camTestResult = ex.Message;
+        }
+        finally
+        {
+            _camSaveBusy = false;
+        }
+    }
+
+    private async Task DeleteCameraAsync(string name)
+    {
+        _camDeleteConfirm = null;
+        try
+        {
+            using var res = await Http.SendAsync(
+                ApiRequest(HttpMethod.Delete, $"/api/admin/cameras/{Uri.EscapeDataString(name)}"));
+            if (res.IsSuccessStatusCode)
+            {
+                _camsNeedRestart = true;
+                _camTestResult = null;
+                await LoadAdminCamerasAsync();
+            }
+            else
+            {
+                _camTestOk = false;
+                _camTestResult = await ApiErrorAsync(res) ?? $"Delete failed ({(int)res.StatusCode})";
+            }
+        }
+        catch (Exception ex)
+        {
+            _camTestOk = false;
+            _camTestResult = ex.Message;
         }
     }
 

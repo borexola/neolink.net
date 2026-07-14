@@ -4,6 +4,7 @@
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Xml.Linq;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -78,8 +79,10 @@ public sealed class WebApiOptions
 ///   GET /api/cameras/{name}/capabilities    — discovered device info + feature flags
 ///   GET /api/cameras/{name}/streaminfo      — encode profiles (resolution/fps/bitrate tables)
 ///   GET/POST/PUT .../settings/stream        — current encode selection / change it (needs http_address)
-///   GET/POST .../led /pir /zoomfocus /floodlight /siren /privacy;
+///   GET/POST .../led /pir /zoomfocus /floodlight /siren /privacy /whiteled;
 ///   POST .../ptz /reboot; GET .../battery   — camera control
+///   GET .../httpfeatures — combined HTTP-API extras (picture/volume/Wi-Fi/presets/
+///   quick replies/auto-track/SD); POST .../image /volume /ptzpreset /quickreply /autotrack
 ///   GET /api/events[?camera=&amp;reviewed=&amp;limit=] — recorded detection events (when enabled)
 ///   GET /api/events/{id}[/clip /thumb]      — one event / its artifacts; POST .../review to (un)dismiss
 ///   GET/POST /api/cameras/{name}/recording  — per-camera recording switches + event-type filter
@@ -95,12 +98,27 @@ public sealed class WebApiOptions
 /// </summary>
 public static class WebApi
 {
-    private sealed record LedRequest(string? State, string? LightState);
+    private sealed record LedRequest(string? State, string? LightState,
+        string? DoorbellLightState, int? IrBrightness);
     private sealed record PirRequest(bool? Enabled);
     private sealed record PtzRequest(string? Command, float? Speed);
     private sealed record ZoomFocusRequest(uint? Zoom, uint? Focus);
     private sealed record FloodlightRequest(int? Brightness, bool? Auto);
     private sealed record WhiteLedRequest(int? Brightness, bool? On, int? Mode);
+    private sealed record ImageRequest(int? Bright, int? Contrast, int? Saturation, int? Hue, int? Sharpen,
+        string? DayNight, string? AntiFlicker, bool? Flip, bool? Mirror);
+    private sealed record VolumeRequest(int? Volume);
+    private sealed record PtzPresetRequest(int? Id, string? Name, bool? Save);
+    private sealed record QuickReplyRequest(int? Id);
+    private sealed record AutoReplyRequest(int? FileId, int? Timeout);
+    /// <summary>Camera add/edit. Password is WRITE-ONLY: null keeps the stored one,
+    /// "" clears it, a value sets it. RTSP URLs sent back masked ("****") mean keep.</summary>
+    private sealed record AdminCameraRequest(string? OriginalName, string? Name, string? Type,
+        string? Address, string? Username, string? Password, int? ChannelId, string? HttpAddress,
+        string? RtspMain, string? RtspSub);
+    private sealed record AdminCameraTestRequest(string? Name, string? Type, string? Address,
+        string? Username, string? Password, int? ChannelId, string? RtspMain, string? RtspSub);
+    private sealed record AutoTrackRequest(bool? On);
     private sealed record SirenRequest(bool? On);
     private sealed record PrivacyRequest(bool? On);
     private sealed record RecordOnDemandRequest(bool Active);
@@ -456,6 +474,253 @@ public static class WebApi
             }
         });
 
+        // -------------------------------------------------- admin: camera editing
+        // Add/edit/delete cameras in config.json from the UI. Passwords are
+        // write-only (never returned; blank keeps the stored one), every candidate
+        // file is validated through the normal loader before it replaces the
+        // config, and changes apply on the next restart.
+
+        app.MapGet("/api/admin/cameras", (HttpContext ctx) =>
+        {
+            if (AdminOnly(ctx) is { } denied) return denied;
+            try
+            {
+                var cfg = NeolinkConfig.Load(o.ConfigPath);
+                return Results.Json(new
+                {
+                    writable = ConfigEditor.IsWritable(o.ConfigPath),
+                    cameras = cfg.Cameras.Select(c => new
+                    {
+                        name = c.Name,
+                        type = c.IsGenericRtsp ? "rtsp" : "reolink",
+                        address = c.IsGenericRtsp ? null
+                            : c.Port == 9000 ? c.Host : $"{c.Host}:{c.Port}",
+                        username = c.IsGenericRtsp ? null : c.Username,
+                        hasPassword = !string.IsNullOrEmpty(c.Password),
+                        channelId = (int)c.ChannelId,
+                        httpAddress = c.HttpAddress,
+                        rtspMain = ConfigEditor.MaskRtspPassword(c.RtspMain),
+                        rtspSub = ConfigEditor.MaskRtspPassword(c.RtspSub),
+                    }).ToList(),
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: 500);
+            }
+        });
+
+        app.MapPost("/api/admin/cameras", (AdminCameraRequest req, HttpContext ctx) =>
+        {
+            if (AdminOnly(ctx) is { } denied) return denied;
+
+            var name = (req.Name ?? "").Trim();
+            if (name.Length is 0 or > 64)
+                return Results.Json(new { error = "name is required (max 64 characters)" }, statusCode: 400);
+            // The name becomes RTSP mount paths and recording directories.
+            if (name.Any(ch => char.IsControl(ch) || "/\\:*?\"<>|".Contains(ch)))
+                return Results.Json(new { error = "name must not contain / \\ : * ? \" < > |" }, statusCode: 400);
+            bool isRtsp = req.Type == "rtsp";
+            if (!isRtsp && req.Type != "reolink")
+                return Results.Json(new { error = "type must be reolink or rtsp" }, statusCode: 400);
+            if (!isRtsp)
+            {
+                if (req.Address is not { } addr || ConfigEditor.HostPortError(addr) is { } addrErr)
+                    return Results.Json(new { error = ConfigEditor.HostPortError(req.Address ?? "") }, statusCode: 400);
+                if (string.IsNullOrWhiteSpace(req.Username))
+                    return Results.Json(new { error = "username is required for a Reolink camera" }, statusCode: 400);
+                if (req.ChannelId is { } cid && cid is < 0 or > 255)
+                    return Results.Json(new { error = "channel id must be 0-255" }, statusCode: 400);
+                if (req.HttpAddress is { Length: > 0 } ha && ha.Any(char.IsWhiteSpace))
+                    return Results.Json(new { error = "HTTP address must not contain spaces" }, statusCode: 400);
+            }
+            else
+            {
+                foreach (var url in new[] { req.RtspMain, req.RtspSub })
+                {
+                    if (url is { Length: > 0 } && !url.Contains("****")
+                        && (!url.StartsWith("rtsp://", StringComparison.OrdinalIgnoreCase)
+                            || !Uri.TryCreate(url, UriKind.Absolute, out _)))
+                        return Results.Json(new { error = $"\"{url}\" is not a valid rtsp:// URL" }, statusCode: 400);
+                }
+                if (req.OriginalName == null
+                    && string.IsNullOrWhiteSpace(req.RtspMain) && string.IsNullOrWhiteSpace(req.RtspSub))
+                    return Results.Json(new { error = "provide at least one rtsp:// URL (main and/or sub)" }, statusCode: 400);
+            }
+
+            try
+            {
+                ConfigEditor.Apply(o.ConfigPath, root =>
+                {
+                    var cams = ConfigEditor.Cameras(root);
+                    var existing = req.OriginalName == null ? null
+                        : ConfigEditor.FindCamera(cams, req.OriginalName)
+                          ?? throw new FormatException($"unknown camera \"{req.OriginalName}\"");
+                    // Friendlier than the loader's duplicate error after the fact.
+                    if (ConfigEditor.FindCamera(cams, name) is { } clash && !ReferenceEquals(clash, existing))
+                        throw new FormatException($"a camera named \"{name}\" already exists");
+
+                    var cam = existing;
+                    if (cam == null)
+                    {
+                        cam = new JsonObject();
+                        cams.Add(cam);
+                    }
+                    ConfigEditor.Set(cam, "name", name);
+                    if (!isRtsp)
+                    {
+                        ConfigEditor.Set(cam, "address", req.Address!.Trim());
+                        ConfigEditor.Set(cam, "username", req.Username!.Trim());
+                        // Write-only password: null keeps whatever the file has.
+                        if (req.Password != null)
+                            ConfigEditor.Set(cam, "password", req.Password.Length == 0 ? null : req.Password);
+                        if (req.ChannelId is { } chan)
+                            ConfigEditor.Set(cam, "channel_id", chan == 0 ? null : chan);
+                        if (req.HttpAddress != null)
+                            ConfigEditor.Set(cam, "http_address",
+                                req.HttpAddress.Length == 0 ? null : req.HttpAddress.Trim());
+                        // A type switch must not leave generic-RTSP keys behind.
+                        ConfigEditor.Set(cam, "rtsp_main", null);
+                        ConfigEditor.Set(cam, "rtsp_sub", null);
+                        ConfigEditor.Set(cam, "rtsp", null);
+                    }
+                    else
+                    {
+                        // Masked value = unchanged; null = keep; "" = remove.
+                        void SetUrl(string key, string? url)
+                        {
+                            if (url == null || url.Contains("****")) return;
+                            ConfigEditor.Set(cam, key, url.Length == 0 ? null : url.Trim());
+                        }
+                        SetUrl("rtsp_main", req.RtspMain);
+                        SetUrl("rtsp_sub", req.RtspSub);
+                        ConfigEditor.Set(cam, "rtsp", null); // retire the legacy spelling
+                        ConfigEditor.Set(cam, "address", null);
+                        ConfigEditor.Set(cam, "username", null);
+                        ConfigEditor.Set(cam, "password", null);
+                        ConfigEditor.Set(cam, "channel_id", null);
+                        ConfigEditor.Set(cam, "http_address", null);
+                    }
+                });
+                Log.Warn($"config.json cameras updated via the web UI by '{SessionName(ctx)}' " +
+                         $"({(req.OriginalName == null ? "added" : "edited")} \"{name}\") — restart to apply");
+                return Results.Json(new { ok = true, requiresRestart = true });
+            }
+            catch (FormatException ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: 400);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return Results.Json(new { error = $"config.json is not writable: {ex.Message}" }, statusCode: 409);
+            }
+        });
+
+        app.MapDelete("/api/admin/cameras/{name}", (string name, HttpContext ctx) =>
+        {
+            if (AdminOnly(ctx) is { } denied) return denied;
+            try
+            {
+                ConfigEditor.Apply(o.ConfigPath, root =>
+                {
+                    var cams = ConfigEditor.Cameras(root);
+                    var cam = ConfigEditor.FindCamera(cams, name)
+                        ?? throw new FormatException($"unknown camera \"{name}\"");
+                    cams.Remove(cam);
+                });
+                Log.Warn($"config.json camera \"{name}\" deleted via the web UI by '{SessionName(ctx)}' — restart to apply");
+                return Results.Json(new { ok = true, requiresRestart = true });
+            }
+            catch (FormatException ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: 400);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return Results.Json(new { error = $"config.json is not writable: {ex.Message}" }, statusCode: 409);
+            }
+        });
+
+        // Connectivity test WITHOUT saving. Reolink: full Baichuan connect + login
+        // (blank password falls back to the stored one, so an existing camera can
+        // be tested without retyping it). Generic: an RTSP OPTIONS round-trip.
+        app.MapPost("/api/admin/cameras/test", async (AdminCameraTestRequest req, HttpContext ctx) =>
+        {
+            if (AdminOnly(ctx) is { } denied) return denied;
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted);
+            cts.CancelAfter(TimeSpan.FromSeconds(12));
+
+            CameraConfig? stored = null;
+            if (req.Name is { Length: > 0 } storedName)
+            {
+                try
+                {
+                    stored = NeolinkConfig.Load(o.ConfigPath).Cameras
+                        .FirstOrDefault(c => string.Equals(c.Name, storedName, StringComparison.OrdinalIgnoreCase));
+                }
+                catch { /* config unreadable — test with what was sent */ }
+            }
+
+            try
+            {
+                if (req.Type == "rtsp")
+                {
+                    var url = req.RtspMain is { Length: > 0 } m && !m.Contains("****") ? m
+                        : req.RtspSub is { Length: > 0 } s && !s.Contains("****") ? s
+                        : stored?.RtspMain ?? stored?.RtspSub;
+                    if (url == null || !url.StartsWith("rtsp://", StringComparison.OrdinalIgnoreCase)
+                        || !Uri.TryCreate(url, UriKind.Absolute, out var uri))
+                        return Results.Json(new { ok = false, message = "provide a valid rtsp:// URL to test" });
+                    using var tcp = new System.Net.Sockets.TcpClient();
+                    await tcp.ConnectAsync(uri.Host, uri.Port > 0 ? uri.Port : 554, cts.Token);
+                    var stream = tcp.GetStream();
+                    var probe = System.Text.Encoding.ASCII.GetBytes($"OPTIONS {url} RTSP/1.0\r\nCSeq: 1\r\n\r\n");
+                    await stream.WriteAsync(probe, cts.Token);
+                    var buf = new byte[256];
+                    int n = await stream.ReadAsync(buf, cts.Token);
+                    var reply = System.Text.Encoding.ASCII.GetString(buf, 0, n);
+                    return reply.StartsWith("RTSP/", StringComparison.Ordinal)
+                        ? Results.Json(new { ok = true, message = "RTSP endpoint answered (credentials are verified when streaming starts)" })
+                        : Results.Json(new { ok = false, message = "the host answered, but not with RTSP — check the URL and port" });
+                }
+
+                var address = req.Address is { Length: > 0 } a ? a
+                    : stored != null && !stored.IsGenericRtsp
+                        ? (stored.Port == 9000 ? stored.Host : $"{stored.Host}:{stored.Port}")
+                        : null;
+                if (address == null || ConfigEditor.HostPortError(address) is { } addrErr2)
+                    return Results.Json(new { ok = false, message = ConfigEditor.HostPortError(address ?? "") });
+                var username = req.Username is { Length: > 0 } u ? u : stored?.Username;
+                if (string.IsNullOrWhiteSpace(username))
+                    return Results.Json(new { ok = false, message = "username is required to test" });
+                var password = req.Password is { Length: > 0 } p ? p : stored?.Password;
+
+                int colon = address.LastIndexOf(':');
+                var (host, port) = colon > address.LastIndexOf(']')
+                    ? (address[..colon].Trim('[', ']'), int.Parse(address[(colon + 1)..]))
+                    : (address.Trim('[', ']'), 9000);
+                byte channel = (byte)Math.Clamp(req.ChannelId ?? stored?.ChannelId ?? 0, 0, 255);
+
+                await using var camera = await Protocol.BcCamera.ConnectAsync(host, port, channel, cts.Token, tag: "test");
+                await camera.LoginAsync(username!, password, cts.Token);
+                var di = camera.DeviceInfo;
+                return Results.Json(new
+                {
+                    ok = true,
+                    message = "Connected and logged in" +
+                        (di is { Width: > 0 } ? $" — the camera reports {di.Width}x{di.Height}" : ""),
+                });
+            }
+            catch (OperationCanceledException) when (!ctx.RequestAborted.IsCancellationRequested)
+            {
+                return Results.Json(new { ok = false, message = "timed out — is the address reachable from this server?" });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { ok = false, message = Log.Flatten(ex) });
+            }
+        });
+
         app.MapPost("/api/admin/restart", (HttpContext ctx) =>
         {
             if (AdminOnly(ctx) is { } denied) return denied;
@@ -715,6 +980,10 @@ public static class WebApi
             }
             catch (ReolinkApiException ex)
             {
+                // Also logged: HTTP-API rejections (wrong payload shape, unsupported
+                // command) must be diagnosable from the server log, not only from
+                // the panel's transient error banner.
+                Log.Warn($"{name}: camera HTTP API rejected the request — {ex.Message}");
                 return Results.Json(new { error = ex.Message }, statusCode: 502);
             }
             catch (TimeoutException)
@@ -759,6 +1028,7 @@ public static class WebApi
                         floodlight = caps.Features.Floodlight,
                         whiteLed = caps.Features.WhiteLed,
                         spotlight = caps.Features.Spotlight,
+                        doorbell = caps.Features.Doorbell,
                         privacy = caps.Features.Privacy,
                         streamSettings = control.CanSetStreamSettings,
                         // Baichuan-only: a generic RTSP camera can't be told to reboot
@@ -847,12 +1117,17 @@ public static class WebApi
             ExecAsync(name, ctx, mutating: true, async (control, reqCt) =>
             {
                 string[] allowed = { "open", "close", "auto" };
-                if (req.State == null && req.LightState == null)
-                    return Results.Json(new { error = "provide state and/or lightState" }, statusCode: 400);
+                if (req.State == null && req.LightState == null
+                    && req.DoorbellLightState == null && req.IrBrightness == null)
+                    return Results.Json(new { error = "provide state, lightState, doorbellLightState and/or irBrightness" }, statusCode: 400);
                 if ((req.State != null && !allowed.Contains(req.State)) ||
-                    (req.LightState != null && !allowed.Contains(req.LightState)))
+                    (req.LightState != null && !allowed.Contains(req.LightState)) ||
+                    (req.DoorbellLightState != null && !allowed.Contains(req.DoorbellLightState)))
                     return Results.Json(new { error = "values must be open, close or auto" }, statusCode: 400);
-                await control.SetLedStateAsync(req.State, req.LightState, reqCt);
+                if (req.IrBrightness is { } irb && irb is < 0 or > 100)
+                    return Results.Json(new { error = "irBrightness must be 0-100" }, statusCode: 400);
+                await control.SetLedStateAsync(req.State, req.LightState,
+                    req.DoorbellLightState, req.IrBrightness, reqCt);
                 return Results.Json(new { ok = true });
             }));
 
@@ -1016,6 +1291,133 @@ public static class WebApi
                 return wl == null
                     ? Results.Json(new { ok = true })
                     : Results.Json(new { bright = wl.Bright, on = wl.On, mode = wl.Mode });
+            }));
+
+        // ------------------------------------------------ HTTP-API extras (beta)
+
+        // One combined read: picture settings, speaker volume, Wi-Fi signal, PTZ
+        // presets, quick replies, auto-tracking and SD cards. 404 = the camera has
+        // no HTTP API; features the camera lacks come back null.
+        app.MapGet("/api/cameras/{name}/httpfeatures", (string name, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: false, async (control, reqCt) =>
+            {
+                var f = await control.GetHttpFeaturesAsync(reqCt);
+                if (f == null)
+                    return Results.Json(new { error = "this camera has no HTTP API" }, statusCode: 404);
+                return Results.Json(new
+                {
+                    image = f.Image == null ? null : new
+                    {
+                        bright = f.Image.Bright,
+                        contrast = f.Image.Contrast,
+                        saturation = f.Image.Saturation,
+                        hue = f.Image.Hue,
+                        sharpen = f.Image.Sharpen,
+                        dayNight = f.Image.DayNight,
+                        antiFlicker = f.Image.AntiFlicker,
+                        flip = f.Image.Flip,
+                        mirror = f.Image.Mirror,
+                    },
+                    volume = f.Volume,
+                    wifiSignal = f.WifiSignal,
+                    ptzPresets = f.PtzPresets?.Select(p => new { id = p.Id, name = p.Name, enabled = p.Enabled }),
+                    quickReplies = f.QuickReplies?.Select(q => new { id = q.Id, name = q.Name }),
+                    autoTrack = f.AutoTrack,
+                    sdCards = f.SdCards?.Select(s => new
+                    {
+                        id = s.Id,
+                        totalMb = s.TotalMb,
+                        freeMb = s.FreeMb,
+                        formatted = s.Formatted,
+                        mounted = s.Mounted,
+                    }),
+                });
+            }));
+
+        // Picture adjustments (0-255 sliders) + ISP config (day/night, anti-flicker,
+        // flip/mirror). Read-modify-write on the camera's own JSON.
+        app.MapPost("/api/cameras/{name}/image", (string name, ImageRequest req, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: true, async (control, reqCt) =>
+            {
+                if (req.Bright == null && req.Contrast == null && req.Saturation == null
+                    && req.Hue == null && req.Sharpen == null && req.DayNight == null
+                    && req.AntiFlicker == null && req.Flip == null && req.Mirror == null)
+                    return Results.Json(new { error = "provide at least one picture setting" }, statusCode: 400);
+                string[] dayNights = { "Auto", "Color", "Black&White" };
+                string[] flickers = { "Outdoor", "50HZ", "60HZ" };
+                if (req.DayNight != null && !dayNights.Contains(req.DayNight))
+                    return Results.Json(new { error = "dayNight must be Auto, Color or Black&White" }, statusCode: 400);
+                if (req.AntiFlicker != null && !flickers.Contains(req.AntiFlicker))
+                    return Results.Json(new { error = "antiFlicker must be Outdoor, 50HZ or 60HZ" }, statusCode: 400);
+                await control.SetImageSettingsAsync(req.Bright, req.Contrast, req.Saturation,
+                    req.Hue, req.Sharpen, req.DayNight, req.AntiFlicker, req.Flip, req.Mirror, reqCt);
+                return Results.Json(new { ok = true });
+            }));
+
+        // Speaker volume (0-100) — also what two-way talk comes out at.
+        app.MapPost("/api/cameras/{name}/volume", (string name, VolumeRequest req, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: true, async (control, reqCt) =>
+            {
+                if (req.Volume is not { } vol || vol is < 0 or > 100)
+                    return Results.Json(new { error = "provide volume: 0-100" }, statusCode: 400);
+                await control.SetVolumeAsync(vol, reqCt);
+                return Results.Json(new { ok = true, volume = vol });
+            }));
+
+        // PTZ presets: {id} recalls a saved position; {id, name, save:true} saves
+        // the camera's CURRENT position into that slot.
+        app.MapPost("/api/cameras/{name}/ptzpreset", (string name, PtzPresetRequest req, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: true, async (control, reqCt) =>
+            {
+                if (req.Id is not { } id || id is < 0 or > 63)
+                    return Results.Json(new { error = "provide id: 0-63" }, statusCode: 400);
+                if (req.Save == true)
+                {
+                    var presetName = (req.Name ?? "").Trim();
+                    if (presetName.Length is 0 or > 31)
+                        return Results.Json(new { error = "provide name: 1-31 characters" }, statusCode: 400);
+                    await control.SavePtzPresetAsync(id, presetName, reqCt);
+                }
+                else
+                {
+                    await control.PtzToPresetAsync(id, reqCt);
+                }
+                return Results.Json(new { ok = true });
+            }));
+
+        // Doorbell quick reply: plays a pre-recorded message through the speaker.
+        app.MapPost("/api/cameras/{name}/quickreply", (string name, QuickReplyRequest req, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: true, async (control, reqCt) =>
+            {
+                if (req.Id is not { } id || id < 0)
+                    return Results.Json(new { error = "provide id (from httpfeatures.quickReplies)" }, statusCode: 400);
+                await control.PlayQuickReplyAsync(id, reqCt);
+                return Results.Json(new { ok = true });
+            }));
+
+        // Doorbell auto-reply: the default message played by itself when a ring
+        // goes unanswered. fileId -1 turns it off; timeout is the wait in seconds.
+        app.MapPost("/api/cameras/{name}/autoreply", (string name, AutoReplyRequest req, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: true, async (control, reqCt) =>
+            {
+                if (req.FileId == null && req.Timeout == null)
+                    return Results.Json(new { error = "provide fileId (-1 = off) and/or timeout (seconds)" }, statusCode: 400);
+                if (req.FileId is { } fid && fid < -1)
+                    return Results.Json(new { error = "fileId must be -1 (off) or a quick-reply id" }, statusCode: 400);
+                if (req.Timeout is { } t && t is < 1 or > 60)
+                    return Results.Json(new { error = "timeout must be 1-60 seconds" }, statusCode: 400);
+                await control.SetAutoReplyAsync(req.FileId, req.Timeout, reqCt);
+                return Results.Json(new { ok = true });
+            }));
+
+        // AI auto-tracking (PTZ cameras that follow detected subjects).
+        app.MapPost("/api/cameras/{name}/autotrack", (string name, AutoTrackRequest req, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: true, async (control, reqCt) =>
+            {
+                if (req.On == null)
+                    return Results.Json(new { error = "provide on: true|false" }, statusCode: 400);
+                await control.SetAutoTrackAsync(req.On.Value, reqCt);
+                return Results.Json(new { ok = true, on = req.On });
             }));
 
         // On-demand clip capture: start records ONE clip capped at
@@ -1212,6 +1614,11 @@ public static class WebApi
                     return Results.Json(new { error = $"unknown camera '{name}'" }, statusCode: 404);
                 if (CheckAuth(ctx, cam) is { } denied)
                     return denied;
+                // These persist SERVER-side (retention, schedules, archive routing,
+                // what gets recorded) — once accounts exist, changing them is admin
+                // work, like every other server setting.
+                if (userStore.Enabled && !IsAdmin(ctx))
+                    return Results.Json(new { error = "admin only — recording settings are server settings" }, statusCode: 403);
 
                 List<string>? types = null;
                 if (req.EventTypes != null)

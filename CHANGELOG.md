@@ -38,9 +38,83 @@ in the README). Paste the matching section below into the GitHub release.
   users too.
 - **Privacy mode leaves beta**: the privacy-mode control drops its BETA tag in the
   camera panel and the README now that it has proven itself.
+- **Camera controls over the Reolink HTTP API (beta)**: building on the HTTP client
+  the spotlight work introduced, the camera panel gains a set of BETA-tagged
+  controls, discovered per camera (a camera that rejects a query simply doesn't
+  show that section):
+  - **Picture**: brightness/contrast/saturation/hue/sharpness sliders (0-255, 128
+    neutral), day/night mode, anti-flicker, and flip / mirror — finally a way to
+    turn an upside-down camera's image around without the Reolink app.
+  - **Speaker volume**: one 0-100 slider that governs sirens, alerts and two-way
+    talk loudness. Also exposed to Home Assistant as a number entity.
+  - **PTZ presets**: saved positions appear as buttons in the PAN/TILT section
+    (click to move there), with a "save current" box that names the camera's
+    current position. Home Assistant gets a PTZ-preset select for automations
+    ("point at the driveway when the doorbell rings").
+  - **Auto-tracking**: an on/off toggle for cameras that follow detected subjects,
+    also a Home Assistant switch. Gated on the camera's GetAbility table
+    (`supportAITrack`), never on config fields alone — firmwares include an
+    `aiTrack` field on models without the feature.
+  - **Doorbell quick reply**: pick one of the doorbell's pre-recorded messages and
+    play it through its speaker — from the panel or from Home Assistant (a "Play
+    quick reply" select on the doorbell's device). The auto-reply (default message)
+    remains settable via the REST API (`POST .../autoreply`) but has no UI.
+  - **Doorbell light + adjustable IR brightness**: the doorbell-light toggle appears
+    only on real doorbells (Support `doorbellVersion`, not just a `doorbellLightState`
+    field — some non-doorbells report one anyway); the IR-brightness slider appears
+    on cameras whose LED state carries it (e.g. the Elite). Both live in LIGHTS.
+  - **Device extras**: Wi-Fi signal and SD-card usage (free/total, mount state) in
+    the DEVICE card.
+  All device writes are read-modify-write (the camera's own config rides along
+  untouched) and stage in the panel until "Apply to camera". A camera whose HTTP
+  port is unreachable is backed off for 60s so panel opens stay fast.
+  Every one of these controls is also exposed to Home Assistant over MQTT, per
+  camera capability: a Spotlight light (on/off + brightness) for white-LED cameras,
+  IR-brightness and picture-setting entities (config category), a doorbell-light
+  switch and a "play quick reply" select on doorbells, alongside the volume number,
+  auto-tracking switch and PTZ-preset select. Entities a camera doesn't qualify for
+  are actively cleared from the broker, so nothing stale lingers in HA.
+- **Server settings redesigned**: the sidebar gear now opens the full Server
+  settings dialog directly (the old inline mini-form is gone). The dialog keeps a
+  fixed height — switching tabs no longer resizes it — and gains two tabs: a
+  **Users** tab embedding account management (the separate users dialog is
+  retired), and a **Connection** tab holding this browser's client-side settings
+  — the server API URL and the legacy control username/password — each with a
+  plain-language explanation of when (rarely) they're needed. Non-admins and
+  open installs see just the Connection tab.
+- **Camera panel reorganised**: the camera dialog was getting crowded, so the
+  device identity (model, firmware, hardware, serial, Wi-Fi, SD card) is now a
+  compact strip pinned under the title — always visible while the rest scrolls —
+  and the content splits into two tabs: **Camera settings** (all device controls,
+  groupings kept, with an unsaved-changes dot on the tab) and **Recording** (the
+  server-side recording settings). The dialog holds a fixed height too, so tab
+  switches don't jump.
+- **Panel feedback as toasts**: the camera panel's action feedback now shows as a
+  toast at the panel's bottom edge — green for applied, red for rejected (with the
+  camera's own error text) — and dismisses itself after 5 seconds.
+- **Camera management in the web UI (beta)**: Server settings gains a Cameras tab
+  where admins add, edit and delete cameras — Reolink (address/username/password,
+  optional HTTP address and NVR channel) and generic RTSP (rtsp:// URLs) alike —
+  without touching config.json by hand. Every field validates live (host/port
+  syntax, rtsp:// URLs, duplicate names, characters that would break recording
+  paths), and a **Test connection** button does a real check before saving: a full
+  Baichuan connect + login for Reolink cameras (reporting the camera's resolution
+  on success and its actual error on failure), an RTSP OPTIONS round-trip for
+  generic ones. Passwords are write-only: never sent to the browser (a stored one
+  shows as a placeholder; blank keeps it), and RTSP URL passwords are masked in
+  transit the same way. Saves go through the same validated, atomic config.json
+  write as the rest of the settings (a .bak of the previous version is kept), and
+  the panel prompts for the restart that applies them.
 
 ### Fixed
 
+- **Recording settings are admin-gated**: the per-camera recording switches
+  (retention, schedules, event types, archive routing) persist server-side, but
+  any signed-in user could change them. Once accounts exist, the API now requires
+  an admin (reads stay open), and the panel shows the section read-only to
+  non-admins. Installs without accounts behave as before. Every other
+  server-writing endpoint was audited: `/api/admin/*` and `/api/users` were
+  already admin-only, and `/api/me/settings` is per-user by design.
 - **Privacy mode no longer flaps the camera offline**: on cameras that go fully dark
   in privacy mode (E1 Pro and similar), the absence of video was mistaken for a
   stalled stream, so Neolink reconnected every ~15s — flapping the status between
