@@ -329,6 +329,26 @@
 
         <div class="toolbar">
             <button class="tool-btn menu-btn" title="Cameras" @onclick="() => _sidebarOpen = !_sidebarOpen">@UiIcon.Render("menu", 16)</button>
+
+            @* Saved layouts sits first (right after the menu) so it stays reachable
+               on a narrow phone toolbar without scrolling. Always says "Layout"; the
+               loaded layout's name rides along as a value. *@
+            <button class="tool-btn layouts-btn @(_showLayouts ? "active" : "")"
+                    title="@(_activeLayout != null ? $"Saved layouts (current: {_activeLayout})" : "Saved layouts — save and reload camera arrangements")"
+                    @onclick="() => _showLayouts = !_showLayouts">
+                @UiIcon.Render("layout", 14) <span class="tool-name">Layout@(_activeLayout != null ? ":" : "s")</span>
+                @if (_activeLayout != null)
+                {
+                    <span class="layout-cur">@_activeLayout</span>
+                }
+                <span class="tool-caret">@(_showLayouts ? "▴" : "▾")</span>
+                @if (LayoutDirty)
+                {
+                    <span class="layout-dirty-dot" title="This layout has unsaved changes"></span>
+                }
+            </button>
+            <span class="tool-sep"></span>
+
             <span class="tool-label">VIEW</span>
             @* One dropdown instead of five buttons: compact on desktop, and on
                phones it opens the platform's native picker. *@
@@ -354,24 +374,6 @@
                 <span class="tool-sep"></span>
                 <button class="tool-btn back" @onclick="RestoreView">@UiIcon.Render("collapse", 14) Restore view</button>
             }
-
-            <span class="tool-sep"></span>
-            @* Always says "Layout": the loaded layout's name rides along as a value,
-               so "Default" reads as a layout name, not a mystery button. *@
-            <button class="tool-btn layouts-btn @(_showLayouts ? "active" : "")"
-                    title="@(_activeLayout != null ? $"Saved layouts (current: {_activeLayout})" : "Saved layouts — save and reload camera arrangements")"
-                    @onclick="() => _showLayouts = !_showLayouts">
-                @UiIcon.Render("layout", 14) <span class="tool-name">Layout@(_activeLayout != null ? ":" : "s")</span>
-                @if (_activeLayout != null)
-                {
-                    <span class="layout-cur">@_activeLayout</span>
-                }
-                <span class="tool-caret">@(_showLayouts ? "▴" : "▾")</span>
-                @if (LayoutDirty)
-                {
-                    <span class="layout-dirty-dot" title="This layout has unsaved changes"></span>
-                }
-            </button>
 
             @if (_eventsSupported)
             {
