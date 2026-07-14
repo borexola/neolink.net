@@ -1259,6 +1259,40 @@ public static class SelfTest
             }
         });
 
+        Test("HA availability debounce over a privacy reconnect", () =>
+        {
+            // A privacy-mode toggle drops the connection for a few seconds; the
+            // camera must stay "online" to HA across that blip, but a real outage
+            // must still surface after the grace period.
+            var grace = TimeSpan.FromSeconds(45);
+            var t0 = new DateTime(2026, 7, 14, 12, 0, 0, DateTimeKind.Utc);
+            DateTime? off = null;
+
+            Assert(Mqtt.CameraBridge.AvailabilityOnline(true, true, ref off, t0, grace), "live = online");
+            Assert(off == null, "offlineSince cleared while live");
+
+            // Connection drops (privacy toggle / idle close): still online within grace.
+            Assert(Mqtt.CameraBridge.AvailabilityOnline(false, true, ref off, t0.AddSeconds(5), grace),
+                "brief drop stays online");
+            Assert(Mqtt.CameraBridge.AvailabilityOnline(false, true, ref off, t0.AddSeconds(40), grace),
+                "still within grace = online");
+            // Reconnect before the grace expires: back to a clean online, timer reset.
+            Assert(Mqtt.CameraBridge.AvailabilityOnline(true, true, ref off, t0.AddSeconds(44), grace),
+                "reconnect = online");
+            Assert(off == null, "offlineSince reset on reconnect");
+
+            // A genuine outage past the grace does report offline.
+            DateTime? off2 = null;
+            Assert(Mqtt.CameraBridge.AvailabilityOnline(false, true, ref off2, t0, grace), "outage starts online");
+            Assert(!Mqtt.CameraBridge.AvailabilityOnline(false, true, ref off2, t0.AddSeconds(46), grace),
+                "past grace = offline");
+
+            // A camera that has never connected is offline immediately (no false "available").
+            DateTime? off3 = null;
+            Assert(!Mqtt.CameraBridge.AvailabilityOnline(false, false, ref off3, t0, grace),
+                "never-online = offline now");
+        });
+
         Test("secret protector: AES-256-GCM round-trip + tamper detection", () =>
         {
             var key = new byte[32];

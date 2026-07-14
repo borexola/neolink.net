@@ -447,6 +447,8 @@ internal sealed class CameraBridge
     private string? _model;
     private DateTime _lastSnapshot = DateTime.MinValue;
     private bool _lastOnline;
+    private bool _everOnline;
+    private DateTime? _offlineSince;
 
     public string Id { get; }
 
@@ -1151,10 +1153,29 @@ internal sealed class CameraBridge
             await PublishSnapshotAsync(ct).ConfigureAwait(false);
     }
 
+    /// <summary>How long a dropped connection is tolerated before HA is told the
+    /// camera is Unavailable. Cameras drop the connection briefly on a privacy-mode
+    /// toggle (and some, like the E1 Pro, close it every ~30s while dark); a
+    /// reconnect lands within a few seconds, so without this grace every entity on
+    /// the camera flaps to Unavailable and back on each blip.</summary>
+    private static readonly TimeSpan OfflineGrace = TimeSpan.FromSeconds(45);
+
+    /// <summary>Debounced availability: online while the camera is live, and for
+    /// <paramref name="grace"/> after a previously-live camera drops. A camera that
+    /// has never connected reports offline immediately (no false "available").</summary>
+    internal static bool AvailabilityOnline(bool live, bool everOnline, ref DateTime? offlineSince,
+        DateTime nowUtc, TimeSpan grace)
+    {
+        if (live) { offlineSince = null; return true; }
+        offlineSince ??= nowUtc;
+        return everOnline && nowUtc - offlineSince.Value < grace;
+    }
+
     private async Task PublishAvailabilityAsync(CancellationToken ct)
     {
-        bool online = _control.Online;
-        if (online == _lastOnline && _lastSnapshot != DateTime.MinValue) { /* still publish periodically */ }
+        bool live = _control.Online;
+        if (live) _everOnline = true;
+        bool online = AvailabilityOnline(live, _everOnline, ref _offlineSince, DateTime.UtcNow, OfflineGrace);
         _lastOnline = online;
         await _hub.PublishAsync(AvailabilityTopic, online ? "online" : "offline", ct).ConfigureAwait(false);
     }

@@ -48,7 +48,12 @@ in the README). Paste the matching section below into the GitHub release.
   privacy switch itself) Unavailable in Home Assistant, which made turning privacy
   back off unreliable. When privacy mode is on, the missing video is now treated as
   expected: the connection is held open, the camera stays online, and control stays
-  available. A genuine disconnect (a socket error, not just silence) still reconnects.
+  available. A genuine disconnect (a socket error, not just silence) still reconnects,
+  and because some cameras (the E1 Pro) actively *close* the idle connection every
+  ~30s while dark instead of just going quiet, a short grace period on the Home
+  Assistant availability keeps every entity Available across those brief reconnects —
+  including the moment privacy switches back off — rather than flapping the whole
+  camera Unavailable and back.
   The camera-settings panel also now reflects privacy mode correctly — it reads the
   same pushed state the tile does, instead of a live query the camera stops answering
   while it is dark (which made the panel show "off" during an active privacy session).
