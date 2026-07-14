@@ -3730,7 +3730,14 @@ select.input-pending {
 
 .sched-time input[type="time"]:focus { border-color: var(--accent); outline: none; }
 
-.sched .event-sub { text-align: right; }
+/* The schedule summary is a full sentence — let it wrap instead of ellipsizing
+   (the base .event-sub is single-line) so it reads on narrow/mobile widths. */
+.sched .event-sub {
+    text-align: right;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+}
 
 .control-row select {
     background: var(--bg);
@@ -3787,24 +3794,23 @@ select.input-pending {
 /* ---------- mobile bottom sheets (kept LAST: these must out-cascade the
    dialogs' desktop geometry above, which shares their specificity) ---------- */
 @media (max-width: 700px) {
+    /* Vertically-centered cards on phones (not bottom sheets). */
     .event-player,
     .quick-view {
-        width: 100vw;
-        max-height: calc(100dvh - 20px);
-        margin: auto auto 0;
-        border-radius: var(--radius) var(--radius) 0 0;
-        border-left: none;
-        border-right: none;
-        border-bottom: none;
+        position: fixed;
+        inset: 0;
+        width: min(100vw - 16px, 900px);
+        max-height: calc(100dvh - 24px);
+        margin: auto;
+        border-radius: var(--radius);
     }
 
     .campanel {
-        width: 100vw;
-        top: auto;
-        left: 0;
-        bottom: 0;
-        transform: none;
+        /* keep the base rule's centered top/left/transform; just size for phones */
+        width: min(94vw, 560px);
         max-height: 88dvh;
-        border-radius: var(--radius) var(--radius) 0 0;
+        border-radius: var(--radius);
     }
+
+    .settings-panel.settings-wide { width: min(96vw, 760px); }
 }

@@ -160,7 +160,7 @@
                         <span class="cam-rec-badge" title="Recording 24/7 to disk">● REC</span>
                     }
                     <button class="icon-btn solo-btn" title="Camera settings & controls"
-                            @onclick="() => _panelCamera = cam.Name" @onclick:stopPropagation="true">@UiIcon.Render("gear", 16)</button>
+                            @onclick="() => { _panelCamera = cam.Name; _sidebarOpen = false; }" @onclick:stopPropagation="true">@UiIcon.Render("gear", 16)</button>
                 </div>
                 <div class="cam-streams">
                     @* A stream chip is a LINK: it navigates to /cameras/{name}/{stream},
@@ -169,7 +169,7 @@
                     {
                         <button class="chip @(s.Ready ? "" : "chip-off") @(IsRouteStream(cam.Name, s.Kind) ? "chip-active" : "")"
                                 title="Open @cam.Name (@s.Label) full size — @s.Path @(s.Codec != null ? $"({s.Codec} {s.Width}x{s.Height})" : "")"
-                                @onclick="() => Nav.NavigateTo(StreamUrl(cam.Name, s.Kind))">
+                                @onclick="() => { _sidebarOpen = false; Nav.NavigateTo(StreamUrl(cam.Name, s.Kind)); }">
                             @s.Label
                             @if (s.Codec == "H265")
                             {
