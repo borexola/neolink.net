@@ -4,6 +4,56 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
+## 0.8.9
+
+### New
+
+- **RTSP audio backchannel (two-way talk for go2rtc / Home Assistant)**: cameras
+  with a speaker now expose an ONVIF Profile-T audio backchannel on their existing
+  RTSP mount, so go2rtc, Home Assistant's WebRTC Camera and other ONVIF-aware
+  clients can talk through the camera without the Neolink web UI. A client that
+  sends `Require: www.onvif.org/ver20/backchannel` on DESCRIBE is offered an extra
+  sendonly µ-law (PCMU/8000) track; the G.711 audio it streams during PLAY is
+  depacketized, decoded and fed to the same talk pipeline the push-to-talk button
+  uses (resampled and ADPCM-encoded to the camera). It is gated on two-way talk
+  being enabled (`ui.talk = true`) and on the camera actually having a speaker, and
+  plain players (VLC, ffmpeg, browsers) are untouched — the extra track only
+  appears when a client explicitly asks for it.
+- **Spotlight brightness for white-LED cameras**: cameras with a white spotlight
+  that don't answer the Baichuan floodlight command (Lumus, Elite) now expose it
+  over the Reolink HTTP API. The LIGHTS panel gains a Spotlight on/off toggle and a
+  brightness slider that appears only while it is on; on/off still works on cameras
+  whose HTTP is closed (it rides the Baichuan light state). The HTTP endpoint is
+  derived from the camera's IP when `http_address` isn't set, a capability probe
+  plus the ledCtrl spotlight bit gate the control so status-LED-only models (E1
+  Pro) and the doorbell are excluded, and a read-modify-write preserves the
+  camera's lighting schedule and AI-detect config.
+- **Home Assistant sidebar (ingress)**: the add-on now supports HA ingress, so the
+  web UI shows up in the Home Assistant sidebar and is served through the
+  Supervisor's authenticated proxy — no exposed port needed. The UI reads the
+  `X-Ingress-Path` header to render under HA's per-session sub-path (dynamic
+  `<base href>`, so assets, the Blazor connection and the API all resolve inside the
+  proxy). Direct access on 8655 and the "Open Web UI" button still work. Set
+  `panel_admin: false` in the add-on options to show the sidebar entry to non-admin
+  users too.
+- **Privacy mode leaves beta**: the privacy-mode control drops its BETA tag in the
+  camera panel and the README now that it has proven itself.
+
+### Fixed
+
+- **Events mark as reviewed on open**: a clip now counts as reviewed the moment you
+  open it, not when you close or advance past it (close/advance stay as a fallback).
+- **Home Assistant entity accuracy**: Vehicle and Animal detections get proper
+  icons (car, paw) instead of the generic motion glyph; the floodlight light entity
+  is announced only for cameras with a real floodlight (not a bare status LED, so
+  the E1 Pro no longer shows a phantom light); and cameras that don't support a
+  floodlight or privacy mode now clear any discovery config an earlier,
+  over-detecting build left behind, so stale switches and lights drop out of HA.
+- **Mobile polish**: selecting a stream or the settings gear closes the sidebar
+  drawer, the event-preview and camera-settings modals are vertically centered
+  instead of anchored to the bottom, and the scheduled-capture summary wraps
+  instead of being clipped.
+
 ## 0.8.8
 
 ### New
