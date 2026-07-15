@@ -299,6 +299,7 @@
 
     private DotNetObjectReference<Timeline>? _selfRef;
     private PeriodicTimer? _clock;
+    private DateTime _covRefreshed = DateTime.UtcNow; // last periodic coverage reload (today only)
     private DateTime _lastTick;
     private bool _scrubInit;
     private bool _booted;
@@ -601,6 +602,7 @@
             foreach (var cam in Included)
                 await LoadCoverageAsync(cam.Name);
         }
+        _covRefreshed = DateTime.UtcNow; // the periodic refresh restarts from here
 
         // Land the cursor somewhere useful: near-now for today, else midday.
         _t = _date == DateTime.Today
@@ -879,6 +881,24 @@
                 var now = DateTime.UtcNow;
                 var elapsed = (now - _lastTick).TotalSeconds;
                 _lastTick = now;
+
+                // Viewing TODAY, footage keeps arriving: refresh the coverage
+                // once a minute so new segments show up while the page is open.
+                // Without this a suspend/resume (or any recording that starts
+                // after the day loaded) records to disk but the lanes stay
+                // blank until a manual reload — REC on, timeline empty.
+                if (_date == DateTime.Today && _continuous && Included.Any()
+                    && now - _covRefreshed > TimeSpan.FromSeconds(60))
+                {
+                    _covRefreshed = now;
+                    await InvokeAsync(async () =>
+                    {
+                        foreach (var cam in Included)
+                            await LoadCoverageAsync(cam.Name);
+                        StateHasChanged();
+                    });
+                }
+
                 if (!_playing) continue;
                 double advance = elapsed * _speed;
                 if (_maxLag > LagSoft)

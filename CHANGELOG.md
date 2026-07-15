@@ -141,7 +141,9 @@ in the README). Paste the matching section below into the GitHub release.
   — the gap is genuinely blank, with "no footage" on that camera's tile while
   the others play on at full speed — and the player treats a cursor beyond a
   file's media as exhausted rather than lagging, so one short file can never
-  hold the other cameras hostage.
+  hold the other cameras hostage. While viewing today, the lanes also refresh
+  themselves once a minute, so recording that starts after the page loaded —
+  a resumed camera, most visibly — shows up without a reload.
 - **Recording settings are admin-gated**: the per-camera recording switches
   (retention, schedules, event types, archive routing) persist server-side, but
   any signed-in user could change them. Once accounts exist, the API now requires
