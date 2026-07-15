@@ -923,6 +923,32 @@ public static class SelfTest
                     "legacy continuous tree removed");
                 AssertEq(store3.ListSegments("cam2", "2001-02-03").Count, 1);
                 Assert(store3.Find("cam2~2001-02-03~090000-beef") != null, "migrated event indexed");
+
+                // On-demand delete: files gone, index gone, size reported, ongoing
+                // refused, empty parents pruned.
+                var d1 = store3.Create("delcam", DateTime.UtcNow, new[] { "person" });
+                d1.Ongoing = false; store3.Save(d1);
+                var d1dir = store3.EventDir(d1);
+                File.WriteAllText(Path.Combine(d1dir, "clip.mp4"), new string('x', 5000));
+                File.WriteAllText(Path.Combine(d1dir, "thumb.jpg"), new string('y', 1000));
+                Assert(store3.EventSize(d1.Id) >= 6000, "event size counts its artifacts");
+
+                var ongoing = store3.Create("delcam", DateTime.UtcNow, new[] { "motion" }); // still recording
+                Assert(!store3.DeleteEvent(ongoing.Id), "an ongoing event is never deleted");
+                Assert(store3.Find(ongoing.Id) != null, "ongoing event survives the refused delete");
+
+                Assert(store3.DeleteEvent(d1.Id), "a finalized event deletes");
+                Assert(store3.Find(d1.Id) == null, "deleted event leaves the index");
+                Assert(!Directory.Exists(d1dir), "deleted event's folder is gone from disk");
+                AssertEq(store3.EventSize(d1.Id), 0L);
+                Assert(!store3.DeleteEvent(d1.Id), "deleting an unknown id fails cleanly");
+                // The day folder (delcam) still holds the ongoing event, so it stays;
+                // deleting a lone event prunes its empty detections + day folders.
+                var lone = store3.Create("lonecam", DateTime.UtcNow, new[] { "vehicle" });
+                lone.Ongoing = false; store3.Save(lone);
+                var loneDay = Path.GetDirectoryName(Path.GetDirectoryName(store3.EventDir(lone)))!;
+                Assert(store3.DeleteEvent(lone.Id), "lone event deletes");
+                Assert(!Directory.Exists(loneDay), "empty day folder pruned after the last event goes");
             }
             finally
             {

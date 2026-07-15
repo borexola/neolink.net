@@ -44,8 +44,28 @@
         {
             <button class="chip" title="Back to the rolling last 24 hours" @onclick="() => SetDateAsync(null)">↺ 24h</button>
         }
+        <button class="chip @(_selectMode ? "chip-active" : "")"
+                title="@(_selectMode ? "Leave selection mode" : "Select multiple events to delete")"
+                @onclick="ToggleSelectModeAsync">@UiIcon.Render("check", 13) Select</button>
         <button class="icon-btn" title="Refresh" @onclick="RefreshAsync">@UiIcon.Render("refresh", 14)</button>
     </div>
+
+    @if (_selectMode)
+    {
+        @* Selection action bar: what's picked, select-all, and the delete trigger. *@
+        <div class="ev-selbar">
+            <label class="ev-selall" title="Select or clear every event in view">
+                <input type="checkbox" checked="@AllShownSelected"
+                       @onchange="e => ToggleSelectAll((bool)(e.Value ?? false))" />
+                <span>@(_selectedIds.Count == 0 ? "Select all" : $"{_selectedIds.Count} selected")</span>
+            </label>
+            <span class="tile-spacer"></span>
+            <button class="chip" disabled="@(_selectedIds.Count == 0)" @onclick="ClearSelection">Clear</button>
+            <button class="chip ev-del-btn" disabled="@(_selectedIds.Count == 0)" @onclick="OpenDeleteAsync">
+                @UiIcon.Render("trash", 13) Delete@(_selectedIds.Count > 0 ? $" ({_selectedIds.Count})" : "")
+            </button>
+        </div>
+    }
 
     @if (_error != null)
     {
@@ -79,8 +99,16 @@
                         <div class="ev-day-head">@DayLabel(day.Key) <span class="event-day-count">@day.Count()</span></div>
                         @foreach (var ev in day)
                         {
-                            <div class="event-row @(ev.Reviewed ? "reviewed" : "") @(_selected?.Id == ev.Id ? "selected" : "")"
-                                 @key="ev.Id" role="listitem" title="Play this event" @onclick="() => SelectAsync(ev)">
+                            <div class="event-row @(ev.Reviewed ? "reviewed" : "") @(_selected?.Id == ev.Id ? "selected" : "") @(_selectMode && _selectedIds.Contains(ev.Id) ? "picked" : "")"
+                                 @key="ev.Id" role="listitem"
+                                 title="@(_selectMode ? "Click to select or deselect" : "Play this event")"
+                                 @onclick="() => RowClickAsync(ev)">
+                                @if (_selectMode)
+                                {
+                                    <input class="event-row-check" type="checkbox" checked="@_selectedIds.Contains(ev.Id)"
+                                           @onclick:stopPropagation="true"
+                                           @onchange="() => ToggleOne(ev.Id)" />
+                                }
                                 <div class="event-row-thumb">
                                     @if (ev.HasThumb)
                                     {
@@ -177,6 +205,70 @@
             </div>
         </div>
     }
+
+    @if (_showDelete)
+    {
+        <div class="ev-del-backdrop" @onclick="CancelDelete">
+            <div class="ev-del-dialog" @onclick:stopPropagation="true">
+                <div class="ev-del-title">
+                    <span>@UiIcon.Render("trash", 15) DELETE EVENTS</span>
+                    <button class="icon-btn" title="Cancel" @onclick="CancelDelete" disabled="@_deleting">✕</button>
+                </div>
+                @if (_delBusy)
+                {
+                    <div class="ev-del-body">Working out what will be deleted…</div>
+                }
+                else if (_delError != null)
+                {
+                    <div class="ev-del-body ev-del-err">@_delError</div>
+                }
+                else
+                {
+                    <div class="ev-del-body">
+                        <p class="ev-del-lead">
+                            Permanently delete <b>@_delCount event@(_delCount == 1 ? "" : "s")</b>,
+                            freeing about <b>@SizeText(_delBytes)</b> of disk?
+                        </p>
+                        <ul class="ev-del-facts">
+                            @foreach (var c in _delCameras)
+                            {
+                                <li><span class="ev-del-cam">@c.Camera</span> <span class="ev-del-n">@c.Count</span></li>
+                            }
+                        </ul>
+                        @if (_delEarliest != null && _delLatest != null)
+                        {
+                            <p class="event-sub">
+                                @(_delEarliest.Value.Date == _delLatest.Value.Date
+                                    ? _delEarliest.Value.ToString("ddd d MMM, HH:mm") + " – " + _delLatest.Value.ToString("HH:mm")
+                                    : _delEarliest.Value.ToString("ddd d MMM HH:mm") + " – " + _delLatest.Value.ToString("ddd d MMM HH:mm"))
+                            </p>
+                        }
+                        @if (_delSkipped > 0)
+                        {
+                            <p class="event-sub ev-del-skip">
+                                @_delSkipped selected event@(_delSkipped == 1 ? " is" : "s are") still recording and will be kept.
+                            </p>
+                        }
+                        <p class="ev-del-warn">This cannot be undone — the clips, thumbnails and previews are removed from disk.</p>
+                    </div>
+                }
+                <div class="ev-del-actions">
+                    <button class="chip" @onclick="CancelDelete" disabled="@_deleting">Cancel</button>
+                    <button class="chip ev-del-confirm" disabled="@(_delBusy || _deleting || _delCount == 0 || _delError != null)"
+                            @onclick="ConfirmDeleteAsync">
+                        @if (_deleting)
+                        {
+                            <span>Deleting…</span>
+                        }
+                        else
+                        {
+                            <span>@UiIcon.Render("trash", 13) Delete @_delCount</span>
+                        }
+                    </button>
+                </div>
+            </div>
+        </div>
+    }
 </div>
 
 @code {
@@ -203,6 +295,20 @@
 
     private double _speed = 1;
     private static readonly double[] Speeds = { 1, 2, 4, 8, 16 };
+
+    // ---- multi-select delete ----
+    private bool _selectMode;
+    private readonly HashSet<string> _selectedIds = new();
+    private bool _showDelete;
+    private bool _delBusy;      // fetching the estimate
+    private bool _deleting;     // the delete request is in flight
+    private string? _delError;
+    private int _delCount;
+    private long _delBytes;
+    private int _delSkipped;    // selected-but-ongoing, kept
+    private DateTime? _delEarliest, _delLatest;
+    private List<CameraCount> _delCameras = new();
+    private sealed record CameraCount(string Camera, int Count);
 
     /// <summary>The user's HD/SD pick: false = full main-stream clip (default at
     /// every speed — muted fast playback keeps it smooth), true = the low-res
@@ -442,6 +548,146 @@
         // Viewing an event is reviewing it: mark it the moment it's opened, not on close.
         if (!ev.Reviewed) await MarkReviewedAsync(ev);
     }
+
+    // ------------------------------------------------------------ multi-select delete
+
+    /// <summary>A row click plays the event normally, or toggles its selection
+    /// while selection mode is on.</summary>
+    private async Task RowClickAsync(ApiEvent ev)
+    {
+        if (_selectMode) ToggleOne(ev.Id);
+        else await SelectAsync(ev);
+    }
+
+    private async Task ToggleSelectModeAsync()
+    {
+        _selectMode = !_selectMode;
+        _selectedIds.Clear();
+        // Leaving the list-and-detail split for selection: close any open player.
+        if (_selectMode && _selected != null) await CloseAsync();
+    }
+
+    private void ToggleOne(string id)
+    {
+        if (!_selectedIds.Remove(id)) _selectedIds.Add(id);
+    }
+
+    private bool AllShownSelected
+    {
+        get
+        {
+            var shown = Filtered.ToList();
+            return shown.Count > 0 && shown.All(e => _selectedIds.Contains(e.Id));
+        }
+    }
+
+    private void ToggleSelectAll(bool select)
+    {
+        if (select) foreach (var e in Filtered) _selectedIds.Add(e.Id);
+        else ClearSelection();
+    }
+
+    private void ClearSelection() => _selectedIds.Clear();
+
+    /// <summary>Opens the confirmation and asks the server for the exact summary
+    /// (count, size, per-camera, span) — computed server-side so it matches what
+    /// deletion will actually remove.</summary>
+    private async Task OpenDeleteAsync()
+    {
+        if (_selectedIds.Count == 0) return;
+        _showDelete = true;
+        _delBusy = true;
+        _delError = null;
+        StateHasChanged();
+        try
+        {
+            var est = await PostDeleteAsync(estimate: true);
+            if (est is { ValueKind: JsonValueKind.Object } o)
+            {
+                _delCount = o.GetProperty("count").GetInt32();
+                _delBytes = o.GetProperty("bytes").GetInt64();
+                _delSkipped = o.TryGetProperty("ongoing", out var og) ? og.GetInt32() : 0;
+                _delEarliest = o.TryGetProperty("earliest", out var ea) && ea.ValueKind != JsonValueKind.Null
+                    ? ea.GetDateTime().ToLocalTime() : null;
+                _delLatest = o.TryGetProperty("latest", out var la) && la.ValueKind != JsonValueKind.Null
+                    ? la.GetDateTime().ToLocalTime() : null;
+                _delCameras = o.TryGetProperty("cameras", out var cams) && cams.ValueKind == JsonValueKind.Array
+                    ? cams.EnumerateArray()
+                        .Select(c => new CameraCount(c.GetProperty("camera").GetString() ?? "?", c.GetProperty("count").GetInt32()))
+                        .ToList()
+                    : new List<CameraCount>();
+                if (_delCount == 0)
+                    _delError = _delSkipped > 0
+                        ? "Every selected event is still recording — nothing can be deleted yet."
+                        : "Those events no longer exist.";
+            }
+            else
+            {
+                _delError = "Could not prepare the deletion — are you signed in as an admin?";
+            }
+        }
+        catch
+        {
+            _delError = "Could not reach the server to prepare the deletion.";
+        }
+        finally
+        {
+            _delBusy = false;
+            StateHasChanged();
+        }
+    }
+
+    private void CancelDelete()
+    {
+        if (_deleting) return;
+        _showDelete = false;
+    }
+
+    private async Task ConfirmDeleteAsync()
+    {
+        if (_delBusy || _deleting || _delCount == 0) return;
+        _deleting = true;
+        StateHasChanged();
+        try
+        {
+            var res = await PostDeleteAsync(estimate: false);
+            int deleted = res is { ValueKind: JsonValueKind.Object } o
+                && o.TryGetProperty("deleted", out var d) ? d.GetInt32() : 0;
+            // Drop the deleted events from the local lists so the UI updates without
+            // a full round-trip; a refresh reconciles anything unexpected.
+            var gone = _selectedIds.ToHashSet();
+            _events.RemoveAll(e => gone.Contains(e.Id));
+            _eventsForDate.RemoveAll(e => gone.Contains(e.Id));
+            if (_selected != null && gone.Contains(_selected.Id)) _selected = null;
+            _selectedIds.Clear();
+            _showDelete = false;
+            _deleting = false;
+            _selectMode = false;
+            await RefreshAsync();
+        }
+        catch
+        {
+            _deleting = false;
+            _delError = "The deletion failed — nothing may have been removed. Try again.";
+        }
+        StateHasChanged();
+    }
+
+    private async Task<JsonElement?> PostDeleteAsync(bool estimate)
+    {
+        var req = Req(HttpMethod.Post, "/api/events/delete");
+        req.Content = JsonContent.Create(new { ids = _selectedIds.ToList(), estimate });
+        using var res = await Http.SendAsync(req);
+        if (!res.IsSuccessStatusCode) return null;
+        return await res.Content.ReadFromJsonAsync<JsonElement>();
+    }
+
+    private static string SizeText(long bytes) => bytes switch
+    {
+        >= 1024L * 1024 * 1024 => $"{bytes / (1024.0 * 1024 * 1024):0.0} GB",
+        >= 1024L * 1024 => $"{bytes / (1024.0 * 1024):0} MB",
+        _ => $"{bytes / 1024.0:0} KB",
+    };
 
     private async Task SetSpeedAsync(double s)
     {

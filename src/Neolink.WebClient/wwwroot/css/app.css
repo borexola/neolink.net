@@ -2342,6 +2342,137 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 
 .ev-toolbar { flex: 0 0 auto; }
 
+/* ---- multi-select delete: action bar, row checkboxes, confirm dialog ---- */
+.ev-selbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 0 0 auto;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--line);
+    background: color-mix(in srgb, var(--panel-2) 55%, transparent);
+}
+
+.ev-selall {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    user-select: none;
+}
+
+.ev-selall input { cursor: pointer; }
+
+/* Delete button reads danger; disabled when nothing is picked */
+.ev-del-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--err);
+    border-color: color-mix(in srgb, var(--err) 45%, transparent);
+}
+.ev-del-btn:not(:disabled):hover {
+    background: color-mix(in srgb, var(--err) 14%, transparent);
+    color: var(--err);
+}
+
+.event-row-check {
+    flex: 0 0 auto;
+    width: 17px;
+    height: 17px;
+    cursor: pointer;
+    accent-color: var(--accent);
+}
+
+.event-row.picked { background: var(--accent-soft); }
+.event-row.picked:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+
+/* Confirmation dialog: centered modal with the deletion summary */
+.ev-del-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 80;
+    background: rgba(0, 0, 0, 0.45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 12px;
+}
+
+.ev-del-dialog {
+    width: min(420px, calc(100vw - 24px));
+    max-height: calc(100dvh - 24px);
+    overflow-y: auto;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    box-shadow: var(--shadow);
+    padding: 16px 18px;
+}
+
+.ev-del-title {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    color: var(--err);
+    margin-bottom: 12px;
+}
+.ev-del-title span { display: inline-flex; align-items: center; gap: 7px; }
+
+.ev-del-lead { font-size: 14px; line-height: 1.45; margin: 0 0 10px; }
+
+.ev-del-facts {
+    list-style: none;
+    margin: 0 0 10px;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    max-height: 160px;
+    overflow-y: auto;
+}
+.ev-del-facts li {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12.5px;
+    padding: 3px 8px;
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--panel-2) 60%, transparent);
+}
+.ev-del-cam { font-weight: 600; }
+.ev-del-n { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.ev-del-warn {
+    font-size: 12px;
+    color: var(--err);
+    margin: 10px 0 0;
+}
+.ev-del-skip { color: #e8b054; }
+.ev-del-err { color: var(--err); }
+
+.ev-del-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 14px;
+}
+
+.ev-del-confirm {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    background: var(--err);
+    color: #fff;
+    border-color: transparent;
+}
+.ev-del-confirm:not(:disabled):hover { filter: brightness(1.1); }
+.ev-del-confirm:disabled { opacity: 0.5; cursor: default; }
+
 /* Events ⇄ Live segmented toggle in the toolbar */
 .ev-switch {
     display: inline-flex;

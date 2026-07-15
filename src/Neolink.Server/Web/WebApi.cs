@@ -90,6 +90,7 @@ public sealed class WebApiOptions
 ///   quick replies/auto-track/SD); POST .../image /volume /ptzpreset /quickreply /autotrack
 ///   GET /api/events[?camera=&amp;reviewed=&amp;limit=] — recorded detection events (when enabled)
 ///   GET /api/events/{id}[/clip /thumb]      — one event / its artifacts; POST .../review to (un)dismiss
+///   POST /api/events/delete {ids[],estimate} — bulk delete events + files (admin; ?estimate summarizes)
 ///   GET/POST /api/cameras/{name}/recording  — per-camera recording switches + event-type filter
 ///   POST /api/cameras/{name}/record         — start/stop an on-demand clip (one clip, auto-capped)
 ///   GET /api/recordings/{camera}[/{date}[/{file}]] — browse/play continuous footage
@@ -132,6 +133,7 @@ public static class WebApi
     private sealed record StreamSettingsRequest(string? Stream, uint? Width, uint? Height,
         uint? Framerate, uint? Bitrate);
     private sealed record ReviewRequest(bool? Reviewed);
+    private sealed record EventDeleteRequest(List<string>? Ids, bool? Estimate);
     /// <summary>Notification settings update. Password is WRITE-ONLY: null keeps the
     /// stored one, "" clears it, a value sets it. It is never returned by GET.</summary>
     private sealed record NotificationRequest(bool? Enabled, string? Recipient,
@@ -1623,6 +1625,74 @@ public static class WebApi
                 events.SetReviewed(id, req.Reviewed ?? true);
                 return Results.Json(new { ok = true });
             });
+
+            // Bulk delete: permanently removes the selected events and their files.
+            // Destructive, so it is admin-only once accounts exist (like the server
+            // settings and user management); with no accounts it needs a valid RTSP
+            // user, same as review. ?estimate answers "what would this delete?"
+            // (count, total size, per-camera and time span) so the UI can confirm
+            // with a real summary before anything is removed.
+            app.MapPost("/api/events/delete", (EventDeleteRequest req, HttpContext ctx) =>
+            {
+                if (userStore.Enabled)
+                {
+                    if (!IsAdmin(ctx)) return Results.Json(new { error = "admin only" }, statusCode: 403);
+                }
+                else if (users.Count > 0)
+                {
+                    var creds = NetUtil.DecodeBasicAuth(ctx.Request.Headers.Authorization);
+                    if (creds == null || !users.TryGetValue(creds.Value.User, out var pw)
+                        || !NetUtil.FixedTimeEquals(pw, creds.Value.Pass))
+                    {
+                        ctx.Response.Headers.WWWAuthenticate = "Basic realm=\"neolink\"";
+                        return Results.Json(new { error = "authentication required" }, statusCode: 401);
+                    }
+                }
+
+                var ids = req.Ids?.Distinct().ToList() ?? new List<string>();
+                if (ids.Count == 0)
+                    return Results.Json(new { error = "no events selected" }, statusCode: 400);
+                if (ids.Count > 1000)
+                    return Results.Json(new { error = "too many events in one request (max 1000)" }, statusCode: 400);
+
+                // Resolve to real, deletable events (skip unknown and still-recording).
+                var found = ids.Select(events.Find).OfType<EventRecord>().ToList();
+                var deletable = found.Where(r => !r.Ongoing).ToList();
+                int ongoing = found.Count(r => r.Ongoing);
+                int unknown = ids.Count - found.Count;
+
+                if (req.Estimate == true)
+                {
+                    long bytes = deletable.Sum(r => events.EventSize(r.Id));
+                    var perCamera = deletable
+                        .GroupBy(r => r.Camera, StringComparer.OrdinalIgnoreCase)
+                        .Select(g => new { camera = g.Key, count = g.Count() })
+                        .OrderByDescending(x => x.count).ThenBy(x => x.camera)
+                        .ToList();
+                    return Results.Json(new
+                    {
+                        count = deletable.Count,
+                        bytes,
+                        cameras = perCamera,
+                        ongoing,
+                        unknown,
+                        earliest = deletable.Count > 0 ? deletable.Min(r => r.StartUtc) : (DateTime?)null,
+                        latest = deletable.Count > 0 ? deletable.Max(r => r.StartUtc) : (DateTime?)null,
+                    });
+                }
+
+                long freed = 0;
+                int deleted = 0, failed = 0;
+                foreach (var rec in deletable)
+                {
+                    long size = events.EventSize(rec.Id);
+                    if (events.DeleteEvent(rec.Id)) { deleted++; freed += size; }
+                    else failed++;
+                }
+                if (deleted > 0)
+                    Log.Info($"Events: deleted {deleted} event(s) on request ({FormatBytes(freed)} freed)");
+                return Results.Json(new { deleted, freed, failed, ongoing, unknown });
+            });
         }
 
         // ------------------------------------------------------------ recording switches + footage
@@ -2077,6 +2147,14 @@ public static class WebApi
     /// <summary>Serializes footage exports: bulk reads off the recordings disk
     /// compete with the recorders' writes, so only one zip streams at a time.</summary>
     private static readonly SemaphoreSlim ExportGate = new(1, 1);
+
+    /// <summary>Human-readable byte size for log lines (KB/MB/GB).</summary>
+    private static string FormatBytes(long bytes) => bytes switch
+    {
+        >= 1024L * 1024 * 1024 => $"{bytes / (1024.0 * 1024 * 1024):0.0} GB",
+        >= 1024L * 1024 => $"{bytes / (1024.0 * 1024):0.0} MB",
+        _ => $"{bytes / 1024.0:0} KB",
+    };
 
     /// <summary>
     /// The segment files a [from, to] seconds-of-day export should contain: every

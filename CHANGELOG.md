@@ -47,6 +47,15 @@ in the README). Paste the matching section below into the GitHub release.
   The segment still being written is excluded until it closes, and one export
   runs at a time so bulk reads never crowd out the recorders.
 
+- **Delete events in bulk from the Events page**: a Select button turns on
+  checkboxes (with select-all); pick any number of events and Delete asks the
+  server for an exact summary first — how many, roughly how much disk it frees,
+  a per-camera breakdown and the time span — then removes the events and every
+  file they own (clip, thumbnail, preview) on confirmation. Events still being
+  recorded are kept and called out; empty day folders are pruned afterward.
+  Deletion is admin-only once web-UI accounts exist
+  (`POST /api/events/delete {ids[], estimate}`; `?estimate` returns the summary
+  without deleting).
 - **Sidebar cameras can be reordered**: drag a camera card onto another and it
   lands in front of it (an insertion line shows where; a drop zone at the list's
   end moves a camera last). The order is saved with the rest of the view — per

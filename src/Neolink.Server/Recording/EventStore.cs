@@ -192,6 +192,46 @@ public sealed class EventStore
         return true;
     }
 
+    /// <summary>The on-disk size of one event's stored artifacts (clip, thumb,
+    /// preview, event.json) in bytes — 0 when the event is unknown or its folder
+    /// is already gone. Used to tell the user how much a deletion will free.</summary>
+    public long EventSize(string id)
+    {
+        string? dir;
+        lock (_gate) { dir = _byId.TryGetValue(id, out var e) ? e.Dir : null; }
+        return dir == null ? 0 : DirSize(dir);
+    }
+
+    /// <summary>
+    /// Permanently deletes one event: its folder and every artifact under it, and
+    /// its index entry. Refuses an event still being recorded (Ongoing) — deleting
+    /// under the writer would race it. Empty parent day/camera folders are pruned
+    /// so the tree does not accumulate hollow directories. Returns false when the
+    /// event is unknown, ongoing, or the folder could not be removed (logged).
+    /// </summary>
+    public bool DeleteEvent(string id)
+    {
+        string dir;
+        lock (_gate)
+        {
+            if (!_byId.TryGetValue(id, out var e)) return false;
+            if (e.Record.Ongoing) return false; // still being written — never delete under the recorder
+            dir = e.Dir;
+        }
+        if (!DeleteTree(dir)) return false;
+        lock (_gate) { _byId.Remove(id); }
+        // {root}/{camera}/{date}/detections/{event} → prune detections, then the day.
+        try
+        {
+            var detections = Path.GetDirectoryName(dir);   // .../detections
+            TryDeleteIfEmpty(detections!);
+            var dayDir = Path.GetDirectoryName(detections!); // .../{date}
+            TryDeleteIfEmpty(dayDir!);
+        }
+        catch { /* pruning is best-effort; the event itself is already gone */ }
+        return true;
+    }
+
     /// <summary>Newest-first event listing with optional filters. <paramref name="localDate"/> matches the server-local calendar day.</summary>
     public List<EventRecord> List(string? camera = null, bool? reviewed = null, int limit = 200,
         DateTime? localDate = null)
@@ -570,6 +610,21 @@ public sealed class EventStore
             }
         }
         return removed;
+    }
+
+    /// <summary>Total size in bytes of every file under a directory (0 on error).</summary>
+    private static long DirSize(string dir)
+    {
+        try
+        {
+            long total = 0;
+            foreach (var f in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
+            {
+                try { total += new FileInfo(f).Length; } catch { }
+            }
+            return total;
+        }
+        catch { return 0; }
     }
 
     /// <summary>Recursively deletes a directory; true only when it is actually gone.</summary>
