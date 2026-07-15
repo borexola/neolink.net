@@ -32,11 +32,11 @@
         <div class="campanel-section">
             <div class="campanel-section-title">@UiIcon.Render("eye-off", 13) SUSPENDED <span class="beta-tag">BETA</span></div>
             <div class="notice small">
-                This camera is <b>suspended in Neolink</b> — no connection is held, so it
+                This camera is <b>suspended in Neolink.NET</b> — no connection is held, so it
                 isn't viewed or recorded here and its Home Assistant entities are unavailable.
             </div>
             <div class="control-row">
-                <span>Suspended in Neolink — on</span>
+                <span>Suspended in Neolink.NET — on</span>
                 @if (_suspendBusy)
                 {
                     <span class="chip chip-off" aria-busy="true"><span class="btn-spinner"></span>Saving…</span>
@@ -548,7 +548,7 @@
                 </div>
                 @if (_privacyOn == true)
                 {
-                    <div class="notice small">The stream drops while private; Neolink keeps the control
+                    <div class="notice small">The stream drops while private; Neolink.NET keeps the control
                         connection and the toggle stays available.</div>
                 }
             </div>
@@ -575,7 +575,7 @@
             <div class="campanel-section">
                 <div class="campanel-section-title">@UiIcon.Render("rec", 13) RECORDING</div>
                 <div class="notice small">
-                    These are <b>Neolink server</b> settings — what this server records from the
+                    These are <b>Neolink.NET server</b> settings — what this server records from the
                     camera's streams. Nothing here is sent to the camera or changes its own
                     (SD-card) recording.
                 </div>
@@ -783,12 +783,12 @@
             <div class="campanel-section">
                 <div class="campanel-section-title">@UiIcon.Render("eye-off", 13) SUSPEND <span class="beta-tag">BETA</span></div>
                 <div class="notice small">
-                    Stops <b>Neolink</b> from connecting to this camera — it can't be viewed
+                    Stops <b>Neolink.NET</b> from connecting to this camera — it can't be viewed
                     or recorded here, and its Home Assistant entities go unavailable, until
                     resumed. No restart needed; the setting survives one.
                 </div>
                 <div class="control-row">
-                    <span>Suspended in Neolink @(_suspended == true ? "— on" : "")</span>
+                    <span>Suspended in Neolink.NET @(_suspended == true ? "— on" : "")</span>
                     @if (_suspendBusy)
                     {
                         <span class="chip chip-off" aria-busy="true"><span class="btn-spinner"></span>Saving…</span>
@@ -806,13 +806,13 @@
                     else
                     {
                         <span class="row-actions">
-                            <button class="chip chip-danger" @onclick="() => SetSuspendAsync(true)">Confirm — stop Neolink for this camera</button>
+                            <button class="chip chip-danger" @onclick="() => SetSuspendAsync(true)">Confirm — stop Neolink.NET for this camera</button>
                             <button class="chip" @onclick="() => _confirmSuspend = false">Cancel</button>
                         </span>
                     }
                 </div>
                 <div class="notice warn small">
-                    ⚠ This only stops <b>Neolink</b>. The camera keeps running: its own
+                    ⚠ This only stops <b>Neolink.NET</b>. The camera keeps running: its own
                     <b>SD-card / cloud recording</b> and any <b>other system</b> pulling its
                     stream directly are unaffected. It is not a privacy guarantee.
                 </div>
@@ -1488,8 +1488,8 @@
                 _suspended = suspend;
                 _requerySeq++; // a new toggle supersedes any resume poll in flight
                 ShowToast(suspend
-                    ? "Suspended — Neolink won't view or record this camera until resumed. The camera itself keeps running."
-                    : "Resumed — Neolink is reconnecting to this camera.");
+                    ? "Suspended — Neolink.NET won't view or record this camera until resumed. The camera itself keeps running."
+                    : "Resumed — Neolink.NET is reconnecting to this camera.");
                 if (!suspend)
                 {
                     // Repopulate now (honest offline notice while it reconnects),

@@ -61,7 +61,7 @@ public sealed class RtspCameraService
             // clients pulling it directly are unaffected). Resuming reconnects.
             if (_suspended)
             {
-                Log.Info($"{_tag}: suspended — Neolink will not view or record this camera until it is resumed");
+                Log.Info($"{_tag}: suspended — Neolink.NET will not view or record this camera until it is resumed");
                 try
                 {
                     while (_suspended && !ct.IsCancellationRequested)

@@ -43,7 +43,7 @@ ports_description:
 ingress: true
 ingress_port: 8655
 panel_icon: mdi:cctv
-panel_title: Neolink
+panel_title: Neolink.NET
 webui: http://[HOST]:[PORT:8655]
 watchdog: tcp://[HOST]:[PORT:8655]
 options:

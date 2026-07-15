@@ -151,7 +151,7 @@ public sealed class CameraService : ILiveCameraSource
             // any other client pulling it directly keep working). Resuming reconnects.
             if (_suspended)
             {
-                Log.Info($"{Tag}: suspended — Neolink will not view or record this camera until it is resumed");
+                Log.Info($"{Tag}: suspended — Neolink.NET will not view or record this camera until it is resumed");
                 try
                 {
                     while (_suspended && !ct.IsCancellationRequested)

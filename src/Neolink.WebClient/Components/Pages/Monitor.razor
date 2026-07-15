@@ -11,7 +11,7 @@
    sampled server-side every 2s, and the frontend (this very browser tab —
    JS heap, frame rate, circuit round-trip) sampled locally at the same beat. *@
 
-<PageTitle>Neolink — Monitor</PageTitle>
+<PageTitle>Neolink.NET — Monitor</PageTitle>
 
 <div class="mon-page">
     <div class="toolbar mon-toolbar">
@@ -43,7 +43,7 @@
     }
     else if (!_supported)
     {
-        <div class="notice">This server does not expose resource statistics — update Neolink.Server.</div>
+        <div class="notice">This server does not expose resource statistics — update the Neolink.NET server.</div>
     }
     else
     {
@@ -51,7 +51,7 @@
             @* ---------------- backend ---------------- *@
             <div class="mon-section">
                 <span class="mon-section-title">BACKEND</span>
-                <span class="mon-section-sub">Neolink.Server process@(_info?.Os != null ? $" · {ShortOs(_info.Os)}" : "")@(_info != null ? $" · {_info.Processors} cores" : "")</span>
+                <span class="mon-section-sub">Neolink.NET server process@(_info?.Os != null ? $" · {ShortOs(_info.Os)}" : "")@(_info != null ? $" · {_info.Processors} cores" : "")</span>
             </div>
 
             <div class="mon-cards">

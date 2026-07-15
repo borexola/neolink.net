@@ -110,7 +110,7 @@
                     }
                     @if (cam.Suspended)
                     {
-                        <span class="cam-doze-badge" title="Suspended in Neolink — not viewed or recorded here until resumed (the camera itself keeps running). Resume from its settings (⚙).">
+                        <span class="cam-doze-badge" title="Suspended in Neolink.NET — not viewed or recorded here until resumed (the camera itself keeps running). Resume from its settings (⚙).">
                             @UiIcon.Render("eye-off", 10) suspended
                         </span>
                     }
@@ -486,7 +486,7 @@
                             <div class="tile-privacy">
                                 <span class="tile-privacy-icon">@UiIcon.Render("eye-off", 22)</span>
                                 <span>suspended</span>
-                                <small>not viewed or recorded in Neolink</small>
+                                <small>not viewed or recorded in Neolink.NET</small>
                             </div>
                         }
                         else if (camera is { Privacy: true })
@@ -811,8 +811,8 @@
                                 Where this page sends its API calls and pulls video from.
                                 <b>Leave it blank in normal setups</b> — the UI automatically talks to
                                 the server that served it. Set it only when this UI runs somewhere else
-                                than the Neolink server (a dev build, a separately hosted copy) or you
-                                want this browser to control a <i>different</i> Neolink instance, e.g.
+                                than the Neolink.NET server (a dev build, a separately hosted copy) or you
+                                want this browser to control a <i>different</i> Neolink.NET instance, e.g.
                                 <code>http://192.168.1.10:8655</code>.
                             </div>
                             <div class="campanel-divider"></div>
@@ -3198,7 +3198,7 @@
 
     private static string CamHeadTitle(ApiCamera cam) =>
         cam.Suspended
-            ? "Suspended in Neolink — not viewed or recorded here until resumed (the camera itself keeps running)"
+            ? "Suspended in Neolink.NET — not viewed or recorded here until resumed (the camera itself keeps running)"
             : cam.Privacy
             ? "Privacy mode is on — the camera is dark on purpose until it is switched back"
             : cam.Online

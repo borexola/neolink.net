@@ -11,7 +11,7 @@ in the README). Paste the matching section below into the GitHub release.
 - **RTSP audio backchannel (two-way talk for go2rtc / Home Assistant)**: cameras
   with a speaker now expose an ONVIF Profile-T audio backchannel on their existing
   RTSP mount, so go2rtc, Home Assistant's WebRTC Camera and other ONVIF-aware
-  clients can talk through the camera without the Neolink web UI. A client that
+  clients can talk through the camera without the Neolink.NET web UI. A client that
   sends `Require: www.onvif.org/ver20/backchannel` on DESCRIBE is offered an extra
   sendonly µ-law (PCMU/8000) track; the G.711 audio it streams during PLAY is
   depacketized, decoded and fed to the same talk pipeline the push-to-talk button
@@ -89,9 +89,9 @@ in the README). Paste the matching section below into the GitHub release.
   groupings kept, with an unsaved-changes dot on the tab) and **Recording** (the
   server-side recording settings). The dialog holds a fixed height too, so tab
   switches don't jump.
-- **Suspend a camera in Neolink (beta)**: a per-camera switch that stops Neolink
+- **Suspend a camera in Neolink.NET (beta)**: a per-camera switch that stops Neolink.NET
   from connecting to the camera at all — so it can't be viewed or recorded here —
-  without editing the config or restarting. It drops Neolink's connection and holds
+  without editing the config or restarting. It drops Neolink.NET's connection and holds
   it closed; downstream (live view, event and 24/7 recording, HA entities) goes
   quiet naturally, and the setting persists across restarts. The camera itself is
   untouched: its own SD-card / cloud recording and any other system pulling its
@@ -151,7 +151,7 @@ in the README). Paste the matching section below into the GitHub release.
   already admin-only, and `/api/me/settings` is per-user by design.
 - **Privacy mode no longer flaps the camera offline**: on cameras that go fully dark
   in privacy mode (E1 Pro and similar), the absence of video was mistaken for a
-  stalled stream, so Neolink reconnected every ~15s — flapping the status between
+  stalled stream, so Neolink.NET reconnected every ~15s — flapping the status between
   online and offline and, worse, marking the camera (and every entity, including the
   privacy switch itself) Unavailable in Home Assistant, which made turning privacy
   back off unreliable. When privacy mode is on, the missing video is now treated as

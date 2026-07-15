@@ -45,22 +45,22 @@ The cameras are unmodified and no Reolink NVR is required.
 
 ## Lightweight by design — the camera does the heavy lifting
 
-Neolink runs no object detection of its own: it never decodes, transcodes, or
+Neolink.NET runs no object detection of its own: it never decodes, transcodes, or
 analyses a single video frame for motion or AI. All of that already happens *on
 the camera*, whose dedicated silicon detects motion and classifies people,
-vehicles and animals in real time. Neolink simply **listens for the alarm
+vehicles and animals in real time. Neolink.NET simply **listens for the alarm
 messages the camera pushes** over the Baichuan connection (the same events that
 drive Reolink's own app) and relays them to Home Assistant as MQTT sensors — and
 doorbell button presses as MQTT events. That means:
 
 - **No GPU, no Coral, no CPU-hungry inference** — unlike setups where a server
-  re-analyses every stream, Neolink adds essentially zero processing load. It
+  re-analyses every stream, Neolink.NET adds essentially zero processing load. It
   runs comfortably on a Raspberry Pi or a small NAS container.
 - **Event-driven, not polled** — sensors fire the instant the camera sees
   something, with no scan interval and no per-frame work.
 - **AI is only as good as the camera** — person/vehicle/animal labels come from
   the camera's firmware, so enable the detection types you want in the Reolink
-  app and Neolink surfaces exactly those.
+  app and Neolink.NET surfaces exactly those.
 
 The trade-off is that detection quality and available classes are whatever your
 camera model provides (rather than a tunable server-side model like Frigate's);
@@ -214,7 +214,7 @@ curl -o config/config.json https://raw.githubusercontent.com/borexola/neolink.ne
 Edit it: camera names, IP addresses, and credentials (same login as the Reolink app).
 
 > **New to it?** You can skip this step. If `config.json` doesn't exist on
-> first start, Neolink writes a commented starter config and boots straight to
+> first start, Neolink.NET writes a commented starter config and boots straight to
 > the web UI (empty, no crash-loop) — then edit `config.json` to add your
 > cameras and restart. Handy for one-click installs (Unraid, Portainer).
 
@@ -464,7 +464,7 @@ config file (in Docker: the `/config` mount), so they survive restarts:
   📦 package, 👁 motion) — detections of disabled types are discarded entirely.
   ⚠ The camera does the detecting: person/vehicle/animal labels only arrive when
   the matching Smart Detection is enabled **in the Reolink app** (camera →
-  Settings → Detection). The chips are a Neolink-side filter on what arrives;
+  Settings → Detection). The chips are a Neolink.NET-side filter on what arrives;
   the camera's own settings are never changed.
 - **Continuous (24/7)**: classic NVR-style recording into rolling
   `segment_minutes`-long MP4 files, browsable under 🕘 → Recordings (grouped by
@@ -569,7 +569,7 @@ be valid for the browser.
 
 ## Home Assistant (MQTT)
 
-Add an `mqtt` section and Neolink connects to your broker and publishes
+Add an `mqtt` section and Neolink.NET connects to your broker and publishes
 [Home Assistant MQTT Discovery](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery)
 config, so a **device per camera** appears automatically — no YAML in HA.
 
@@ -604,7 +604,7 @@ config, so a **device per camera** appears automatically — no YAML in HA.
 | Doorbell | `event` | Video doorbells: every button press publishes an MQTT event (`event_type: press`, `device_class: doorbell`) — the natural trigger for ring automations |
 | Visitor | `binary_sensor` | Momentary doorbell-press pulse; HA clears it itself after a few seconds |
 | Record on demand | `switch` | **Record a clip on demand from HA**, regardless of what the camera detects — one clip, stops by itself; see below (appears when the server records events for this camera) |
-| Suspend (beta) | `switch` | ON = Neolink holds no connection to the camera, so it isn't viewed or recorded here (the camera itself keeps running — its own SD/cloud recording is unaffected). Stays usable while the camera is intentionally offline |
+| Suspend (beta) | `switch` | ON = Neolink.NET holds no connection to the camera, so it isn't viewed or recorded here (the camera itself keeps running — its own SD/cloud recording is unaffected). Stays usable while the camera is intentionally offline |
 | Recording | `binary_sensor` | ON while the server is writing this camera's footage right now — an event clip (detection or on-demand) or a continuous segment |
 | Battery | `sensor` | Battery cameras; charge status + temperature as attributes |
 | Wi-Fi signal | `sensor` | Diagnostic; RSSI in dBm from the camera's own status pushes (Wi-Fi cameras) |
@@ -648,7 +648,7 @@ time someone rings. Presses are also logged and recorded as regular "Doorbell
 pressed" events with pre-roll video.
 
 **On-demand recording (the Record on demand switch).** Most Reolink firmwares cannot be
-told to record on demand — but Neolink is already the recorder, so it doesn't
+told to record on demand — but Neolink.NET is already the recorder, so it doesn't
 need the camera's cooperation. Switching ON records **one clip** for that
 camera exactly as if a detection were running: pre-roll included, retention
 applies, and the footage appears in the timeline and review strip labeled
@@ -687,13 +687,13 @@ Non-HA consumers can publish `ON` / `OFF` to `{base_topic}/{camera}/record/set`
 directly, or use the web API: `POST /api/cameras/{name}/record` with
 `{"active": true|false}`.
 
-Availability is two-level: entities show **unavailable** when either the Neolink
+Availability is two-level: entities show **unavailable** when either the Neolink.NET
 service (a Last-Will topic) or the individual camera goes offline. State and
 discovery messages are retained (press events excepted, as above), so Home
 Assistant repopulates after a restart.
 Commands from HA (toggle the floodlight, reboot, nudge PTZ…) are executed on the
 camera over the same Baichuan connection. No external MQTT library is used —
-Neolink speaks MQTT 3.1.1 directly, keeping the zero-dependency build.
+Neolink.NET speaks MQTT 3.1.1 directly, keeping the zero-dependency build.
 
 > Plain MQTT (port 1883) is unencrypted. For a LAN broker that's typical; enable
 > `tls` (port 8883) if the broker is remote.
@@ -711,7 +711,7 @@ automation:
   - alias: Notify on driveway motion
     trigger:
       - platform: state
-        entity_id: binary_sensor.driveway_motion   # a Neolink camera sensor
+        entity_id: binary_sensor.driveway_motion   # a Neolink.NET camera sensor
         to: "on"
     action:
       - service: notify.mobile_app_your_phone
@@ -749,7 +749,7 @@ that auto-open from such a link start muted; tap the speaker to unmute.
 ## Email notifications
 
 For the things you want to hear about even when you're not looking at a
-dashboard, Neolink can email **critical alerts**. It's off until you opt in:
+dashboard, Neolink.NET can email **critical alerts**. It's off until you opt in:
 open ⚙ **Server settings → Notifications**, turn it on, enter one recipient
 address and your SMTP details, and **Send test email** to confirm. Settings
 apply immediately (no restart) and are stored separately from `config.json`.
@@ -814,7 +814,7 @@ battery-powered and managing sleep deliberately:
 
 - **Auto-detected**: a camera that reports a battery gets a charge badge in the
   sidebar (with a charging bolt when powered), and defaults to **sleep-friendly
-  mode** — Neolink disconnects while nobody watches so the camera can power down,
+  mode** — Neolink.NET disconnects while nobody watches so the camera can power down,
   and reconnects when you open one of its streams. A dozing camera shows an
   "asleep" badge instead of the red offline one.
 - **`"always_on": true`** (per camera in the config) holds the connection — and
@@ -854,7 +854,7 @@ the strip with their own 🚧/🚷/🕒 icons.
 Confirmed working against real hardware (Reolink Elite WiFi): newer firmware
 nests the perimeter verdict in a `smartAiTypeList` inside the alarm push — rule
 type (`crossline` / `intrusion` / `loitering`), the zone/line index, and the
-object class that tripped it — and Neolink maps all of it to event labels.
+object class that tripped it — and Neolink.NET maps all of it to event labels.
 Older firmware variants that put the token in `AItype` or the status list are
 handled too.
 
@@ -1004,7 +1004,7 @@ by channel, nonce-derived AES session keys, binary-mode switching via
 - **Choppy browser video on Firefox for main streams**: that's H.265 — use the sub
   stream or a Chromium/Safari browser with hardware HEVC.
 - **Configured `clips_path`/`archive_path` but the folders look empty on the
-  host (Docker)**: recording never blocks on a missing directory — Neolink
+  host (Docker)**: recording never blocks on a missing directory — Neolink.NET
   creates it at startup. If no volume is mapped at that container path, the
   directory is created **inside the container's writable layer**: footage
   records fine but lives in the container (surviving restarts, destroyed by
