@@ -2771,6 +2771,153 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 
 .tl-keys-hint { margin-top: 10px; }
 
+/* ---- footage export dialog: camera, range, format cards, download ---- */
+.tl-export-panel {
+    /* centered modal (the keys panel it borrows from is corner-anchored, which
+       breaks when the studio layout docks the toolbar at the bottom) */
+    position: fixed;
+    inset: 0;
+    margin: auto;
+    height: fit-content;
+    width: min(440px, calc(100vw - 24px));
+    max-height: calc(100dvh - 24px);
+    overflow-y: auto;
+}
+
+/* Little uppercase captions so each row reads as what it is at a glance */
+.tl-export-sec {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 2px 0 6px;
+}
+
+.tl-export-cams {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 14px;
+}
+
+.tl-export-range {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+}
+
+.tl-export-range label {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12px;
+    color: var(--muted);
+}
+
+.tl-export-range .tl-clock-edit { width: 86px; }
+
+.tl-export-arrow { color: var(--muted); }
+
+/* Live length of the chosen range — instant feedback while typing times */
+.tl-export-window {
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border-radius: 999px;
+    padding: 2px 9px;
+    white-space: nowrap;
+}
+
+.tl-export-presets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 14px;
+}
+
+/* Format picker: two self-explanatory cards instead of bare chips */
+.tl-export-format {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.tl-export-card {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    text-align: left;
+    padding: 9px 11px;
+    border-radius: 10px;
+    border: 1px solid var(--line);
+    background: color-mix(in srgb, var(--panel-2) 55%, transparent);
+    color: var(--text);
+    cursor: pointer;
+}
+
+.tl-export-card.sel {
+    border-color: color-mix(in srgb, var(--accent) 65%, transparent);
+    background: var(--accent-soft);
+}
+
+.tl-export-card:disabled {
+    opacity: 0.55;
+    cursor: default;
+}
+
+.tl-export-card-title { font-size: 12px; font-weight: 700; }
+
+.tl-export-card-sub {
+    font-size: 10.5px;
+    color: var(--muted);
+    line-height: 1.4;
+}
+
+.tl-export-card.sel .tl-export-card-sub {
+    color: color-mix(in srgb, var(--text) 82%, transparent);
+}
+
+/* Phones: the cards stack — side by side their captions get too cramped */
+@media (max-width: 480px) {
+    .tl-export-format { grid-template-columns: 1fr; }
+}
+
+.tl-export-est {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    font-size: 12px;
+    min-height: 18px;
+}
+
+.tl-export-warn { color: #e8b054; }
+.tl-export-err { color: var(--err); }
+
+.tl-export-actions {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.tl-export-go {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.tl-export-go:disabled {
+    opacity: 0.45;
+    cursor: default;
+    filter: none;
+}
+
 /* Adaptive playback: shown while the clock is held back for lagging streams */
 .tl-lag {
     font-size: 10px;
@@ -2968,6 +3115,21 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     white-space: nowrap;
 }
 
+/* Gentle discovery hint: zooming is the timeline's superpower and nothing
+   visible said so. Flows under the lanes, never intercepts the pointer, and
+   disappears the moment the user is zoomed in. */
+.tl-zoom-hint {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 5px;
+    padding-top: 4px;
+    font-size: 10.5px;
+    color: var(--muted);
+    pointer-events: none;
+    user-select: none;
+}
+
 .tl-grid {
     flex: 1;
     min-height: 0;
@@ -3043,6 +3205,77 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 @keyframes tl-busy-in {
     to { opacity: 1; }
 }
+
+/* ---- Studio layout (opt-in): monitors on top, editing desk at the bottom ----
+   Pure flex re-ordering of the same DOM — the scrub/zoom/hover JS hooks and the
+   render path are identical in both layouts, only the visual order changes. */
+.tl-page.studio .tl-grid { order: 1; padding: 8px 12px; }
+.tl-page.studio .tl-toolbar { order: 2; border-top: 1px solid var(--line); }
+.tl-page.studio .tl-cams { order: 3; padding-top: 4px; }
+.tl-page.studio .tl-board {
+    order: 4;
+    max-height: 34vh;
+    /* Scroll only when many tracks exceed the cap — and never sideways: ruler
+       and cursor labels poke a few px past the right edge at some zoom
+       positions, and overflow-y:auto alone silently turns overflow-x into
+       auto as well (CSS computed-value rule), so a horizontal scrollbar
+       flashed in and out under the tracks while zooming/panning, jolting the
+       board by its height. The stable gutter keeps lane widths constant when
+       the vertical scrollbar appears with many cameras. */
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-gutter: stable;
+}
+/* Empty-state and error notices sit centered on the (otherwise black) stage. */
+.tl-page.studio .notice { order: 1; margin: auto; }
+/* The calendar can't drop below a bottom-docked toolbar — center it instead.
+   inset/margin centering, and an opacity-only entrance: the default popover
+   animation drives transform, which would fight (and visibly jump) a
+   transform-based centering. */
+.tl-page.studio .tl-cal {
+    position: fixed;
+    inset: 0;
+    margin: auto;
+    height: fit-content;
+    animation: tl-cal-in 0.14s ease;
+}
+
+@keyframes tl-cal-in {
+    from { opacity: 0; }
+}
+
+/* Program monitor: click a tile to focus it, the rest become a thumbnail rail. */
+.tl-page.studio .tl-tile { cursor: pointer; }
+.tl-page.studio .tl-grid.tl-focused { grid-auto-rows: minmax(64px, 1fr); }
+.tl-tile-focus { border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+.tl-tile-rail .tl-tile-name { font-size: 10px; left: 5px; bottom: 4px; padding: 1px 6px; }
+.tl-tile-rail .tl-nofootage { font-size: 10px; }
+
+/* Frame snapshot: quiet until the tile is hovered (always faintly visible on touch). */
+.tl-snap {
+    position: absolute;
+    right: 6px;
+    bottom: 6px;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 26px;
+    border: none;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.12s ease;
+}
+.tl-tile:hover .tl-snap, .tl-snap:focus-visible { opacity: 1; }
+.tl-snap:hover { background: rgba(0, 0, 0, 0.8); color: var(--accent); }
+@media (pointer: coarse) {
+    .tl-snap { opacity: 0.7; }
+}
+.tl-tile-rail .tl-snap { display: none; } /* thumbnails: too small, focus first */
 
 .event-player-foot {
     display: flex;

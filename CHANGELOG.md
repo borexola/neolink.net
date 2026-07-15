@@ -4,6 +4,70 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
+## 0.8.10
+
+### New
+
+- **Studio layout for the timeline (opt-in)**: a Studio toggle in the timeline
+  toolbar switches the page to a video-editor arrangement — the camera monitors
+  fill the top of the screen and the editing desk (transport controls, camera
+  chips and the tracks) docks at the bottom, like Premiere or Resolve. Clicking
+  a monitor promotes it to the program monitor with the other cameras in a
+  thumbnail rail; clicking it again restores the equal grid. The classic layout
+  stays the default and is unchanged. The choice is per user: saved to the
+  signed-in account, so it follows you across browsers and devices, with
+  localStorage as the signed-out fallback.
+- **Frame snapshots on the timeline**: every timeline tile gains a camera
+  button — and the `S` key targets the focused monitor (or a lone camera) —
+  that saves the frame under the cursor as a PNG named after the camera, date
+  and time.
+- **Per-page account settings in the API**: `GET/PUT /api/me/settings/{page}`
+  stores an independent settings blob per page for the signed-in user (the
+  timeline uses `timeline`), so pages never overwrite each other's state. The
+  existing `/api/me/settings` blob is untouched.
+- **Footage export from the timeline**: an Export button in the timeline toolbar
+  downloads a chosen period of one camera's day — up to the full 24 hours
+  (`GET /api/recordings/{camera}/{date}/export?from=HH:mm:ss&to=HH:mm:ss`
+  `[&format=mp4]`). Two formats, both lossless and re-encode-free:
+  - **Single MP4** (the default when possible): the segments' sample tables are
+    merged and the media bytes stream-copied into one fast-start file with an
+    exact Content-Length (real download progress). The file is trimmed to the
+    requested range — it begins at the nearest keyframe at or before the From
+    time (at most one GOP early, a few seconds) and ends at To. Coverage gaps
+    become hard cuts, like any NVR export. Old fragmented recordings combine
+    transparently via the virtual classic index. A range whose stream
+    configuration changes mid-way (record stream switched, so resolution/codec
+    differ) can't share one container — the dialog says why and offers the zip
+    instead.
+  - **Zip of segments**: the original files as-is (whole segments, so coverage
+    can start a few minutes early), each named by its start time and playable on
+    its own, streamed with store-level compression.
+  The dialog pre-fills the zoomed-in window, shows size (and footage duration
+  for the MP4) before the download starts (`&estimate=1`), and warns above 2 GB.
+  The segment still being written is excluded until it closes, and one export
+  runs at a time so bulk reads never crowd out the recorders.
+
+- **Timeline zoom is discoverable**: a quiet hint under the lanes — "Scroll or
+  pinch here to zoom into the day" — points out the timeline's best trick; it
+  disappears the moment you are zoomed in.
+
+### Fixed
+
+- **Timeline lanes no longer trail behind "now" on some filesystems**: the day
+  listing derived every segment's duration from the file's mtime, but an OPEN
+  file's directory mtime is stale on NTFS (updated lazily on close) and on
+  FUSE/network mounts (attribute caches) — so a recording camera's lane could
+  sit minutes behind the clock and look like recording had stopped, then jump
+  forward when the segment closed. High-bitrate cameras were hit worst: their
+  big segments stay open the longest between rolls. The recorder now reports
+  the segment it is writing (file, day, real media seconds) from its own
+  memory; the day listing overlays that as `live: true` (appending the file if
+  directory enumeration missed it), and the timeline extends a live lane to
+  "now" whenever the server says so, with the old mtime heuristic kept as the
+  fallback for older servers. Also, a just-opened live segment no longer
+  borrows the typical-length guess, which could briefly project its lane into
+  the future.
+
 ## 0.8.9
 
 ### New

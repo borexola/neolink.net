@@ -881,6 +881,28 @@ issue with them so the mapping can be extended.
   with TLS it just works; on a plain `http://lan-ip` page the mic button reports that
   HTTPS is required. The mic button only appears on cameras that advertise talk
   support (and only while maximized or in quick view).
+- **Footage export**: the Export button in the timeline toolbar downloads a chosen
+  period of one camera's day (up to the full 24 hours) — as one combined MP4
+  (segments joined without re-encoding and trimmed to the range: the file starts
+  at the nearest keyframe at or before your From time, a few seconds early at
+  most, and ends at To; coverage gaps become hard cuts) or as a zip of the whole
+  original segments, each named by its start time. The dialog pre-fills the
+  zoomed-in window and shows the download size before you start. A range whose
+  stream configuration changes mid-way (the record stream was switched, so
+  resolution differs) can't become one file — the dialog explains and offers the
+  zip. The segment still being written is excluded until it closes, and one
+  export runs at a time so bulk reads never crowd out the recorders. Mind the
+  size: a full day of a high-bitrate camera is tens of gigabytes, and behind
+  Home Assistant ingress big downloads are slower — prefer the direct port for
+  those.
+- **Timeline studio layout (opt-in)**: the Studio button in the timeline toolbar
+  flips the page into a video-editor arrangement — monitors on top, the transport
+  bar and the camera tracks docked at the bottom, like Premiere or Resolve. Click
+  a monitor to make it the program monitor (the others become a thumbnail rail);
+  click it again to restore the grid. Every tile also has a camera button (and
+  the `S` key) that saves the frame under the cursor as a PNG. The choice is
+  saved to your signed-in account, so it follows you across browsers and devices;
+  signed-out browsers fall back to local storage.
 
 ## Versioning & releases
 

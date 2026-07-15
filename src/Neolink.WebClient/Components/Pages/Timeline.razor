@@ -11,7 +11,7 @@
 
 <PageTitle>Neolink.NET — Timeline</PageTitle>
 
-<div class="tl-page">
+<div class="tl-page @(_studio ? "studio" : "")">
     <div class="toolbar tl-toolbar">
         <a class="tool-btn" href="" title="Back to live view">@UiIcon.Render("chev-left", 16) <span class="tool-name">Live</span></a>
         <span class="tool-label">TIMELINE</span>
@@ -77,6 +77,17 @@
             <button class="chip tl-zoom-chip @(Zoomed ? "chip-active" : "chip-off")"
                     title="@(Zoomed ? "Zoomed in — click (or press 0) to see the whole day again" : "Scroll or pinch on the timeline to zoom in for fine seeking")"
                     @onclick="ResetZoomAsync">@UiIcon.Render("zoom", 12) @SpanLabel(_viewSpan)</button>
+            @if (_continuous && Included.Any())
+            {
+                <button class="tool-btn tl-export-btn @(_showExport ? "active" : "")"
+                        title="Export footage: download a period of this day (up to the whole day) as a zip of its recordings"
+                        @onclick="OpenExportAsync">@UiIcon.Render("download", 13) <span class="tool-name">Export</span></button>
+            }
+            <button class="tool-btn tl-studio-btn @(_studio ? "active" : "")"
+                    title="@(_studio
+                        ? "Studio layout is on — click to switch back to the classic view (your choice is saved)"
+                        : "Studio layout: monitors on top, the timeline docked at the bottom like a video editor — saved to your account")"
+                    @onclick="ToggleStudioAsync">@UiIcon.Render("film", 13) <span class="tool-name">Studio</span></button>
             <button class="tool-btn tl-keys-btn @(_showKeys ? "active" : "")" title="Keyboard shortcuts"
                     @onclick="() => _showKeys = !_showKeys">?</button>
         </div>
@@ -139,8 +150,112 @@
                     <span>scroll</span><span>Zoom in/out around the mouse (Shift: pan)</span>
                     <span>+ − 0</span><span>Zoom in / out / whole day</span>
                     <span>T</span><span>Jump to an exact time</span>
+                    <span>S</span><span>Save a still (focused monitor, or a lone camera)</span>
                 </div>
                 <div class="event-sub tl-keys-hint">Drag the thin day strip above the lanes to move the zoomed view. Double-click the lanes to zoom back out.</div>
+            </div>
+        </div>
+    }
+
+    @if (_showExport)
+    {
+        <div class="tl-keys-backdrop" @onclick="() => _showExport = false">
+            <div class="tl-keys-panel tl-export-panel" @onclick:stopPropagation="true">
+                <div class="tl-keys-title">
+                    <span>EXPORT FOOTAGE — @_date.ToString("ddd, d MMM yyyy")</span>
+                    <button class="icon-btn" title="Close" @onclick="() => _showExport = false">✕</button>
+                </div>
+                <div class="tl-export-sec">Camera</div>
+                <div class="tl-export-cams">
+                    @foreach (var cam in Included)
+                    {
+                        var name = cam.Name;
+                        <button class="chip @(string.Equals(_exCam, name, StringComparison.OrdinalIgnoreCase) ? "chip-active" : "")"
+                                @onclick="() => PickExportCamAsync(name)">@name</button>
+                    }
+                </div>
+
+                <div class="tl-export-sec">Time range</div>
+                <div class="tl-export-range">
+                    <label>From <input class="tl-clock-edit" value="@_exFrom" spellcheck="false" placeholder="HH:mm:ss"
+                                       @onchange="e => ExportRangeEditedAsync(e, from: true)" /></label>
+                    <span class="tl-export-arrow">→</span>
+                    <label>To <input class="tl-clock-edit" value="@_exTo" spellcheck="false" placeholder="HH:mm:ss"
+                                     @onchange="e => ExportRangeEditedAsync(e, from: false)" /></label>
+                    @if (ExportRangeValid(out var exF, out var exT))
+                    {
+                        <span class="tl-export-window" title="Length of the chosen range">@SpanLabel((exT - exF).TotalSeconds)</span>
+                    }
+                </div>
+                <div class="tl-export-presets">
+                    @if (Zoomed)
+                    {
+                        <button class="chip" title="The stretch of the day you are zoomed into"
+                                @onclick="@(() => ApplyExportPresetAsync("view"))">Zoomed view</button>
+                    }
+                    @if (_date == DateTime.Today)
+                    {
+                        <button class="chip" title="The 60 minutes up to now"
+                                @onclick="@(() => ApplyExportPresetAsync("hour"))">Last hour</button>
+                    }
+                    <button class="chip" title="Midnight to midnight"
+                            @onclick="@(() => ApplyExportPresetAsync("day"))">Whole day</button>
+                </div>
+
+                <div class="tl-export-sec">Format</div>
+                <div class="tl-export-format">
+                    <button class="tl-export-card @(EffectiveFormat == "mp4" ? "sel" : "")" disabled="@(_exMp4Bytes == null)"
+                            @onclick="@(() => _exFormat = "mp4")">
+                        <span class="tl-export-card-title">Single MP4</span>
+                        <span class="tl-export-card-sub">
+                            @(_exMp4Bytes == null && _exMp4Reason != null && _exFiles > 0
+                                ? _exMp4Reason
+                                : "one continuous video, trimmed to your range — starts on a keyframe, seconds early at most")
+                        </span>
+                    </button>
+                    <button class="tl-export-card @(EffectiveFormat == "zip" ? "sel" : "")"
+                            @onclick="@(() => _exFormat = "zip")">
+                        <span class="tl-export-card-title">Zip of segments</span>
+                        <span class="tl-export-card-sub">the untouched originals — whole segments, one file per roll, named by start time</span>
+                    </button>
+                </div>
+
+                <div class="tl-export-est">
+                    @if (_exError != null)
+                    {
+                        <span class="tl-export-err">@_exError</span>
+                    }
+                    else if (_exBusy)
+                    {
+                        <span>sizing up the range…</span>
+                    }
+                    else if (_exFiles == 0)
+                    {
+                        <span>no recorded footage in this range</span>
+                    }
+                    else
+                    {
+                        <span>
+                            @(EffectiveFormat == "mp4"
+                                ? $"one video · {DurText(_exMp4DurMs ?? 0)} of footage"
+                                : $"{_exFiles} segment{(_exFiles == 1 ? "" : "s")} · whole originals")
+                        </span>
+                        @if (EffBytes > 2L * 1024 * 1024 * 1024)
+                        {
+                            <span class="tl-export-warn">large download — leave this tab open until it finishes</span>
+                        }
+                    }
+                </div>
+                <div class="event-sub tl-export-hint">
+                    Footage still being recorded is left out until its segment closes.
+                </div>
+                <div class="tl-export-actions">
+                    <button class="chip" @onclick="() => _showExport = false">Cancel</button>
+                    <button class="tl-play tl-export-go" disabled="@(_exBusy || _exFiles == 0 || _exError != null)"
+                            @onclick="StartExportAsync">
+                        @UiIcon.Render("download", 14) Export@(!_exBusy && _exFiles > 0 && _exError == null ? $" ≈ {SizeText(EffBytes)}" : "")
+                    </button>
+                </div>
             </div>
         </div>
     }
@@ -255,20 +370,36 @@
                         <span class="tl-cursor-time">@TimeText(_t)</span>
                     </div>
                 }
+                @if (!Zoomed)
+                {
+                    @* Discovery nudge for the timeline's best trick; it bows out
+                       the moment the user zooms (and returns at the full-day view). *@
+                    <div class="tl-zoom-hint">@UiIcon.Render("zoom", 11) <span>Scroll or pinch here to zoom into the day</span></div>
+                }
             </div>
         </div>
 
-        @* Tile size adapts to the selection: fewer cameras = bigger tiles. *@
-        <div class="tl-grid" style="grid-template-columns: repeat(@TileColumns(), 1fr);">
+        @* Tile size adapts to the selection: fewer cameras = bigger tiles. In the
+           studio layout, clicking a tile promotes it to the program monitor (the
+           rest become a thumbnail rail); clicking it again restores the grid. *@
+        <div class="tl-grid @(FocusActive ? "tl-focused" : "")" style="@GridStyle()">
             @foreach (var cam in Included)
             {
-                <div class="tl-tile" @key="cam.Name">
+                bool focused = FocusActive && IsFocus(cam.Name);
+                <div class="tl-tile @(focused ? "tl-tile-focus" : "") @(FocusActive && !focused ? "tl-tile-rail" : "")"
+                     style="@TileStyle(cam.Name)"
+                     title="@(_studio ? (focused ? "Click to show all monitors again" : "Click to focus this monitor") : null)"
+                     @onclick="() => ToggleFocus(cam.Name)" @key="cam.Name">
                     <video id="@VideoId(cam.Name)" muted playsinline preload="auto"></video>
                     @if (_noFootage.Contains(cam.Name))
                     {
                         <div class="tl-nofootage">no footage at @TimeText(_t)</div>
                     }
                     <div class="tl-tile-name">@cam.Name</div>
+                    <button class="tl-snap" title="Save a still of this frame (PNG)"
+                            @onclick="() => SnapshotAsync(cam.Name)" @onclick:stopPropagation="true">
+                        @UiIcon.Render("camera", 14)
+                    </button>
                 </div>
             }
         </div>
@@ -315,11 +446,22 @@
     private sealed record Mark(double Start, double End, string Color, string Title);
 
     private const string PrefsKey = "neolink.timeline";
+    /// <summary>Timeline preferences. Fields are nullable so a partial blob (an
+    /// older build's, or the server's empty "{}") only overrides what it holds.
+    /// Saved to localStorage always, and per account via /api/me/settings/timeline
+    /// when signed in — so choices like the studio layout follow the user across
+    /// browsers and devices.</summary>
     private sealed class Prefs
     {
-        public List<string> Included { get; set; } = new();
-        public double Speed { get; set; } = 1;
+        public List<string>? Included { get; set; }
+        public double? Speed { get; set; }
+        public bool? Studio { get; set; }
     }
+
+    // Studio (opt-in): monitors fill the top, and the editing desk — transport,
+    // camera chips, tracks — docks at the bottom, like a video editor.
+    private bool _studio;
+    private string? _focusCam; // studio program monitor; null = equal grid
 
     // 0.25/0.5 are slow motion — fine review of a fast moment; the rest skim.
     private static readonly double[] SpeedOptions = { 0.25, 0.5, 1, 2, 4, 8, 16 };
@@ -439,13 +581,11 @@
             try
             {
                 var json = await JS.InvokeAsync<string?>("neolink.lsGet", PrefsKey);
-                if (json != null && JsonSerializer.Deserialize<Prefs>(json) is { } p)
-                {
-                    _included = new HashSet<string>(p.Included, StringComparer.OrdinalIgnoreCase);
-                    _speed = SpeedOptions.Contains(p.Speed) ? p.Speed : 1d;
-                }
+                if (json != null)
+                    ApplyPrefs(JsonSerializer.Deserialize<Prefs>(json));
             }
             catch { }
+            await LoadServerPrefsAsync(); // signed in: the account's copy wins
 
             await LoadCamerasAsync();
             _included.RemoveWhere(name => _cameras.All(c => !string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase)));
@@ -643,7 +783,7 @@
     private List<Seg> BuildSegs(List<ApiSegment> files, string camera, string date)
     {
         var parsed = files
-            .Select(f => (f.File, Start: ParseStart(f.File), f.Seconds))
+            .Select(f => (f.File, Start: ParseStart(f.File), f.Seconds, f.Live))
             .Where(x => x.Start >= 0)
             .OrderBy(x => x.Start)
             .ToList();
@@ -666,20 +806,28 @@
                 double gap = parsed[i + 1].Start - start;
                 if (gap <= dur + Fuzz) span = gap; // contiguous roll: butt-join
             }
-            else if (date == DateTime.Today.ToString("yyyy-MM-dd")
-                     && start + dur > (DateTime.Now - DateTime.Today).TotalSeconds - 120)
+            else if (parsed[i].Live
+                     || (date == DateTime.Today.ToString("yyyy-MM-dd")
+                         && start + dur > (DateTime.Now - DateTime.Today).TotalSeconds - 120))
             {
-                // Today's newest file, and its reported end reaches (about) now:
-                // it is still being written. Cover up to NOW (plus a small buffer
-                // that the once-a-minute coverage refresh renews) — and no
-                // further: projecting a full segment length ahead made lanes
-                // reach into the future by different amounts per camera (a
-                // high-bitrate camera rolls on the size cap every few minutes,
-                // the others on the timer), so equal footage looked unequal.
-                // A newest file that ENDED long ago (camera suspended/offline
-                // right now) gets no allowance: that lane is genuinely blank
-                // from its end onward.
-                span = Math.Max(dur, (DateTime.Now - DateTime.Today).TotalSeconds - start + 75);
+                // This file is still being written. The server says so outright
+                // (live, from the recorder's own memory — trustworthy even where
+                // an open file's mtime is stale: NTFS, FUSE, network mounts);
+                // older servers without the flag fall back to the mtime heuristic:
+                // the newest file whose reported end reaches (about) now.
+                // Cover up to NOW (plus a small buffer that the once-a-minute
+                // coverage refresh renews) — and no further: projecting a full
+                // segment length ahead made lanes reach into the future by
+                // different amounts per camera (a high-bitrate camera rolls on
+                // the size cap every few minutes, the others on the timer), so
+                // equal footage looked unequal. A newest file that ENDED long
+                // ago (camera suspended/offline right now) gets no allowance:
+                // that lane is genuinely blank from its end onward. The REAL
+                // reported seconds anchor the max — never the typical-length
+                // guess, which would project a just-opened file a whole
+                // segment into the future.
+                span = Math.Max(Math.Max(0, parsed[i].Seconds),
+                    (DateTime.Now - DateTime.Today).TotalSeconds - start + 75);
             }
             span = Math.Min(span, DaySeconds - start);
             segs.Add(new Seg(start, span,
@@ -779,6 +927,12 @@
                 case "clock":
                     OpenClockEdit();
                     break;
+                case "snap":
+                    // Unambiguous targets only: the focused monitor, or a lone camera.
+                    var target = FocusActive ? _focusCam
+                        : Included.Count() == 1 ? Included.First().Name : null;
+                    if (target != null) await SnapshotAsync(target);
+                    break;
             }
             StateHasChanged();
         });
@@ -871,9 +1025,49 @@
         await SyncVideosAsync(); // applies the new playbackRate immediately
     }
 
-    private Task SavePrefsAsync() =>
-        JS.InvokeVoidAsync("neolink.lsSet", PrefsKey,
-            JsonSerializer.Serialize(new Prefs { Included = _included.ToList(), Speed = _speed })).AsTask();
+    private void ApplyPrefs(Prefs? p)
+    {
+        if (p == null) return;
+        if (p.Included != null) _included = new HashSet<string>(p.Included, StringComparer.OrdinalIgnoreCase);
+        if (p.Speed is { } sp && SpeedOptions.Contains(sp)) _speed = sp;
+        if (p.Studio is { } st) _studio = st;
+    }
+
+    /// <summary>Signed in: the account's server-side prefs override the local copy —
+    /// preferences follow the user across browsers. Signed out (or the endpoint is
+    /// unavailable): localStorage carries on alone.</summary>
+    private async Task LoadServerPrefsAsync()
+    {
+        if (string.IsNullOrEmpty(_token)) return;
+        try
+        {
+            var p = await GetJsonAsync<Prefs>("/api/me/settings/timeline");
+            if (p == null || (p.Included == null && p.Speed == null && p.Studio == null))
+                return; // never saved yet — keep whatever localStorage had
+            ApplyPrefs(p);
+            // Refresh the local copy so the next (pre-network) boot starts right.
+            try { await JS.InvokeVoidAsync("neolink.lsSet", PrefsKey, SerializePrefs()); } catch { }
+        }
+        catch { }
+    }
+
+    private string SerializePrefs() =>
+        JsonSerializer.Serialize(new Prefs { Included = _included.ToList(), Speed = _speed, Studio = _studio });
+
+    private async Task SavePrefsAsync()
+    {
+        var json = SerializePrefs();
+        try { await JS.InvokeVoidAsync("neolink.lsSet", PrefsKey, json); } catch { }
+        if (string.IsNullOrEmpty(_token)) return;
+        try
+        {
+            var req = new HttpRequestMessage(HttpMethod.Put, $"{ApiBase}/api/me/settings/timeline");
+            req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _token);
+            req.Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
+            using var _ = await Http.SendAsync(req);
+        }
+        catch { /* transient: localStorage still has it */ }
+    }
 
     private async Task ClockLoopAsync()
     {
@@ -1073,6 +1267,211 @@
     {
         int n = Included.Count();
         return n <= 1 ? 1 : (int)Math.Ceiling(Math.Sqrt(n));
+    }
+
+    // ------------------------------------------------------------ studio layout
+
+    private bool FocusActive =>
+        _studio && _focusCam != null
+        && Included.Any(c => string.Equals(c.Name, _focusCam, StringComparison.OrdinalIgnoreCase));
+
+    private bool IsFocus(string cam) => string.Equals(cam, _focusCam, StringComparison.OrdinalIgnoreCase);
+
+    private async Task ToggleStudioAsync()
+    {
+        _studio = !_studio;
+        if (!_studio) _focusCam = null;
+        await SavePrefsAsync();
+    }
+
+    /// <summary>Studio only: a click promotes the tile to the program monitor;
+    /// a click on the program monitor restores the equal grid.</summary>
+    private void ToggleFocus(string cam)
+    {
+        if (!_studio) return;
+        _focusCam = IsFocus(cam) ? null : cam;
+    }
+
+    /// <summary>Equal grid normally; focused: program monitor + thumbnail rail.</summary>
+    private string GridStyle() => FocusActive
+        ? "grid-template-columns: minmax(0, 1fr) clamp(96px, 18vw, 220px);"
+        : $"grid-template-columns: repeat({TileColumns()}, 1fr);";
+
+    private string? TileStyle(string cam) => !FocusActive ? null
+        : IsFocus(cam) ? $"grid-column: 1; grid-row: 1 / span {Math.Max(1, Included.Count() - 1)};"
+        : "grid-column: 2;";
+
+    /// <summary>Downloads the current frame of a camera's player as a PNG
+    /// (e.g. "driveway 2026-07-15 08.30.12.png").</summary>
+    private async Task SnapshotAsync(string camera)
+    {
+        var file = $"{camera} {_date:yyyy-MM-dd} {TimeText(_t).Replace(':', '.')}.png";
+        try { await JS.InvokeVoidAsync("neolink.tlSnap", VideoId(camera), file); } catch { }
+    }
+
+    // ------------------------------------------------------------ footage export
+    //
+    // One camera, one day, [from, to]: the server streams a zip of the segments
+    // overlapping the range (whole files — lossless, no re-encode) and the
+    // browser downloads it. The dialog pre-fills the zoomed window, so "zoom to
+    // the incident, hit Export" needs no typing, and it shows the size before
+    // the user commits to a multi-gigabyte download.
+
+    private bool _showExport;
+    private string _exCam = "";
+    private string _exFrom = "00:00:00";
+    private string _exTo = "23:59:59";
+    private int _exFiles;
+    private long _exBytes;
+    private bool _exBusy;
+    private string? _exError;
+    // Format preference: one combined MP4 when the range allows it (same stream
+    // config throughout), otherwise the zip of original segments takes over.
+    private string _exFormat = "mp4";
+    private long? _exMp4Bytes;
+    private long? _exMp4DurMs;
+    private string? _exMp4Reason;
+
+    private string EffectiveFormat => _exFormat == "mp4" && _exMp4Bytes != null ? "mp4" : "zip";
+
+    /// <summary>The bytes the chosen format would download.</summary>
+    private long EffBytes => EffectiveFormat == "mp4" && _exMp4Bytes is { } mb ? mb : _exBytes;
+
+    /// <summary>One-click ranges: the zoomed view, the last hour (today), the whole day.</summary>
+    private async Task ApplyExportPresetAsync(string preset)
+    {
+        switch (preset)
+        {
+            case "view" when Zoomed:
+                _exFrom = TimeText(_viewStart);
+                _exTo = TimeText(Math.Min(_viewStart + _viewSpan, DaySeconds - 1));
+                break;
+            case "hour":
+                double now = (DateTime.Now - DateTime.Today).TotalSeconds;
+                _exFrom = TimeText(Math.Max(0, now - 3600));
+                _exTo = TimeText(Math.Min(now, DaySeconds - 1));
+                break;
+            case "day":
+                _exFrom = "00:00:00";
+                _exTo = "23:59:59";
+                break;
+        }
+        await ExportEstimateAsync();
+    }
+
+    private async Task OpenExportAsync()
+    {
+        if (!Included.Any()) return;
+        // The focused monitor (studio) or the first loaded camera; keep a prior
+        // valid pick so reopening the dialog remembers it.
+        if (!Included.Any(c => string.Equals(c.Name, _exCam, StringComparison.OrdinalIgnoreCase)))
+            _exCam = (FocusActive ? _focusCam : null) ?? Included.First().Name;
+        if (Zoomed)
+        {
+            _exFrom = TimeText(_viewStart);
+            _exTo = TimeText(Math.Min(_viewStart + _viewSpan, DaySeconds - 1));
+        }
+        else
+        {
+            _exFrom = "00:00:00";
+            _exTo = "23:59:59";
+        }
+        _showExport = true;
+        await ExportEstimateAsync();
+    }
+
+    private async Task PickExportCamAsync(string camera)
+    {
+        _exCam = camera;
+        await ExportEstimateAsync();
+    }
+
+    private async Task ExportRangeEditedAsync(ChangeEventArgs e, bool from)
+    {
+        var text = ((string?)e.Value ?? "").Trim();
+        if (from) _exFrom = text; else _exTo = text;
+        await ExportEstimateAsync();
+    }
+
+    private bool ExportRangeValid(out TimeSpan fromT, out TimeSpan toT)
+    {
+        toT = default;
+        return TimeSpan.TryParse(_exFrom, System.Globalization.CultureInfo.InvariantCulture, out fromT)
+            && TimeSpan.TryParse(_exTo, System.Globalization.CultureInfo.InvariantCulture, out toT)
+            && fromT >= TimeSpan.Zero && toT <= TimeSpan.FromDays(1) && fromT < toT;
+    }
+
+    private string ExportQuery() =>
+        $"/api/recordings/{Uri.EscapeDataString(_exCam)}/{_date:yyyy-MM-dd}/export" +
+        $"?from={Uri.EscapeDataString(_exFrom)}&to={Uri.EscapeDataString(_exTo)}";
+
+    private async Task ExportEstimateAsync()
+    {
+        if (!ExportRangeValid(out _, out _))
+        {
+            _exError = "times must be HH:mm[:ss] with From before To";
+            _exFiles = 0;
+            return;
+        }
+        _exError = null;
+        _exBusy = true;
+        StateHasChanged();
+        try
+        {
+            var est = await GetJsonAsync<JsonElement?>(ExportQuery() + "&estimate=1");
+            if (est is { ValueKind: JsonValueKind.Object } o
+                && o.TryGetProperty("files", out var f) && o.TryGetProperty("bytes", out var b))
+            {
+                _exFiles = f.GetInt32();
+                _exBytes = b.GetInt64();
+                _exMp4Bytes = o.TryGetProperty("mp4Bytes", out var mb) && mb.ValueKind == JsonValueKind.Number
+                    ? mb.GetInt64() : null;
+                _exMp4DurMs = o.TryGetProperty("mp4DurationMs", out var md) && md.ValueKind == JsonValueKind.Number
+                    ? md.GetInt64() : null;
+                _exMp4Reason = o.TryGetProperty("mp4Reason", out var mr) && mr.ValueKind == JsonValueKind.String
+                    ? mr.GetString() : null;
+            }
+            else
+            {
+                _exError = "could not size the range — is the server reachable?";
+                _exFiles = 0;
+            }
+        }
+        catch
+        {
+            _exError = "could not size the range — is the server reachable?";
+            _exFiles = 0;
+        }
+        finally
+        {
+            _exBusy = false;
+            StateHasChanged();
+        }
+    }
+
+    /// <summary>Hands the export URL to the browser: the zip streams straight into
+    /// its download manager (the server names the file via Content-Disposition).</summary>
+    private async Task StartExportAsync()
+    {
+        if (_exBusy || _exFiles == 0 || !ExportRangeValid(out _, out _)) return;
+        var format = EffectiveFormat == "mp4" ? "&format=mp4" : "";
+        try { await JS.InvokeVoidAsync("neolink.download", $"{Base}{ExportQuery()}{format}{TokenQuery('&')}"); } catch { }
+        _showExport = false;
+    }
+
+    private static string SizeText(long bytes) => bytes switch
+    {
+        >= 1024L * 1024 * 1024 => $"{bytes / (1024.0 * 1024 * 1024):0.0} GB",
+        >= 1024L * 1024 => $"{bytes / (1024.0 * 1024):0} MB",
+        _ => $"{bytes / 1024.0:0} KB",
+    };
+
+    private static string DurText(long ms)
+    {
+        var t = TimeSpan.FromMilliseconds(ms);
+        return t.TotalHours >= 1 ? $"{(int)t.TotalHours} h {t.Minutes:00} m"
+            : t.TotalMinutes >= 1 ? $"{t.Minutes} m {t.Seconds:00} s"
+            : $"{t.TotalSeconds:0.#} s";
     }
 
     private static string TimeText(double t) =>

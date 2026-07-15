@@ -1043,6 +1043,27 @@
             return playing ? Math.max(0, offset - (v.currentTime || 0)) : 0;
         },
 
+        // Saves the player's current frame as a PNG download. Returns false when
+        // there is no decodable picture yet, or the canvas is tainted (a remote
+        // server without CORS headers) — in both cases there is nothing to save.
+        tlSnap(id, filename) {
+            const v = document.getElementById(id);
+            if (!v || v.readyState < 2 || !v.videoWidth) return false;
+            const c = document.createElement('canvas');
+            c.width = v.videoWidth;
+            c.height = v.videoHeight;
+            c.getContext('2d').drawImage(v, 0, 0);
+            try {
+                const a = document.createElement('a');
+                a.href = c.toDataURL('image/png');
+                a.download = filename;
+                a.click();
+                return true;
+            } catch {
+                return false;
+            }
+        },
+
         // Pointer-drag scrubbing on the timeline lanes: reports the horizontal
         // fraction (0..1) to Blazor, throttled so dragging doesn't flood SignalR.
         tlScrubInit(elemId, dotnetRef) {
@@ -1227,6 +1248,7 @@
                     case '-': case '_': action = 'zoom:out'; break;
                     case '0': action = 'zoom:reset'; break;
                     case 't': case 'T': action = 'clock'; break;
+                    case 's': case 'S': action = 'snap'; break;
                 }
                 if (!action) return;
                 e.preventDefault();
@@ -1591,6 +1613,17 @@
             const prefix = new URL(document.baseURI).pathname.replace(/\/+$/, "");
             return location.origin + prefix;
         },
+        // Kicks off a browser download of a server-prepared file (the response's
+        // Content-Disposition names it) — used by the timeline's footage export.
+        download(url) {
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = '';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+        },
+
         lsGet(key) { return localStorage.getItem(key); },
         lsSet(key, value) { localStorage.setItem(key, value); },
         // Session-scoped flags: things that must NOT survive to the next visit

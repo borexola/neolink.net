@@ -29,11 +29,13 @@ public sealed record WebStreamInfo(string Kind, string Path, IStreamHub Hub);
 /// <param name="PrivacyOn">Latest privacy-mode state the camera pushed, or null (no push yet / unsupported).</param>
 /// <param name="Suspended">Probe: has the user suspended this camera in Neolink (no connection held)?</param>
 /// <param name="SetSuspended">Suspends/resumes the camera at runtime and persists it; null when unsupported.</param>
+/// <param name="ActiveSegment">Probe: the continuous segment being written right now (day, file, media seconds) — the recorder's in-memory truth for the day listing.</param>
 public sealed record WebCameraInfo(string Name, List<WebStreamInfo> Streams, ICameraControl Control,
     HashSet<string>? PermittedUsers, Func<bool>? ContinuousActive = null, bool SupportsEvents = true,
     Func<BatteryPush?>? Battery = null, Func<bool>? Asleep = null,
     Func<bool?>? SirenOn = null, Func<bool?>? PrivacyOn = null,
-    Func<bool>? Suspended = null, Action<bool>? SetSuspended = null)
+    Func<bool>? Suspended = null, Action<bool>? SetSuspended = null,
+    Func<(string Date, string File, double Seconds)?>? ActiveSegment = null)
 {
     /// <summary>The camera's event recorder when server-side event recording runs —
     /// the shared entry point for on-demand clips (web UI button and HA switch).</summary>
@@ -91,8 +93,9 @@ public sealed class WebApiOptions
 ///   GET/POST /api/cameras/{name}/recording  — per-camera recording switches + event-type filter
 ///   POST /api/cameras/{name}/record         — start/stop an on-demand clip (one clip, auto-capped)
 ///   GET /api/recordings/{camera}[/{date}[/{file}]] — browse/play continuous footage
+///   GET .../{date}/export?from=&to=[&format=mp4][&estimate=1] — a range (≤ one day) as one MP4 or a zip
 ///   /api/auth/* (status/setup/login/reset-admin), /api/users (admin CRUD),
-///   GET/PUT /api/me/settings — web-UI accounts; once any account exists, every
+///   GET/PUT /api/me/settings[/{page}] — web-UI accounts; once any account exists, every
 ///   other /api route requires a Bearer session token (or ?token= where headers
 ///   can't go: media elements and the stream WebSocket)
 ///   /                                       — web UI (when enabled in the config)
@@ -839,6 +842,37 @@ public static class WebApi
             try
             {
                 userStore.SetSettings(me, json);
+                return Results.Json(new { ok = true });
+            }
+            catch (Exception ex) when (ex is ArgumentException or JsonException)
+            {
+                return Results.Json(new { error = "invalid settings payload" }, statusCode: 400);
+            }
+        });
+
+        // Per-page variant: each page keeps its own blob (e.g. "timeline"), so
+        // pages never read-modify-write — and thus never clobber — each other.
+        static bool ValidPageKey(string page) =>
+            page.Length is > 0 and <= 32 && page.All(c => char.IsAsciiLetterLower(c) || c == '-');
+
+        app.MapGet("/api/me/settings/{page}", (string page, HttpContext ctx) =>
+            !ValidPageKey(page)
+                ? Results.Json(new { error = "invalid page key" }, statusCode: 400)
+                : SessionName(ctx) is { } me
+                    ? Results.Content(userStore.GetPageSettings(me, page), "application/json")
+                    : Results.Json(new { error = "authentication disabled" }, statusCode: 404));
+
+        app.MapPut("/api/me/settings/{page}", async (string page, HttpContext ctx) =>
+        {
+            if (!ValidPageKey(page))
+                return Results.Json(new { error = "invalid page key" }, statusCode: 400);
+            if (SessionName(ctx) is not { } me)
+                return Results.Json(new { error = "authentication disabled" }, statusCode: 404);
+            using var reader = new StreamReader(ctx.Request.Body);
+            var json = await reader.ReadToEndAsync();
+            try
+            {
+                userStore.SetPageSettings(me, page, json);
                 return Results.Json(new { ok = true });
             }
             catch (Exception ex) when (ex is ArgumentException or JsonException)
@@ -1745,8 +1779,9 @@ public static class WebApi
                 var cam = cameras.FirstOrDefault(c => string.Equals(c.Name, camera, StringComparison.OrdinalIgnoreCase));
                 if (cam == null)
                     return Results.Json(new { error = $"unknown camera '{camera}'" }, statusCode: 404);
-                var segments = events.ListSegments(cam.Name, date)
-                    .Select(s => new { file = s.File, size = s.Size, seconds = Math.Round(s.Seconds, 1) });
+                var segments = OverlayActiveSegment(
+                        events.ListSegments(cam.Name, date), cam.ActiveSegment?.Invoke(), date)
+                    .Select(s => new { file = s.File, size = s.Size, seconds = Math.Round(s.Seconds, 1), live = s.Live });
                 return Results.Json(segments);
             });
 
@@ -1757,6 +1792,124 @@ public static class WebApi
                 return path == null
                     ? Results.Json(new { error = "no such recording" }, statusCode: 404)
                     : ServeMp4(path);
+            });
+
+            // Bulk export: every segment overlapping [from, to] of one day (so at
+            // most 24 h by construction), streamed as a STORED zip — video doesn't
+            // compress, and store-level means no CPU and no temp files. Segments
+            // ship as-is (lossless, each named by its start time and playable on
+            // its own); the one still being written is skipped — it would be an
+            // unfinalized, unplayable file. ?estimate=1 returns {files, bytes} so
+            // the UI can show the damage before the user commits to gigabytes.
+            app.MapGet("/api/recordings/{camera}/{date}/export", (string camera, string date,
+                string? from, string? to, string? estimate, string? format, HttpContext ctx) =>
+            {
+                var cam = cameras.FirstOrDefault(c => string.Equals(c.Name, camera, StringComparison.OrdinalIgnoreCase));
+                if (cam == null)
+                    return Results.Json(new { error = $"unknown camera '{camera}'" }, statusCode: 404);
+                if (!TimeSpan.TryParse(from, System.Globalization.CultureInfo.InvariantCulture, out var fromT)
+                    || !TimeSpan.TryParse(to, System.Globalization.CultureInfo.InvariantCulture, out var toT)
+                    || fromT < TimeSpan.Zero || toT > TimeSpan.FromDays(1) || toT <= fromT)
+                    return Results.Json(new { error = "invalid range — need from=HH:mm[:ss] < to=HH:mm[:ss] within the day" }, statusCode: 400);
+
+                var active = cam.ActiveSegment?.Invoke();
+                var picked = PickExportSegments(events.ListSegments(cam.Name, date),
+                    active is { } a && a.Date == date ? a.File : null,
+                    fromT.TotalSeconds, toT.TotalSeconds, out long bytes);
+                // The single-MP4 planner needs each file's start-of-day offset to
+                // trim the output to the requested range.
+                var inputs = picked
+                    .Select(f => (Path: events.SegmentPath(cam.Name, date, f), File: f))
+                    .Where(p => p.Path != null)
+                    .Select(p => (p.Path!,
+                        TimeSpan.TryParseExact(Path.GetFileNameWithoutExtension(p.File), @"hh\-mm\-ss", null, out var st)
+                            ? st.TotalSeconds : 0))
+                    .ToList();
+
+                if (estimate is "1" or "true")
+                {
+                    // Also answer "can this range become ONE file?" — the planner
+                    // reads only each segment's index, so this stays cheap.
+                    Mp4Export.Plan? est = null;
+                    string? mp4Reason = null;
+                    if (inputs.Count > 0)
+                    {
+                        try { est = Mp4Export.TryPlan(inputs, fromT.TotalSeconds, toT.TotalSeconds, out mp4Reason); }
+                        catch (Exception ex) { mp4Reason = ex.Message; }
+                    }
+                    return Results.Json(new
+                    {
+                        files = picked.Count,
+                        bytes,
+                        mp4Bytes = est?.TotalBytes,
+                        mp4DurationMs = est?.DurationMs,
+                        mp4Reason,
+                    });
+                }
+                if (picked.Count == 0)
+                    return Results.Json(new { error = "no footage in this range" }, statusCode: 404);
+                // One export at a time: bulk sequential reads compete with the
+                // recorders' writes for the same disk; a second stream doubles it.
+                if (!ExportGate.Wait(0))
+                    return Results.Json(new { error = "another export is already running — try again when it finishes" }, statusCode: 503);
+
+                var baseName = $"{cam.Name} {date} {fromT:hh\\-mm\\-ss}-{toT:hh\\-mm\\-ss}";
+                if (format == "mp4")
+                {
+                    // Single combined MP4: concatenated without re-encoding. The
+                    // plan is built before streaming starts, so failures are clean
+                    // errors and the response carries an exact Content-Length.
+                    Mp4Export.Plan? plan;
+                    string? reason;
+                    try { plan = Mp4Export.TryPlan(inputs, fromT.TotalSeconds, toT.TotalSeconds, out reason); }
+                    catch (Exception ex) { plan = null; reason = ex.Message; }
+                    if (plan == null)
+                    {
+                        ExportGate.Release();
+                        return Results.Json(new { error = $"cannot combine into one file: {reason} — export as zip instead" },
+                            statusCode: 409);
+                    }
+                    return Results.Stream(async body =>
+                    {
+                        try
+                        {
+                            ctx.Response.ContentLength = plan.TotalBytes; // real download progress
+                            await Mp4Export.WriteAsync(plan, body, ctx.RequestAborted).ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException) { /* download cancelled */ }
+                        catch (IOException) { /* client went away, or a segment was pruned mid-copy */ }
+                        finally { ExportGate.Release(); }
+                    }, "video/mp4", $"{baseName}.mp4");
+                }
+
+                return Results.Stream(async body =>
+                {
+                    try
+                    {
+                        // ZipArchive writes entry headers and the central directory
+                        // with SYNCHRONOUS stream writes, which Kestrel rejects by
+                        // default (aborting the download mid-stream). Allow them for
+                        // this response — the gate above caps it to one busy thread.
+                        if (ctx.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpBodyControlFeature>() is { } bodyCtl)
+                            bodyCtl.AllowSynchronousIO = true;
+                        using var zip = new System.IO.Compression.ZipArchive(
+                            body, System.IO.Compression.ZipArchiveMode.Create, leaveOpen: true);
+                        foreach (var f in picked)
+                        {
+                            var path = events.SegmentPath(cam.Name, date, f);
+                            if (path == null) continue; // archived/pruned mid-export
+                            var entry = zip.CreateEntry(f, System.IO.Compression.CompressionLevel.NoCompression);
+                            try { entry.LastWriteTime = File.GetLastWriteTime(path); } catch { }
+                            await using var es = entry.Open();
+                            await using var fs = new FileStream(path, FileMode.Open, FileAccess.Read,
+                                FileShare.ReadWrite | FileShare.Delete, 81920, useAsync: true);
+                            await fs.CopyToAsync(es, ctx.RequestAborted).ConfigureAwait(false);
+                        }
+                    }
+                    catch (OperationCanceledException) { /* download cancelled */ }
+                    catch (IOException) { /* client went away mid-stream */ }
+                    finally { ExportGate.Release(); }
+                }, "application/zip", $"{baseName}.zip");
             });
         }
 
@@ -1919,6 +2072,67 @@ public static class WebApi
         Log.Info($"  API:    http://{displayHost}:{port}/api/cameras" + (webUi ? "" : " (web UI disabled)"));
         await using var reg = ct.Register(() => app.Lifetime.StopApplication());
         await app.RunAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>Serializes footage exports: bulk reads off the recordings disk
+    /// compete with the recorders' writes, so only one zip streams at a time.</summary>
+    private static readonly SemaphoreSlim ExportGate = new(1, 1);
+
+    /// <summary>
+    /// The segment files a [from, to] seconds-of-day export should contain: every
+    /// file whose footage overlaps the range, oldest first, with the total byte
+    /// count for the pre-flight estimate. The file still being written is excluded
+    /// (it has no moov yet — an unplayable torso); it exports once it closes.
+    /// A file with an unknown duration (exotic filesystems) counts as at least a
+    /// second long so it is still caught when the range crosses its start.
+    /// </summary>
+    internal static List<string> PickExportSegments(
+        List<(string File, long Size, double Seconds)> listed, string? activeFile,
+        double fromSec, double toSec, out long bytes)
+    {
+        var picked = new List<(double Start, string File, long Size)>();
+        foreach (var s in listed)
+        {
+            if (activeFile != null && string.Equals(s.File, activeFile, StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (!TimeSpan.TryParseExact(Path.GetFileNameWithoutExtension(s.File), @"hh\-mm\-ss", null, out var start))
+                continue;
+            double startSec = start.TotalSeconds;
+            double endSec = startSec + Math.Max(s.Seconds, 1);
+            if (startSec < toSec && endSec > fromSec)
+                picked.Add((startSec, s.File, s.Size));
+        }
+        picked.Sort((a, b) => a.Start.CompareTo(b.Start));
+        bytes = picked.Sum(p => p.Size);
+        return picked.Select(p => p.File).ToList();
+    }
+
+    /// <summary>
+    /// Overlays the recorder's in-memory truth for the segment being written right
+    /// now onto a filesystem day listing. While a file is held open its directory
+    /// mtime — the listing's duration source — can be minutes stale (NTFS updates
+    /// it lazily on close; FUSE and network mounts cache attributes), which made a
+    /// recording camera's lane trail "now" by up to a whole segment and look
+    /// stopped, worst on high-bitrate cameras whose big segments stay open longest.
+    /// The live file gets its real written duration and a live flag, and is
+    /// appended if enumeration missed it entirely.
+    /// </summary>
+    internal static List<(string File, long Size, double Seconds, bool Live)> OverlayActiveSegment(
+        List<(string File, long Size, double Seconds)> listed,
+        (string Date, string File, double Seconds)? active, string date)
+    {
+        var result = listed.Select(s => (s.File, s.Size, s.Seconds, Live: false)).ToList();
+        if (active is not { } a || !string.Equals(a.Date, date, StringComparison.Ordinal))
+            return result;
+        int i = result.FindIndex(s => string.Equals(s.File, a.File, StringComparison.OrdinalIgnoreCase));
+        if (i >= 0)
+            result[i] = (result[i].File, result[i].Size, Math.Max(result[i].Seconds, a.Seconds), true);
+        else
+        {
+            result.Add((a.File, 0, a.Seconds, true));
+            result.Sort((x, y) => string.CompareOrdinal(x.File, y.File));
+        }
+        return result;
     }
 
     /// <summary>The base URL the server's own Blazor circuits use to reach the API:

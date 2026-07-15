@@ -38,6 +38,19 @@ public sealed class ContinuousRecorder
     /// <summary>True while 24/7 footage is actually being written to disk (feeds the UI's REC badge).</summary>
     public bool IsWriting => _writing;
 
+    private sealed record ActiveInfo(string Date, string File, ClipWriter Writer);
+    private volatile ActiveInfo? _active;
+
+    /// <summary>The segment being written right now — day ("yyyy-MM-dd"), file name
+    /// and seconds of media muxed so far — straight from the recorder's memory.
+    /// The day listing overlays this onto its filesystem view: a file that is held
+    /// open reports a STALE directory mtime on NTFS (updated lazily on close) and
+    /// on FUSE/network mounts (attribute caches), so an mtime-derived duration can
+    /// trail minutes behind and make a recording camera's lane look stopped —
+    /// worst on high-bitrate cameras, whose large segments stay open longest.</summary>
+    public (string Date, string File, double Seconds)? ActiveSegment =>
+        _active is { } a ? (a.Date, a.File, a.Writer.DurationSeconds) : null;
+
     /// <param name="hubsByKind">The camera's streams by kind, enabling the per-camera
     /// "record from main/sub" runtime choice; null pins recording to <paramref name="hub"/>.</param>
     /// <param name="hasRoom">Free-space guard: false = the recordings volume is full,
@@ -127,6 +140,7 @@ public sealed class ContinuousRecorder
                         // the gap starts a NEW segment stamped with the true time.
                         writer.Dispose();
                         writer = null;
+                        _active = null;
                         _writing = false;
                         Log.Info($"{_camera}: stream quiet for {SilenceRoll.TotalSeconds:0}s — segment closed; " +
                                  "footage after the gap starts a new segment");
@@ -159,6 +173,7 @@ public sealed class ContinuousRecorder
                     {
                         writer.Dispose();
                         writer = null;
+                        _active = null;
                         Log.Info($"{_camera}: continuous recording stopped");
                     }
                     _writing = false;
@@ -180,6 +195,7 @@ public sealed class ContinuousRecorder
                 {
                     writer.Dispose();
                     writer = null;
+                    _active = null;
                 }
 
                 if (writer == null)
@@ -205,11 +221,12 @@ public sealed class ContinuousRecorder
                         Log.Info($"{_camera}: storage has room again — continuous recording resumes");
                         _fullLogged = false;
                     }
+                    var startedAt = DateTime.Now;
                     try
                     {
                         // Never blocks on disk: the file is opened and written by the
                         // writer's own background thread.
-                        writer = ClipWriter.TryCreate(_store.NewSegmentPath(_camera, DateTime.Now), hub);
+                        writer = ClipWriter.TryCreate(_store.NewSegmentPath(_camera, startedAt), hub);
                     }
                     catch (Exception ex)
                     {
@@ -219,6 +236,7 @@ public sealed class ContinuousRecorder
                         continue;
                     }
                     if (writer == null) continue; // codec parameters not known yet
+                    _active = new ActiveInfo($"{startedAt:yyyy-MM-dd}", $"{startedAt:HH-mm-ss}.mp4", writer);
                     gap = false; // fresh file: this keyframe is a clean start
                 }
 
@@ -229,6 +247,7 @@ public sealed class ContinuousRecorder
                     // have skipped a full volume): a failing/disconnected drive.
                     writer.Dispose();
                     writer = null;
+                    _active = null;
                     _onWriteError?.Invoke(_camera);
                     retryAfter = DateTime.UtcNow + WriteErrorBackoff;
                 }
@@ -238,6 +257,7 @@ public sealed class ContinuousRecorder
         finally
         {
             _writing = false;
+            _active = null;
             if (writer != null)
             {
                 writer.Dispose();

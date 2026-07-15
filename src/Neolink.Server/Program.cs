@@ -405,7 +405,10 @@ foreach (var cam in config.Cameras)
         SirenOn: battery == null ? null : () => battery.SirenOn,
         PrivacyOn: battery == null ? null : () => battery.PrivacyOn,
         Suspended: suspendables.Count == 0 ? null : IsCamSuspended,
-        SetSuspended: suspendables.Count == 0 ? null : SetCamSuspended)
+        SetSuspended: suspendables.Count == 0 ? null : SetCamSuspended,
+        // The open segment from the recorder's memory — the day listing trusts
+        // this over the file's mtime, which is stale while the handle is open.
+        ActiveSegment: continuousRecorder == null ? null : () => continuousRecorder.ActiveSegment)
         // The recorder rides along so the web API and the MQTT bridge share one
         // on-demand recording session per camera (UI button ≡ HA Record switch).
         { EventRecorder = eventRecorder });

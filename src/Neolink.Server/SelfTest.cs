@@ -662,8 +662,27 @@ public static class SelfTest
             using var serverCts = new CancellationTokenSource();
             var serverTask = Task.Run(() => server.RunAsync("127.0.0.1", port, serverCts.Token));
 
-            using var tcp = new System.Net.Sockets.TcpClient();
-            tcp.Connect(System.Net.IPAddress.Loopback, port);
+            // Explicit IPv4 (the parameterless TcpClient dials through a dual-mode
+            // IPv6 socket — ::ffff:127.0.0.1 — which containers without IPv6
+            // refuse), and connect with retries: the server task binds on its own
+            // schedule, and on a container's cold thread pool a plain Connect
+            // reliably beat the Listen and reported "connection refused".
+            System.Net.Sockets.TcpClient tcp = null!;
+            for (int attempt = 0; ; attempt++)
+            {
+                tcp = new System.Net.Sockets.TcpClient(System.Net.Sockets.AddressFamily.InterNetwork);
+                try
+                {
+                    tcp.Connect(System.Net.IPAddress.Loopback, port);
+                    break;
+                }
+                catch (System.Net.Sockets.SocketException) when (attempt < 50)
+                {
+                    tcp.Dispose();
+                    Thread.Sleep(100);
+                }
+            }
+            using var tcpGuard = tcp;
             var ns = tcp.GetStream();
             ns.ReadTimeout = 5000;
             string baseUri = $"rtsp://127.0.0.1:{port}/cam";
@@ -1146,10 +1165,14 @@ public static class SelfTest
 
                 store.Add("viewer2", "viewerpass", admin: false);
                 store.SetSettings("viewer2", "{\"mode\":\"grid\"}");
+                store.SetPageSettings("viewer2", "timeline", "{\"studio\":true}");
                 var reloaded = new Web.UserStore(dir);
                 Assert(reloaded.Enabled, "accounts persist across restart");
                 Assert(reloaded.Verify("admin", "new password!") != null, "password persists");
                 Assert(reloaded.GetSettings("viewer2").Contains("grid"), "per-user settings persist");
+                Assert(reloaded.GetPageSettings("viewer2", "timeline").Contains("studio"),
+                    "per-page settings persist independently");
+                Assert(reloaded.GetPageSettings("viewer2", "other") == "{}", "unset page settings read as empty");
             }
             finally
             {
@@ -2042,9 +2065,18 @@ public static class SelfTest
                 AssertEq(Segments().Length, 1);
                 var first = Segments()[0];
 
+                // While writing, the recorder itself names the open segment — the
+                // day listing overlays this (an open file's mtime is stale on
+                // NTFS/FUSE/network mounts, which made lanes trail behind "now").
+                Assert(recorder.ActiveSegment is { } act0
+                       && act0.File == Path.GetFileName(first)
+                       && act0.Date == new DirectoryInfo(first).Parent!.Parent!.Name,
+                    "active segment reports the open file and its day");
+
                 // Silence (the suspension): after SilenceRoll the segment must be
                 // CLOSED — bounded at the true end time, gap left on the timeline.
                 Assert(Poll(() => !recorder.IsWriting), "silence closes the segment");
+                Assert(recorder.ActiveSegment == null, "no active segment once closed");
                 // Finalization happens on the writer's own thread: a classic MP4 is
                 // exactly ftyp + free + moov (the live header has trailing moofs).
                 static List<string> TopBoxes(byte[] b)
@@ -2081,6 +2113,182 @@ public static class SelfTest
                 Recording.ContinuousRecorder.SilenceRoll = realRoll;
                 try { Directory.Delete(dir, recursive: true); } catch { }
             }
+        });
+
+        Test("day listing overlays the live segment (stale-mtime lanes)", () =>
+        {
+            var listed = new List<(string File, long Size, double Seconds)>
+            {
+                ("06-00-00.mp4", 1000, 600),
+                ("06-10-00.mp4", 500, 3), // the open file: mtime barely moved since creation
+            };
+
+            // The recorder's truth wins for the open file: real duration + live flag.
+            var merged = Web.WebApi.OverlayActiveSegment(listed, ("2026-07-15", "06-10-00.mp4", 240.0), "2026-07-15");
+            AssertEq(merged.Count, 2);
+            Assert(merged[1] is { File: "06-10-00.mp4", Seconds: 240.0, Live: true }, "open file gets recorder duration + live");
+            Assert(merged[0] is { Live: false, Seconds: 600.0 }, "closed files untouched");
+
+            // Enumeration missed the open file entirely (attribute-cached mounts):
+            // it is appended in order.
+            merged = Web.WebApi.OverlayActiveSegment(
+                new List<(string, long, double)> { ("06-00-00.mp4", 1000, 600) },
+                ("2026-07-15", "06-10-00.mp4", 42.0), "2026-07-15");
+            AssertEq(merged.Count, 2);
+            Assert(merged[1] is { File: "06-10-00.mp4", Seconds: 42.0, Live: true }, "missing open file appended");
+
+            // A different day (or no active segment) leaves the listing as-is.
+            merged = Web.WebApi.OverlayActiveSegment(listed, ("2026-07-14", "23-55-00.mp4", 9000.0), "2026-07-15");
+            Assert(merged.All(s => !s.Live), "other-day active segment ignored");
+            merged = Web.WebApi.OverlayActiveSegment(listed, null, "2026-07-15");
+            Assert(merged.All(s => !s.Live), "no active segment, no live flags");
+        });
+
+        Test("export: segments combine into one classic MP4", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                byte[] Nal(byte type, int len)
+                {
+                    var nal = new byte[len];
+                    Array.Fill(nal, (byte)0xAA);
+                    nal[0] = type;
+                    nal[1] = 0x80;
+                    return nal;
+                }
+                byte[] Au(params byte[][] nals)
+                {
+                    var ms = new MemoryStream();
+                    foreach (var n in nals)
+                    {
+                        ms.Write(new byte[] { 0, 0, 0, 1 });
+                        ms.Write(n);
+                    }
+                    return ms.ToArray();
+                }
+
+                string Write(Streaming.StreamHub hub, byte[] sps, byte[] pps, string name, int frames)
+                {
+                    var path = Path.Combine(dir, name);
+                    var w = Recording.ClipWriter.TryCreate(path, hub)!;
+                    Assert(w != null, "writer created");
+                    uint ts = 0;
+                    for (int i = 0; i < frames; i++)
+                    {
+                        bool key = i % 5 == 0;
+                        w!.Add(new Streaming.HubVideo(i, key ? Au(sps, pps, Nal(0x65, 40)) : Au(Nal(0x41, 25 + i)), key, ts));
+                        ts += 3000; // 90 kHz, ~30 fps
+                    }
+                    w!.Dispose();
+                    Assert(w.Completion.Wait(TimeSpan.FromSeconds(10)), "segment written");
+                    return path;
+                }
+
+                var sps = new byte[] { 0x67, 0x42, 0xE0, 0x1F, 0xA0 };
+                var pps = new byte[] { 0x68, 0xCE, 0x38, 0x80 };
+                var hub = new Streaming.StreamHub("cat");
+                hub.PublishVideo(new VideoFrame(VideoCodec.H264, true, 0, null, Au(sps, pps, Nal(0x65, 40))));
+                var p1 = Write(hub, sps, pps, "a.mp4", 10);
+                var p2 = Write(hub, sps, pps, "b.mp4", 8);
+
+                var plan = Recording.Mp4Export.TryPlan(new[] { (p1, 0.0), (p2, 1000.0) }, 0, 86400, out var reason);
+                Assert(plan != null, $"segments are combinable ({reason})");
+                // 10 + 8 frames at 3000 ticks each = 54000 ticks = 600 ms.
+                AssertEq(plan!.DurationMs, 600ul);
+
+                var outPath = Path.Combine(dir, "combined.mp4");
+                using (var os = File.Create(outPath))
+                    Recording.Mp4Export.WriteAsync(plan, os, CancellationToken.None).Wait();
+                AssertEq(new FileInfo(outPath).Length, plan.TotalBytes);
+
+                // Fast-start classic shape: exactly ftyp · moov · mdat.
+                var bytes = File.ReadAllBytes(outPath);
+                var boxes = new List<string>();
+                int pos = 0;
+                while (pos + 8 <= bytes.Length)
+                {
+                    uint size = System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(bytes.AsSpan(pos));
+                    if (size < 8 || pos + size > (uint)bytes.Length) break;
+                    boxes.Add(Encoding.ASCII.GetString(bytes, pos + 4, 4));
+                    pos += (int)size;
+                }
+                Assert(boxes.SequenceEqual(new[] { "ftyp", "moov", "mdat" }), $"classic fast-start layout ({string.Join('·', boxes)})");
+
+                // The combined file parses with the same scanner: every sample
+                // indexed, duration preserved — proof the tables are coherent.
+                var re = Recording.Mp4Export.TryPlan(new[] { (outPath, 0.0) }, 0, 86400, out var reReason);
+                Assert(re != null, $"combined file parses ({reReason})");
+                AssertEq(re!.DurationMs, plan.DurationMs);
+                AssertEq(re.Copies[0].Runs.Count, plan.Copies.Sum(c => c.Runs.Count));
+
+                // Trimmed export: the range starts mid-segment-1 and ends
+                // mid-segment-2. Keyframes sit at frames 0 and 5 (15000 ticks):
+                // from = 0.2 s (18000 ticks) snaps back to the keyframe at 15000
+                // → frames 5..9 of A (15000 ticks of footage); to = 0.2 s into B
+                // keeps its frames 0..5 (18000 ticks). 33000 ticks = 366 ms.
+                var trimmed = Recording.Mp4Export.TryPlan(new[] { (p1, 0.0), (p2, 10.0) }, 0.2, 10.2, out var tReason);
+                Assert(trimmed != null, $"trimmed plan built ({tReason})");
+                AssertEq(trimmed!.DurationMs, 366ul);
+                AssertEq(trimmed.Copies.Sum(c => c.Runs.Count), 11);
+                var tOut = Path.Combine(dir, "trimmed.mp4");
+                using (var os = File.Create(tOut))
+                    Recording.Mp4Export.WriteAsync(trimmed, os, CancellationToken.None).Wait();
+                AssertEq(new FileInfo(tOut).Length, trimmed.TotalBytes);
+                var tRe = Recording.Mp4Export.TryPlan(new[] { (tOut, 0.0) }, 0, 86400, out var tReReason);
+                Assert(tRe != null && tRe.Copies[0].Runs.Count == 11, $"trimmed file parses ({tReReason})");
+                AssertEq(tRe!.DurationMs, 366ul);
+
+                // Byte fidelity: the first sample's payload is copied verbatim.
+                var (srcOff, srcSize) = plan.Copies[0].Runs[0];
+                var src = new byte[srcSize];
+                using (var f = File.OpenRead(p1)) { f.Position = srcOff; f.ReadExactly(src); }
+                Assert(bytes.AsSpan(plan.Header.Length, (int)srcSize).SequenceEqual(src), "sample bytes copied verbatim");
+
+                // A segment with a different stream config must be refused with a
+                // reason (single MP4 tracks cannot change resolution mid-stream).
+                var sps2 = new byte[] { 0x67, 0x42, 0xE0, 0x1F, 0xA1 };
+                var hub2 = new Streaming.StreamHub("cat2");
+                hub2.PublishVideo(new VideoFrame(VideoCodec.H264, true, 0, null, Au(sps2, pps, Nal(0x65, 40))));
+                var p3 = Write(hub2, sps2, pps, "c.mp4", 5);
+                Assert(Recording.Mp4Export.TryPlan(new[] { (p1, 0.0), (p3, 1000.0) }, 0, 86400, out var why) == null
+                       && why != null && why.Contains("video"),
+                    "mixed video config refused with a reason");
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+        });
+
+        Test("export picker: overlap, live-file exclusion, ordering", () =>
+        {
+            var day = new List<(string File, long Size, double Seconds)>
+            {
+                ("06-10-00.mp4", 20, 600), // out of order on purpose
+                ("06-00-00.mp4", 10, 600),
+                ("06-20-00.mp4", 30, 600),
+                ("07-00-00.mp4", 40, 0),   // unknown duration: counts ≥ 1 s
+                ("07-10-00.mp4", 50, 300), // the live file (excluded below)
+                ("junk.txt", 999, 60),     // unparseable name: ignored
+            };
+
+            // Range clips both ends: 06:05–06:15 touches the first two segments only.
+            var picked = Web.WebApi.PickExportSegments(day, null, 6 * 3600 + 300, 6 * 3600 + 900, out long bytes);
+            Assert(picked.SequenceEqual(new[] { "06-00-00.mp4", "06-10-00.mp4" }), "overlapping segments, oldest first");
+            AssertEq(bytes, 30L);
+
+            // A range crossing an unknown-duration file's start still catches it;
+            // the live file is excluded even when the range covers it.
+            picked = Web.WebApi.PickExportSegments(day, "07-10-00.mp4", 7 * 3600, 8 * 3600, out bytes);
+            Assert(picked.SequenceEqual(new[] { "07-00-00.mp4" }), "unknown-duration caught, live file skipped");
+            AssertEq(bytes, 40L);
+
+            // Nothing in range → empty (the endpoint answers 404, not an empty zip).
+            picked = Web.WebApi.PickExportSegments(day, null, 3 * 3600, 4 * 3600, out bytes);
+            AssertEq(picked.Count, 0);
+            AssertEq(bytes, 0L);
         });
 
         Test("loopback base for blazor circuits (reverse-proxy fix)", () =>

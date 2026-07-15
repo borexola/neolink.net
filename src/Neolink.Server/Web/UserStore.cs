@@ -15,6 +15,9 @@ public sealed class UserRecord
     public string Hash { get; set; } = "";
     public bool Admin { get; set; }
     public string? Settings { get; set; }
+    /// <summary>Additional per-page settings blobs (raw JSON), keyed by page name
+    /// (e.g. "timeline") — so each page owns its state without racing the main blob.</summary>
+    public Dictionary<string, string>? Pages { get; set; }
 }
 
 /// <summary>
@@ -206,6 +209,27 @@ public sealed class UserStore
             var user = Find(name);
             if (user == null) return false;
             user.Settings = json;
+            SaveLocked();
+            return true;
+        }
+    }
+
+    public string GetPageSettings(string name, string page)
+    {
+        lock (_gate)
+            return Find(name)?.Pages?.GetValueOrDefault(page) ?? "{}";
+    }
+
+    public bool SetPageSettings(string name, string page, string json)
+    {
+        if (Encoding.UTF8.GetByteCount(json) > MaxSettingsBytes)
+            throw new ArgumentException("settings blob too large");
+        using (JsonDocument.Parse(json)) { } // must be valid JSON
+        lock (_gate)
+        {
+            var user = Find(name);
+            if (user == null) return false;
+            (user.Pages ??= new Dictionary<string, string>())[page] = json;
             SaveLocked();
             return true;
         }

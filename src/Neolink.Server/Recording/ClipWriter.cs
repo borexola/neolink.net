@@ -446,7 +446,12 @@ public sealed class ClipWriter : IDisposable
     }
 
     /// <summary>True when the file still has the live moov up front (old format /
-    /// still being recorded), as opposed to the finalized free-span layout.</summary>
+    /// still being recorded), as opposed to the finalized free-span layout.
+    /// A moov right after ftyp is not proof by itself: an ordinary fast-start
+    /// classic file (a combined export, say) has the same silhouette — only the
+    /// live fragmented header carries an mvex box, so that is the discriminator
+    /// (checked by walking the moov's child HEADERS, a few seeks, no payload
+    /// reads).</summary>
     internal static bool IsFragmented(FileStream file)
     {
         Span<byte> head = stackalloc byte[8];
@@ -456,7 +461,20 @@ public sealed class ClipWriter : IDisposable
         if (!head[4..].SequenceEqual("ftyp"u8)) throw new InvalidOperationException("not an MP4");
         file.Seek(ftypLen, SeekOrigin.Begin);
         file.ReadExactly(head);
-        return head[4..].SequenceEqual("moov"u8);
+        if (!head[4..].SequenceEqual("moov"u8)) return false;
+
+        long moovEnd = ftypLen + BinaryPrimitives.ReadUInt32BigEndian(head);
+        long pos = ftypLen + 8;
+        while (pos + 8 <= moovEnd)
+        {
+            file.Seek(pos, SeekOrigin.Begin);
+            file.ReadExactly(head);
+            uint size = BinaryPrimitives.ReadUInt32BigEndian(head);
+            if (size < 8 || pos + size > moovEnd) break;
+            if (head[4..].SequenceEqual("mvex"u8)) return true;
+            pos += size;
+        }
+        return false;
     }
 
     /// <summary>
@@ -681,8 +699,10 @@ public sealed class ClipWriter : IDisposable
         int MinfOff, int StblOff, int StsdEnd);
     internal sealed record InitLayout(int MoovOff, int MvhdOff, int MvhdLen, List<TrakLayout> Traks);
 
-    /// <summary>Locates the init-segment boxes the classic moov reuses or replaces.</summary>
-    private static InitLayout AnalyzeInit(byte[] init)
+    /// <summary>Locates the init-segment boxes the classic moov reuses or replaces.
+    /// Works on any ftyp+moov blob: a live init segment and a finalized file's
+    /// classic header share the structure this reads (Mp4Export relies on that).</summary>
+    internal static InitLayout AnalyzeInit(byte[] init)
     {
         int moovOff = -1, mvhdOff = -1, mvhdLen = 0;
         var traks = new List<TrakLayout>();
@@ -725,7 +745,7 @@ public sealed class ClipWriter : IDisposable
         return new InitLayout(moovOff, mvhdOff, mvhdLen, traks);
     }
 
-    private static IEnumerable<(string Type, int Start, int Len)> Boxes(byte[] b, int pos, int end)
+    internal static IEnumerable<(string Type, int Start, int Len)> Boxes(byte[] b, int pos, int end)
     {
         while (pos + 8 <= end)
         {
