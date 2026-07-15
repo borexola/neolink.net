@@ -152,7 +152,11 @@
                     <span>T</span><span>Jump to an exact time</span>
                     <span>S</span><span>Save a still (focused monitor, or a lone camera)</span>
                 </div>
-                <div class="event-sub tl-keys-hint">Drag the thin day strip above the lanes to move the zoomed view. Double-click the lanes to zoom back out.</div>
+                <div class="event-sub tl-keys-hint">
+                    Drag the thin day strip above the lanes to move the zoomed view. Double-click the lanes to zoom back out.
+                    Drag the divider beside the tracks to make the timeline taller; with a focused monitor, the handle beside
+                    the thumbnail rail resizes it the same way. Double-click a divider for its default.
+                </div>
             </div>
         </div>
     }
@@ -295,88 +299,102 @@
         }
         else
         {
-        <div class="tl-board">
-            <div class="tl-names">
-                <div class="tl-name tl-name-head"></div>
-                @foreach (var cam in Included)
-                {
-                    <div class="tl-name" title="@cam.Name">@cam.Name</div>
-                }
-            </div>
-            @* data-vs/data-vspan let the JS hover bubble map pixels → time locally,
-               with zero server round-trips while the mouse moves. *@
-            <div class="tl-lanes" id="tl-scrub" data-vs="@_viewStart" data-vspan="@_viewSpan">
-                @* The whole day at a glance, always: footage blocks, the red cursor,
-                   and — when zoomed — the draggable view-window rectangle. *@
-                <div class="tl-overview">
+        @* The board's height is the user's: the divider under it (over it, in the
+           studio layout) drags, and the tracks share out whatever it is given. *@
+        <div class="tl-board" id="tl-board" style="@BoardStyle()">
+            @* Names and lanes are one row so both columns get the same height —
+               that is what keeps every label level with its track as they grow. *@
+            <div class="tl-tracks">
+                <div class="tl-names">
+                    <div class="tl-name tl-name-head"></div>
                     @foreach (var cam in Included)
                     {
-                        @if (_cov.TryGetValue(cam.Name, out var ovSegs))
-                        {
-                            @foreach (var s in ovSegs)
-                            {
-                                <div class="tl-ov-cov" style="left:@DayPct(s.Start); width:@DayPct(s.Span)"></div>
-                            }
-                        }
-                    }
-                    <div class="tl-ov-cursor" style="left:@DayPct(_t)"></div>
-                    @if (Zoomed)
-                    {
-                        <div class="tl-ov-win" style="left:@DayPct(_viewStart); width:@DayPct(_viewSpan)"></div>
+                        <div class="tl-name" title="@cam.Name">@cam.Name</div>
                     }
                 </div>
-                <div class="tl-ruler">
-                    @foreach (var (t, label) in RulerTicks())
-                    {
-                        @if (label != null)
+                @* data-vs/data-vspan let the JS hover bubble map pixels → time locally,
+                   with zero server round-trips while the mouse moves. *@
+                <div class="tl-lanes" id="tl-scrub" data-vs="@_viewStart" data-vspan="@_viewSpan">
+                    @* The whole day at a glance, always: footage blocks, the red cursor,
+                       and — when zoomed — the draggable view-window rectangle. *@
+                    <div class="tl-overview">
+                        @foreach (var cam in Included)
                         {
-                            <span class="tl-tick" style="left:@Pct(t)">@label</span>
-                        }
-                        else
-                        {
-                            <span class="tl-tick-minor" style="left:@Pct(t)"></span>
-                        }
-                    }
-                </div>
-                @foreach (var cam in Included)
-                {
-                    <div class="tl-lane">
-                        @if (_cov.TryGetValue(cam.Name, out var segs))
-                        {
-                            @foreach (var s in segs)
+                            @if (_cov.TryGetValue(cam.Name, out var ovSegs))
                             {
-                                @if (InView(s.Start, s.Start + s.Span))
+                                @foreach (var s in ovSegs)
                                 {
-                                    <div class="tl-cov" style="left:@Pct(s.Start); width:@W(s.Span)"></div>
+                                    <div class="tl-ov-cov" style="left:@DayPct(s.Start); width:@DayPct(s.Span)"></div>
                                 }
                             }
                         }
-                        @if (_marks.TryGetValue(cam.Name, out var marks))
+                        <div class="tl-ov-cursor" style="left:@DayPct(_t)"></div>
+                        @if (Zoomed)
                         {
-                            @foreach (var m in marks)
+                            <div class="tl-ov-win" style="left:@DayPct(_viewStart); width:@DayPct(_viewSpan)"></div>
+                        }
+                    </div>
+                    <div class="tl-ruler">
+                        @foreach (var (t, label) in RulerTicks())
+                        {
+                            @if (label != null)
                             {
-                                @if (InView(m.Start, m.End))
-                                {
-                                    <div class="tl-ev" title="@m.Title"
-                                         style="left:@Pct(m.Start); width:@WMark(m.End - m.Start); background:@m.Color"></div>
-                                }
+                                <span class="tl-tick" style="left:@Pct(t)">@label</span>
+                            }
+                            else
+                            {
+                                <span class="tl-tick-minor" style="left:@Pct(t)"></span>
                             }
                         }
                     </div>
-                }
-                @if (InView(_t, _t))
-                {
-                    <div class="tl-cursor" style="left:@Pct(_t)">
-                        <span class="tl-cursor-time">@TimeText(_t)</span>
-                    </div>
-                }
-                @if (!Zoomed)
-                {
-                    @* Discovery nudge for the timeline's best trick; it bows out
-                       the moment the user zooms (and returns at the full-day view). *@
-                    <div class="tl-zoom-hint">@UiIcon.Render("zoom", 11) <span>Scroll or pinch here to zoom into the day</span></div>
-                }
+                    @foreach (var cam in Included)
+                    {
+                        <div class="tl-lane">
+                            @if (_cov.TryGetValue(cam.Name, out var segs))
+                            {
+                                @foreach (var s in segs)
+                                {
+                                    @if (InView(s.Start, s.Start + s.Span))
+                                    {
+                                        <div class="tl-cov" style="left:@Pct(s.Start); width:@W(s.Span)"></div>
+                                    }
+                                }
+                            }
+                            @if (_marks.TryGetValue(cam.Name, out var marks))
+                            {
+                                @foreach (var m in marks)
+                                {
+                                    @if (InView(m.Start, m.End))
+                                    {
+                                        <div class="tl-ev" title="@m.Title"
+                                             style="left:@Pct(m.Start); width:@WMark(m.End - m.Start); background:@m.Color"></div>
+                                    }
+                                }
+                            }
+                        </div>
+                    }
+                    @if (InView(_t, _t))
+                    {
+                        <div class="tl-cursor" style="left:@Pct(_t)">
+                            <span class="tl-cursor-time">@TimeText(_t)</span>
+                        </div>
+                    }
+                </div>
             </div>
+            @if (!Zoomed)
+            {
+                @* Discovery nudge for the timeline's best trick; it bows out
+                   the moment the user zooms (and returns at the full-day view). *@
+                <div class="tl-zoom-hint">@UiIcon.Render("zoom", 11) <span>Scroll or pinch here to zoom into the day</span></div>
+            }
+        </div>
+
+        @* Drag to trade height between the monitors and the tracks. JS owns the
+           drag (see tlResizeInit) and hands back the height it landed on. *@
+        <div class="tl-resizer" id="tl-resizer" role="separator" aria-orientation="horizontal"
+             title="Drag to make the timeline taller or shorter — double-click to reset"
+             @ondblclick="ResetBoardHeightAsync">
+            <span class="tl-resizer-grip"></span>
         </div>
 
         @* Tile size adapts to the selection: fewer cameras = bigger tiles. In the
@@ -400,6 +418,18 @@
                             @onclick="() => SnapshotAsync(cam.Name)" @onclick:stopPropagation="true">
                         @UiIcon.Render("camera", 14)
                     </button>
+                </div>
+            }
+            @if (FocusActive && Included.Count() > 1)
+            {
+                @* Drag to trade width between the program monitor and the rail.
+                   Lives in its own thin grid column between the two; the drag is
+                   JS-owned like the board divider's (see tlColResizeInit). *@
+                <div class="tl-vresizer" id="tl-vresizer" role="separator" aria-orientation="vertical"
+                     style="grid-column: 2; grid-row: 1 / span @(Math.Max(1, Included.Count() - 1));"
+                     title="Drag to make the thumbnail rail wider or narrower — double-click to reset"
+                     @ondblclick="ResetRailWidthAsync">
+                    <span class="tl-vresizer-grip"></span>
                 </div>
             }
         </div>
@@ -433,6 +463,7 @@
     private DateTime _covRefreshed = DateTime.UtcNow; // last periodic coverage reload (today only)
     private DateTime _lastTick;
     private bool _scrubInit;
+    private bool _railInit; // rail-divider drag hooked (focused studio only)
     private bool _booted;
 
     // Calendar date-picker: days that hold footage are highlighted at a glance.
@@ -456,6 +487,75 @@
         public List<string>? Included { get; set; }
         public double? Speed { get; set; }
         public bool? Studio { get; set; }
+        public double? BoardH { get; set; }
+        public double? StudioBoardH { get; set; }
+        public double? StudioRailW { get; set; }
+    }
+
+    // ------------------------------------------------------------ resizable tracks
+    //
+    // The board's height in pixels, kept per layout: the two want very different
+    // sizes (a strip above the monitors vs. the editing desk under them), and one
+    // shared number would mean every Studio toggle undid the other's tuning.
+    // null = the layout's natural size, which is what everyone gets until they
+    // drag. The lanes share out whatever height the board has, so this is really
+    // "how thick are my tracks" — the reason the drag is worth having at all.
+    private const double MinBoard = 90; // ruler + a full track stay reachable
+    private double? _boardH;
+    private double? _studioBoardH;
+
+    private double? BoardH => _studio ? _studioBoardH : _boardH;
+
+    /// <summary>The dragged height, if any. The max-height rides along to outrank
+    /// the studio layout's 34vh cap and to keep a height saved on a roomy desktop
+    /// from swallowing a phone screen — it is the same ceiling the drag clamps to.</summary>
+    private string? BoardStyle() =>
+        BoardH is { } h ? $"height:{h:0}px; max-height:70vh;" : null;
+
+    /// <summary>The divider drag ended. JS applied the height live (no round-trip
+    /// per pixel); this records where it landed and saves it to the account.</summary>
+    [JSInvokable]
+    public async Task OnBoardResize(double px)
+    {
+        await InvokeAsync(async () =>
+        {
+            var h = Math.Clamp(px, MinBoard, 4000);
+            if (_studio) _studioBoardH = h; else _boardH = h;
+            StateHasChanged();
+            await SavePrefsAsync();
+        });
+    }
+
+    /// <summary>Double-click the divider: back to this layout's natural size.</summary>
+    private async Task ResetBoardHeightAsync()
+    {
+        if (_studio) _studioBoardH = null; else _boardH = null;
+        await SavePrefsAsync();
+    }
+
+    // Width of the thumbnail rail while a monitor is focused (studio). Same
+    // deal as the board height: null = the default (clamp to ~18vw), a number
+    // = the user's drag, saved to the account so it follows them.
+    private const double MinRail = 96; // thumbnails stay recognizable
+    private double? _studioRailW;
+
+    /// <summary>The rail divider drag ended (JS applied the width live).</summary>
+    [JSInvokable]
+    public async Task OnRailResize(double px)
+    {
+        await InvokeAsync(async () =>
+        {
+            _studioRailW = Math.Clamp(px, MinRail, 2000);
+            StateHasChanged();
+            await SavePrefsAsync();
+        });
+    }
+
+    /// <summary>Double-click the rail divider: back to the default width.</summary>
+    private async Task ResetRailWidthAsync()
+    {
+        _studioRailW = null;
+        await SavePrefsAsync();
     }
 
     // Studio (opt-in): monitors fill the top, and the editing desk — transport,
@@ -608,18 +708,34 @@
         }
 
         // The lane strip only exists while cameras are selected; (re)hook the
-        // scrub + zoom/hover handlers whenever it (re)appears.
+        // scrub + zoom/hover + divider handlers whenever it (re)appears.
         if (Included.Any() && !_scrubInit)
         {
             _scrubInit = true;
             await JS.InvokeVoidAsync("neolink.tlScrubInit", "tl-scrub", _selfRef);
             await JS.InvokeVoidAsync("neolink.tlZoomInit", "tl-scrub", _selfRef);
+            await JS.InvokeVoidAsync("neolink.tlResizeInit", "tl-resizer", "tl-board", _selfRef);
         }
         else if (!Included.Any() && _scrubInit)
         {
             _scrubInit = false;
             await JS.InvokeVoidAsync("neolink.tlScrubDispose", "tl-scrub");
             await JS.InvokeVoidAsync("neolink.tlZoomDispose", "tl-scrub");
+            await JS.InvokeVoidAsync("neolink.tlResizeDispose", "tl-resizer");
+        }
+
+        // The rail divider only exists while a monitor is focused (studio) —
+        // (re)hook its drag whenever it (re)appears.
+        bool wantRail = FocusActive && Included.Count() > 1;
+        if (wantRail && !_railInit)
+        {
+            _railInit = true;
+            await JS.InvokeVoidAsync("neolink.tlColResizeInit", "tl-vresizer", _selfRef);
+        }
+        else if (!wantRail && _railInit)
+        {
+            _railInit = false;
+            await JS.InvokeVoidAsync("neolink.tlColResizeDispose", "tl-vresizer");
         }
     }
 
@@ -1031,6 +1147,9 @@
         if (p.Included != null) _included = new HashSet<string>(p.Included, StringComparer.OrdinalIgnoreCase);
         if (p.Speed is { } sp && SpeedOptions.Contains(sp)) _speed = sp;
         if (p.Studio is { } st) _studio = st;
+        if (p.BoardH is { } bh) _boardH = Math.Clamp(bh, MinBoard, 4000);
+        if (p.StudioBoardH is { } sbh) _studioBoardH = Math.Clamp(sbh, MinBoard, 4000);
+        if (p.StudioRailW is { } rw) _studioRailW = Math.Clamp(rw, MinRail, 2000);
     }
 
     /// <summary>Signed in: the account's server-side prefs override the local copy —
@@ -1052,7 +1171,15 @@
     }
 
     private string SerializePrefs() =>
-        JsonSerializer.Serialize(new Prefs { Included = _included.ToList(), Speed = _speed, Studio = _studio });
+        JsonSerializer.Serialize(new Prefs
+        {
+            Included = _included.ToList(),
+            Speed = _speed,
+            Studio = _studio,
+            BoardH = _boardH,
+            StudioBoardH = _studioBoardH,
+            StudioRailW = _studioRailW,
+        });
 
     private async Task SavePrefsAsync()
     {
@@ -1292,14 +1419,17 @@
         _focusCam = IsFocus(cam) ? null : cam;
     }
 
-    /// <summary>Equal grid normally; focused: program monitor + thumbnail rail.</summary>
+    /// <summary>Equal grid normally; focused: program monitor · divider · rail.
+    /// The rail column is the user's to drag (see the vresizer); min() keeps a
+    /// width saved on a roomy desktop from swallowing a narrow screen.</summary>
     private string GridStyle() => FocusActive
-        ? "grid-template-columns: minmax(0, 1fr) clamp(96px, 18vw, 220px);"
+        ? $"grid-template-columns: minmax(0, 1fr) 10px {(
+            _studioRailW is { } w ? $"min({w:0}px, 45vw)" : "clamp(96px, 18vw, 220px)")};"
         : $"grid-template-columns: repeat({TileColumns()}, 1fr);";
 
     private string? TileStyle(string cam) => !FocusActive ? null
         : IsFocus(cam) ? $"grid-column: 1; grid-row: 1 / span {Math.Max(1, Included.Count() - 1)};"
-        : "grid-column: 2;";
+        : "grid-column: 3;";
 
     /// <summary>Downloads the current frame of a camera's player as a PNG
     /// (e.g. "driveway 2026-07-15 08.30.12.png").</summary>
@@ -1484,6 +1614,8 @@
         {
             await JS.InvokeVoidAsync("neolink.tlScrubDispose", "tl-scrub");
             await JS.InvokeVoidAsync("neolink.tlZoomDispose", "tl-scrub");
+            await JS.InvokeVoidAsync("neolink.tlResizeDispose", "tl-resizer");
+            await JS.InvokeVoidAsync("neolink.tlColResizeDispose", "tl-vresizer");
             await JS.InvokeVoidAsync("neolink.tlKeysDispose");
         }
         catch { /* circuit already gone */ }

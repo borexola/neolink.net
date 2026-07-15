@@ -66,6 +66,20 @@ in the README). Paste the matching section below into the GitHub release.
 - **Timeline zoom is discoverable**: a quiet hint under the lanes — "Scroll or
   pinch here to zoom into the day" — points out the timeline's best trick; it
   disappears the moment you are zoomed in.
+- **The timeline is resizable**: a divider on the boundary between the monitors
+  and the tracks — below them in the classic view, above the docked desk in
+  Studio — drags to trade height between the two, in both layouts and on touch.
+  The tracks share out whatever height the board is given, so pulling it open
+  makes the lanes themselves thicker (easier to read, easier to hit) rather than
+  adding empty space; the footage blocks and event marks scale with them. A
+  board dragged shorter than its tracks scrolls instead of squashing them.
+  Double-click the divider for the layout's default height. The size is saved
+  per layout (the two want very different ones) and per user — to the account
+  when signed in, so it follows you across browsers. In Studio with a focused
+  monitor, a second, vertical divider between the program monitor and the
+  thumbnail rail drags the same way to trade width between the two (and
+  double-clicks back to the default rail width); it is saved and restored with
+  the rest.
 
 ### Fixed
 

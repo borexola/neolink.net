@@ -903,6 +903,14 @@ issue with them so the mapping can be extended.
   the `S` key) that saves the frame under the cursor as a PNG. The choice is
   saved to your signed-in account, so it follows you across browsers and devices;
   signed-out browsers fall back to local storage.
+- **Resizing the timeline**: the divider between the monitors and the tracks
+  drags (either layout, mouse or finger) to give the timeline as much of the
+  screen as you want. The tracks share the height, so a taller board means
+  thicker lanes rather than empty space — worth doing before a close review, and
+  worth undoing to get the picture back. In Studio with a focused monitor, the
+  vertical handle beside the thumbnail rail drags too, trading width between the
+  program monitor and the rail. Double-click any divider for its default. Each
+  size is remembered separately, saved to your account like the rest.
 
 ## Versioning & releases
 

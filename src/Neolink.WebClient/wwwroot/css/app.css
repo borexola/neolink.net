@@ -3094,17 +3094,39 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     align-items: center;
 }
 
+/* The scrubbing area. Its height is the user's to set (the divider below/above
+   it drags): natural size until then, and whatever was dragged after — the
+   tracks inside share it, so a taller board means thicker, easier-to-hit lanes. */
 .tl-board {
     display: flex;
+    flex-direction: column;
     padding: 10px 12px;
     gap: 0;
     flex: 0 0 auto;
+    /* Scroll when the tracks outgrow a dragged-short (or studio-capped) board —
+       and never sideways: ruler and cursor labels poke a few px past the right
+       edge at some zoom positions, and overflow-y:auto alone silently turns
+       overflow-x into auto as well (CSS computed-value rule), so a horizontal
+       scrollbar flashed in and out under the tracks while zooming/panning,
+       jolting the board by its height. The stable gutter keeps lane widths
+       constant when the vertical scrollbar appears with many cameras. */
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-gutter: stable;
 }
+
+/* Names beside lanes. Grows into a taller board so the tracks thicken with it,
+   but never shrinks below its natural size: a board dragged shorter than its
+   tracks scrolls instead of squashing them into slivers. */
+.tl-tracks { display: flex; flex: 1 0 auto; }
 
 .tl-names { display: flex; flex-direction: column; width: 110px; flex: 0 0 auto; }
 
+/* Name rows mirror the lanes exactly — same 26px floor, same growth, same 2px
+   gap — so every camera's label stays level with its track at any board height. */
 .tl-name {
-    height: 26px;
+    flex: 1 0 26px;
+    margin-bottom: 2px;
     display: flex;
     align-items: center;
     font-size: 12px;
@@ -3117,7 +3139,10 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 
 .tl-lanes {
     position: relative;
+    display: flex;
+    flex-direction: column;
     flex: 1;
+    min-width: 0;
     cursor: crosshair;
     touch-action: none; /* pointer-drag scrubbing on touch too */
     user-select: none;
@@ -3127,6 +3152,7 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
    red cursor and the draggable view-window rectangle. */
 .tl-overview {
     position: relative;
+    flex: 0 0 auto;
     height: 16px;
     margin-bottom: 4px;
     background: color-mix(in srgb, var(--panel) 70%, transparent);
@@ -3164,9 +3190,12 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     pointer-events: none;
 }
 
-.tl-name-head { height: 46px; } /* overview strip + ruler */
+/* Blank spacer opposite the overview strip + ruler. Fixed, and explicitly out
+   of the name rows' growth (it shares their class): let it flex like a real
+   row and it would both mis-size and shove every label off its lane. */
+.tl-name-head { flex: 0 0 46px; margin-bottom: 0; }
 
-.tl-ruler { position: relative; height: 26px; }
+.tl-ruler { position: relative; flex: 0 0 auto; height: 26px; }
 
 .tl-tick {
     position: absolute;
@@ -3220,19 +3249,24 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     white-space: nowrap;
 }
 
+/* 26px is the floor, not the size: the lanes share every pixel the board is
+   dragged to, so the tracks thicken instead of leaving dead space below them. */
 .tl-lane {
     position: relative;
-    height: 26px;
+    flex: 1 0 26px;
     background: color-mix(in srgb, var(--panel) 70%, transparent);
     border-radius: 4px;
     margin-bottom: 2px;
     overflow: hidden;
 }
 
+/* Footage blocks and event marks are inset by proportion, not pixels — they
+   grow with the lane (at the 26px floor these land on the original 7/12 and
+   4/18 pixel geometry). */
 .tl-cov {
     position: absolute;
-    top: 7px;
-    height: 12px;
+    top: 27%;
+    bottom: 27%;
     background: #35507e;
     border-radius: 2px;
     pointer-events: none;
@@ -3240,8 +3274,8 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 
 .tl-ev {
     position: absolute;
-    top: 4px;
-    height: 18px;
+    top: 15%;
+    bottom: 15%;
     min-width: 3px;
     border-radius: 2px;
     opacity: 0.95;
@@ -3271,9 +3305,12 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 
 /* Gentle discovery hint: zooming is the timeline's superpower and nothing
    visible said so. Flows under the lanes, never intercepts the pointer, and
-   disappears the moment the user is zoomed in. */
+   disappears the moment the user is zoomed in. Sits outside .tl-lanes so the
+   names column mirrors the lane column exactly (an extra row in one and not the
+   other would drift every label off its track as the board grows). */
 .tl-zoom-hint {
     display: flex;
+    flex: 0 0 auto;
     align-items: center;
     justify-content: flex-end;
     gap: 5px;
@@ -3282,6 +3319,73 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     color: var(--muted);
     pointer-events: none;
     user-select: none;
+}
+
+/* ---- Board divider: drag to trade height between the monitors and the tracks.
+   It rides the boundary in both layouts — under the board in the classic view
+   (monitors below), above the docked desk in studio (monitors above) — and the
+   drag itself is JS-owned so the tracks track the pointer without a round-trip
+   per pixel. Blazor gets the final height, persists it, and renders it back. */
+.tl-resizer {
+    flex: 0 0 auto;
+    height: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: row-resize;
+    touch-action: none; /* the drag owns the gesture; never scroll the page */
+    z-index: 2;
+}
+
+.tl-resizer-grip {
+    width: 44px;
+    height: 3px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--line) 90%, transparent);
+    transition: background 0.12s ease, width 0.12s ease;
+}
+
+.tl-resizer:hover .tl-resizer-grip,
+.tl-resizer.dragging .tl-resizer-grip {
+    background: var(--accent);
+    width: 64px;
+}
+
+/* While dragging, the pointer belongs to the divider: the resize cursor holds
+   even when it outruns the handle, and nothing highlights along the way. */
+body.tl-resizing, body.tl-resizing * { cursor: row-resize !important; user-select: none; }
+
+/* ---- Rail divider (focused studio): the vertical twin, between the program
+   monitor and the thumbnail rail. It occupies the thin middle grid column that
+   GridStyle() lays out; z-index floats the hit area over the tiles' edges. */
+.tl-vresizer {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: col-resize;
+    touch-action: none; /* the drag owns the gesture; never scroll the page */
+    z-index: 2;
+}
+
+.tl-vresizer-grip {
+    width: 3px;
+    height: 44px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--line) 90%, transparent);
+    transition: background 0.12s ease, height 0.12s ease;
+}
+
+.tl-vresizer:hover .tl-vresizer-grip,
+.tl-vresizer.dragging .tl-vresizer-grip {
+    background: var(--accent);
+    height: 64px;
+}
+
+body.tl-colresizing, body.tl-colresizing * { cursor: col-resize !important; user-select: none; }
+
+@media (pointer: coarse) {
+    .tl-resizer { height: 20px; }    /* a finger-sized target for the same 3px grip */
+    .tl-vresizer { margin: 0 -5px; } /* widen the touch target into the grid gaps */
 }
 
 .tl-grid {
@@ -3364,21 +3468,14 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
    Pure flex re-ordering of the same DOM — the scrub/zoom/hover JS hooks and the
    render path are identical in both layouts, only the visual order changes. */
 .tl-page.studio .tl-grid { order: 1; padding: 8px 12px; }
-.tl-page.studio .tl-toolbar { order: 2; border-top: 1px solid var(--line); }
-.tl-page.studio .tl-cams { order: 3; padding-top: 4px; }
+/* The divider leads the docked desk here, so it lands on the toolbar's existing
+   top border — the visible seam between the monitors and everything below it. */
+.tl-page.studio .tl-resizer { order: 2; }
+.tl-page.studio .tl-toolbar { order: 3; border-top: 1px solid var(--line); }
+.tl-page.studio .tl-cams { order: 4; padding-top: 4px; }
 .tl-page.studio .tl-board {
-    order: 4;
-    max-height: 34vh;
-    /* Scroll only when many tracks exceed the cap — and never sideways: ruler
-       and cursor labels poke a few px past the right edge at some zoom
-       positions, and overflow-y:auto alone silently turns overflow-x into
-       auto as well (CSS computed-value rule), so a horizontal scrollbar
-       flashed in and out under the tracks while zooming/panning, jolting the
-       board by its height. The stable gutter keeps lane widths constant when
-       the vertical scrollbar appears with many cameras. */
-    overflow-y: auto;
-    overflow-x: hidden;
-    scrollbar-gutter: stable;
+    order: 5;
+    max-height: 34vh; /* until dragged: an explicit height overrides this inline */
 }
 /* Empty-state and error notices sit centered on the (otherwise black) stage. */
 .tl-page.studio .notice { order: 1; margin: auto; }

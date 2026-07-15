@@ -440,6 +440,7 @@
     // ---------- timeline page (recorded footage scrubbing) ----------
     const scrubs = {};
     const zooms = {};      // per-element zoom/hover/pinch handler registries
+    const resizers = {};   // per-element board-divider drag registries
     let tlKeyHandler = null;
     let tlPinching = false; // two-finger zoom in progress: scrubbing must yield
 
@@ -1223,6 +1224,108 @@
             for (const [t, ev, fn, opts] of st.handlers) t.removeEventListener(ev, fn, opts);
             st.el.querySelector('.tl-hover')?.remove();
             delete zooms[elemId];
+        },
+
+        // Drag the divider to resize the timeline board. The height is applied
+        // here, live, so the tracks follow the pointer at screen rate instead of
+        // one SignalR round-trip per pixel; Blazor is told once, on release, and
+        // owns it from there (persisting it and rendering it back identically).
+        tlResizeInit(handleId, boardId, dotnetRef) {
+            this.tlResizeDispose(handleId);
+            const el = document.getElementById(handleId);
+            const board = document.getElementById(boardId);
+            if (!el || !board) return;
+            const down = (e) => {
+                if (e.button !== 0 && e.pointerType === 'mouse') return;
+                e.preventDefault();
+                const startY = e.clientY;
+                const startH = board.getBoundingClientRect().height;
+                // Which way is "bigger"? The board sits above the divider in the
+                // classic layout and below it in studio. Reading the live rects
+                // answers that per drag, so flipping layouts needs no re-init.
+                const dir = board.getBoundingClientRect().top < el.getBoundingClientRect().top ? 1 : -1;
+                try { el.setPointerCapture(e.pointerId); } catch { }
+                el.classList.add('dragging');
+                document.body.classList.add('tl-resizing');
+                // The floor keeps the ruler and a full track reachable; the
+                // ceiling keeps the monitors on screen. Matches the inline
+                // max-height Blazor renders, so nothing jumps on release.
+                const at = (ev) => Math.max(90, Math.min(window.innerHeight * 0.7,
+                    startH + dir * (ev.clientY - startY)));
+                const apply = (ev) => {
+                    board.style.height = at(ev) + 'px';
+                    board.style.maxHeight = '70vh'; // outranks studio's 34vh cap while dragging
+                };
+                const move = (ev) => apply(ev);
+                const up = (ev) => {
+                    el.removeEventListener('pointermove', move);
+                    el.removeEventListener('pointerup', up);
+                    el.removeEventListener('pointercancel', up);
+                    el.classList.remove('dragging');
+                    document.body.classList.remove('tl-resizing');
+                    apply(ev);
+                    dotnetRef.invokeMethodAsync('OnBoardResize', at(ev));
+                };
+                el.addEventListener('pointermove', move);
+                el.addEventListener('pointerup', up);
+                el.addEventListener('pointercancel', up);
+            };
+            el.addEventListener('pointerdown', down);
+            resizers[handleId] = { el, down };
+        },
+        tlResizeDispose(handleId) {
+            const r = resizers[handleId];
+            if (r) { r.el.removeEventListener('pointerdown', r.down); delete resizers[handleId]; }
+        },
+
+        // Drag the vertical divider between the program monitor and the
+        // thumbnail rail (focused studio): the rail's grid column follows the
+        // pointer live, and Blazor gets the width it landed on — the same
+        // split of labor as tlResizeInit. The template string written here
+        // must stay in step with GridStyle() in Timeline.razor.
+        tlColResizeInit(handleId, dotnetRef) {
+            this.tlColResizeDispose(handleId);
+            const el = document.getElementById(handleId);
+            const grid = el?.closest('.tl-grid');
+            if (!el || !grid) return;
+            const down = (e) => {
+                if (e.button !== 0 && e.pointerType === 'mouse') return;
+                const rail = grid.querySelector('.tl-tile-rail');
+                if (!rail) return;
+                e.preventDefault();
+                const startX = e.clientX;
+                const startW = rail.getBoundingClientRect().width;
+                try { el.setPointerCapture(e.pointerId); } catch { }
+                el.classList.add('dragging');
+                document.body.classList.add('tl-colresizing');
+                // The divider sits left of the rail, so dragging right shrinks
+                // it. Floor keeps thumbnails recognizable; the ceiling keeps
+                // the program monitor the bigger half. Matches Blazor's clamps.
+                const at = (ev) => Math.max(96, Math.min(grid.getBoundingClientRect().width * 0.45,
+                    startW - (ev.clientX - startX)));
+                const apply = (ev) => {
+                    grid.style.gridTemplateColumns = `minmax(0, 1fr) 10px ${at(ev)}px`;
+                };
+                const move = (ev) => apply(ev);
+                const up = (ev) => {
+                    el.removeEventListener('pointermove', move);
+                    el.removeEventListener('pointerup', up);
+                    el.removeEventListener('pointercancel', up);
+                    el.classList.remove('dragging');
+                    document.body.classList.remove('tl-colresizing');
+                    apply(ev);
+                    dotnetRef.invokeMethodAsync('OnRailResize', at(ev));
+                };
+                el.addEventListener('pointermove', move);
+                el.addEventListener('pointerup', up);
+                el.addEventListener('pointercancel', up);
+            };
+            el.addEventListener('pointerdown', down);
+            resizers[handleId] = { el, down };
+        },
+        tlColResizeDispose(handleId) {
+            const r = resizers[handleId];
+            if (r) { r.el.removeEventListener('pointerdown', r.down); delete resizers[handleId]; }
         },
 
         // NLE-style keyboard transport for the timeline page. Ignores keystrokes
