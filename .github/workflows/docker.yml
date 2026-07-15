@@ -63,11 +63,20 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Release tags (vX.Y.Z) become the app's self-reported version — the
-      # Dockerfile falls back to the csproj <Version> when this is empty.
+      # Release tags (vX.Y.Z) become the app's self-reported version; beta
+      # branch builds report "<csproj version>-beta" so the beta channel is
+      # unmistakable everywhere the version shows (web UI, startup log,
+      # /api/features). The Dockerfile falls back to the csproj <Version>
+      # when this is empty (local builds).
       - id: ver
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/beta'
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            v=$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' src/Neolink.Server/Neolink.Server.csproj)
+            echo "version=${v%-beta}-beta" >> "$GITHUB_OUTPUT"
+          fi
 
       - uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         id: meta
