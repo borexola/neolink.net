@@ -265,20 +265,35 @@ public sealed class EventStore
         return days.OrderByDescending(d => d).ToList();
     }
 
-    /// <summary>Segment files of one day (live and archived merged), oldest first: (file name, size in bytes).</summary>
-    public List<(string File, long Size)> ListSegments(string camera, string date)
+    /// <summary>Segment files of one day (live and archived merged), oldest first:
+    /// (file name, size in bytes, seconds of media). The duration comes from the
+    /// file's mtime minus the start encoded in its name — free during enumeration,
+    /// preserved by the archive mover, and it keeps growing for the file still
+    /// being written. The timeline uses it to size coverage truthfully: a segment
+    /// cut short (camera suspended/offline) must not claim minutes it doesn't
+    /// have, or the cursor is sent past the end of the media.</summary>
+    public List<(string File, long Size, double Seconds)> ListSegments(string camera, string date)
     {
-        if (!IsDayName(date)) return new List<(string, long)>();
-        var seen = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        if (!IsDayName(date)) return new List<(string, long, double)>();
+        bool haveDay = DateTime.TryParseExact(date, "yyyy-MM-dd", null,
+            System.Globalization.DateTimeStyles.None, out var day);
+        var seen = new Dictionary<string, (long Size, double Seconds)>(StringComparer.OrdinalIgnoreCase);
         foreach (var root in ContinuousRoots)
         {
             var dir = Path.Combine(root, SafeName(camera), date, "continuous");
             if (!Directory.Exists(dir)) continue;
             foreach (var f in Directory.EnumerateFiles(dir, "*.mp4").Select(f => new FileInfo(f)))
-                if (IsSegmentName(f.Name) && !seen.ContainsKey(f.Name))
-                    seen[f.Name] = f.Length;
+            {
+                if (!IsSegmentName(f.Name) || seen.ContainsKey(f.Name)) continue;
+                double seconds = 0;
+                if (haveDay && TimeSpan.TryParseExact(Path.GetFileNameWithoutExtension(f.Name),
+                        @"hh\-mm\-ss", null, out var start))
+                    seconds = Math.Max(0, (f.LastWriteTime - (day + start)).TotalSeconds);
+                seen[f.Name] = (f.Length, seconds);
+            }
         }
-        return seen.OrderBy(kv => kv.Key).Select(kv => (kv.Key, kv.Value)).ToList();
+        return seen.OrderBy(kv => kv.Key)
+            .Select(kv => (kv.Key, kv.Value.Size, kv.Value.Seconds)).ToList();
     }
 
     /// <summary>Absolute path of one segment (live first, then archive); strict name validation (no traversal).</summary>

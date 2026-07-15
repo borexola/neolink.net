@@ -839,6 +839,18 @@ public static class SelfTest
                 Assert(store2.List().Count == 1, "recent event survives retention");
                 Assert(store2.ListContinuousDays("cam1").Count == 1, "recent day listed");
 
+                // The segment listing reports each file's media length as
+                // mtime − the start encoded in its name: the timeline sizes lane
+                // coverage with it so a cut-short segment (suspended/offline
+                // camera) doesn't claim minutes it doesn't have.
+                var segDay = new FileInfo(newSeg).Directory!.Parent!.Name;
+                var segStart = DateTime.ParseExact(
+                    $"{segDay} {Path.GetFileNameWithoutExtension(newSeg)}", "yyyy-MM-dd HH-mm-ss", null);
+                File.SetLastWriteTime(newSeg, segStart.AddSeconds(600));
+                var listedSeg = store2.ListSegments("cam1", segDay)
+                    .Single(s => s.File == Path.GetFileName(newSeg));
+                AssertEq((long)listedSeg.Seconds, 600L);
+
                 // The exact boundary: a day EXACTLY retention-days old is kept
                 // (deletion needs strictly older) — "keep 7 days" never eats day 7.
                 static string DayDir(string root, string cam, DateTime day, string half) =>
@@ -1468,6 +1480,68 @@ public static class SelfTest
             }
         });
 
+        Test("HA suspend switch: resumable while the camera is offline", () =>
+        {
+            // The whole point of suspend is that the camera reads OFFLINE — so the
+            // HA switch must (1) act without ever touching the camera connection
+            // and (2) stay Available in HA, i.e. its availability must be gated on
+            // the BRIDGE topic only, never the per-camera topic.
+            bool? lastSet = null;
+            var cam = new Web.WebCameraInfo("suspendcam",
+                new List<Web.WebStreamInfo>(), new StubCameraControl("suspendcam"), null,
+                Suspended: () => lastSet ?? true,
+                SetSuspended: v => lastSet = v);
+            var hub = new Mqtt.HomeAssistantMqtt(
+                new Config.MqttConfig { Broker = "127.0.0.1", Port = 1 }, // never connected
+                new List<Web.WebCameraInfo> { cam }, "test");
+            var bridge = new Mqtt.CameraBridge(cam, hub);
+
+            // Resume command (payload OFF) flips the flag — camera offline throughout,
+            // and the state publish failing (no broker) must not break the command.
+            bridge.HandleCommandAsync("suspend", "OFF").GetAwaiter().GetResult();
+            AssertEq(lastSet, false);
+            bridge.HandleCommandAsync("suspend", "ON").GetAwaiter().GetResult();
+            AssertEq(lastSet, true);
+
+            // Discovery config: availability must be the bridge topic ONLY.
+            var json = System.Text.Json.JsonSerializer.Serialize(
+                bridge.SuspendSwitchConfig(), Mqtt.HomeAssistantMqtt.DiscoveryJson);
+            Assert(json.Contains("\"availability\":[{\"topic\":\"neolink/bridge/state\"}]"),
+                $"suspend switch availability must be bridge-only, got: {json}");
+            Assert(!json.Contains("suspendcam/state"),
+                "per-camera availability topic must NOT gate the suspend switch");
+        });
+
+        Test("camera state store: suspend flag round-trip + restart persistence", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var store = new Web.CameraStateStore(dir);
+                Assert(!store.Suspended("Driveway"), "not suspended by default");
+
+                store.SetSuspended("Driveway", true);
+                Assert(store.Suspended("driveway"), "case-insensitive lookup");
+                Assert(new Web.CameraStateStore(dir).Suspended("Driveway"),
+                    "suspend survives a restart (persisted)");
+
+                store.SetSuspended("Driveway", false);
+                Assert(!new Web.CameraStateStore(dir).Suspended("Driveway"),
+                    "resume persists (safe default is un-suspended)");
+
+                // A corrupt file must not take the server down — cameras start
+                // un-suspended (they stream and record).
+                File.WriteAllText(Path.Combine(dir, "camera-state.json"), "{ not json");
+                Assert(!new Web.CameraStateStore(dir).Suspended("Driveway"),
+                    "corrupt file -> un-suspended, no throw");
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+        });
+
         Test("secret protector: AES-256-GCM round-trip + tamper detection", () =>
         {
             var key = new byte[32];
@@ -1891,6 +1965,120 @@ public static class SelfTest
             }
             finally
             {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+        });
+
+        Test("continuous recorder: silence closes the segment (suspend = timeline gap)", () =>
+        {
+            // A suspended (or offline) camera stops publishing but the hub stays
+            // open. The recorder must finalize the open segment instead of gluing
+            // resumed footage into it — ClipWriter clamps big timestamp jumps, so
+            // gluing would time-compress the gap and misplace everything after it.
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            var realRoll = Recording.ContinuousRecorder.SilenceRoll;
+            Recording.ContinuousRecorder.SilenceRoll = TimeSpan.FromMilliseconds(250);
+            try
+            {
+                var hub = new Streaming.StreamHub("gapcam");
+                byte[] Nal(byte type, int len)
+                {
+                    var nal = new byte[len];
+                    Array.Fill(nal, (byte)0xAA);
+                    nal[0] = type;
+                    nal[1] = 0x80;
+                    return nal;
+                }
+                byte[] Au(params byte[][] nals)
+                {
+                    var ms = new MemoryStream();
+                    foreach (var n in nals)
+                    {
+                        ms.Write(new byte[] { 0, 0, 0, 1 });
+                        ms.Write(n);
+                    }
+                    return ms.ToArray();
+                }
+                var sps = new byte[] { 0x67, 0x42, 0xE0, 0x1F, 0xA0 };
+                var pps = new byte[] { 0x68, 0xCE, 0x38, 0x80 };
+                byte[] KeyAu() => Au(sps, pps, Nal(0x65, 40));
+                // Teach the hub its codec parameters before the recorder subscribes.
+                hub.PublishVideo(new VideoFrame(VideoCodec.H264, Keyframe: true, Microseconds: 0, UnixTime: null, KeyAu()));
+
+                var settings = new Recording.RecordingSettings(dir);
+                settings.Update("gapcam", events: null, continuous: true, eventTypes: null, setEventTypes: false);
+                var store = new Recording.EventStore(Path.Combine(dir, "rec"));
+                var recorder = new Recording.ContinuousRecorder("gapcam", hub, store, settings,
+                    new Config.RecordingConfig { SegmentMinutes = 10, MaxSegmentSizeMb = 256 });
+
+                using var cts = new CancellationTokenSource();
+                var run = Task.Run(() => recorder.RunAsync(cts.Token));
+
+                uint us = 0;
+                void Frames()
+                {
+                    hub.PublishVideo(new VideoFrame(VideoCodec.H264, true, us += 33_000, null, KeyAu()));
+                    for (int i = 0; i < 4; i++)
+                        hub.PublishVideo(new VideoFrame(VideoCodec.H264, false, us += 33_000, null, Au(Nal(0x41, 25))));
+                }
+                bool Poll(Func<bool> done, int ms = 5000)
+                {
+                    var until = DateTime.UtcNow.AddMilliseconds(ms);
+                    while (DateTime.UtcNow < until)
+                    {
+                        if (done()) return true;
+                        Thread.Sleep(25);
+                    }
+                    return done();
+                }
+                string[] Segments() => Directory.Exists(Path.Combine(dir, "rec"))
+                    ? Directory.GetFiles(Path.Combine(dir, "rec"), "*.mp4", SearchOption.AllDirectories)
+                    : Array.Empty<string>();
+
+                // Frames flow → one segment opens. The recorder may still be
+                // subscribing, so feed it until the file appears.
+                Assert(Poll(() => { Frames(); return recorder.IsWriting; }), "segment opens while frames flow");
+                AssertEq(Segments().Length, 1);
+                var first = Segments()[0];
+
+                // Silence (the suspension): after SilenceRoll the segment must be
+                // CLOSED — bounded at the true end time, gap left on the timeline.
+                Assert(Poll(() => !recorder.IsWriting), "silence closes the segment");
+                // Finalization happens on the writer's own thread: a classic MP4 is
+                // exactly ftyp + free + moov (the live header has trailing moofs).
+                static List<string> TopBoxes(byte[] b)
+                {
+                    var list = new List<string>();
+                    int pos = 0;
+                    while (pos + 8 <= b.Length)
+                    {
+                        uint size = System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(b.AsSpan(pos));
+                        if (size < 8 || pos + size > (uint)b.Length) break;
+                        list.Add(Encoding.ASCII.GetString(b, pos + 4, 4));
+                        pos += (int)size;
+                    }
+                    return list;
+                }
+                Assert(Poll(() =>
+                {
+                    var boxes = TopBoxes(File.ReadAllBytes(first));
+                    return boxes.Count == 3 && boxes[^1] == "moov";
+                }), "closed segment is finalized (playable, bounded)");
+
+                // Let the wall clock move past the old file's HH-mm-ss stamp, then
+                // resume: footage must land in a NEW segment, not the old file.
+                Thread.Sleep(1100);
+                Assert(Poll(() => { Frames(); return recorder.IsWriting; }), "recording resumes after the gap");
+                AssertEq(Segments().Length, 2);
+                Assert(new FileInfo(first).Length > 200, "first segment untouched by the resume");
+
+                cts.Cancel();
+                Assert(run.Wait(TimeSpan.FromSeconds(10)), "recorder stops cleanly");
+            }
+            finally
+            {
+                Recording.ContinuousRecorder.SilenceRoll = realRoll;
                 try { Directory.Delete(dir, recursive: true); } catch { }
             }
         });

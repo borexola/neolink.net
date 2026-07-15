@@ -83,6 +83,13 @@ public sealed class ContinuousRecorder
         }
     }
 
+    /// <summary>An open segment is closed after this much source silence: an
+    /// offline or SUSPENDED camera must leave a real gap in the timeline. Gluing
+    /// resumed footage into the old file would time-compress the gap (ClipWriter
+    /// clamps timestamp jumps) and place everything after it hours off. Mutable
+    /// for the selftest only.</summary>
+    internal static TimeSpan SilenceRoll = TimeSpan.FromSeconds(15);
+
     private async Task PumpAsync(CancellationToken ct)
     {
         var hub = RecordHub();
@@ -94,8 +101,38 @@ public sealed class ContinuousRecorder
 
         try
         {
-            await foreach (var packet in reader.ReadAllAsync(ct).ConfigureAwait(false))
+            while (!ct.IsCancellationRequested)
             {
+                // Channel drained: wait for more. With no file open a plain wait
+                // does; with a segment open the wait carries the silence deadline.
+                if (!reader.TryRead(out var packet))
+                {
+                    if (writer == null)
+                    {
+                        if (!await reader.WaitToReadAsync(ct).ConfigureAwait(false))
+                            return; // hub completed
+                        continue;
+                    }
+                    using var silence = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    silence.CancelAfter(SilenceRoll);
+                    try
+                    {
+                        if (!await reader.WaitToReadAsync(silence.Token).ConfigureAwait(false))
+                            return;
+                    }
+                    catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                    {
+                        // Source went quiet (camera offline or suspended): finalize
+                        // the segment so it is bounded and playable; footage after
+                        // the gap starts a NEW segment stamped with the true time.
+                        writer.Dispose();
+                        writer = null;
+                        _writing = false;
+                        Log.Info($"{_camera}: stream quiet for {SilenceRoll.TotalSeconds:0}s — segment closed; " +
+                                 "footage after the gap starts a new segment");
+                    }
+                    continue;
+                }
                 if (!ReferenceEquals(RecordHub(), hub))
                 {
                     // Stream selection changed: close this segment, resubscribe.

@@ -629,13 +629,17 @@
     }
 
     /// <summary>
-    /// Segment spans: a segment reaches to the next one when they are contiguous;
-    /// otherwise (a recording gap) the typical segment length is assumed.
+    /// Segment spans: the file's real media length when the server reports it
+    /// (so a segment cut short — camera suspended or offline — claims exactly the
+    /// minutes it has, and the lane goes blank for the rest of the gap), with a
+    /// butt-join to the next file when it starts about where this one ends so
+    /// normal rolls stay seamless. Servers that predate the duration field fall
+    /// back to the old typical-length guess.
     /// </summary>
     private List<Seg> BuildSegs(List<ApiSegment> files, string camera, string date)
     {
         var parsed = files
-            .Select(f => (f.File, Start: ParseStart(f.File)))
+            .Select(f => (f.File, Start: ParseStart(f.File), f.Seconds))
             .Where(x => x.Start >= 0)
             .OrderBy(x => x.Start)
             .ToList();
@@ -643,17 +647,34 @@
         var diffs = parsed.Zip(parsed.Skip(1), (a, b) => b.Start - a.Start)
             .Where(d => d > 1).OrderBy(d => d).ToList();
         double typical = diffs.Count > 0 ? Math.Clamp(diffs[diffs.Count / 2], 30, 1800) : 600;
+        // The duration derives from the file's close time, which trails the last
+        // frame by the recorder's silence window (~15 s) — joins get that much slack.
+        const double Fuzz = 30;
 
         var segs = new List<Seg>();
         for (int i = 0; i < parsed.Count; i++)
         {
             double start = parsed[i].Start;
-            double span = typical;
+            double dur = parsed[i].Seconds > 0.5 ? parsed[i].Seconds : typical;
+            double span = dur;
             if (i + 1 < parsed.Count)
             {
                 double gap = parsed[i + 1].Start - start;
-                if (gap <= typical * 1.5) span = gap;
+                if (gap <= dur + Fuzz) span = gap; // contiguous roll: butt-join
             }
+            else if (date == DateTime.Today.ToString("yyyy-MM-dd")
+                     && start + dur > (DateTime.Now - DateTime.Today).TotalSeconds - 120)
+            {
+                // Today's newest file, and its reported end reaches (about) now:
+                // it is still being written, so its length is only "as of this
+                // load" — keep the old forward allowance. The player just holds
+                // the last frame past the media it fetched (never lag), and a
+                // reload picks up the growth. A newest file that ENDED long ago
+                // (camera suspended/offline right now) gets no allowance: that
+                // lane is genuinely blank from its end onward.
+                span = Math.Max(dur, typical);
+            }
+            span = Math.Min(span, DaySeconds - start);
             segs.Add(new Seg(start, span,
                 $"{Base}/api/recordings/{Uri.EscapeDataString(camera)}/{date}/{parsed[i].File}{TokenQuery('?')}"));
         }

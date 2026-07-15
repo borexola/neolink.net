@@ -89,6 +89,18 @@ in the README). Paste the matching section below into the GitHub release.
   groupings kept, with an unsaved-changes dot on the tab) and **Recording** (the
   server-side recording settings). The dialog holds a fixed height too, so tab
   switches don't jump.
+- **Suspend a camera in Neolink (beta)**: a per-camera switch that stops Neolink
+  from connecting to the camera at all — so it can't be viewed or recorded here —
+  without editing the config or restarting. It drops Neolink's connection and holds
+  it closed; downstream (live view, event and 24/7 recording, HA entities) goes
+  quiet naturally, and the setting persists across restarts. The camera itself is
+  untouched: its own SD-card / cloud recording and any other system pulling its
+  stream directly keep working, so it is not a privacy guarantee — the UI says so.
+  Works on Reolink and generic RTSP cameras alike, appears as a "Suspend" switch in
+  Home Assistant (with bridge-only availability so it stays usable while the camera
+  is intentionally offline), and suppresses the camera-offline email alert while
+  suspended. Writing is admin-only once accounts exist (it stops recording, a
+  server-side change).
 - **Panel feedback as toasts**: the camera panel's action feedback now shows as a
   toast at the panel's bottom edge — green for applied, red for rejected (with the
   camera's own error text) — and dismisses itself after 5 seconds.
@@ -108,6 +120,28 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Fixed
 
+- **A source gap now closes the open 24/7 segment (correct timeline placement)**:
+  when a camera stopped delivering frames with a segment file open — suspended,
+  offline, or asleep — the recorder used to keep the file open and glue the
+  resumed footage into it. The writer clamps large timestamp jumps, so the whole
+  gap got time-compressed into one segment and everything after it played at the
+  wrong position on the timeline. The recorder now finalizes the open segment
+  after 15 seconds of silence (bounded and playable at its true end time) and
+  starts a fresh segment when frames return, leaving a real gap with no footage —
+  exactly like a camera that was off. Event recording's pre-roll buffer is
+  cleared across such gaps too, so the first event after a resume can't start
+  with stale pre-gap frames.
+- **Timeline: gaps play as gaps**: the day view used to guess every segment
+  file's length from the typical roll interval, so a segment cut short (the
+  camera was suspended or went offline mid-segment) claimed lane minutes it
+  doesn't have — the cursor was sent past the end of the real media, the player
+  could never catch up, and the whole timeline slowed to a crawl ("catching
+  up…") over footage that doesn't exist. The segment listing now reports each
+  file's actual length (from its close time), lanes size their coverage with it
+  — the gap is genuinely blank, with "no footage" on that camera's tile while
+  the others play on at full speed — and the player treats a cursor beyond a
+  file's media as exhausted rather than lagging, so one short file can never
+  hold the other cameras hostage.
 - **Recording settings are admin-gated**: the per-camera recording switches
   (retention, schedules, event types, archive routing) persist server-side, but
   any signed-in user could change them. Once accounts exist, the API now requires

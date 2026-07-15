@@ -230,6 +230,11 @@ tasks.Add(Task.Run(() => notifier.RunAsync(shutdown.Token)));
 // exist (the bridge needs the camera list, built below).
 var motionTargets = new List<(CameraService Primary, string Name, Action<MotionPush>? RecorderSink)>();
 
+// Per-camera runtime state that survives restarts (today: the SUSPEND flag —
+// Neolink holds no connection to the camera, so it can't be viewed or recorded).
+// Shared by the web API / MQTT bridge (which toggle it) and applied at startup.
+var cameraState = new Neolink.Web.CameraStateStore(stateDir);
+
 foreach (var cam in config.Cameras)
 {
     var permitted = config.PermittedUsersFor(cam);
@@ -237,12 +242,12 @@ foreach (var cam in config.Cameras)
     ICameraControl control;
     CameraService? primaryService = null;
     var camServices = new List<CameraService>();
+    var pullServices = new List<RtspCameraService>();
 
     if (cam.IsGenericRtsp)
     {
         // Generic (non-Reolink) camera: pull its RTSP URL(s) into hubs. It streams
         // and records, but has no Baichuan control surface and no motion pushes.
-        var pullServices = new List<RtspCameraService>();
         int rtspIndex = 0;
         void AddRtsp(string url, string suffix, bool alsoRoot)
         {
@@ -253,6 +258,7 @@ foreach (var cam in config.Cameras)
             webStreams.Add(new WebStreamInfo(suffix, $"/{cam.Name}/{suffix}", hub));
             var service = new RtspCameraService($"{cam.Name} {suffix}", url, hub,
                 TimeSpan.FromSeconds(2 * rtspIndex++));
+            service.SetSuspended(cameraState.Suspended(cam.Name)); // restore persisted suspend
             pullServices.Add(service);
             tasks.Add(Task.Run(() => RunRtspGuardedAsync(service, $"{cam.Name} ({suffix})", shutdown.Token)));
         }
@@ -283,6 +289,7 @@ foreach (var cam in config.Cameras)
             }
             webStreams.Add(new WebStreamInfo(suffix, $"/{cam.Name}/{suffix}", hub));
             var service = new CameraService(cam, kind, hub, TimeSpan.FromSeconds(2 * streamIndex++));
+            service.SetSuspended(cameraState.Suspended(cam.Name)); // restore persisted suspend
             primaryService ??= service;
             camServices.Add(service);
             tasks.Add(Task.Run(() => RunCameraGuardedAsync(service, $"{cam.Name} ({kind})", shutdown.Token)));
@@ -374,6 +381,20 @@ foreach (var cam in config.Cameras)
     // Registered after the recorders so the web API can report live REC state.
     var battery = primaryService;
     var sleepers = camServices;
+    // Suspend applies to every stream of the camera (Baichuan or generic RTSP);
+    // reading it back is "all streams held" (they toggle together). Persist here so
+    // the API/bridge just flip one switch. Both service lists exist; only one is
+    // populated per camera, so concatenating covers both kinds.
+    var suspendables = camServices.Cast<object>().Concat(pullServices).ToList();
+    void SetCamSuspended(bool v)
+    {
+        foreach (var s in camServices) s.SetSuspended(v);
+        foreach (var s in pullServices) s.SetSuspended(v);
+        cameraState.SetSuspended(cam.Name, v);
+    }
+    bool IsCamSuspended() =>
+        (camServices.Count > 0 && camServices.All(s => s.Suspended))
+        || (pullServices.Count > 0 && pullServices.All(s => s.Suspended));
     webCameras.Add(new WebCameraInfo(cam.Name, webStreams, control, permitted,
         ContinuousActive: continuousRecorder == null ? null : () => continuousRecorder.IsWriting,
         SupportsEvents: !cam.IsGenericRtsp,
@@ -382,7 +403,9 @@ foreach (var cam in config.Cameras)
         // as opposed to offline-because-unreachable.
         Asleep: sleepers.Count == 0 ? null : () => sleepers.All(s => s.Parked),
         SirenOn: battery == null ? null : () => battery.SirenOn,
-        PrivacyOn: battery == null ? null : () => battery.PrivacyOn)
+        PrivacyOn: battery == null ? null : () => battery.PrivacyOn,
+        Suspended: suspendables.Count == 0 ? null : IsCamSuspended,
+        SetSuspended: suspendables.Count == 0 ? null : SetCamSuspended)
         // The recorder rides along so the web API and the MQTT bridge share one
         // on-demand recording session per camera (UI button ≡ HA Record switch).
         { EventRecorder = eventRecorder });
@@ -412,7 +435,10 @@ if (config.WebPort > 0 || config.Mqtt is { StatsIntervalSeconds: > 0 })
 var alertMonitor = new Neolink.Notifications.AlertMonitor(
     notifier, Environment.MachineName, storage, monitor,
     cameras: () => webCameras.Select(c => new Neolink.Notifications.CameraHealth(
-        c.Name, c.Control.Online, c.Asleep?.Invoke() ?? false)),
+        c.Name, c.Control.Online,
+        // "Intentionally offline" — a dozing battery camera OR one the user
+        // suspended — must not raise a camera-offline alert.
+        (c.Asleep?.Invoke() ?? false) || (c.Suspended?.Invoke() ?? false))),
     recording: recordingHealth);
 tasks.Add(Task.Run(() => alertMonitor.RunAsync(shutdown.Token)));
 

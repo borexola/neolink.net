@@ -25,6 +25,34 @@
     {
         <div class="notice">Querying camera…</div>
     }
+    else if (_suspended == true)
+    {
+        @* A suspended camera reads offline — but the resume control must stay
+           reachable, so it gets its own mini-panel instead of the offline notice. *@
+        <div class="campanel-section">
+            <div class="campanel-section-title">@UiIcon.Render("eye-off", 13) SUSPENDED <span class="beta-tag">BETA</span></div>
+            <div class="notice small">
+                This camera is <b>suspended in Neolink</b> — no connection is held, so it
+                isn't viewed or recorded here and its Home Assistant entities are unavailable.
+            </div>
+            <div class="control-row">
+                <span>Suspended in Neolink — on</span>
+                @if (_suspendBusy)
+                {
+                    <span class="chip chip-off" aria-busy="true"><span class="btn-spinner"></span>Saving…</span>
+                }
+                else
+                {
+                    <button class="chip chip-active" disabled="@(!CanEditRecording)"
+                            @onclick="() => SetSuspendAsync(false)">suspended — click to resume</button>
+                }
+            </div>
+            <div class="notice warn small">
+                ⚠ The camera itself keeps running: its own SD-card / cloud recording and any
+                other system pulling it directly are unaffected. Suspend is not a privacy guarantee.
+            </div>
+        </div>
+    }
     else if (_caps != null && !_caps.Online)
     {
         <div class="notice">Camera is offline (reconnecting). Controls appear when it comes back.</div>
@@ -750,6 +778,47 @@
             </div>
         }
 
+        @if (_camTab == "controls" && Camera?.CanSuspend == true)
+        {
+            <div class="campanel-section">
+                <div class="campanel-section-title">@UiIcon.Render("eye-off", 13) SUSPEND <span class="beta-tag">BETA</span></div>
+                <div class="notice small">
+                    Stops <b>Neolink</b> from connecting to this camera — it can't be viewed
+                    or recorded here, and its Home Assistant entities go unavailable, until
+                    resumed. No restart needed; the setting survives one.
+                </div>
+                <div class="control-row">
+                    <span>Suspended in Neolink @(_suspended == true ? "— on" : "")</span>
+                    @if (_suspendBusy)
+                    {
+                        <span class="chip chip-off" aria-busy="true"><span class="btn-spinner"></span>Saving…</span>
+                    }
+                    else if (_suspended == true)
+                    {
+                        <button class="chip chip-active" disabled="@(!CanEditRecording)"
+                                @onclick="() => SetSuspendAsync(false)">suspended — click to resume</button>
+                    }
+                    else if (!_confirmSuspend)
+                    {
+                        <button class="chip chip-off" disabled="@(!CanEditRecording)"
+                                @onclick="() => _confirmSuspend = true">active</button>
+                    }
+                    else
+                    {
+                        <span class="row-actions">
+                            <button class="chip chip-danger" @onclick="() => SetSuspendAsync(true)">Confirm — stop Neolink for this camera</button>
+                            <button class="chip" @onclick="() => _confirmSuspend = false">Cancel</button>
+                        </span>
+                    }
+                </div>
+                <div class="notice warn small">
+                    ⚠ This only stops <b>Neolink</b>. The camera keeps running: its own
+                    <b>SD-card / cloud recording</b> and any <b>other system</b> pulling its
+                    stream directly are unaffected. It is not a privacy guarantee.
+                </div>
+            </div>
+        }
+
         @if (_camTab == "controls" && _caps.Features?.Reboot != false)
         {
             <div class="campanel-section">
@@ -845,7 +914,7 @@
     /// <summary>Whether the Camera settings tab has anything to show — false for
     /// generic RTSP cameras (no Baichuan/HTTP control surface at all).</summary>
     private bool HasDeviceControls =>
-        _profiles is { Count: > 0 } || _http != null
+        _profiles is { Count: > 0 } || _http != null || Camera?.CanSuspend == true
         || _caps?.Features is { } f && (f.Battery || f.Ptz || f.Zoom || f.Led || f.Siren
             || f.Privacy || f.Pir || f.Reboot);
     private bool _loading;
@@ -861,6 +930,10 @@
     private bool _confirmSiren;
     private bool _confirmPrivacy;
     private bool _privacyBusy;   // a privacy-mode write is in flight (spinner shown)
+    private bool? _suspended;    // Neolink-side suspend (beta); null when unsupported
+    private bool _confirmSuspend;
+    private bool _suspendBusy;
+    private int _requerySeq;     // invalidates the post-resume reconnect poll
     private bool? _sirenOn;   // last known state (pushes / this panel's own actions)
     private bool? _privacyOn;
     private int _ptzSpeed = 32;
@@ -1275,8 +1348,21 @@
         _quickReplyId = 0;
         _camTab = "controls";
         _confirmReboot = _confirmSiren = _confirmPrivacy = _privacyBusy = false;
+        _confirmSuspend = _suspendBusy = false;
+        // Suspend state: seeded from the camera list (reachable even while the
+        // camera is offline), then confirmed against the server — the list entry
+        // the parent passed in can be stale, e.g. right after resuming from this
+        // very panel, and it must not flip the panel back to "suspended".
+        _suspended = Camera?.CanSuspend == true ? Camera.Suspended : null;
         DiscardPending(); // switching cameras must not carry staged edits across
         StateHasChanged();
+
+        if (Camera?.CanSuspend == true &&
+            (await GetAsync<JsonElement?>("suspend"))?.TryGetProperty("suspended", out var su) == true
+            && su.ValueKind is JsonValueKind.True or JsonValueKind.False)
+        {
+            _suspended = su.GetBoolean();
+        }
 
         // Capability discovery drives everything else; the camera answers control
         // commands one at a time, so the remaining queries run sequentially.
@@ -1385,6 +1471,62 @@
         finally
         {
             _privacyBusy = false;
+        }
+    }
+
+    /// <summary>Suspends/resumes the camera in Neolink (server-side; persisted). No
+    /// camera write — this only drops/keeps Neolink's own connection.</summary>
+    private async Task SetSuspendAsync(bool suspend)
+    {
+        if (_suspendBusy) return;
+        _confirmSuspend = false;
+        _suspendBusy = true;
+        try
+        {
+            if (await PostAsync("suspend", new { suspended = suspend }))
+            {
+                _suspended = suspend;
+                _requerySeq++; // a new toggle supersedes any resume poll in flight
+                ShowToast(suspend
+                    ? "Suspended — Neolink won't view or record this camera until resumed. The camera itself keeps running."
+                    : "Resumed — Neolink is reconnecting to this camera.");
+                if (!suspend)
+                {
+                    // Repopulate now (honest offline notice while it reconnects),
+                    // then keep re-querying until the camera answers so the panel
+                    // fills in by itself — no close/reopen needed.
+                    await LoadAsync();
+                    _ = RequeryUntilOnlineAsync(_requerySeq, CameraName);
+                }
+            }
+        }
+        finally
+        {
+            _suspendBusy = false;
+        }
+    }
+
+    /// <summary>After a resume the camera needs a few seconds to reconnect: probe
+    /// it every 2 s (up to a minute) and reload the panel once it reports online.
+    /// Stops quietly when the panel closes, switches camera, or is re-suspended.</summary>
+    private async Task RequeryUntilOnlineAsync(int seq, string camera)
+    {
+        for (int i = 0; i < 30; i++)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(2));
+            if (_disposed || seq != _requerySeq || _loadedFor != camera || _suspended != false)
+                return;
+            if (_caps is { Online: true }) return; // already populated — done
+            await InvokeAsync(async () =>
+            {
+                // Light probe first; the full (multi-query) reload only runs once
+                // the camera actually answers, so the panel doesn't churn.
+                var caps = await GetAsync<ApiCapabilities>("capabilities");
+                if (caps is { Online: true }) await LoadAsync();
+                else if (caps != null) _caps = caps;
+                StateHasChanged();
+            });
+            if (_caps is { Online: true }) return;
         }
     }
 

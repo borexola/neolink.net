@@ -108,7 +108,13 @@
                             @UiIcon.Render(bat.Charging ? "bolt" : "battery", 11)@bat.Percent%
                         </span>
                     }
-                    @if (cam.Privacy)
+                    @if (cam.Suspended)
+                    {
+                        <span class="cam-doze-badge" title="Suspended in Neolink — not viewed or recorded here until resumed (the camera itself keeps running). Resume from its settings (⚙).">
+                            @UiIcon.Render("eye-off", 10) suspended
+                        </span>
+                    }
+                    else if (cam.Privacy)
                     {
                         <span class="cam-privacy-badge" title="Privacy mode — the camera is dark on purpose (turn it off here or in the Reolink app)">
                             🔒 private
@@ -475,7 +481,15 @@
                         @* Privacy is its own OPAQUE overlay: the player neither shows a
                            frozen last frame under it nor overwrites it (it rewrites
                            .tile-status with its own connecting/reconnect text). *@
-                        @if (camera is { Privacy: true })
+                        @if (camera is { Suspended: true })
+                        {
+                            <div class="tile-privacy">
+                                <span class="tile-privacy-icon">@UiIcon.Render("eye-off", 22)</span>
+                                <span>suspended</span>
+                                <small>not viewed or recorded in Neolink</small>
+                            </div>
+                        }
+                        else if (camera is { Privacy: true })
                         {
                             <div class="tile-privacy">
                                 <span class="tile-privacy-icon">🔒</span>
@@ -3183,7 +3197,9 @@
     }
 
     private static string CamHeadTitle(ApiCamera cam) =>
-        cam.Privacy
+        cam.Suspended
+            ? "Suspended in Neolink — not viewed or recorded here until resumed (the camera itself keeps running)"
+            : cam.Privacy
             ? "Privacy mode is on — the camera is dark on purpose until it is switched back"
             : cam.Online
                 ? "Open full view (main stream) — drag the card onto a tile to add it to the wall"

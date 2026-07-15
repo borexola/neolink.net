@@ -27,10 +27,13 @@ public sealed record WebStreamInfo(string Kind, string Path, IStreamHub Hub);
 /// <param name="Asleep">Probe: is the camera intentionally disconnected so it can sleep (battery doze)?</param>
 /// <param name="SirenOn">Latest siren state the camera pushed, or null (no push yet / unsupported).</param>
 /// <param name="PrivacyOn">Latest privacy-mode state the camera pushed, or null (no push yet / unsupported).</param>
+/// <param name="Suspended">Probe: has the user suspended this camera in Neolink (no connection held)?</param>
+/// <param name="SetSuspended">Suspends/resumes the camera at runtime and persists it; null when unsupported.</param>
 public sealed record WebCameraInfo(string Name, List<WebStreamInfo> Streams, ICameraControl Control,
     HashSet<string>? PermittedUsers, Func<bool>? ContinuousActive = null, bool SupportsEvents = true,
     Func<BatteryPush?>? Battery = null, Func<bool>? Asleep = null,
-    Func<bool?>? SirenOn = null, Func<bool?>? PrivacyOn = null)
+    Func<bool?>? SirenOn = null, Func<bool?>? PrivacyOn = null,
+    Func<bool>? Suspended = null, Action<bool>? SetSuspended = null)
 {
     /// <summary>The camera's event recorder when server-side event recording runs —
     /// the shared entry point for on-demand clips (web UI button and HA switch).</summary>
@@ -121,6 +124,7 @@ public static class WebApi
     private sealed record AutoTrackRequest(bool? On);
     private sealed record SirenRequest(bool? On);
     private sealed record PrivacyRequest(bool? On);
+    private sealed record SuspendRequest(bool? Suspended);
     private sealed record RecordOnDemandRequest(bool Active);
     private sealed record StreamSettingsRequest(string? Stream, uint? Width, uint? Height,
         uint? Framerate, uint? Bitrate);
@@ -891,6 +895,10 @@ public static class WebApi
                 // Camera dark on purpose (privacy mode) — set from this UI OR the
                 // Reolink app; the pushes keep it current either way.
                 privacy = c.PrivacyOn?.Invoke() ?? false,
+                // Suspended in Neolink (beta): no connection held, so it can't be
+                // viewed or recorded here. Distinct from offline-because-unreachable.
+                suspended = c.Suspended?.Invoke() ?? false,
+                canSuspend = c.SetSuspended != null,
                 battery = c.Battery?.Invoke() is { } b
                     ? new { percent = b.Percent, charging = b.Charging }
                     : null,
@@ -1236,6 +1244,42 @@ public static class WebApi
                 await control.SetPrivacyModeAsync(req.On.Value, reqCt);
                 return Results.Json(new { ok = true, on = req.On });
             }));
+
+        // Suspend (beta): a Neolink-side "off" switch. Suspending drops Neolink's
+        // connection and holds it closed, so the camera can't be VIEWED or RECORDED
+        // here — without editing the config or restarting. The camera itself is
+        // untouched: its own SD-card/cloud recording and any other system pulling
+        // its stream directly keep working. Persisted across restarts. Reads are
+        // open; writing is admin-only once accounts exist (it's a server-side state
+        // change that stops recording, like the recording settings).
+        app.MapGet("/api/cameras/{name}/suspend", (string name, HttpContext ctx) =>
+        {
+            var cam = cameras.FirstOrDefault(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase));
+            if (cam == null)
+                return Results.Json(new { error = $"unknown camera '{name}'" }, statusCode: 404);
+            if (CheckAuth(ctx, cam) is { } denied)
+                return denied;
+            return cam.Suspended == null
+                ? Results.Json(new { error = "suspend is not available for this camera" }, statusCode: 404)
+                : Results.Json(new { suspended = cam.Suspended() });
+        });
+
+        app.MapPost("/api/cameras/{name}/suspend", (string name, SuspendRequest req, HttpContext ctx) =>
+        {
+            var cam = cameras.FirstOrDefault(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase));
+            if (cam == null)
+                return Results.Json(new { error = $"unknown camera '{name}'" }, statusCode: 404);
+            if (CheckAuth(ctx, cam) is { } denied)
+                return denied;
+            if (userStore.Enabled && !IsAdmin(ctx))
+                return Results.Json(new { error = "admin only — suspending stops recording, a server setting" }, statusCode: 403);
+            if (cam.SetSuspended == null)
+                return Results.Json(new { error = "suspend is not available for this camera" }, statusCode: 404);
+            if (req.Suspended is not { } s)
+                return Results.Json(new { error = "provide suspended: true|false" }, statusCode: 400);
+            cam.SetSuspended(s);
+            return Results.Json(new { ok = true, suspended = s });
+        });
 
         // Floodlight behavior (cameras with a spotlight): brightness and the
         // "turn on with motion at night" switch. Read-modify-write of the
@@ -1702,7 +1746,7 @@ public static class WebApi
                 if (cam == null)
                     return Results.Json(new { error = $"unknown camera '{camera}'" }, statusCode: 404);
                 var segments = events.ListSegments(cam.Name, date)
-                    .Select(s => new { file = s.File, size = s.Size });
+                    .Select(s => new { file = s.File, size = s.Size, seconds = Math.Round(s.Seconds, 1) });
                 return Results.Json(segments);
             });
 

@@ -56,6 +56,8 @@ public sealed class CameraService : ILiveCameraSource
     private volatile int _privacyOn = -1;  // from msg 623 pushes: -1 unknown, 0 off, 1 on
     private volatile bool _privacyLoop;    // dark + reconnecting: log it once, then quiet the churn
     private volatile bool _parked;
+    private volatile bool _suspended;      // user pressed "suspend": hold no connection at all
+    private volatile CancellationTokenSource? _activeStream; // the live session's CTS, to interrupt on suspend
     private bool _sleepHintLogged;
 
     public CameraService(CameraConfig config, StreamKind kind, IMediaSink hub, TimeSpan startupDelay)
@@ -84,6 +86,21 @@ public sealed class CameraService : ILiveCameraSource
 
     /// <summary>True while intentionally disconnected so a battery camera can sleep.</summary>
     public bool Parked => _parked;
+
+    /// <summary>True while the user has SUSPENDED this stream: Neolink holds no
+    /// connection, so it can't be viewed or recorded here (the camera is untouched).</summary>
+    public bool Suspended => _suspended;
+
+    /// <summary>Suspends or resumes the stream at runtime. Suspending drops any live
+    /// session at once; resuming lets the connect loop reconnect on the next tick.</summary>
+    public void SetSuspended(bool suspended)
+    {
+        _suspended = suspended;
+        if (suspended)
+        {
+            try { _activeStream?.Cancel(); } catch (ObjectDisposedException) { }
+        }
+    }
 
     // Sleep policy: explicit always_on wins; unset = battery cameras doze,
     // everything else streams around the clock (the pre-battery behavior).
@@ -128,6 +145,28 @@ public sealed class CameraService : ILiveCameraSource
         var backoff = MinBackoff;
         while (!ct.IsCancellationRequested)
         {
+            // Suspended by the user (Neolink-side): hold NO connection, so the camera
+            // can't be viewed or recorded here — regardless of viewer demand or power
+            // source. The camera itself is untouched (its own SD/cloud recording and
+            // any other client pulling it directly keep working). Resuming reconnects.
+            if (_suspended)
+            {
+                Log.Info($"{Tag}: suspended — Neolink will not view or record this camera until it is resumed");
+                try
+                {
+                    while (_suspended && !ct.IsCancellationRequested)
+                        await Task.Delay(500, ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+                if (ct.IsCancellationRequested) return;
+                Log.Info($"{Tag}: resumed — reconnecting");
+                backoff = MinBackoff;
+                continue;
+            }
+
             // Sleep-friendly cameras: stay disconnected while nobody watches, so
             // the camera can power down. A viewer's DESCRIBE/init attempt wakes us.
             if (AllowSleep && !DemandNow)
@@ -167,6 +206,12 @@ public sealed class CameraService : ILiveCameraSource
             {
                 return;
             }
+            catch (OperationCanceledException) when (_suspended)
+            {
+                // A live session interrupted by SetSuspended — the top-of-loop park
+                // holds it until resumed. Not an error; no backoff, no log noise.
+                continue;
+            }
             catch (AuthFailedException ex)
             {
                 // Wrong credentials are permanent, but cameras also reject logins
@@ -187,6 +232,9 @@ public sealed class CameraService : ILiveCameraSource
             }
             catch (Exception ex)
             {
+                // Interrupted by a user suspend (the session's error races the token):
+                // not a failure — let the top-of-loop park hold it, no log, no backoff.
+                if (_suspended) continue;
                 if (gotFrames)
                 {
                     backoff = MinBackoff; // we did stream; reset the backoff
@@ -263,6 +311,8 @@ public sealed class CameraService : ILiveCameraSource
         });
 
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        _activeStream = linked; // let SetSuspended interrupt this session at once
+        if (_suspended) linked.Cancel(); // a suspend that raced the assignment above
         // Privacy mode (E1 Pro etc.) makes the camera go dark: no video is expected,
         // and losing the connection over it would make the camera — and the privacy
         // switch itself — Unavailable in Home Assistant. Hold the connection instead.
@@ -364,6 +414,7 @@ public sealed class CameraService : ILiveCameraSource
         finally
         {
             _live = null;
+            _activeStream = null;
             linked.Cancel();
             try { await videoTask.ConfigureAwait(false); } catch { }
             if (motionTask != null)

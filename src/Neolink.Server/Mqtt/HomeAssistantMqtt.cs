@@ -28,6 +28,9 @@ namespace Neolink.Mqtt;
 ///   • sensor:        battery                            (battery cameras)
 ///   • sensor:        Wi-Fi signal, diagnostic           (from the status pushes)
 ///   • switch:        PIR sensor                         (PIR cameras)
+///   • switch:        Suspend (beta) — ON = Neolink holds no connection to the
+///                    camera (not viewed or recorded here); bridge-only availability
+///                    so it stays usable while the camera is intentionally offline
 ///   • switch:        Record on demand — records ONE clip, no camera detection
 ///                    involved; stops by itself at recording.max_clip_seconds
 ///                    (the switch flips back OFF) or when switched off early.
@@ -571,6 +574,16 @@ internal sealed class CameraBridge
     {
         await PublishAvailabilityAsync(ct).ConfigureAwait(false);
 
+        // Suspend switch (beta) — universal, so announced for every camera (Baichuan
+        // and generic RTSP) before the events/no-events split. Its availability is
+        // the BRIDGE only, never this camera's online topic: a suspended camera reads
+        // offline, and the switch must stay controllable to un-suspend it.
+        if (_cam.SetSuspended != null)
+        {
+            await AnnounceEntityAsync("switch", "suspend", SuspendSwitchConfig(), ct).ConfigureAwait(false);
+            await PublishSuspendStateAsync(ct).ConfigureAwait(false);
+        }
+
         if (!_cam.SupportsEvents)
         {
             // Generic RTSP camera: no detection pushes and no Baichuan commands —
@@ -634,6 +647,31 @@ internal sealed class CameraBridge
         if (_sirenAnnounced)
             await AnnounceEntityAsync("binary_sensor", "siren", SirenConfig(), ct).ConfigureAwait(false);
     }
+
+    /// <summary>Suspend switch (beta): ON = Neolink holds no connection to the camera
+    /// (not viewed or recorded here). Bridge-only availability so it stays usable
+    /// while the camera is (intentionally) offline — otherwise you couldn't resume it.</summary>
+    // Internal (not private) so the selftest can assert the bridge-only
+    // availability — the property that keeps the switch usable, and the camera
+    // RESUMABLE from Home Assistant, while the camera itself reads unavailable.
+    internal object SuspendSwitchConfig() => new
+    {
+        name = "Suspend",
+        unique_id = $"neolink_{Id}_suspend",
+        state_topic = StateTopic("suspend"),
+        command_topic = CommandTopic("suspend"),
+        payload_on = "ON",
+        payload_off = "OFF",
+        icon = "mdi:pause-octagon-outline",
+        device = Device(),
+        availability = new object[] { new { topic = _hub.AvailabilityTopic } },
+        availability_mode = "all",
+    };
+
+    private Task PublishSuspendStateAsync(CancellationToken ct) =>
+        _cam.Suspended == null
+            ? Task.CompletedTask
+            : _hub.PublishAsync(StateTopic("suspend"), _cam.Suspended() ? "ON" : "OFF", ct);
 
     /// <summary>Generic cameras: online/offline as a diagnostic connectivity sensor.</summary>
     private object ConnectivityConfig() => new
@@ -1307,6 +1345,10 @@ internal sealed class CameraBridge
     {
         await PublishSensorEdgesAsync(ct).ConfigureAwait(false); // time out stale detections
         await PublishAvailabilityAsync(ct).ConfigureAwait(false);
+        // The suspend flag can flip from the web UI too — keep HA's switch in sync
+        // (cheap: publishing a retained ON/OFF is a no-op when unchanged). The switch
+        // is announced on connect for every camera that supports suspend.
+        await PublishSuspendStateAsync(ct).ConfigureAwait(false);
         // Continuous segments start/stop without an event to ride on — the
         // periodic sweep keeps the Recording sensor honest for them (and heals
         // a publish that failed mid-outage). Runs regardless of online state:
@@ -1577,6 +1619,13 @@ internal sealed class CameraBridge
                     break;
                 case "record":
                     await SetRecordAsync(payload == "ON").ConfigureAwait(false);
+                    break;
+                case "suspend":
+                    if (_cam.SetSuspended is { } setSuspend)
+                    {
+                        setSuspend(payload == "ON");
+                        await _hub.PublishAsync(StateTopic("suspend"), payload == "ON" ? "ON" : "OFF", ct).ConfigureAwait(false);
+                    }
                     break;
                 case "ptz_up" or "ptz_down" or "ptz_left" or "ptz_right" when payload == "PRESS":
                     await PtzStepAsync(entity["ptz_".Length..], ct).ConfigureAwait(false);

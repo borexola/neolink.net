@@ -1005,12 +1005,19 @@
                 return 0;
             }
             const r = Math.max(0.25, Math.min(16, rate || 1));
+            // Cursor beyond this file's media (a segment cut short by a suspension
+            // or outage, or the still-growing live file the browser only has a
+            // snapshot of): the picture is EXHAUSTED, not lagging. Hold the last
+            // frame quietly — reporting lag here would slow every other camera
+            // to a crawl ("catching up…") over footage that does not exist.
+            const dur = v.dataset.tlUrl === url ? v.duration : NaN;
+            const pastEnd = Number.isFinite(dur) && dur > 0 && offset >= dur - 0.3;
             if (v.dataset.tlUrl !== url) {
                 v.dataset.tlUrl = url;
                 v.src = url;
                 try { v.load(); } catch { }
                 v.currentTime = offset;
-            } else {
+            } else if (!pastEnd) {
                 // The clock ticks every 500 ms, so timer jitter scales with the
                 // playback rate — widen the drift tolerance accordingly or fast
                 // playback degrades into a seek-storm. (The adaptive clock keeps
@@ -1026,9 +1033,10 @@
                 if (v.defaultPlaybackRate !== r) v.defaultPlaybackRate = r;
                 if (v.playbackRate !== r) v.playbackRate = r;
             } catch { }
-            if (playing) { if (v.paused) v.play().catch(() => { }); }
+            if (playing && !pastEnd) { if (v.paused) v.play().catch(() => { }); }
             else if (!v.paused) v.pause();
             if (v.error) { busy(false); return -1; } // dead media must not hold the timeline hostage
+            if (pastEnd) { busy(false); return 0; }
             // Playing needs future data to keep moving; a paused scrub only needs
             // the current frame to be showing something.
             busy(v.seeking || v.readyState < (playing ? 3 : 2));

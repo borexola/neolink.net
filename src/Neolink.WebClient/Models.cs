@@ -21,7 +21,8 @@ public sealed record ApiStream(string Kind, string Path, bool Ready, string? Cod
 /// <param name="Recording">24/7 footage is being written for this camera right now.</param>
 /// <param name="OnDemand">On-demand clip capture state; null when the camera can't record events.</param>
 public sealed record ApiCamera(string Name, bool Online, List<ApiStream> Streams, bool Recording = false,
-    bool Asleep = false, ApiBattery? Battery = null, ApiOnDemand? OnDemand = null, bool Privacy = false);
+    bool Asleep = false, ApiBattery? Battery = null, ApiOnDemand? OnDemand = null, bool Privacy = false,
+    bool Suspended = false, bool CanSuspend = false);
 
 /// <summary>On-demand clip capture (the tile record button / HA Record switch):
 /// one clip, stopped automatically at MaxSeconds.</summary>
@@ -189,8 +190,10 @@ public sealed record ApiCamAvail(string Cam, bool On, double Pct, long Obs,
 public sealed record ApiSystemStats(ApiSystemInfo? Info, List<ApiSystemSample> Samples,
     List<ApiCamAvail>? Avail = null);
 
-/// <summary>GET /api/recordings/{camera}/{date} — one continuous-recording segment.</summary>
-public sealed record ApiSegment(string File, long Size)
+/// <summary>GET /api/recordings/{camera}/{date} — one continuous-recording segment.
+/// Seconds = media length (0 from servers that predate it); the timeline sizes
+/// coverage with it so a cut-short segment doesn't claim minutes it lacks.</summary>
+public sealed record ApiSegment(string File, long Size, double Seconds = 0)
 {
     /// <summary>"HH-mm-ss.mp4" → "HH:mm:ss".</summary>
     public string TimeLabel => File.Length >= 8 ? File[..8].Replace('-', ':') : File;

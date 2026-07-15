@@ -276,10 +276,22 @@ public sealed class EventRecorder
                 try
                 {
                     long lastIndex = -1;
+                    var lastPacketAt = DateTime.UtcNow;
                     await foreach (var packet in reader.ReadAllAsync(ct).ConfigureAwait(false))
                     {
                         if (!ReferenceEquals(RecordHub(), hub) && TrySwitchWhileIdle(hub))
                             break; // resubscribe to the newly selected stream
+
+                        // A quiet stretch (offline or suspended camera) stales the
+                        // pre-roll: frames from before the gap must not seed the
+                        // next clip (their timestamps would time-compress the gap).
+                        var now = DateTime.UtcNow;
+                        if (now - lastPacketAt > ContinuousRecorder.SilenceRoll)
+                        {
+                            lock (_mediaGate) _preroll.Clear();
+                            lastIndex = -1; // the drop flag is meaningless across a gap
+                        }
+                        lastPacketAt = now;
 
                         bool gap = lastIndex >= 0 && packet.Index != lastIndex + 1;
                         lastIndex = packet.Index;
@@ -336,8 +348,32 @@ public sealed class EventRecorder
             // indices whenever audio is interleaved, and treating those as drops
             // would discard all P-frames (0-second clips).
             long lastIndex = -1;
+            var lastPacketAt = DateTime.UtcNow;
             await foreach (var packet in reader.ReadAllAsync(ct).ConfigureAwait(false))
             {
+                // Stale pre-roll across a quiet stretch — see the idle watcher.
+                var now = DateTime.UtcNow;
+                if (now - lastPacketAt > ContinuousRecorder.SilenceRoll)
+                {
+                    lock (_mediaGate)
+                    {
+                        (preview ? _previewPreroll : _preroll).Clear();
+                        // An event still open across the gap (its all-clear push died
+                        // with the connection) must not have resumed footage glued in:
+                        // the clip's media ends AT the gap. The event loop's own timers
+                        // still close the event; its disposal is null-safe.
+                        var open = preview ? _previewWriter : _writer;
+                        if (open != null)
+                        {
+                            open.Dispose();
+                            if (preview) _previewWriter = null;
+                            else _writer = null;
+                        }
+                    }
+                    lastIndex = -1;
+                }
+                lastPacketAt = now;
+
                 bool gap = lastIndex >= 0 && packet.Index != lastIndex + 1;
                 lastIndex = packet.Index;
 
