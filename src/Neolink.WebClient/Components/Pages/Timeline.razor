@@ -604,9 +604,11 @@
         }
         _covRefreshed = DateTime.UtcNow; // the periodic refresh restarts from here
 
-        // Land the cursor somewhere useful: near-now for today, else midday.
+        // Land the cursor somewhere useful: today starts five minutes back —
+        // autoplay then rolls through the recent past, which is almost always
+        // what a "let me check the cameras" visit is after. Other days: midday.
         _t = _date == DateTime.Today
-            ? Math.Max(0, (DateTime.Now - _date).TotalSeconds - 30)
+            ? Math.Max(0, (DateTime.Now - _date).TotalSeconds - 300)
             : DaySeconds / 2;
         // Autoplay: the day starts rolling as soon as it loads (first visit and
         // day changes alike) — pause is one click away, dead-stopped tiles that
@@ -668,13 +670,16 @@
                      && start + dur > (DateTime.Now - DateTime.Today).TotalSeconds - 120)
             {
                 // Today's newest file, and its reported end reaches (about) now:
-                // it is still being written, so its length is only "as of this
-                // load" — keep the old forward allowance. The player just holds
-                // the last frame past the media it fetched (never lag), and a
-                // reload picks up the growth. A newest file that ENDED long ago
-                // (camera suspended/offline right now) gets no allowance: that
-                // lane is genuinely blank from its end onward.
-                span = Math.Max(dur, typical);
+                // it is still being written. Cover up to NOW (plus a small buffer
+                // that the once-a-minute coverage refresh renews) — and no
+                // further: projecting a full segment length ahead made lanes
+                // reach into the future by different amounts per camera (a
+                // high-bitrate camera rolls on the size cap every few minutes,
+                // the others on the timer), so equal footage looked unequal.
+                // A newest file that ENDED long ago (camera suspended/offline
+                // right now) gets no allowance: that lane is genuinely blank
+                // from its end onward.
+                span = Math.Max(dur, (DateTime.Now - DateTime.Today).TotalSeconds - start + 75);
             }
             span = Math.Min(span, DaySeconds - start);
             segs.Add(new Seg(start, span,

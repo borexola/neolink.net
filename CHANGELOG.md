@@ -143,7 +143,11 @@ in the README). Paste the matching section below into the GitHub release.
   file's media as exhausted rather than lagging, so one short file can never
   hold the other cameras hostage. While viewing today, the lanes also refresh
   themselves once a minute, so recording that starts after the page loaded —
-  a resumed camera, most visibly — shows up without a reload.
+  a resumed camera, most visibly — shows up without a reload; and the live
+  edge is capped at "now" instead of projecting a whole segment length ahead,
+  which had made cameras with different roll intervals (a high-bitrate camera
+  rolls on the size cap every few minutes, others on the timer) look like they
+  held unequal footage when they were equal.
 - **Recording settings are admin-gated**: the per-camera recording switches
   (retention, schedules, event types, archive routing) persist server-side, but
   any signed-in user could change them. Once accounts exist, the API now requires
