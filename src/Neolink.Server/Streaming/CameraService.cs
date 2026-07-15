@@ -44,6 +44,9 @@ public sealed class CameraService : ILiveCameraSource
     {
         "people", "person", "face", "vehicle", "car", "dog_cat", "animal", "pet",
         "package", "visitor", "doorbell",
+        // Crying-sound detection (indoor cams, e.g. E1 series): "cry" confirmed
+        // from an E1 Pro; the other spellings are guesses at firmware variants.
+        "cry", "baby_cry", "babycry",
         // Perimeter protection (line/zone crossing) token spellings seen or expected
         "crossline", "cross_line", "tripwire", "intrude", "intrusion", "region",
         "perimeter", "linger", "loiter", "loitering",

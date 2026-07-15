@@ -1588,7 +1588,7 @@
 
     // Review-strip filters (persisted with the view settings, per user when logged in)
     private static readonly string[] StripTypes =
-        { "person", "vehicle", "animal", "package", "doorbell", "line-crossing", "intrusion", "motion" };
+        { "person", "vehicle", "animal", "package", "doorbell", "crying", "line-crossing", "intrusion", "motion" };
     private HashSet<string> _hiddenTypes = new(StringComparer.OrdinalIgnoreCase);
     private HashSet<string> _hiddenCams = new(StringComparer.OrdinalIgnoreCase);
     private bool _showStripFilter;
@@ -2623,6 +2623,7 @@
         "animal" => "🐾",
         "package" => "📦",
         "doorbell" => "🔔",
+        "crying" => "😢",
         "line-crossing" => "🚧",
         "intrusion" => "🚷",
         "loitering" => "🕒",

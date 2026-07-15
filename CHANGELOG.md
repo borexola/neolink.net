@@ -66,6 +66,15 @@ in the README). Paste the matching section below into the GitHub release.
 - **Timeline zoom is discoverable**: a quiet hint under the lanes — "Scroll or
   pinch here to zoom into the day" — points out the timeline's best trick; it
   disappears the moment you are zoomed in.
+- **Crying-sound detection is a first-class event type**: indoor cameras (E1
+  series and friends) that listen for crying push a `cry` AI type; it now maps
+  to a proper "crying" label — its own icon and color on the Events page,
+  review strip and timeline, a chip in the per-camera detection filter, and a
+  Home Assistant `Crying` binary sensor (device class `sound`) alongside the
+  other detections. Crying records by default when the filter is untouched:
+  it is audio-only, so no other detection type would catch the moment (turn
+  the detector itself on or off in the Reolink app; previously these pushes
+  were kept only as a raw label and the default filter dropped them).
 - **The timeline is resizable**: a divider on the boundary between the monitors
   and the tracks — below them in the classic view, above the docked desk in
   Studio — drags to trade height between the two, in both layouts and on touch.

@@ -216,6 +216,8 @@ public sealed record ApiEvent(string Id, string Camera, DateTime Start, DateTime
         ("animal", "🐾", "Animal"),
         ("package", "📦", "Package"),
         ("doorbell", "🔔", "Doorbell"),
+        // Crying-sound detection (indoor cams listen through the mic)
+        ("crying", "😢", "Crying"),
         // Perimeter protection (line/zone crossing configured in the Reolink app)
         ("line-crossing", "🚧", "Line crossing"),
         ("intrusion", "🚷", "Intrusion"),

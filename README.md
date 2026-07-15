@@ -461,7 +461,10 @@ config file (in Docker: the `/config` mount), so they survive restarts:
   review strip at the top of the web UI; click to play, ✕ to dismiss. The 🕘
   Events button opens the full history grouped by day. Per camera you can also
   pick **which detection types to record** (🧍 person, 🚗 vehicle, 🐾 animal,
-  📦 package, 👁 motion) — detections of disabled types are discarded entirely.
+  📦 package, 😢 crying, 👁 motion) — detections of disabled types are discarded
+  entirely. Crying is the audio detection indoor cams offer (E1 series and
+  friends): the camera hears crying through its mic and pushes it like any
+  other smart detection.
   ⚠ The camera does the detecting: person/vehicle/animal labels only arrive when
   the matching Smart Detection is enabled **in the Reolink app** (camera →
   Settings → Detection). The chips are a Neolink.NET-side filter on what arrives;
@@ -600,7 +603,7 @@ config, so a **device per camera** appears automatically — no YAML in HA.
 | Entity | Type | Notes |
 |---|---|---|
 | Motion / Person / Vehicle / Animal | `binary_sensor` | From the camera's alarm pushes (AI labels need Smart Detection enabled in the Reolink app) |
-| Package / Line crossing / Intrusion / Loitering | `binary_sensor` | Created up front like the core four, so automations can be built before the first event — they stay **Clear** until the camera pushes one (smart/perimeter detection must be configured in the Reolink app for that to ever happen) |
+| Package / Crying / Line crossing / Intrusion / Loitering | `binary_sensor` | Created up front like the core four, so automations can be built before the first event — they stay **Clear** until the camera pushes one (smart/perimeter detection must be configured in the Reolink app for that to ever happen). Crying is the indoor cams' audio detection and uses device class `sound` |
 | Doorbell | `event` | Video doorbells: every button press publishes an MQTT event (`event_type: press`, `device_class: doorbell`) — the natural trigger for ring automations |
 | Visitor | `binary_sensor` | Momentary doorbell-press pulse; HA clears it itself after a few seconds |
 | Record on demand | `switch` | **Record a clip on demand from HA**, regardless of what the camera detects — one clip, stops by itself; see below (appears when the server records events for this camera) |

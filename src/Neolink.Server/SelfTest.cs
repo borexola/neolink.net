@@ -350,6 +350,15 @@ public static class SelfTest
                 "<AItype>none</AItype></AlarmEvent>"));
             AssertEq(string.Join(",", Recording.EventRecorder.LabelsOf(cross)), "line-crossing");
 
+            // Crying-sound detection ("cry" captured from an E1 Pro, 2026-07-15):
+            // maps to its own label and records by default — it is audio-only, so
+            // no other detection would catch the moment.
+            AssertEq(string.Join(",", Recording.EventRecorder.LabelsOf(
+                new MotionPush("MD", new[] { "cry" }))), "crying");
+            Assert(Recording.CameraRecordingSettings.DefaultLabels.Contains("crying")
+                && Recording.CameraRecordingSettings.KnownLabels.Contains("crying"),
+                "crying is a default and offered detection type");
+
             // Captured from a real Reolink Elite WiFi (Driveway, 2026-07-09): newer
             // firmware nests perimeter verdicts in smartAiTypeList — rule type +
             // zone index + the object class that tripped it.

@@ -94,7 +94,7 @@ public sealed class HomeAssistantMqtt
     /// pushes (feature absent, or not configured in the Reolink app) simply stays
     /// Clear — visible-but-idle beats invisible-until-it-happens.</summary>
     internal static readonly string[] DetectionLabels =
-        { "motion", "person", "vehicle", "animal", "package", "line-crossing", "intrusion", "loitering" };
+        { "motion", "person", "vehicle", "animal", "package", "crying", "line-crossing", "intrusion", "loitering" };
 
     private readonly MqttConfig _cfg;
     private readonly string _version;
@@ -856,6 +856,7 @@ internal sealed class CameraBridge
             "vehicle" => "Vehicle",
             "animal" => "Animal",
             "package" => "Package",
+            "crying" => "Crying",
             "line-crossing" => "Line crossing",
             "intrusion" => "Intrusion",
             "loitering" => "Loitering",
@@ -865,7 +866,8 @@ internal sealed class CameraBridge
         state_topic = StateTopic(label),
         payload_on = "ON",
         payload_off = "OFF",
-        device_class = "motion",
+        // Crying is heard, not seen — HA's "sound" class fits it exactly.
+        device_class = label == "crying" ? "sound" : "motion",
         // The smart labels aren't plain motion — give them a telling icon.
         // (motion/person keep the device_class default, which reads as a person.)
         icon = label switch
@@ -873,6 +875,7 @@ internal sealed class CameraBridge
             "vehicle" => "mdi:car",
             "animal" => "mdi:paw",
             "package" => "mdi:package-variant-closed",
+            "crying" => "mdi:emoticon-cry-outline",
             "line-crossing" => "mdi:vector-line",
             "intrusion" => "mdi:shield-alert-outline",
             "loitering" => "mdi:account-clock-outline",

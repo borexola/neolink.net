@@ -37,6 +37,8 @@ public sealed record CameraRecordingSettings(bool Events, bool Continuous, List<
     public static readonly string[] KnownLabels =
     {
         "person", "vehicle", "animal", "package", "doorbell",
+        // Crying-sound detection (indoor cams, enabled in the Reolink app).
+        "crying",
         // Perimeter protection (line/zone crossing set up in the Reolink app):
         // record on these INSTEAD of the plain detections, no non-detection
         // zones needed — untick person/vehicle and keep these.
@@ -49,9 +51,11 @@ public sealed record CameraRecordingSettings(bool Events, bool Continuous, List<
     /// The perimeter labels are OPT-IN: until ticked they'd only duplicate the
     /// plain detections (a crossing is also motion+person), so an untouched
     /// setup keeps recording exactly what it recorded before they existed.
+    /// Crying IS default: it's audio-only, so nothing else would catch the
+    /// moment, and the camera-side toggle in the Reolink app is the opt-in.
     /// </summary>
     public static readonly string[] DefaultLabels =
-        { "person", "vehicle", "animal", "package", "doorbell", "motion" };
+        { "person", "vehicle", "animal", "package", "doorbell", "crying", "motion" };
 
     /// <summary>A null EventTypes list means the default set (perimeter labels are opt-in).</summary>
     public bool AllowsLabel(string label) =>

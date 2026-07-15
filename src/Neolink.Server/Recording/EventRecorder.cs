@@ -687,6 +687,9 @@ public sealed class EventRecorder
             "dog_cat" or "animal" or "pet" => "animal",
             "package" => "package",
             "visitor" or "doorbell" => "doorbell", // video doorbells: the button was pressed
+            // Crying-sound detection (indoor cams listen for it through the mic;
+            // "cry" confirmed from an E1 Pro, the others are spelling guesses).
+            "cry" or "baby_cry" or "babycry" => "crying",
             // Perimeter protection (smart events configured in the Reolink app).
             // Token spellings vary by firmware; extend as captures come in.
             "crossline" or "cross_line" or "tripwire" => "line-crossing",
