@@ -379,6 +379,9 @@ public sealed class PersistedView
     public int StripHeight { get; set; } = 160;
     /// <summary>Named layouts the user saved (per account when signed in).</summary>
     public List<SavedLayout> Layouts { get; set; } = new();
+    /// <summary>Sidebar camera order (names, first = top). Cameras not listed —
+    /// new ones, typically — follow in server order. Empty = server order.</summary>
+    public List<string> CamOrder { get; set; } = new();
     /// <summary>Name of the layout currently loaded, if any — drives the "update or save as new" choice.</summary>
     public string? ActiveLayout { get; set; }
 }

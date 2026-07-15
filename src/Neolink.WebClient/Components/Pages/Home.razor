@@ -88,12 +88,17 @@
             </div>
         }
 
-        @foreach (var cam in _cameras)
+        @foreach (var cam in SidebarCameras)
         {
-            @* The card is a drag source: drop it on any tile to show this camera there. *@
-            <div class="cam @(cam.Online || cam.Asleep ? "" : "cam-offline") @(IsRouteCamera(cam.Name) ? "cam-active" : "")" draggable="true"
+            @* The card is a drag source: drop it on any tile to show this camera
+               there — or on another camera card to reorder the sidebar (the
+               dragged card lands in front of the one it is dropped on). *@
+            <div class="cam @(cam.Online || cam.Asleep ? "" : "cam-offline") @(IsRouteCamera(cam.Name) ? "cam-active" : "") @(_dropTargetCam == cam.Name ? "cam-drop-target" : "")" draggable="true"
                  @ondragstart="() => _dragCamera = cam.Name"
-                 @ondragend="ClearDragState">
+                 @ondragend="ClearDragState"
+                 @ondragenter="() => SetCamDropTarget(cam.Name)"
+                 @ondragover:preventDefault="true"
+                 @ondrop="() => DropOnCamAsync(cam.Name)" @ondrop:preventDefault="true">
                 @* Stream readiness latches once video has flowed, so only the live
                    control connection (Online) is a truthful liveness signal. *@
                 <div class="cam-head" title="@CamHeadTitle(cam)"
@@ -153,6 +158,17 @@
                         </button>
                     }
                 </div>
+            </div>
+        }
+
+        @if (_dragCamera != null)
+        {
+            @* Appears only mid-drag: the one spot "insert before a card" can't reach. *@
+            <div class="cam-drop-end @(_dropTargetCam == EndDropMarker ? "cam-drop-target" : "")"
+                 @ondragenter="() => SetCamDropTarget(EndDropMarker)"
+                 @ondragover:preventDefault="true"
+                 @ondrop="() => DropOnCamAsync(null)" @ondrop:preventDefault="true">
+                drop here to move it last
             </div>
         }
 
@@ -285,7 +301,7 @@
                     }
                     <span class="tool-sep"></span>
                     <span class="tool-label">CAMERAS</span>
-                    @foreach (var cam in _cameras)
+                    @foreach (var cam in SidebarCameras)
                     {
                         var name = cam.Name;
                         <button class="chip @(_hiddenCams.Contains(name) ? "chip-off" : "chip-active")"
@@ -456,7 +472,7 @@
                      draggable="@(TileDraggable(index) ? "true" : "false")"
                      @ondragstart="() => _dragTile = index"
                      @ondragend="ClearDragState"
-                     @ondragenter="() => _dropIndex = index"
+                     @ondragenter="() => { _dropIndex = index; _dropTargetCam = null; }"
                      @ondragover:preventDefault="true"
                      @ondrop="() => DropOnTileAsync(index)" @ondrop:preventDefault="true"
                      @oncontextmenu="e => OpenTileMenu(index, e)" @oncontextmenu:preventDefault="true"
@@ -647,7 +663,7 @@
         <div class="ctx-backdrop" @onclick="CloseTileMenu" @oncontextmenu="CloseTileMenu" @oncontextmenu:preventDefault="true"></div>
         <div class="ctx-menu" style="left:@(_ctxX)px; top:@(_ctxY)px" role="menu">
             <div class="ctx-title">Show camera</div>
-            @foreach (var cam in _cameras)
+            @foreach (var cam in SidebarCameras)
             {
                 var c = cam;
                 bool current = _slots[ctxIdx].Camera == c.Name;
@@ -1782,6 +1798,7 @@
         HiddenTypes = _hiddenTypes.ToList(), HiddenCams = _hiddenCams.ToList(),
         StripHeight = _stripHeight,
         Layouts = _layouts, ActiveLayout = _activeLayout,
+        CamOrder = _camOrder,
     };
 
     private async Task SaveAsync()
@@ -1828,6 +1845,7 @@
         // Account settings that predate saved layouts keep whatever localStorage had.
         if (v.Layouts.Count > 0) _layouts = v.Layouts;
         if (v.ActiveLayout != null) _activeLayout = v.ActiveLayout;
+        if (v.CamOrder.Count > 0) _camOrder = v.CamOrder;
         EnsureSlots();
     }
 
@@ -3096,10 +3114,61 @@
     // ------------------------------------------------------------ drag & drop, context menu, resize
 
     private int? _dragTile;      // tile being dragged (drop = swap)
-    private string? _dragCamera; // sidebar camera being dragged onto a tile
+    private string? _dragCamera; // sidebar camera being dragged (onto a tile OR another card)
     private int? _dropIndex;     // hovered drop target (highlight)
     private int? _ctxIndex;      // tile whose right-click menu is open
     private double _ctxX, _ctxY;
+
+    // ---- sidebar reordering: drop a camera card on another to move it there ----
+
+    private const string EndDropMarker = " end"; // the after-the-last-card zone
+    private List<string> _camOrder = new(); // user's sidebar order (names); empty = server order
+    private string? _dropTargetCam;         // card the drag hovers (draws the insertion line)
+
+    /// <summary>The cameras in the user's chosen sidebar order: listed names first,
+    /// top to bottom; anything unlisted (a newly added camera) follows in server
+    /// order. Drives the sidebar, the review-strip camera chips and the tile
+    /// right-click picker, so the order the user set is the order everywhere.</summary>
+    private IEnumerable<ApiCamera> SidebarCameras =>
+        _camOrder.Count == 0
+            ? _cameras
+            : _cameras
+                .Select((cam, i) => (Cam: cam, Index: i))
+                .OrderBy(x =>
+                {
+                    int k = _camOrder.FindIndex(n => string.Equals(n, x.Cam.Name, StringComparison.OrdinalIgnoreCase));
+                    return k < 0 ? int.MaxValue : k;
+                })
+                .ThenBy(x => x.Index)
+                .Select(x => x.Cam);
+
+    private void SetCamDropTarget(string marker)
+    {
+        // Only camera drags reorder; a dragged TILE hovering the sidebar means nothing.
+        _dropTargetCam = _dragCamera != null
+                         && !string.Equals(_dragCamera, marker, StringComparison.OrdinalIgnoreCase)
+            ? marker : null;
+    }
+
+    /// <summary>Drop on a sidebar card: the dragged camera lands in front of it
+    /// (<paramref name="before"/> null = the end zone → it goes last). The order
+    /// persists like the rest of the view — per account when signed in.</summary>
+    private async Task DropOnCamAsync(string? before)
+    {
+        var dragged = _dragCamera;
+        ClearDragState();
+        if (dragged == null || string.Equals(dragged, before, StringComparison.OrdinalIgnoreCase))
+            return;
+        var order = SidebarCameras.Select(c => c.Name).ToList();
+        order.RemoveAll(n => string.Equals(n, dragged, StringComparison.OrdinalIgnoreCase));
+        int at = before == null
+            ? order.Count
+            : order.FindIndex(n => string.Equals(n, before, StringComparison.OrdinalIgnoreCase));
+        if (at < 0) at = order.Count;
+        order.Insert(at, dragged);
+        _camOrder = order;
+        await SaveAsync();
+    }
 
     private bool TileDraggable(int index) =>
         _mode != "free" && _maxIndex == null && _slots[index].Camera != null;
@@ -3109,6 +3178,7 @@
         _dragTile = null;
         _dragCamera = null;
         _dropIndex = null;
+        _dropTargetCam = null;
     }
 
     private async Task DropOnTileAsync(int index)
@@ -3202,7 +3272,7 @@
             : cam.Privacy
             ? "Privacy mode is on — the camera is dark on purpose until it is switched back"
             : cam.Online
-                ? "Open full view (main stream) — drag the card onto a tile to add it to the wall"
+                ? "Open full view (main stream) — drag the card onto a tile to add it to the wall, or onto another camera to reorder the sidebar"
                 : cam.Asleep
                     ? "Battery camera sleeping to save power — opening a stream reconnects (it must be awake to answer)"
                     : "Camera unreachable — reconnecting";

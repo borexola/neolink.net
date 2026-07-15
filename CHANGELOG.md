@@ -47,6 +47,13 @@ in the README). Paste the matching section below into the GitHub release.
   The segment still being written is excluded until it closes, and one export
   runs at a time so bulk reads never crowd out the recorders.
 
+- **Sidebar cameras can be reordered**: drag a camera card onto another and it
+  lands in front of it (an insertion line shows where; a drop zone at the list's
+  end moves a camera last). The order is saved with the rest of the view — per
+  account when signed in — and it drives every camera list the live view shows:
+  the sidebar, the review-strip camera filters and the tile right-click picker.
+  Dragging a card onto a tile still shows the camera there, exactly as before;
+  newly added cameras append at the end until placed.
 - **Timeline zoom is discoverable**: a quiet hint under the lanes — "Scroll or
   pinch here to zoom into the day" — points out the timeline's best trick; it
   disappears the moment you are zoomed in.
