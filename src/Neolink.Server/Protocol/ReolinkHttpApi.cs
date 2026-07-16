@@ -188,6 +188,14 @@ public sealed class ReolinkHttpApi : IDisposable
     public Task SetAutoReplyAsync(JsonObject autoReply, CancellationToken ct) =>
         ExecAsync("SetAutoReply", new JsonObject { ["AutoReply"] = autoReply.DeepClone() }, ct);
 
+    /// <summary>Reads the camera's identity: model, firmware, hardware, serial,
+    /// channel count. Null when the reply carries no DevInfo.</summary>
+    public async Task<JsonObject?> GetDevInfoAsync(CancellationToken ct)
+    {
+        var value = await ExecAsync("GetDevInfo", new JsonObject(), ct).ConfigureAwait(false);
+        return value?["DevInfo"] as JsonObject;
+    }
+
     /// <summary>Reads the camera's ability table for this account — the authoritative
     /// "does this model actually have the feature" source (config reads often carry
     /// fields for features the hardware lacks).</summary>

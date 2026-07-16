@@ -139,6 +139,7 @@ public sealed class NeolinkConfig
         string stream = "both";
         byte channelId = 0;
         bool record = true;
+        bool udpProbe = false;
         bool? alwaysOn = null;
         List<string>? permitted = null;
 
@@ -156,6 +157,7 @@ public sealed class NeolinkConfig
                 case "channelid": channelId = prop.Value.GetByte(); break;
                 case "record": record = prop.Value.GetBoolean(); break;
                 case "alwayson": alwaysOn = prop.Value.GetBoolean(); break;
+                case "udpprobe": udpProbe = prop.Value.GetBoolean(); break;
                 // Generic (non-Reolink) camera: pull these RTSP URLs directly.
                 case "rtsp" or "rtspmain": rtspMain = prop.Value.GetString(); break;
                 case "rtspsub": rtspSub = prop.Value.GetString(); break;
@@ -172,7 +174,7 @@ public sealed class NeolinkConfig
         }
 
         return BuildCamera(name, username, password, address, uid, stream, channelId, permitted, httpAddress,
-            record, rtspMain, rtspSub, alwaysOn);
+            record, rtspMain, rtspSub, alwaysOn, udpProbe);
     }
 
     private static RecordingConfig ParseJsonRecording(JsonElement el)
@@ -351,7 +353,8 @@ public sealed class NeolinkConfig
                 MiniToml.GetBool(c, "record") ?? true,
                 MiniToml.GetString(c, "rtsp_main") ?? MiniToml.GetString(c, "rtsp"),
                 MiniToml.GetString(c, "rtsp_sub"),
-                MiniToml.GetBool(c, "always_on")));
+                MiniToml.GetBool(c, "always_on"),
+                MiniToml.GetBool(c, "udp_probe") ?? false));
         }
         return config;
     }
@@ -365,7 +368,7 @@ public sealed class NeolinkConfig
     private static CameraConfig BuildCamera(string? name, string? username, string? password,
         string? address, string? uid, string stream, byte channelId, List<string>? permitted,
         string? httpAddress = null, bool record = true, string? rtspMain = null, string? rtspSub = null,
-        bool? alwaysOn = null)
+        bool? alwaysOn = null, bool udpProbe = false)
     {
         if (name == null) throw new FormatException("camera entry missing \"name\"");
 
@@ -396,8 +399,8 @@ public sealed class NeolinkConfig
         if (username == null) throw new FormatException($"Camera \"{name}\" missing \"username\"");
         if (uid != null && address == null)
             throw new FormatException(
-                $"Camera \"{name}\": UID (relay/battery) connections are not supported by Neolink.NET; " +
-                "please use a direct \"address\" instead");
+                $"Camera \"{name}\": UID-only (relay/battery) connections are not supported by Neolink.NET yet; " +
+                "give the camera a direct \"address\" too (\"uid\" + \"udp_probe\": true runs the UDP diagnostics)");
         if (address == null)
             throw new FormatException($"Camera \"{name}\" needs an \"address\" (host or host:port)");
 
@@ -415,6 +418,8 @@ public sealed class NeolinkConfig
             HttpAddress = string.IsNullOrWhiteSpace(httpAddress) ? null : httpAddress.Trim(),
             Record = record,
             AlwaysOn = alwaysOn,
+            Uid = string.IsNullOrWhiteSpace(uid) ? null : uid.Trim(),
+            UdpProbe = udpProbe,
         };
     }
 
@@ -650,4 +655,13 @@ public sealed class CameraConfig
     /// auto — cameras that report a battery sleep, everything else stays always-on.
     /// </summary>
     public bool? AlwaysOn { get; init; }
+    /// <summary>The camera's UID (Reolink app → device info, or the sticker; e.g.
+    /// "95270000ABCDEFGH"). Used by the UDP discovery probe — UDP-only battery
+    /// models (Argus family) answer discovery keyed on it.</summary>
+    public string? Uid { get; init; }
+    /// <summary>Diagnostic (opt-in): when the camera cannot be reached over TCP,
+    /// probe Baichuan-over-UDP discovery — what battery-only models speak instead
+    /// of TCP — and log the exchange comprehensively (UID masked, no credentials).
+    /// Requires "uid".</summary>
+    public bool UdpProbe { get; init; }
 }

@@ -229,6 +229,8 @@ public static class SelfTest
                       "password": "12345678",
                       "address": "192.168.1.188",
                       "always_on": true,
+                      "uid": "95270000ABCDEFGH",
+                      "udp_probe": true,
                     },
                   ],
                 }
@@ -249,6 +251,10 @@ public static class SelfTest
                 // Battery cameras: always_on is tri-state — unset means auto.
                 Assert(cfg.Cameras[0].AlwaysOn == null, "always_on defaults to auto");
                 Assert(cfg.Cameras[1].AlwaysOn == true, "always_on parsed");
+                // UDP-only battery cams: uid + the opt-in discovery probe toggle.
+                Assert(cfg.Cameras[0].Uid == null && !cfg.Cameras[0].UdpProbe, "udp probe defaults off");
+                AssertEq(cfg.Cameras[1].Uid ?? "", "95270000ABCDEFGH");
+                Assert(cfg.Cameras[1].UdpProbe, "udp_probe parsed");
                 // Tiered-storage keys must round-trip through the parser — the
                 // archive UI only appears when archive_path survives loading.
                 AssertEq(cfg.Recording!.Path, "/recordings");
@@ -260,6 +266,93 @@ public static class SelfTest
             {
                 File.Delete(tmp);
             }
+        });
+
+        Test("bcudp discovery wire format (battery-camera probe)", () =>
+        {
+            // Keystream anchor: crypting zeros with tid 0 must expose the first
+            // key word's little-endian bytes (0x1f2d3c4b → 4b 3c 2d 1f); tid
+            // offsets every word, so tid 1 bumps the low byte.
+            var zeros = new byte[8];
+            UdpDiscovery.Crypt(0, zeros);
+            AssertEq(Convert.ToHexString(zeros[..4]), "4B3C2D1F");
+            zeros = new byte[4];
+            UdpDiscovery.Crypt(1, zeros);
+            AssertEq(Convert.ToHexString(zeros), "4C3C2D1F");
+
+            // Symmetric: crypt twice with the same tid restores the original.
+            var data = Encoding.UTF8.GetBytes("<P2P><C2D_C>roundtrip</C2D_C></P2P>");
+            var copy = (byte[])data.Clone();
+            UdpDiscovery.Crypt(0x1234abcd, copy);
+            Assert(!copy.SequenceEqual(data), "crypt changes the bytes");
+            UdpDiscovery.Crypt(0x1234abcd, copy);
+            Assert(copy.SequenceEqual(data), "crypt is its own inverse");
+
+            // CRC: table implementation must agree with a naive bit-by-bit
+            // reference (raw register: init 0, reflected poly, no final xor).
+            static uint BitwiseCrc(byte[] d)
+            {
+                uint c = 0;
+                foreach (var b in d)
+                {
+                    c ^= b;
+                    for (int k = 0; k < 8; k++)
+                        c = (c & 1) != 0 ? 0xEDB88320 ^ (c >> 1) : c >> 1;
+                }
+                return c;
+            }
+            AssertEq(UdpDiscovery.Crc(data), BitwiseCrc(data));
+
+            // A built discovery packet parses back: same tid, same XML, CRC ok;
+            // and one flipped payload bit must fail the CRC check.
+            var xml = UdpDiscovery.BuildC2dC("95270000ABCDEFGH", 53777, 12345, xmlDeclaration: false);
+            Assert(xml.Contains("<uid>95270000ABCDEFGH</uid>") && xml.Contains("<mtu>1350</mtu>")
+                && xml.Contains("<cid>12345</cid>") && xml.Contains("<p>WIN</p>"),
+                "C2D_C carries uid/mtu/cid/platform");
+            var pkt = UdpDiscovery.BuildDiscovery(0xDEADBEEF, xml);
+            Assert(UdpDiscovery.TryParseDiscovery(pkt, out var tid, out var back, out _)
+                && tid == 0xDEADBEEF && back == xml, "discovery packet roundtrips");
+            pkt[^1] ^= 0x01;
+            Assert(!UdpDiscovery.TryParseDiscovery(pkt, out _, out _, out var why)
+                && why != null && why.Contains("CRC"), "corruption is caught by the checksum");
+
+            // Logs must never carry the full UID.
+            var masked = UdpDiscovery.MaskUid($"reply for 95270000ABCDEFGH accepted", "95270000ABCDEFGH");
+            Assert(!masked.Contains("95270000ABCDEFGH") && masked.Contains("9527**********GH"),
+                "uid is masked in probe logs");
+        });
+
+        Test("camera discovery sweep: ONVIF parse + recommendation table", () =>
+        {
+            // A real-shaped WS-Discovery ProbeMatch: pull the service URL and only
+            // the telling scopes (name/hardware), namespace-agnostic.
+            var soap =
+                "<?xml version=\"1.0\"?><s:Envelope xmlns:s=\"http://www.w3.org/2003/05/soap-envelope\" " +
+                "xmlns:d=\"http://schemas.xmlsoap.org/ws/2005/04/discovery\"><s:Body><d:ProbeMatches>" +
+                "<d:ProbeMatch><d:Scopes>onvif://www.onvif.org/name/Reolink onvif://www.onvif.org/hardware/RLC-810A " +
+                "onvif://www.onvif.org/Profile/Streaming</d:Scopes>" +
+                "<d:XAddrs>http://192.168.1.50/onvif/device_service</d:XAddrs></d:ProbeMatch>" +
+                "</d:ProbeMatches></s:Body></s:Envelope>";
+            var matches = CameraProbe.ParseOnvifMatches(soap).ToList();
+            AssertEq(matches.Count, 1);
+            AssertEq(matches[0].XAddrs, "http://192.168.1.50/onvif/device_service");
+            Assert(matches[0].Scopes.Contains("/name/Reolink") && matches[0].Scopes.Contains("/hardware/RLC-810A")
+                && !matches[0].Scopes.Contains("/Profile/"), "keeps identifying scopes, drops noise");
+            Assert(!CameraProbe.ParseOnvifMatches("not xml").Any(), "garbage yields no matches");
+
+            // Recommendation decision table, most-specific first.
+            var http = new CameraProbe.HttpResult(true, "Argus", "v3.0");
+            var none = new CameraProbe.HttpResult(false, null, null);
+            Assert(CameraProbe.Recommend(new() { 9000 }, none, 0, UdpDiscovery.UdpOutcome.Silent).Contains("TCP 9000 is OPEN"),
+                "open 9000 wins");
+            Assert(CameraProbe.Recommend(new(), none, 0, UdpDiscovery.UdpOutcome.Accepted).Contains("Baichuan-over-UDP"),
+                "accepted UDP handshake wins over everything but is reported");
+            Assert(CameraProbe.Recommend(new(), http, 0, UdpDiscovery.UdpOutcome.Silent).Contains("HTTP API answers"),
+                "HTTP reachability reported when no TCP/UDP");
+            Assert(CameraProbe.Recommend(new(), none, 1, UdpDiscovery.UdpOutcome.Silent).Contains("ONVIF"),
+                "ONVIF-only path suggested");
+            Assert(CameraProbe.Recommend(new(), none, 0, UdpDiscovery.UdpOutcome.Silent).Contains("unreachable"),
+                "total silence is called out");
         });
 
         Test("config with zero cameras loads (first-run web UI boots empty)", () =>

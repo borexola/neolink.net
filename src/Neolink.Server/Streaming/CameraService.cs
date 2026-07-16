@@ -62,6 +62,10 @@ public sealed class CameraService : ILiveCameraSource
     private volatile bool _suspended;      // user pressed "suspend": hold no connection at all
     private volatile CancellationTokenSource? _activeStream; // the live session's CTS, to interrupt on suspend
     private bool _sleepHintLogged;
+    // Last diagnostic discovery sweep, keyed by camera NAME so the Main and Sub
+    // services for one camera don't both sweep — whichever fails first claims
+    // the 15-minute window and the other skips.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTime> _udpProbedAt = new();
 
     public CameraService(CameraConfig config, StreamKind kind, IMediaSink hub, TimeSpan startupDelay)
     {
@@ -258,6 +262,13 @@ public sealed class CameraService : ILiveCameraSource
                     Log.Debug($"{Tag}: privacy reconnect: {Log.Flatten(ex)}; retrying in {backoff.TotalSeconds:0}s");
                 else
                     Log.Error($"{Tag}: {Log.Flatten(ex)}; retrying in {backoff.TotalSeconds:0}s{hint}");
+
+                // Opt-in diagnostics for UDP-only battery cameras (Argus family):
+                // TCP will never answer on those, so while the camera stays
+                // unreachable, probe the Baichuan-over-UDP discovery handshake
+                // and log the exchange (UID masked, no credentials).
+                if (_config.UdpProbe && !gotFrames && !ct.IsCancellationRequested)
+                    await MaybeUdpProbeAsync(ct).ConfigureAwait(false);
             }
 
             try
@@ -269,6 +280,29 @@ public sealed class CameraService : ILiveCameraSource
                 return;
             }
             backoff = TimeSpan.FromTicks(Math.Min(MaxBackoff.Ticks, backoff.Ticks * 2));
+        }
+    }
+
+    /// <summary>
+    /// The opt-in camera-discovery diagnostic (<see cref="CameraProbe"/>), rate-limited
+    /// so an unreachable camera logs one thorough sweep per quarter hour instead of one
+    /// per reconnect attempt. Never lets a sweep failure disturb the retry loop.
+    /// </summary>
+    private async Task MaybeUdpProbeAsync(CancellationToken ct)
+    {
+        // One sweep per camera per 15 min, shared across its stream services.
+        var now = DateTime.UtcNow;
+        if (_udpProbedAt.TryGetValue(_config.Name, out var last) && now - last < TimeSpan.FromMinutes(15))
+            return;
+        _udpProbedAt[_config.Name] = now;
+        try
+        {
+            await CameraProbe.SweepAsync(Tag, _config, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            Log.Warn($"{Tag}: [discover] sweep crashed: {Log.Flatten(ex)}");
         }
     }
 
