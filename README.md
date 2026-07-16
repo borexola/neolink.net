@@ -831,15 +831,37 @@ Limitations to know about (all inherited from how these cameras work, not fixabl
 from our side):
 
 - The camera must be reachable **by IP over Wi-Fi** (`"address"` in the config —
-  give it a DHCP reservation). The UID/P2P relay transport is not implemented, so
-  cameras that can only be reached through Reolink's cloud relay won't connect.
-- **A sleeping camera cannot be woken over TCP.** Reconnection succeeds when the
-  camera wakes itself: PIR motion, the Reolink app, or `always_on` having held it
-  awake in the first place. Expect "open stream → wait" to work only if something
-  wakes the camera; with `always_on` this never comes up.
+  give it a DHCP reservation). The Reolink cloud/P2P relay transport is not
+  implemented, so a camera reachable only through Reolink's servers won't connect.
+- **A sleeping camera cannot be woken by Neolink.NET** — over TCP or UDP. While
+  asleep it is fully off the network, so there is nothing to connect to; it must
+  wake itself (PIR motion or the Reolink app). Reconnection then succeeds on the
+  next retry. `always_on` doesn't wake a sleeping camera either — it *keeps* one
+  awake once it is up (the held-open connection is what prevents it dozing), so
+  after the first wake it stays reachable. Set it per camera in the config
+  (`"always_on": true`); it is not in the web-UI camera editor.
 - While asleep there are **no motion events, no MQTT updates, no recording, no
   snapshots** — the camera is off the network on purpose. It still records
   PIR events to its own SD card, as it does with the official app.
+
+### UDP-only battery models (experimental)
+
+Some battery-only models (parts of the Argus line) never listen on TCP at all —
+they speak Baichuan **over UDP** — so they log `Connection refused` forever on the
+normal path, and a port scan shows no open ports. Neolink.NET can connect to these
+over UDP: set the camera's **UID** (Reolink app → device info, or the sticker) and
+`"udp": true` in its config entry:
+
+```jsonc
+{ "name": "Retro", "username": "admin", "password": "…",
+  "address": "192.168.178.50", "uid": "95270000ABCDEFGH", "udp": true }
+```
+
+The camera still has to be **awake and on your LAN** (the same sleep limitation
+applies — UDP can't wake a sleeping camera). Once connected, everything is the same
+as the TCP path: video, events, battery, recording and controls all work, because
+only the transport differs. This path is **experimental** — if a UDP camera
+connects but misbehaves, please open an issue with the log.
 
 ## Perimeter protection (line/zone crossing)
 

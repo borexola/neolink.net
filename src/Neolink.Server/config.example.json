@@ -120,6 +120,17 @@
       // or false to force sleep-friendly behavior.
       // "always_on": false,
 
+      // UDP transport (EXPERIMENTAL) for battery-only models (parts of the Argus
+      // line) that never listen on TCP — they log "Connection refused" forever on
+      // the normal path because they speak Baichuan over UDP. Set the camera's UID
+      // (Reolink app -> device info, or the sticker) and "udp": true to connect over
+      // UDP instead. The camera must still be awake and reachable by "address" on
+      // your LAN; a sleeping battery camera can't be woken over UDP either (PIR
+      // motion or the Reolink app wakes it). Everything after connect — video,
+      // events, battery, controls — works the same as the TCP path.
+      // "uid": "95270000ABCDEFGH",
+      // "udp": true,
+
       // Optional: restrict this camera to specific users from "users" above.
       // "permitted_users": [ "me" ]
     }

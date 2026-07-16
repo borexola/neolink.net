@@ -349,9 +349,14 @@ public sealed class CameraService : ILiveCameraSource
             return true;
         }
 
-        Note($"{Tag}: connecting to {_config.Host}:{_config.Port}");
-        await using IBcCamera camera = await BcCamera.ConnectAsync(_config.Host, _config.Port, _config.ChannelId, ct,
-            tag: Tag).ConfigureAwait(false);
+        // UDP transport (experimental, opt-in) for battery-only cameras that never
+        // listen on TCP; everything after connect is identical to the TCP path.
+        Note(_config.Udp
+            ? $"{Tag}: connecting over UDP to {_config.Host} (uid set)"
+            : $"{Tag}: connecting to {_config.Host}:{_config.Port}");
+        await using IBcCamera camera = _config.Udp
+            ? await BcCamera.ConnectUdpAsync(_config.Host, _config.Uid!, _config.ChannelId, ct, tag: Tag).ConfigureAwait(false)
+            : await BcCamera.ConnectAsync(_config.Host, _config.Port, _config.ChannelId, ct, tag: Tag).ConfigureAwait(false);
 
         Note($"{Tag}: logging in as '{_config.Username}'");
         await camera.LoginAsync(_config.Username, _config.Password, ct).ConfigureAwait(false);

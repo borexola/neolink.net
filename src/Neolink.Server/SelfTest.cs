@@ -231,6 +231,7 @@ public static class SelfTest
                       "always_on": true,
                       "uid": "95270000ABCDEFGH",
                       "udp_probe": true,
+                      "udp": true,
                     },
                   ],
                 }
@@ -255,6 +256,7 @@ public static class SelfTest
                 Assert(cfg.Cameras[0].Uid == null && !cfg.Cameras[0].UdpProbe, "udp probe defaults off");
                 AssertEq(cfg.Cameras[1].Uid ?? "", "95270000ABCDEFGH");
                 Assert(cfg.Cameras[1].UdpProbe, "udp_probe parsed");
+                Assert(cfg.Cameras[1].Udp && !cfg.Cameras[0].Udp, "udp transport flag parsed (opt-in, default off)");
                 // Tiered-storage keys must round-trip through the parser — the
                 // archive UI only appears when archive_path survives loading.
                 AssertEq(cfg.Recording!.Path, "/recordings");
@@ -320,6 +322,23 @@ public static class SelfTest
             var masked = UdpDiscovery.MaskUid($"reply for 95270000ABCDEFGH accepted", "95270000ABCDEFGH");
             Assert(!masked.Contains("95270000ABCDEFGH") && masked.Contains("9527**********GH"),
                 "uid is masked in probe logs");
+
+            // Directed-broadcast math: host bits set. The /23 case is the point —
+            // a naive /24 guess would send to the wrong broadcast and miss the camera.
+            static string Bcast(string ip, string mask) =>
+                UdpDiscovery.DirectedBroadcast(System.Net.IPAddress.Parse(ip), System.Net.IPAddress.Parse(mask)).ToString();
+            AssertEq(Bcast("192.168.1.50", "255.255.255.0"), "192.168.1.255");
+            AssertEq(Bcast("10.0.0.5", "255.255.254.0"), "10.0.1.255");   // /23 spans .0 and .1
+            AssertEq(Bcast("172.16.40.9", "255.255.0.0"), "172.16.255.255");
+            // The live enumeration must not throw and must yield only IPv4 addresses.
+            var live = UdpDiscovery.LocalDirectedBroadcasts().ToList();
+            Assert(live.All(a => a.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork),
+                "directed broadcasts are IPv4");
+        });
+
+        Test("bcudp transport: handshake + reliable out-of-order reassembly", () =>
+        {
+            RunBcUdpTransport().GetAwaiter().GetResult();
         });
 
         Test("camera discovery sweep: ONVIF parse + recommendation table", () =>
@@ -2971,6 +2990,88 @@ public static class SelfTest
             Console.WriteLine($"FAIL: {name}: {ex.Message}");
             _failed++;
         }
+    }
+
+    /// <summary>End-to-end transport test: a loopback "camera" performs the UDP
+    /// discovery handshake, then sends a real BC message split across two data
+    /// packets delivered OUT OF ORDER. Proves the whole path — handshake, inbound
+    /// reorder + reassembly, pipe → BcCodec framing, subscription dispatch — plus
+    /// that the client's own send is received and acked (no retransmit storm).</summary>
+    private static async Task RunBcUdpTransport()
+    {
+        const string uid = "TESTUID0000000LO";
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        using var cam = new System.Net.Sockets.UdpClient(
+            new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 2015));
+        int clientDataPackets = 0;
+
+        // The canned message the "camera" will send us: a header-only ping, built
+        // and serialized exactly as the real code would (unencrypted session).
+        var pingBytes = Neolink.Bc.BcCodec.Serialize(
+            Neolink.Bc.BcMessage.HeaderOnly(new Neolink.Bc.BcMeta
+            {
+                MsgId = Neolink.Bc.BcConstants.MsgIdPing,
+                Class = Neolink.Bc.BcConstants.ClassModern,
+            }),
+            new Neolink.Bc.EncryptionState());
+
+        var mock = Task.Run(async () =>
+        {
+            System.Net.IPEndPoint? client = null;
+            int cid = 0;
+            // 1. Handshake: accept the C2D_C, reply D2C_C_R rsp 0.
+            while (!cts.IsCancellationRequested && client == null)
+            {
+                var r = await cam.ReceiveAsync(cts.Token);
+                if (!UdpDiscovery.TryParseDiscovery(r.Buffer, out _, out var xml, out _)) continue;
+                if (!xml.Contains("<C2D_C>", StringComparison.Ordinal)) continue;
+                cid = int.Parse(xml.Split("<cid>")[1].Split("</cid>")[0]);
+                var reply = $"<P2P><D2C_C_R><timer><def>3000</def><hb>20000</hb><hbt>60000</hbt></timer>" +
+                            $"<rsp>0</rsp><cid>{cid}</cid><did>7</did></D2C_C_R></P2P>";
+                await cam.SendAsync(UdpDiscovery.BuildDiscovery(1234, reply), r.RemoteEndPoint, cts.Token);
+                client = r.RemoteEndPoint;
+            }
+            if (client == null) return;
+
+            // 2. Send the ping as two data packets, OUT OF ORDER (pid 1 before 0),
+            //    stamped with the client's cid (the direction the client expects).
+            int half = pingBytes.Length / 2;
+            var p0 = BcUdp.BuildData(cid, 0, pingBytes.AsSpan(0, half));
+            var p1 = BcUdp.BuildData(cid, 1, pingBytes.AsSpan(half));
+            await cam.SendAsync(p1, client, cts.Token);
+            await Task.Delay(40, cts.Token);
+            await cam.SendAsync(p0, client, cts.Token);
+
+            // 3. Drain: ack any data the client sends us (so its send doesn't retransmit forever).
+            while (!cts.IsCancellationRequested)
+            {
+                var r = await cam.ReceiveAsync(cts.Token);
+                if (BcUdp.TryParseData(r.Buffer, out _, out var pid, out _))
+                {
+                    clientDataPackets++;
+                    await cam.SendAsync(BcUdp.BuildAck(cid, 0, pid, 0, ReadOnlySpan<byte>.Empty), r.RemoteEndPoint, cts.Token);
+                }
+            }
+        }, cts.Token);
+
+        await using var conn = await Neolink.Protocol.BcUdpConnection.ConnectAsync(
+            "127.0.0.1", uid, TimeSpan.FromSeconds(10), cts.Token, "udptest");
+
+        using (var sub = conn.Subscribe(Neolink.Bc.BcConstants.MsgIdPing))
+        {
+            var got = await sub.ReceiveAsync(TimeSpan.FromSeconds(8), cts.Token);
+            AssertEq(got.Meta.MsgId, Neolink.Bc.BcConstants.MsgIdPing);
+        }
+
+        // Exercise the outbound path: send a ping; the mock must receive+ack it.
+        var outPing = Neolink.Bc.BcMessage.HeaderOnly(new Neolink.Bc.BcMeta
+        {
+            MsgId = Neolink.Bc.BcConstants.MsgIdPing,
+            Class = Neolink.Bc.BcConstants.ClassModern,
+        });
+        await conn.SendAsync(outPing, cts.Token);
+        for (int i = 0; i < 50 && clientDataPackets == 0; i++) await Task.Delay(50, cts.Token);
+        Assert(clientDataPackets > 0, "camera received the client's UDP data packet");
     }
 
     private static void Assert(bool cond, string what)

@@ -8,6 +8,17 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### New
 
+- **Baichuan-over-UDP transport for battery-only cameras (experimental, opt-in)**:
+  some battery models (parts of the Argus line) never listen on TCP — they speak
+  Baichuan over UDP — so they could never connect. Setting a camera's `uid`
+  (Reolink app → device info, or the sticker) and `"udp": true` connects it over
+  UDP instead: a discovery handshake followed by a reliable ordered-datagram layer
+  (sequencing, acks, retransmission, heartbeats) beneath the identical BC framing,
+  so video, events, battery and controls all work exactly as on the TCP path. The
+  default is unchanged TCP; the UDP path runs only when `"udp": true` is set. The
+  camera must still be awake and reachable by `address` on the LAN — UDP can't wake
+  a sleeping camera. Experimental: please report a UDP camera that connects but
+  misbehaves.
 - **Studio layout for the timeline (opt-in)**: a Studio toggle in the timeline
   toolbar switches the page to a video-editor arrangement — the camera monitors
   fill the top of the screen and the editing desk (transport controls, camera

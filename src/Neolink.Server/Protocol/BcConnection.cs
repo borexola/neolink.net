@@ -18,7 +18,7 @@ namespace Neolink.Protocol;
 /// A TCP connection to a camera. Handles framing and routes incoming messages to
 /// subscribers by message ID. One subscriber per message ID at a time.
 /// </summary>
-public sealed class BcConnection : IAsyncDisposable
+public sealed class BcConnection : IBcConnection
 {
     private readonly TcpClient _tcp;
     private readonly NetworkStream _stream;
@@ -140,7 +140,7 @@ public sealed class BcConnection : IAsyncDisposable
             if (!_subscribers.TryAdd(msgId, channel))
                 throw new InvalidOperationException($"Simultaneous subscription to message ID {msgId}");
         }
-        return new BcSubscription(this, msgId, channel.Reader);
+        return new BcSubscription(msgId, channel.Reader, () => Unsubscribe(msgId));
     }
 
     internal void Unsubscribe(uint msgId)
@@ -178,13 +178,15 @@ public sealed class BcConnection : IAsyncDisposable
 
 public sealed class BcSubscription : IDisposable
 {
-    private readonly BcConnection _conn;
+    private readonly Action _unsubscribe;
     private readonly uint _msgId;
     public ChannelReader<BcMessage> Messages { get; }
 
-    internal BcSubscription(BcConnection conn, uint msgId, ChannelReader<BcMessage> reader)
+    // Holds an unsubscribe delegate rather than a concrete connection, so the same
+    // subscription type serves both the TCP and UDP transports.
+    internal BcSubscription(uint msgId, ChannelReader<BcMessage> reader, Action unsubscribe)
     {
-        _conn = conn;
+        _unsubscribe = unsubscribe;
         _msgId = msgId;
         Messages = reader;
     }
@@ -207,5 +209,5 @@ public sealed class BcSubscription : IDisposable
         }
     }
 
-    public void Dispose() => _conn.Unsubscribe(_msgId);
+    public void Dispose() => _unsubscribe();
 }

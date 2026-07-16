@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Text;
 using System.Xml.Linq;
@@ -133,8 +134,168 @@ public static class UdpDiscovery
         return xmlDeclaration ? "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" + body : body;
     }
 
-    private static string BuildC2dDisc(int cid, int did) =>
+    internal static string BuildC2dDisc(int cid, int did) =>
         $"<P2P><C2D_DISC><cid>{cid}</cid><did>{did}</did></C2D_DISC></P2P>";
+
+    /// <summary>Client→device heartbeat XML (keeps the UDP session alive).</summary>
+    internal static string BuildC2dHb(int cid, int did) =>
+        $"<P2P><C2D_HB><cid>{cid}</cid><did>{did}</did></C2D_HB></P2P>";
+
+    /// <summary>An established UDP session: the open socket, the endpoint the camera
+    /// actually answered from, and the two negotiated connection ids (cid = ours,
+    /// did = the camera's). The caller owns the socket from here on.</summary>
+    internal sealed record Session(UdpClient Socket, IPEndPoint Camera, int ClientId, int DeviceId);
+
+    /// <summary>
+    /// Performs the discovery handshake against a KNOWN camera IP (direct, no
+    /// broadcast) and hands back a live session for the UDP transport to run on:
+    /// send C2D_C, wait for an accepted D2C_C_R, keep the socket. Null on failure.
+    /// This is the connect-path twin of <see cref="ProbeAsync"/> (which is the
+    /// throwaway diagnostic).
+    /// </summary>
+    internal static async Task<Session?> EstablishAsync(IPAddress ip, string uid, TimeSpan timeout,
+        CancellationToken ct, string tag)
+    {
+        string P(string m) => $"{tag}: [udp] {MaskUid(m, uid)}";
+        if (ip.AddressFamily != AddressFamily.InterNetwork)
+        {
+            Log.Warn(P($"{ip} is not IPv4 — UDP connect needs an IPv4 address"));
+            return null;
+        }
+
+        UdpClient? udp = null;
+        for (int attempt = 0; attempt < 8 && udp == null; attempt++)
+        {
+            int lp = Random.Shared.Next(53500, 54000);
+            try { udp = new UdpClient(new IPEndPoint(IPAddress.Any, lp)); }
+            catch (SocketException) { }
+        }
+        if (udp == null) { Log.Warn(P("could not bind a local UDP port")); return null; }
+
+        int localPort = ((IPEndPoint)udp.Client.LocalEndPoint!).Port;
+        int cid = Random.Shared.Next(1, int.MaxValue);
+        var xml = BuildC2dC(uid, localPort, cid, xmlDeclaration: false);
+
+        using var handshakeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        handshakeCts.CancelAfter(timeout);
+        try
+        {
+            // Retransmit the hello until an accepted reply arrives or time runs out.
+            var sender = Task.Run(async () =>
+            {
+                while (!handshakeCts.IsCancellationRequested)
+                {
+                    foreach (var port in CameraPorts)
+                    {
+                        var pkt = BuildDiscovery((uint)Random.Shared.Next(1, int.MaxValue), xml);
+                        try { await udp.SendAsync(pkt, new IPEndPoint(ip, port), handshakeCts.Token).ConfigureAwait(false); }
+                        catch (OperationCanceledException) { return; }
+                        catch (SocketException) { }
+                    }
+                    try { await Task.Delay(500, handshakeCts.Token).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { return; }
+                }
+            }, handshakeCts.Token);
+
+            while (!handshakeCts.IsCancellationRequested)
+            {
+                UdpReceiveResult r;
+                try { r = await udp.ReceiveAsync(handshakeCts.Token).ConfigureAwait(false); }
+                catch (OperationCanceledException) { break; }
+                catch (SocketException) { continue; }
+                if (!TryParseDiscovery(r.Buffer, out _, out var replyXml, out _)) continue;
+                if (replyXml.Contains("<C2D_C>", StringComparison.Ordinal)) continue; // our own loopback
+                var reply = ParseReply(replyXml);
+                if (reply is { Root: "D2C_C_R", Rsp: 0 })
+                {
+                    handshakeCts.Cancel();
+                    try { await sender.ConfigureAwait(false); } catch { }
+                    Log.Info(P($"UDP session established — cid {reply.Cid}, did {reply.Did} " +
+                               $"(camera at {r.RemoteEndPoint})"));
+                    return new Session(udp, (IPEndPoint)r.RemoteEndPoint, reply.Cid, reply.Did);
+                }
+                if (reply is { Root: "D2C_C_R" })
+                    Log.Warn(P($"camera refused the UDP handshake (rsp {reply.Rsp})"));
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Log.Warn(P($"UDP handshake error: {Log.Flatten(ex)}"));
+        }
+
+        udp.Dispose();
+        if (!ct.IsCancellationRequested)
+            Log.Warn(P($"UDP handshake timed out after {timeout.TotalSeconds:0}s (camera asleep or not reachable)"));
+        return null;
+    }
+
+    /// <summary>
+    /// The directed broadcast address of every up, non-loopback IPv4 interface
+    /// (host bits all set: ip | ~mask). Best practice for LAN discovery: the
+    /// limited broadcast 255.255.255.255 only egresses one interface on most
+    /// stacks, and a guessed /24 misses any subnet that isn't a /24 — a directed
+    /// broadcast per interface reaches a camera on any local subnet, out the
+    /// right NIC (multi-homed hosts, VLANs, /23s and the like).
+    /// </summary>
+    internal static IEnumerable<IPAddress> LocalDirectedBroadcasts()
+    {
+        foreach (var ni in SafeInterfaces())
+        {
+            if (ni.OperationalStatus != OperationalStatus.Up) continue;
+            if (ni.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
+            IEnumerable<UnicastIPAddressInformation> unicasts;
+            try { unicasts = ni.GetIPProperties().UnicastAddresses; }
+            catch { continue; }
+            foreach (var ua in unicasts)
+            {
+                if (ua.Address.AddressFamily != AddressFamily.InterNetwork) continue;
+                var ab = ua.Address.GetAddressBytes();
+                // Skip APIPA link-local (169.254/16): a camera never lives there.
+                if (ab is [169, 254, ..]) continue;
+                var mask = ua.IPv4Mask;
+                if (mask == null || mask.GetAddressBytes() is not { Length: 4 } mb) continue;
+                // A /32 (mask 255.255.255.255) has no broadcast; skip it.
+                if (mb is [255, 255, 255, 255]) continue;
+                yield return DirectedBroadcast(ua.Address, mask);
+            }
+        }
+    }
+
+    /// <summary>Directed broadcast of a subnet: host bits all set (ip | ~mask).
+    /// Pure — a /23 like 10.0.0.5 / 255.255.254.0 yields 10.0.1.255, which a
+    /// naive /24 guess (10.0.0.255) would miss.</summary>
+    internal static IPAddress DirectedBroadcast(IPAddress ip, IPAddress mask)
+    {
+        var ipb = ip.GetAddressBytes();
+        var mb = mask.GetAddressBytes();
+        var bc = new byte[4];
+        for (int i = 0; i < 4; i++) bc[i] = (byte)(ipb[i] | (byte)~mb[i]);
+        return new IPAddress(bc);
+    }
+
+    private static NetworkInterface[] SafeInterfaces()
+    {
+        try { return NetworkInterface.GetAllNetworkInterfaces(); }
+        catch { return Array.Empty<NetworkInterface>(); }
+    }
+
+    /// <summary>Delay that returns true if it completed, false if the token fired
+    /// (the window closed) — lets the send schedule read as a plain while-loop.</summary>
+    private static async Task<bool> QuietDelayAsync(TimeSpan delay, CancellationToken ct)
+    {
+        try { await Task.Delay(delay, ct).ConfigureAwait(false); return true; }
+        catch (OperationCanceledException) { return false; }
+    }
+
+    /// <summary>The /24 directed broadcast derived from an address (fallback for
+    /// when the camera sits on a subnet the host has no interface on).</summary>
+    private static IPAddress? Slash24Broadcast(IPAddress ip)
+    {
+        var o = ip.GetAddressBytes();
+        if (o.Length != 4 || o[3] == 255) return null;
+        o[3] = 255;
+        return new IPAddress(o);
+    }
 
     /// <summary>UID-masked text, safe to log/paste: first four and last two
     /// characters survive, the middle is starred out.</summary>
@@ -197,20 +358,24 @@ public static class UdpDiscovery
             var pktPlain = BuildDiscovery(tidPlain, xmlPlain);
             var pktDecl = BuildDiscovery(tidDecl, xmlDecl);
 
-            // Direct to the camera, limited broadcast, and (heuristic /24)
-            // subnet broadcast — docker bridge networks drop the broadcasts,
-            // the direct sends still get through.
+            // Best-practice target set, per camera port:
+            //  · the camera directly (works even when broadcasts are dropped,
+            //    e.g. a docker bridge network),
+            //  · every local interface's directed broadcast (reaches a camera on
+            //    any local subnet, out the correct NIC),
+            //  · the limited broadcast 255.255.255.255 (belt-and-braces; egresses
+            //    the primary interface on most stacks), and
+            //  · the /24 derived from the camera's own address, in case it sits on
+            //    a subnet this host has no interface on.
+            // Broadcast destinations are de-duplicated.
+            var bcasts = new HashSet<IPAddress>(LocalDirectedBroadcasts()) { IPAddress.Broadcast };
+            if (Slash24Broadcast(ip) is { } guess) bcasts.Add(guess);
+
             var targets = new List<IPEndPoint>();
             foreach (var port in CameraPorts)
             {
                 targets.Add(new IPEndPoint(ip, port));
-                targets.Add(new IPEndPoint(IPAddress.Broadcast, port));
-                var octets = ip.GetAddressBytes();
-                if (octets.Length == 4 && octets[3] != 255)
-                {
-                    octets[3] = 255;
-                    targets.Add(new IPEndPoint(new IPAddress(octets), port));
-                }
+                foreach (var b in bcasts) targets.Add(new IPEndPoint(b, port));
             }
 
             Log.Info(P($"local port {localPort}, cid {cid}, hello {pktPlain.Length}/{pktDecl.Length} bytes " +
@@ -308,29 +473,34 @@ public static class UdpDiscovery
                 }
             }, probeCts.Token);
 
-            // Five send rounds, 3 s apart, both XML dialects to every target.
-            for (int round = 1; round <= 5 && !probeCts.IsCancellationRequested; round++)
+            // One burst = both XML dialects to every target. Returns false if the
+            // window closed mid-burst.
+            async Task<bool> BurstAsync()
             {
                 foreach (var target in targets)
-                {
                     foreach (var pkt in new[] { pktPlain, pktDecl })
                     {
-                        try
-                        {
-                            await udp.SendAsync(pkt, target, probeCts.Token).ConfigureAwait(false);
-                            sent++;
-                        }
-                        catch (OperationCanceledException) { break; }
-                        catch (SocketException ex)
-                        {
-                            Log.Debug(P($"send to {target} failed: {ex.SocketErrorCode}"));
-                        }
+                        try { await udp.SendAsync(pkt, target, probeCts.Token).ConfigureAwait(false); sent++; }
+                        catch (OperationCanceledException) { return false; }
+                        catch (SocketException ex) { Log.Debug(P($"send to {target} failed: {ex.SocketErrorCode}")); }
                     }
-                }
-                Log.Info(P($"round {round}/5 sent ({sent} datagrams so far)"));
-                try { await Task.Delay(TimeSpan.FromSeconds(3), probeCts.Token).ConfigureAwait(false); }
-                catch (OperationCanceledException) { break; }
+                return true;
             }
+
+            // Schedule tuned for battery cameras: an opening double-tap (t≈0 and
+            // t≈0.4 s) catches a camera already awake within a second; steady 2 s
+            // retransmits across the window catch one that wakes partway through
+            // (roused by motion or the Reolink app). The ~20 s window bounds it.
+            int bursts = 0;
+            if (await BurstAsync().ConfigureAwait(false)) bursts++;
+            if (await QuietDelayAsync(TimeSpan.FromMilliseconds(400), probeCts.Token).ConfigureAwait(false)
+                && await BurstAsync().ConfigureAwait(false)) bursts++;
+            while (await QuietDelayAsync(TimeSpan.FromSeconds(2), probeCts.Token).ConfigureAwait(false))
+            {
+                if (!await BurstAsync().ConfigureAwait(false)) break;
+                bursts++;
+            }
+            Log.Info(P($"sent {sent} datagrams across {bursts} bursts to {targets.Count} targets"));
 
             try { await receiver.ConfigureAwait(false); } catch (OperationCanceledException) { }
 

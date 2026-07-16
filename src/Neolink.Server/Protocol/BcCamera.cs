@@ -33,7 +33,7 @@ public sealed class BcCamera : IBcCamera
 {
     public static readonly TimeSpan RxTimeout = TimeSpan.FromSeconds(15);
 
-    private readonly BcConnection _conn;
+    private readonly IBcConnection _conn;
     private readonly byte _channelId;
     private int _messageNum = -1;
     private bool _oddMotionPushLogged; // one diagnostic per connection is plenty
@@ -45,17 +45,30 @@ public sealed class BcCamera : IBcCamera
     // "ch0" is ambiguous in captures — callers pass the camera name instead.
     private readonly string _logTag;
 
-    private BcCamera(BcConnection conn, byte channelId, string? tag)
+    private BcCamera(IBcConnection conn, byte channelId, string? tag)
     {
         _conn = conn;
         _channelId = channelId;
         _logTag = tag ?? $"ch{channelId}";
     }
 
+    /// <summary>Connect over TCP (the normal Baichuan transport, port 9000).</summary>
     public static async Task<BcCamera> ConnectAsync(string host, int port, byte channelId, CancellationToken ct,
         string? tag = null)
     {
         var conn = await BcConnection.ConnectAsync(host, port, TimeSpan.FromSeconds(10), ct).ConfigureAwait(false);
+        return new BcCamera(conn, channelId, tag);
+    }
+
+    /// <summary>Connect over UDP (Baichuan-over-UDP) — the transport battery-only
+    /// models (Argus family) speak instead of TCP. The UID keys the discovery
+    /// handshake; everything above the transport (login, streaming, control) is
+    /// identical to the TCP path.</summary>
+    public static async Task<BcCamera> ConnectUdpAsync(string host, string uid, byte channelId, CancellationToken ct,
+        string? tag = null)
+    {
+        var conn = await BcUdpConnection.ConnectAsync(host, uid, TimeSpan.FromSeconds(15), ct, tag ?? $"ch{channelId}")
+            .ConfigureAwait(false);
         return new BcCamera(conn, channelId, tag);
     }
 

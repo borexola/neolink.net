@@ -140,6 +140,7 @@ public sealed class NeolinkConfig
         byte channelId = 0;
         bool record = true;
         bool udpProbe = false;
+        bool udp = false;
         bool? alwaysOn = null;
         List<string>? permitted = null;
 
@@ -158,6 +159,7 @@ public sealed class NeolinkConfig
                 case "record": record = prop.Value.GetBoolean(); break;
                 case "alwayson": alwaysOn = prop.Value.GetBoolean(); break;
                 case "udpprobe": udpProbe = prop.Value.GetBoolean(); break;
+                case "udp": udp = prop.Value.GetBoolean(); break;
                 // Generic (non-Reolink) camera: pull these RTSP URLs directly.
                 case "rtsp" or "rtspmain": rtspMain = prop.Value.GetString(); break;
                 case "rtspsub": rtspSub = prop.Value.GetString(); break;
@@ -174,7 +176,7 @@ public sealed class NeolinkConfig
         }
 
         return BuildCamera(name, username, password, address, uid, stream, channelId, permitted, httpAddress,
-            record, rtspMain, rtspSub, alwaysOn, udpProbe);
+            record, rtspMain, rtspSub, alwaysOn, udpProbe, udp);
     }
 
     private static RecordingConfig ParseJsonRecording(JsonElement el)
@@ -354,7 +356,8 @@ public sealed class NeolinkConfig
                 MiniToml.GetString(c, "rtsp_main") ?? MiniToml.GetString(c, "rtsp"),
                 MiniToml.GetString(c, "rtsp_sub"),
                 MiniToml.GetBool(c, "always_on"),
-                MiniToml.GetBool(c, "udp_probe") ?? false));
+                MiniToml.GetBool(c, "udp_probe") ?? false,
+                MiniToml.GetBool(c, "udp") ?? false));
         }
         return config;
     }
@@ -368,7 +371,7 @@ public sealed class NeolinkConfig
     private static CameraConfig BuildCamera(string? name, string? username, string? password,
         string? address, string? uid, string stream, byte channelId, List<string>? permitted,
         string? httpAddress = null, bool record = true, string? rtspMain = null, string? rtspSub = null,
-        bool? alwaysOn = null, bool udpProbe = false)
+        bool? alwaysOn = null, bool udpProbe = false, bool udp = false)
     {
         if (name == null) throw new FormatException("camera entry missing \"name\"");
 
@@ -400,9 +403,11 @@ public sealed class NeolinkConfig
         if (uid != null && address == null)
             throw new FormatException(
                 $"Camera \"{name}\": UID-only (relay/battery) connections are not supported by Neolink.NET yet; " +
-                "give the camera a direct \"address\" too (\"uid\" + \"udp_probe\": true runs the UDP diagnostics)");
+                "give the camera a direct \"address\" too (\"uid\" + \"udp\": true connects over UDP)");
         if (address == null)
             throw new FormatException($"Camera \"{name}\" needs an \"address\" (host or host:port)");
+        if (udp && string.IsNullOrWhiteSpace(uid))
+            throw new FormatException($"Camera \"{name}\": \"udp\": true needs a \"uid\" (from the Reolink app or the sticker)");
 
         var (host, port) = SplitHostPort(address);
         return new CameraConfig
@@ -420,6 +425,7 @@ public sealed class NeolinkConfig
             AlwaysOn = alwaysOn,
             Uid = string.IsNullOrWhiteSpace(uid) ? null : uid.Trim(),
             UdpProbe = udpProbe,
+            Udp = udp,
         };
     }
 
@@ -664,4 +670,8 @@ public sealed class CameraConfig
     /// of TCP — and log the exchange comprehensively (UID masked, no credentials).
     /// Requires "uid".</summary>
     public bool UdpProbe { get; init; }
+    /// <summary>Experimental (opt-in): connect to this camera over Baichuan-over-UDP
+    /// instead of TCP — for battery-only models (Argus family) that never listen on
+    /// TCP. Requires "uid". The default (false) is the unchanged TCP path.</summary>
+    public bool Udp { get; init; }
 }
