@@ -31,12 +31,15 @@ public sealed class BcUdpConnection : IBcConnection
     // (20-byte data header + IP/UDP overhead) so nothing fragments.
     private const int ChunkSize = 1024;
     private static readonly TimeSpan RetxAfter = TimeSpan.FromMilliseconds(500);
-    // Match the official client: a 1 s heartbeat plus a continuous ~20 ms ack that
-    // doubles as flow control and keepalive — the camera closes the session (clean
-    // D2C_DISC, ~8 s) if it stops seeing acks, so acking must never be gated behind
-    // downstream delivery.
+    // Match the official client EXACTLY: a 1 s heartbeat plus a continuous 10 ms ack.
+    // The reference transport documents this precisely — the official app acks every
+    // 10 ms, and a camera that stops seeing acks at that cadence decides the client
+    // has a poor connection, re-offers the session (repeated D2C_C_R) and then closes
+    // it cleanly (D2C_DISC) after ~3 tries (~8 s). We had been acking at 20 ms — half
+    // the official rate — which the camera treated as a failing link. The ack timer
+    // is decoupled from downstream delivery so the cadence never slips.
     private static readonly TimeSpan Heartbeat = TimeSpan.FromSeconds(1);
-    private static readonly TimeSpan AckInterval = TimeSpan.FromMilliseconds(20);
+    private static readonly TimeSpan AckInterval = TimeSpan.FromMilliseconds(10);
 
     private readonly UdpClient _udp;
     private readonly IPEndPoint _camera;
@@ -450,12 +453,15 @@ public sealed class BcUdpConnection : IBcConnection
     {
         try
         {
+            // Send the first heartbeat immediately (the reference's tokio interval
+            // fires on its first tick), then once a second, so the camera sees the
+            // session confirmed the instant it answers.
             while (!ct.IsCancellationRequested)
             {
-                await Task.Delay(Heartbeat, ct).ConfigureAwait(false);
                 var hb = UdpDiscovery.BuildDiscovery(_tid, UdpDiscovery.BuildC2dHb(_cid, _did));
                 await SendRawAsync(hb, ct).ConfigureAwait(false);
                 if (_txHb++ == 0) Log.Debug($"{_tag}: udp control → C2D_HB (heartbeat, {Heartbeat.TotalSeconds:0.#}s, tid {_tid:x8})");
+                await Task.Delay(Heartbeat, ct).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) { }

@@ -143,16 +143,18 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Fixed
 
-- **UDP battery cameras no longer drop every ~8 seconds**: the camera keys its
-  UDP session to the transaction id (tid) of the discovery hello it accepted,
-  and ignores discovery-layer packets carrying any other tid. Neolink.NET
-  generated a fresh random tid for every heartbeat, so from the camera's point
-  of view the client went silent right after connecting — it retried its
-  handshake reply a few times and then closed the session cleanly (`D2C_DISC`),
-  over and over, causing the periodic stream freeze/skip. All discovery-layer
-  packets (heartbeats, session confirm, disconnect) now run under the
-  handshake's tid, matching the reference client. The wake-capture liveness
-  probe also politely releases the session it opens (`C2D_DISC`) instead of
+- **UDP battery cameras no longer drop every ~8 seconds**: a UDP battery camera
+  measures the client's acknowledgement cadence to judge the link, and the
+  official Reolink client acks every 10 ms; a camera that stops seeing acks at
+  that rate decides the connection is failing, re-offers the session and then
+  closes it cleanly (`D2C_DISC`) after a few seconds — the periodic freeze and
+  reconnect loop. Neolink.NET was acking at half that rate (every 20 ms), which
+  the camera treated as a poor connection. It now acks every 10 ms to match the
+  official client, and sends the first heartbeat immediately on connect. Two
+  related correctness fixes ride along: every discovery-layer packet
+  (heartbeats, session confirm, disconnect) now runs under the handshake's
+  transaction id, as the camera keys its session to it; and the wake-capture
+  liveness probe politely releases the session it opens (`C2D_DISC`) instead of
   leaving the camera retrying a half-open handshake after every poll.
 - **Timeline lanes no longer trail behind "now" on some filesystems**: the day
   listing derived every segment's duration from the file's mtime, but an OPEN
