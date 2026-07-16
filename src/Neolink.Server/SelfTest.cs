@@ -3008,10 +3008,10 @@ public static class SelfTest
     {
         const string uid = "TESTUID0000000LO";
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-        using var cam = new System.Net.Sockets.UdpClient(
-            new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 2015));
+        using var cam = BindLoopbackUdp(2015);
         int clientDataPackets = 0;
         int clientAckPackets = 0;
+        int clientC2dA = 0;
 
         // The canned message the "camera" will send us: a header-only ping, built
         // and serialized exactly as the real code would (unencrypted session).
@@ -3041,7 +3041,13 @@ public static class SelfTest
             }
             if (client == null) return;
 
-            // 2. Send the ping as two data packets, OUT OF ORDER (pid 1 before 0),
+            // 2. Send D2C_T — the camera's session-confirm request; the client must
+            //    reply C2D_A or the camera would recycle the session.
+            var d2ct = "<P2P><D2C_T><sid>42</sid><conn>local</conn><cid>" +
+                       $"{cid}</cid><did>7</did></D2C_T></P2P>";
+            await cam.SendAsync(UdpDiscovery.BuildDiscovery(55, d2ct), client, cts.Token);
+
+            // 3. Send the ping as two data packets, OUT OF ORDER (pid 1 before 0),
             //    stamped with the client's cid (the direction the client expects).
             int half = pingBytes.Length / 2;
             var p0 = BcUdp.BuildData(cid, 0, pingBytes.AsSpan(0, half));
@@ -3050,11 +3056,16 @@ public static class SelfTest
             await Task.Delay(40, cts.Token);
             await cam.SendAsync(p0, client, cts.Token);
 
-            // 3. Drain: ack any data the client sends us (so its send doesn't retransmit forever).
+            // 4. Drain: ack client data, and watch for the C2D_A confirm reply.
             while (!cts.IsCancellationRequested)
             {
                 var r = await cam.ReceiveAsync(cts.Token);
-                if (BcUdp.TryParseData(r.Buffer, out _, out var pid, out _))
+                if (UdpDiscovery.TryParseDiscovery(r.Buffer, out _, out var dx, out _)
+                    && dx.Contains("<C2D_A>", StringComparison.Ordinal))
+                {
+                    if (dx.Contains("<sid>42</sid>") && dx.Contains("<conn>local</conn>")) clientC2dA++;
+                }
+                else if (BcUdp.TryParseData(r.Buffer, out _, out var pid, out _))
                 {
                     clientDataPackets++;
                     await cam.SendAsync(BcUdp.BuildAck(cid, 0, pid, 0, ReadOnlySpan<byte>.Empty), r.RemoteEndPoint, cts.Token);
@@ -3089,6 +3100,11 @@ public static class SelfTest
         // the camera needs to keep the session open) — not just when data arrives.
         for (int i = 0; i < 40 && clientAckPackets < 3; i++) await Task.Delay(50, cts.Token);
         Assert(clientAckPackets >= 3, "client sends acks continuously (keepalive), not only on receipt");
+
+        // The client must reply C2D_A to the camera's D2C_T (session confirm) —
+        // without it the real camera recycles the session every ~8 s.
+        for (int i = 0; i < 40 && clientC2dA == 0; i++) await Task.Delay(50, cts.Token);
+        Assert(clientC2dA > 0, "client replies C2D_A to D2C_T (confirms the session)");
     }
 
     /// <summary>Wake-capture liveness probe: silent when nothing answers (asleep),
@@ -3102,8 +3118,7 @@ public static class SelfTest
 
         // Bring up a responder on 2015 → probe returns true.
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        using var cam = new System.Net.Sockets.UdpClient(
-            new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 2015));
+        using var cam = BindLoopbackUdp(2015);
         var responder = Task.Run(async () =>
         {
             while (!cts.IsCancellationRequested)
@@ -3124,6 +3139,28 @@ public static class SelfTest
             "liveness probe is true the moment the camera answers");
         cts.Cancel();
         try { await responder; } catch { }
+    }
+
+    /// <summary>Bind a loopback UDP socket, retrying briefly — the two UDP tests both
+    /// use port 2015 back to back, and the OS can hold it a moment after the prior
+    /// test releases it, so a bare bind occasionally flakes.</summary>
+    private static System.Net.Sockets.UdpClient BindLoopbackUdp(int port)
+    {
+        for (int i = 0; ; i++)
+        {
+            try
+            {
+                var c = new System.Net.Sockets.UdpClient();
+                c.Client.SetSocketOption(System.Net.Sockets.SocketOptionLevel.Socket,
+                    System.Net.Sockets.SocketOptionName.ReuseAddress, true);
+                c.Client.Bind(new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, port));
+                return c;
+            }
+            catch (System.Net.Sockets.SocketException) when (i < 30)
+            {
+                System.Threading.Thread.Sleep(50);
+            }
+        }
     }
 
     private static void Assert(bool cond, string what)

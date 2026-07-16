@@ -70,6 +70,7 @@ public sealed class BcUdpConnection : IBcConnection
     private readonly object _rxGate = new();
     private uint _rxNext;
     private readonly SortedDictionary<uint, byte[]> _rxBuffer = new();
+    private bool _confirmLogged; // "session confirmed (C2D_A)" said once
 
     private readonly Task _recvLoop, _readLoop, _hbLoop, _retxLoop, _ackLoop;
 
@@ -183,12 +184,19 @@ public sealed class BcUdpConnection : IBcConnection
                         if (gid != BcUdp.NoneReceived && apid != BcUdp.NoneReceived) OnAck(apid);
                         break;
                     case BcUdp.Kind.Discovery
-                        when UdpDiscovery.TryParseDiscovery(d, out _, out var xml, out _)
-                             && xml.Contains("_DISC", StringComparison.Ordinal):
-                        Log.Info($"{_tag}: UDP camera closed the session (D2C_DISC)");
-                        _cts.Cancel();
-                        return;
-                    // Other discovery packets (heartbeat replies) are keep-alives; ignore.
+                        when UdpDiscovery.TryParseDiscovery(d, out _, out var xml, out _):
+                        if (xml.Contains("_DISC", StringComparison.Ordinal))
+                        {
+                            Log.Info($"{_tag}: UDP camera closed the session (D2C_DISC)");
+                            _cts.Cancel();
+                            return;
+                        }
+                        // The camera confirms the session by sending D2C_T and waits
+                        // for C2D_A; without the reply it recycles the session (~8 s).
+                        if (xml.Contains("<D2C_T>", StringComparison.Ordinal))
+                            await SendC2dAAsync(xml, ct).ConfigureAwait(false);
+                        // Everything else (D2C_HB heartbeats) is a keep-alive; ignore.
+                        break;
                 }
             }
         }
@@ -227,6 +235,35 @@ public sealed class BcUdpConnection : IBcConnection
         if (deliver != null)
             foreach (var chunk in deliver)
                 await _pipe.Writer.WriteAsync(chunk, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>Confirm the session: the camera sends D2C_T (with its sid and the
+    /// connection type) and requires a C2D_A echoing them, or it recycles the
+    /// session. The camera resends D2C_T until it sees the C2D_A, so replying on
+    /// each one keeps it confirmed.</summary>
+    private async Task SendC2dAAsync(string d2cTXml, CancellationToken ct)
+    {
+        uint sid = 0;
+        string conn = "local";
+        try
+        {
+            var el = System.Xml.Linq.XElement.Parse(d2cTXml).Elements().FirstOrDefault();
+            if (el != null)
+            {
+                if (uint.TryParse(el.Element("sid")?.Value, out var s)) sid = s;
+                conn = el.Element("conn")?.Value is { Length: > 0 } c ? c : "local";
+            }
+        }
+        catch { /* fall back to defaults */ }
+
+        if (!_confirmLogged)
+        {
+            _confirmLogged = true;
+            Log.Debug($"{_tag}: UDP session confirmed (C2D_A: sid {sid}, conn {conn})");
+        }
+        var pkt = UdpDiscovery.BuildDiscovery((uint)Random.Shared.Next(1, int.MaxValue),
+            UdpDiscovery.BuildC2dA(sid, conn, _cid, _did, 1350));
+        await SendRawAsync(pkt, ct).ConfigureAwait(false);
     }
 
     /// <summary>

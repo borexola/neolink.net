@@ -141,6 +141,12 @@ public static class UdpDiscovery
     internal static string BuildC2dHb(int cid, int did) =>
         $"<P2P><C2D_HB><cid>{cid}</cid><did>{did}</did></C2D_HB></P2P>";
 
+    /// <summary>Client→device ACCEPT — the reply the camera requires to a D2C_T, or
+    /// it recycles the (unconfirmed) session after a few seconds. Echoes the sid and
+    /// conn the camera sent, plus our mtu.</summary>
+    internal static string BuildC2dA(uint sid, string conn, int cid, int did, uint mtu) =>
+        $"<P2P><C2D_A><sid>{sid}</sid><conn>{conn}</conn><cid>{cid}</cid><did>{did}</did><mtu>{mtu}</mtu></C2D_A></P2P>";
+
     /// <summary>
     /// Cheap liveness check: is a UDP camera answering discovery right now? Sends a
     /// few C2D_C hellos to the known IP and returns true on the first D2C_C_R,
