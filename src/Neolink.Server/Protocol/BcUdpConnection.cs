@@ -42,6 +42,12 @@ public sealed class BcUdpConnection : IBcConnection
     private readonly IPEndPoint _camera;
     private readonly int _cid; // our id — inbound packets carry this
     private readonly int _did; // camera id — we stamp outbound with it
+    // The discovery tid the handshake ran under. The camera keys its session to it
+    // and ignores discovery-layer packets under any other tid — heartbeats sent
+    // with fresh random tids read as silence, and the camera recycles the session
+    // (D2C_C_R retries, then a clean D2C_DISC at ~8 s). Every discovery-layer
+    // packet (C2D_HB, C2D_A, C2D_DISC) must carry this tid.
+    private readonly uint _tid;
     private readonly string _tag;
 
     public EncryptionState Encryption { get; } = new();
@@ -92,6 +98,7 @@ public sealed class BcUdpConnection : IBcConnection
         _camera = session.Camera;
         _cid = session.ClientId;
         _did = session.DeviceId;
+        _tid = session.Tid;
         _tag = tag;
         _context = new BcContext(Encryption);
         try { _udp.Client.ReceiveBufferSize = 1 << 20; } catch { } // 1 MB: absorb video bursts
@@ -311,7 +318,7 @@ public sealed class BcUdpConnection : IBcConnection
             _confirmLogged = true;
             Log.Debug($"{_tag}: udp {El} → C2D_A (confirm) sid {sid}, conn {conn}");
         }
-        var pkt = UdpDiscovery.BuildDiscovery((uint)Random.Shared.Next(1, int.MaxValue),
+        var pkt = UdpDiscovery.BuildDiscovery(_tid,
             UdpDiscovery.BuildC2dA(sid, conn, _cid, _did, 1350));
         await SendRawAsync(pkt, ct).ConfigureAwait(false);
     }
@@ -446,10 +453,9 @@ public sealed class BcUdpConnection : IBcConnection
             while (!ct.IsCancellationRequested)
             {
                 await Task.Delay(Heartbeat, ct).ConfigureAwait(false);
-                var hb = UdpDiscovery.BuildDiscovery((uint)Random.Shared.Next(1, int.MaxValue),
-                    UdpDiscovery.BuildC2dHb(_cid, _did));
+                var hb = UdpDiscovery.BuildDiscovery(_tid, UdpDiscovery.BuildC2dHb(_cid, _did));
                 await SendRawAsync(hb, ct).ConfigureAwait(false);
-                if (_txHb++ == 0) Log.Debug($"{_tag}: udp control → C2D_HB (heartbeat, {Heartbeat.TotalSeconds:0.#}s)");
+                if (_txHb++ == 0) Log.Debug($"{_tag}: udp control → C2D_HB (heartbeat, {Heartbeat.TotalSeconds:0.#}s, tid {_tid:x8})");
             }
         }
         catch (OperationCanceledException) { }
@@ -497,8 +503,7 @@ public sealed class BcUdpConnection : IBcConnection
         // Politely tell the camera we're leaving (best effort), then tear down.
         try
         {
-            var disc = UdpDiscovery.BuildDiscovery((uint)Random.Shared.Next(1, int.MaxValue),
-                UdpDiscovery.BuildC2dDisc(_cid, _did));
+            var disc = UdpDiscovery.BuildDiscovery(_tid, UdpDiscovery.BuildC2dDisc(_cid, _did));
             await _udp.SendAsync(disc, _camera, CancellationToken.None).ConfigureAwait(false);
         }
         catch { }

@@ -112,6 +112,17 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Fixed
 
+- **UDP battery cameras no longer drop every ~8 seconds**: the camera keys its
+  UDP session to the transaction id (tid) of the discovery hello it accepted,
+  and ignores discovery-layer packets carrying any other tid. Neolink.NET
+  generated a fresh random tid for every heartbeat, so from the camera's point
+  of view the client went silent right after connecting — it retried its
+  handshake reply a few times and then closed the session cleanly (`D2C_DISC`),
+  over and over, causing the periodic stream freeze/skip. All discovery-layer
+  packets (heartbeats, session confirm, disconnect) now run under the
+  handshake's tid, matching the reference client. The wake-capture liveness
+  probe also politely releases the session it opens (`C2D_DISC`) instead of
+  leaving the camera retrying a half-open handshake after every poll.
 - **Timeline lanes no longer trail behind "now" on some filesystems**: the day
   listing derived every segment's duration from the file's mtime, but an OPEN
   file's directory mtime is stale on NTFS (updated lazily on close) and on

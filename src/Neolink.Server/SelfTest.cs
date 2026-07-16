@@ -3012,6 +3012,8 @@ public static class SelfTest
         int clientDataPackets = 0;
         int clientAckPackets = 0;
         int clientC2dA = 0;
+        int clientHbSameTid = 0, clientHbOtherTid = 0;
+        uint hsTid = 0; // the tid of the C2D_C the mock accepted — the session's tid
 
         // The canned message the "camera" will send us: a header-only ping, built
         // and serialized exactly as the real code would (unencrypted session).
@@ -3027,16 +3029,19 @@ public static class SelfTest
         {
             System.Net.IPEndPoint? client = null;
             int cid = 0;
-            // 1. Handshake: accept the C2D_C, reply D2C_C_R rsp 0.
+            // 1. Handshake: accept the C2D_C, reply D2C_C_R rsp 0 — echoing the
+            //    request's tid, as the real firmware does (the camera keys the
+            //    session to it).
             while (!cts.IsCancellationRequested && client == null)
             {
                 var r = await cam.ReceiveAsync(cts.Token);
-                if (!UdpDiscovery.TryParseDiscovery(r.Buffer, out _, out var xml, out _)) continue;
+                if (!UdpDiscovery.TryParseDiscovery(r.Buffer, out var htid, out var xml, out _)) continue;
                 if (!xml.Contains("<C2D_C>", StringComparison.Ordinal)) continue;
                 cid = int.Parse(xml.Split("<cid>")[1].Split("</cid>")[0]);
+                hsTid = htid;
                 var reply = $"<P2P><D2C_C_R><timer><def>3000</def><hb>20000</hb><hbt>60000</hbt></timer>" +
                             $"<rsp>0</rsp><cid>{cid}</cid><did>7</did></D2C_C_R></P2P>";
-                await cam.SendAsync(UdpDiscovery.BuildDiscovery(1234, reply), r.RemoteEndPoint, cts.Token);
+                await cam.SendAsync(UdpDiscovery.BuildDiscovery(htid, reply), r.RemoteEndPoint, cts.Token);
                 client = r.RemoteEndPoint;
             }
             if (client == null) return;
@@ -3056,14 +3061,19 @@ public static class SelfTest
             await Task.Delay(40, cts.Token);
             await cam.SendAsync(p0, client, cts.Token);
 
-            // 4. Drain: ack client data, and watch for the C2D_A confirm reply.
+            // 4. Drain: ack client data, and watch for the C2D_A confirm reply and
+            //    the tid the client's heartbeats run under.
             while (!cts.IsCancellationRequested)
             {
                 var r = await cam.ReceiveAsync(cts.Token);
-                if (UdpDiscovery.TryParseDiscovery(r.Buffer, out _, out var dx, out _)
-                    && dx.Contains("<C2D_A>", StringComparison.Ordinal))
+                if (UdpDiscovery.TryParseDiscovery(r.Buffer, out var dtid, out var dx, out _))
                 {
-                    if (dx.Contains("<sid>42</sid>") && dx.Contains("<conn>local</conn>")) clientC2dA++;
+                    if (dx.Contains("<C2D_A>", StringComparison.Ordinal)
+                        && dx.Contains("<sid>42</sid>") && dx.Contains("<conn>local</conn>")) clientC2dA++;
+                    else if (dx.Contains("<C2D_HB>", StringComparison.Ordinal))
+                    {
+                        if (dtid == hsTid) clientHbSameTid++; else clientHbOtherTid++;
+                    }
                 }
                 else if (BcUdp.TryParseData(r.Buffer, out _, out var pid, out _))
                 {
@@ -3105,6 +3115,14 @@ public static class SelfTest
         // without it the real camera recycles the session every ~8 s.
         for (int i = 0; i < 40 && clientC2dA == 0; i++) await Task.Delay(50, cts.Token);
         Assert(clientC2dA > 0, "client replies C2D_A to D2C_T (confirms the session)");
+
+        // Discovery-layer keepalives must run under the handshake tid: the camera
+        // keys its session to it and treats any other tid as a stranger, re-sending
+        // D2C_C_R and then closing with a clean D2C_DISC (~8 s on real hardware).
+        for (int i = 0; i < 80 && clientHbSameTid == 0 && clientHbOtherTid == 0; i++)
+            await Task.Delay(50, cts.Token);
+        Assert(clientHbSameTid > 0, "heartbeats carry the handshake tid (session continuity)");
+        AssertEq(clientHbOtherTid, 0);
     }
 
     /// <summary>Wake-capture liveness probe: silent when nothing answers (asleep),
@@ -3119,24 +3137,30 @@ public static class SelfTest
         // Bring up a responder on 2015 → probe returns true.
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         using var cam = BindLoopbackUdp(2015);
+        int gotDisc = 0;
         var responder = Task.Run(async () =>
         {
             while (!cts.IsCancellationRequested)
             {
                 System.Net.Sockets.UdpReceiveResult r;
                 try { r = await cam.ReceiveAsync(cts.Token); } catch { return; }
-                if (UdpDiscovery.TryParseDiscovery(r.Buffer, out _, out var xml, out _)
-                    && xml.Contains("<C2D_C>", StringComparison.Ordinal))
+                if (!UdpDiscovery.TryParseDiscovery(r.Buffer, out _, out var xml, out _)) continue;
+                if (xml.Contains("<C2D_C>", StringComparison.Ordinal))
                 {
                     int cid = int.Parse(xml.Split("<cid>")[1].Split("</cid>")[0]);
                     var reply = $"<P2P><D2C_C_R><rsp>0</rsp><cid>{cid}</cid><did>3</did></D2C_C_R></P2P>";
                     try { await cam.SendAsync(UdpDiscovery.BuildDiscovery(9, reply), r.RemoteEndPoint, cts.Token); } catch { }
                 }
+                else if (xml.Contains("<C2D_DISC>", StringComparison.Ordinal)) gotDisc++;
             }
         }, cts.Token);
 
         Assert(await UdpDiscovery.IsReachableAsync("127.0.0.1", uid, TimeSpan.FromSeconds(3), cts.Token),
             "liveness probe is true the moment the camera answers");
+        // The probe must release the session it just created — a C2D_DISC — or the
+        // camera would keep retrying D2C_C_R for ~9 s after every 5 s poll.
+        for (int i = 0; i < 40 && gotDisc == 0; i++) await Task.Delay(50);
+        Assert(gotDisc > 0, "wake probe releases its session with a polite C2D_DISC");
         cts.Cancel();
         try { await responder; } catch { }
     }

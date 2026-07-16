@@ -150,8 +150,11 @@ public static class UdpDiscovery
     /// <summary>
     /// Cheap liveness check: is a UDP camera answering discovery right now? Sends a
     /// few C2D_C hellos to the known IP and returns true on the first D2C_C_R,
-    /// WITHOUT establishing a session (nothing to tear down). Silent and short — it
-    /// is the wake-capture poll, run every few seconds while the camera sleeps.
+    /// releasing the just-created session with a polite C2D_DISC (otherwise the
+    /// camera would keep retrying D2C_C_R for ~9 s after every poll — battery cost,
+    /// and a stale session sitting there right when the real connect follows).
+    /// Silent and short — it is the wake-capture poll, run every few seconds while
+    /// the camera sleeps.
     /// </summary>
     internal static async Task<bool> IsReachableAsync(string host, string uid, TimeSpan timeout, CancellationToken ct)
     {
@@ -175,7 +178,9 @@ public static class UdpDiscovery
         using (udp)
         {
             int localPort = ((IPEndPoint)udp.Client.LocalEndPoint!).Port;
+            uint tid = (uint)Random.Shared.Next(1, int.MaxValue);
             var xml = BuildC2dC(uid, localPort, Random.Shared.Next(1, int.MaxValue), xmlDeclaration: false);
+            var hello = BuildDiscovery(tid, xml);
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(timeout);
 
@@ -185,7 +190,7 @@ public static class UdpDiscovery
                 {
                     foreach (var port in CameraPorts)
                     {
-                        try { await udp.SendAsync(BuildDiscovery((uint)Random.Shared.Next(1, int.MaxValue), xml),
+                        try { await udp.SendAsync(hello,
                             new IPEndPoint(ip, port), cts.Token).ConfigureAwait(false); }
                         catch (OperationCanceledException) { return; }
                         catch (SocketException) { }
@@ -208,6 +213,14 @@ public static class UdpDiscovery
                     {
                         cts.Cancel();
                         try { await sender.ConfigureAwait(false); } catch { }
+                        // An accepted reply means the camera opened a session for us;
+                        // release it (same tid) — the probe only wanted the answer.
+                        if (ParseReply(reply) is { Root: "D2C_C_R", Rsp: 0 } ok)
+                        {
+                            var disc = BuildDiscovery(tid, BuildC2dDisc(ok.Cid, ok.Did));
+                            try { await udp.SendAsync(disc, r.RemoteEndPoint, CancellationToken.None).ConfigureAwait(false); }
+                            catch { /* best effort */ }
+                        }
                         return true;
                     }
                 }
@@ -218,9 +231,12 @@ public static class UdpDiscovery
     }
 
     /// <summary>An established UDP session: the open socket, the endpoint the camera
-    /// actually answered from, and the two negotiated connection ids (cid = ours,
-    /// did = the camera's). The caller owns the socket from here on.</summary>
-    internal sealed record Session(UdpClient Socket, IPEndPoint Camera, int ClientId, int DeviceId);
+    /// actually answered from, the two negotiated connection ids (cid = ours,
+    /// did = the camera's), and the discovery tid the handshake ran under — the
+    /// camera keys its session state to that tid, so every discovery-layer packet
+    /// sent for the rest of the session (heartbeats, C2D_A, C2D_DISC) must carry
+    /// it. The caller owns the socket from here on.</summary>
+    internal sealed record Session(UdpClient Socket, IPEndPoint Camera, int ClientId, int DeviceId, uint Tid);
 
     /// <summary>
     /// Performs the discovery handshake against a KNOWN camera IP (direct, no
@@ -250,7 +266,15 @@ public static class UdpDiscovery
 
         int localPort = ((IPEndPoint)udp.Client.LocalEndPoint!).Port;
         int cid = Random.Shared.Next(1, int.MaxValue);
+        // ONE tid for the whole session. The camera keys its discovery state to the
+        // tid of the C2D_C it accepted and ignores discovery packets carrying any
+        // other tid — heartbeats sent under fresh random tids look like silence, so
+        // the camera re-sends D2C_C_R every `def` ms and recycles the session with
+        // a clean D2C_DISC after ~3 tries (the observed ~8 s disconnect). The
+        // reference client uses its discovery tid for every packet that follows.
+        uint tid = (uint)Random.Shared.Next(1, int.MaxValue);
         var xml = BuildC2dC(uid, localPort, cid, xmlDeclaration: false);
+        var hello = BuildDiscovery(tid, xml);
 
         using var handshakeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         handshakeCts.CancelAfter(timeout);
@@ -263,8 +287,7 @@ public static class UdpDiscovery
                 {
                     foreach (var port in CameraPorts)
                     {
-                        var pkt = BuildDiscovery((uint)Random.Shared.Next(1, int.MaxValue), xml);
-                        try { await udp.SendAsync(pkt, new IPEndPoint(ip, port), handshakeCts.Token).ConfigureAwait(false); }
+                        try { await udp.SendAsync(hello, new IPEndPoint(ip, port), handshakeCts.Token).ConfigureAwait(false); }
                         catch (OperationCanceledException) { return; }
                         catch (SocketException) { }
                     }
@@ -289,8 +312,8 @@ public static class UdpDiscovery
                     Log.Info(P($"UDP session established — cid {reply.Cid}, did {reply.Did} " +
                                $"(camera at {r.RemoteEndPoint}" +
                                (reply.Timers != null ? $", timers {reply.Timers}" : "") + ")"));
-                    Log.Debug(P($"D2C_C_R payload: {Condense(replyXml)}"));
-                    return new Session(udp, (IPEndPoint)r.RemoteEndPoint, reply.Cid, reply.Did);
+                    Log.Debug(P($"D2C_C_R payload (tid {tid:x8}): {Condense(replyXml)}"));
+                    return new Session(udp, (IPEndPoint)r.RemoteEndPoint, reply.Cid, reply.Did, tid);
                 }
                 if (reply is { Root: "D2C_C_R" })
                     Log.Warn(P($"camera refused the UDP handshake (rsp {reply.Rsp})"));
@@ -513,8 +536,11 @@ public static class UdpDiscovery
                                     accepted = true;
                                     Log.Info(P($"HANDSHAKE ACCEPTED — camera negotiated cid {reply.Cid}, did {reply.Did}" +
                                                (reply.Timers != null ? $", timers {reply.Timers}" : "")));
-                                    // A diagnostic leaves no half-open session behind.
-                                    var disc = BuildDiscovery((uint)Random.Shared.Next(1, int.MaxValue),
+                                    // A diagnostic leaves no half-open session behind. The
+                                    // disconnect must run under the session's tid (the camera
+                                    // echoes the tid of the hello it accepted, and ignores
+                                    // discovery packets under any other tid).
+                                    var disc = BuildDiscovery(rtid,
                                         BuildC2dDisc(reply.Cid, reply.Did));
                                     try
                                     {
