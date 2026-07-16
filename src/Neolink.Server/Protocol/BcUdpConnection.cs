@@ -90,6 +90,15 @@ public sealed class BcUdpConnection : IBcConnection
     // Per-session tally of the camera's control messages (D2C_T, D2C_HB, ...), so the
     // one-line D2C_DISC summary shows what the camera sent — no debug level needed.
     private readonly Dictionary<string, int> _ctrlTally = new();
+    // First control messages in detail (root, did, arrival offset) — the tally says
+    // WHAT arrived, this says WHEN and FOR WHICH SESSION, which is what finally
+    // distinguishes "camera gave up on us" from "another session's paperwork".
+    private readonly List<string> _ctrlDetail = new();
+    private const int CtrlDetailMax = 12;
+    // Duplicate camera-side sessions we have already dealt with (see the recv loop):
+    // ones we released with a C2D_DISC, and foreign disconnects we logged.
+    private readonly HashSet<int> _orphansReleased = new();
+    private readonly HashSet<int> _foreignDiscLogged = new();
     private readonly Task _recvLoop, _readLoop, _hbLoop, _retxLoop, _ackLoop, _diagLoop;
 
     private string El => $"+{(DateTime.UtcNow - _t0).TotalMilliseconds:0}ms";
@@ -230,21 +239,51 @@ public sealed class BcUdpConnection : IBcConnection
                         when UdpDiscovery.TryParseDiscovery(d, out _, out var xml, out _):
                         _rxCtrl++;
                         _lastCtrlUtc = DateTime.UtcNow;
-                        var root = ControlRoot(xml);
+                        var (root, _, ctrlDid) = ParseControl(xml);
                         _ctrlTally[root] = _ctrlTally.GetValueOrDefault(root) + 1;
+                        if (_ctrlDetail.Count < CtrlDetailMax)
+                            _ctrlDetail.Add($"{root}{(ctrlDid is int cd ? $"(did {cd})" : "")}@{(DateTime.UtcNow - _t0).TotalSeconds:0.0}s");
                         // Full per-message timeline stays at Debug (off by default).
                         if (Dbg) Log.Debug($"{_tag}: udp {El} ← CONTROL {Condense(xml)}");
                         if (root.Contains("DISC", StringComparison.Ordinal))
                         {
+                            // The camera runs one session PER HELLO it answers, all
+                            // sharing our socket — the handshake's retransmits (two
+                            // ports, 500 ms) can leave duplicate sessions behind, and
+                            // when one of those starves out (~3×def ms) its D2C_DISC
+                            // lands here too. Only a disconnect addressed to OUR
+                            // session (did match) may close us; a duplicate's death
+                            // notice must not kill a healthy stream.
+                            if (ctrlDid is int fdid && fdid != _did)
+                            {
+                                if (_foreignDiscLogged.Add(fdid))
+                                    Log.Info($"{_tag}: ignoring D2C_DISC for another session (did {fdid}; ours is {_did}) — stream continues");
+                                break;
+                            }
                             var sinceData = _lastDataUtc == default ? -1 : (DateTime.UtcNow - _lastDataUtc).TotalMilliseconds;
                             // One compact Info line (no debug level needed): everything
                             // needed to see WHY the camera closed and what it sent.
-                            Log.Info($"{_tag}: UDP camera closed the session (D2C_DISC) after {(DateTime.UtcNow - _t0).TotalSeconds:0.0}s — " +
+                            Log.Info($"{_tag}: UDP camera closed the session (D2C_DISC, our did {_did}) after {(DateTime.UtcNow - _t0).TotalSeconds:0.0}s — " +
                                      $"rx {_rxData} data (last {sinceData:0}ms ago), camera sent [{TallyString()}]; " +
                                      $"we sent {_txAck} acks/{_txHb} hb/{_txC2dA} C2D_A; " +
                                      (_confirmLogged ? "session confirmed" : "camera never sent D2C_T"));
                             _cts.Cancel();
                             return;
+                        }
+                        // A connect-reply for a session that is not ours: the camera
+                        // answered one of our handshake retransmits with a second
+                        // session and keeps re-offering it. Release it (once) with a
+                        // C2D_DISC so the camera drops it immediately instead of
+                        // starving it out next to our live one.
+                        if (root == "D2C_C_R" && ctrlDid is int odid && odid != _did)
+                        {
+                            if (_orphansReleased.Add(odid))
+                            {
+                                Log.Info($"{_tag}: releasing a duplicate handshake session the camera offered (did {odid}; ours is {_did})");
+                                var rel = UdpDiscovery.BuildDiscovery(_tid, UdpDiscovery.BuildC2dDisc(_cid, odid));
+                                await SendRawAsync(rel, ct).ConfigureAwait(false);
+                            }
+                            break;
                         }
                         // The camera confirms the session by sending D2C_T and waits
                         // for C2D_A; without the reply it recycles the session (~8 s).
@@ -304,6 +343,7 @@ public sealed class BcUdpConnection : IBcConnection
     {
         uint sid = 0;
         string conn = "local";
+        int cid = _cid, did = _did;
         try
         {
             var el = System.Xml.Linq.XElement.Parse(d2cTXml).Elements().FirstOrDefault();
@@ -311,6 +351,10 @@ public sealed class BcUdpConnection : IBcConnection
             {
                 if (uint.TryParse(el.Element("sid")?.Value, out var s)) sid = s;
                 conn = el.Element("conn")?.Value is { Length: > 0 } c ? c : "local";
+                // Echo the D2C_T's own ids — the camera may be confirming a session
+                // other than the one we stream on, and the reply must match its offer.
+                if (int.TryParse(el.Element("cid")?.Value, out var pc)) cid = pc;
+                if (int.TryParse(el.Element("did")?.Value, out var pd)) did = pd;
             }
         }
         catch { /* fall back to defaults */ }
@@ -319,10 +363,10 @@ public sealed class BcUdpConnection : IBcConnection
         if (!_confirmLogged)
         {
             _confirmLogged = true;
-            Log.Debug($"{_tag}: udp {El} → C2D_A (confirm) sid {sid}, conn {conn}");
+            Log.Debug($"{_tag}: udp {El} → C2D_A (confirm) sid {sid}, conn {conn}, did {did}");
         }
         var pkt = UdpDiscovery.BuildDiscovery(_tid,
-            UdpDiscovery.BuildC2dA(sid, conn, _cid, _did, 1350));
+            UdpDiscovery.BuildC2dA(sid, conn, cid, did, 1350));
         await SendRawAsync(pkt, ct).ConfigureAwait(false);
     }
 
@@ -379,14 +423,26 @@ public sealed class BcUdpConnection : IBcConnection
         string.Join("", xml.Split('\n', '\r').Select(s => s.Trim()));
 
     /// <summary>Inner element name of a control XML (D2C_T, D2C_HB, D2C_DISC, ...).</summary>
-    private static string ControlRoot(string xml)
+    private static (string Root, int? Cid, int? Did) ParseControl(string xml)
     {
-        try { return System.Xml.Linq.XElement.Parse(xml).Elements().FirstOrDefault()?.Name.LocalName ?? "?"; }
-        catch { return "?"; }
+        try
+        {
+            var el = System.Xml.Linq.XElement.Parse(xml).Elements().FirstOrDefault();
+            if (el == null) return ("?", null, null);
+            int? Get(string name) => int.TryParse(el.Element(name)?.Value, out var v) ? v : null;
+            return (el.Name.LocalName, Get("cid"), Get("did"));
+        }
+        catch { return ("?", null, null); }
     }
 
-    private string TallyString() =>
-        _ctrlTally.Count == 0 ? "none" : string.Join(" ", _ctrlTally.Select(kv => $"{kv.Key}×{kv.Value}"));
+    private string TallyString()
+    {
+        if (_ctrlTally.Count == 0) return "none";
+        var tally = string.Join(" ", _ctrlTally.Select(kv => $"{kv.Key}×{kv.Value}"));
+        var detail = string.Join(" ", _ctrlDetail);
+        if (_rxCtrl > CtrlDetailMax) detail += $" +{_rxCtrl - CtrlDetailMax} more";
+        return $"{tally}; timeline: {detail}";
+    }
 
     private void OnAck(uint pid)
     {

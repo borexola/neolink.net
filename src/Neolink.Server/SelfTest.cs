@@ -3156,7 +3156,12 @@ public static class SelfTest
         int clientAckPackets = 0;
         int clientC2dA = 0;
         int clientHbSameTid = 0, clientHbOtherTid = 0;
+        int releasedOrphan = 0; // C2D_DISC for the duplicate session (did 8)
         uint hsTid = 0; // the tid of the C2D_C the mock accepted — the session's tid
+        // Phase gates so the mock injects the duplicate-session traffic only after
+        // the main body has finished its first round of asserts.
+        var phase2 = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var phase3 = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         // The canned message the "camera" will send us: a header-only ping, built
         // and serialized exactly as the real code would (unencrypted session).
@@ -3204,6 +3209,30 @@ public static class SelfTest
             await Task.Delay(40, cts.Token);
             await cam.SendAsync(p0, client, cts.Token);
 
+            // 3b. Duplicate-session scenario (phase-gated): real battery cameras run
+            //     one session per hello they answer, and a duplicate's paperwork
+            //     arrives on the same socket. The client must release the duplicate,
+            //     ignore ITS disconnect, keep our stream alive — and still honor a
+            //     disconnect addressed to OUR did.
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await phase2.Task;
+                    var dup = $"<P2P><D2C_C_R><rsp>0</rsp><cid>{cid}</cid><did>8</did></D2C_C_R></P2P>";
+                    await cam.SendAsync(UdpDiscovery.BuildDiscovery(hsTid, dup), client, cts.Token);
+                    var foreignDisc = $"<P2P><D2C_DISC><cid>{cid}</cid><did>9</did></D2C_DISC></P2P>";
+                    await cam.SendAsync(UdpDiscovery.BuildDiscovery(hsTid, foreignDisc), client, cts.Token);
+                    // Prove the stream survived: another ping (pids 2 and 3, in order).
+                    await cam.SendAsync(BcUdp.BuildData(cid, 2, pingBytes.AsSpan(0, half)), client, cts.Token);
+                    await cam.SendAsync(BcUdp.BuildData(cid, 3, pingBytes.AsSpan(half)), client, cts.Token);
+                    await phase3.Task;
+                    var ourDisc = $"<P2P><D2C_DISC><cid>{cid}</cid><did>7</did></D2C_DISC></P2P>";
+                    await cam.SendAsync(UdpDiscovery.BuildDiscovery(hsTid, ourDisc), client, cts.Token);
+                }
+                catch { /* cancelled at teardown */ }
+            }, cts.Token);
+
             // 4. Drain: ack client data, and watch for the C2D_A confirm reply and
             //    the tid the client's heartbeats run under.
             while (!cts.IsCancellationRequested)
@@ -3217,6 +3246,8 @@ public static class SelfTest
                     {
                         if (dtid == hsTid) clientHbSameTid++; else clientHbOtherTid++;
                     }
+                    else if (dx.Contains("<C2D_DISC>", StringComparison.Ordinal)
+                             && dx.Contains("<did>8</did>", StringComparison.Ordinal)) releasedOrphan++;
                 }
                 else if (BcUdp.TryParseData(r.Buffer, out _, out var pid, out _))
                 {
@@ -3266,6 +3297,33 @@ public static class SelfTest
             await Task.Delay(50, cts.Token);
         Assert(clientHbSameTid > 0, "heartbeats carry the handshake tid (session continuity)");
         AssertEq(clientHbOtherTid, 0);
+
+        // Duplicate-session handling: the camera answers a D2C_C_R for a session
+        // that is not ours (did 8) and a D2C_DISC for another session (did 9). The
+        // client must release the duplicate, ignore the foreign disconnect, and the
+        // stream must keep working — a duplicate's death notice killing a healthy
+        // stream was the ~8 s reconnect loop on real battery cameras.
+        using (var sub = conn.Subscribe(Neolink.Bc.BcConstants.MsgIdPing))
+        {
+            phase2.SetResult();
+            var got = await sub.ReceiveAsync(TimeSpan.FromSeconds(8), cts.Token);
+            AssertEq(got.Meta.MsgId, Neolink.Bc.BcConstants.MsgIdPing);
+        }
+        for (int i = 0; i < 40 && releasedOrphan == 0; i++) await Task.Delay(50, cts.Token);
+        Assert(releasedOrphan > 0, "client releases the duplicate session with C2D_DISC (did 8)");
+
+        // ...but a D2C_DISC addressed to OUR did must still close the connection,
+        // promptly (well before the receive timeout).
+        using (var sub = conn.Subscribe(Neolink.Bc.BcConstants.MsgIdPing))
+        {
+            var t0 = DateTime.UtcNow;
+            phase3.SetResult();
+            bool closed = false;
+            try { await sub.ReceiveAsync(TimeSpan.FromSeconds(8), cts.Token); }
+            catch { closed = true; }
+            Assert(closed && DateTime.UtcNow - t0 < TimeSpan.FromSeconds(5),
+                "a D2C_DISC for our own did closes the connection promptly");
+        }
     }
 
     /// <summary>Wake-capture liveness probe: silent when nothing answers (asleep),

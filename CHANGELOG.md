@@ -143,19 +143,24 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Fixed
 
-- **UDP battery cameras no longer drop every ~8 seconds**: a UDP battery camera
-  measures the client's acknowledgement cadence to judge the link, and the
-  official Reolink client acks every 10 ms; a camera that stops seeing acks at
-  that rate decides the connection is failing, re-offers the session and then
-  closes it cleanly (`D2C_DISC`) after a few seconds — the periodic freeze and
-  reconnect loop. Neolink.NET was acking at half that rate (every 20 ms), which
-  the camera treated as a poor connection. It now acks every 10 ms to match the
-  official client, and sends the first heartbeat immediately on connect. Two
-  related correctness fixes ride along: every discovery-layer packet
-  (heartbeats, session confirm, disconnect) now runs under the handshake's
-  transaction id, as the camera keys its session to it; and the wake-capture
-  liveness probe politely releases the session it opens (`C2D_DISC`) instead of
-  leaving the camera retrying a half-open handshake after every poll.
+- **UDP battery cameras no longer drop every ~8 seconds**: the camera runs one
+  UDP session per connect-hello it answers — and the handshake retransmits its
+  hello (two ports, every 500 ms) until the camera wakes, so the camera can end
+  up with duplicate sessions for the same client, all sharing one socket. The
+  duplicates never carry traffic, so the camera starves them out and sends
+  their `D2C_DISC` death notices to that shared socket — and Neolink.NET
+  honored *any* `D2C_DISC`, tearing down its healthy stream on a duplicate's
+  paperwork, reliably ~8.5 s in (the duplicate's ~3×3 s retry budget). A
+  disconnect now only closes the session it is addressed to (matching `did`);
+  a foreign one is logged and ignored, and a duplicate session the camera
+  re-offers mid-stream (`D2C_C_R` with another `did`) is released immediately
+  with a polite `C2D_DISC` so the camera stops nursing it. Hardening from the
+  same investigation rides along: acks at the official client's 10 ms cadence,
+  every discovery-layer packet under the handshake's transaction id, the first
+  heartbeat sent immediately on connect, and the wake-capture liveness probe
+  releasing the session it opens instead of leaving it half-open. The
+  disconnect diagnostic now records each control message's session id and
+  arrival time, so any remaining close is attributable at a glance.
 - **Timeline lanes no longer trail behind "now" on some filesystems**: the day
   listing derived every segment's duration from the file's mtime, but an OPEN
   file's directory mtime is stale on NTFS (updated lazily on close) and on
