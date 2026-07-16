@@ -36,6 +36,11 @@ namespace Neolink.Mqtt;
 ///                    (the switch flips back OFF) or when switched off early.
 ///                    Shares its session with the web UI's record button;
 ///                    announced when the camera has an event recorder
+///   • switch:        Detection events — the web UI's per-camera event-capture
+///                    master toggle; OFF stops the server recording event clips
+///                    for this camera (and on-demand). The camera keeps detecting,
+///                    so the detection sensors above still report. Bridge-only
+///                    availability, like Suspend; announced with the event recorder
 ///   • binary_sensor: recording — ON while the server is writing this camera's
 ///                    footage (an event clip, whatever triggered it, or a
 ///                    continuous segment)
@@ -614,6 +619,11 @@ internal sealed class CameraBridge
             await AnnounceEntityAsync("switch", "record", RecordSwitchConfig(), ct).ConfigureAwait(false);
             await _hub.PublishAsync(StateTopic("record"), recorder.OnDemand != null ? "ON" : "OFF", ct)
                 .ConfigureAwait(false);
+            // Detection events master switch — the same per-camera setting as the
+            // web UI's Events toggle, so event-clip capture can be paused from an
+            // automation (this pauses recording; it does not silence the sensors).
+            await AnnounceEntityAsync("switch", "detect", DetectSwitchConfig(), ct).ConfigureAwait(false);
+            await PublishDetectStateAsync(ct).ConfigureAwait(false);
             // Last event id: state is retained, so HA has the most recent id even
             // across restarts — no state publish needed here.
             await AnnounceEntityAsync("sensor", "last_event", LastEventConfig(), ct).ConfigureAwait(false);
@@ -943,6 +953,33 @@ internal sealed class CameraBridge
         availability = Availability(),
         availability_mode = "all",
     };
+
+    /// <summary>Detection events: the same per-camera master toggle as the web UI's
+    /// camera settings. OFF stops the server capturing event clips for this camera
+    /// (and on-demand recording) until switched back on; the camera keeps detecting,
+    /// so the detection binary_sensors are unaffected — this pauses recording, it is
+    /// not a sensor disarm. The setting lives on the SERVER (settings.json), so
+    /// availability is bridge-only like Suspend: it must stay controllable while the
+    /// camera itself is offline or asleep.</summary>
+    // Internal (not private) so the selftest can assert the bridge-only availability.
+    internal object DetectSwitchConfig() => new
+    {
+        name = "Detection events",
+        unique_id = $"neolink_{Id}_detect",
+        state_topic = StateTopic("detect"),
+        command_topic = CommandTopic("detect"),
+        payload_on = "ON",
+        payload_off = "OFF",
+        icon = "mdi:motion-sensor",
+        device = Device(),
+        availability = new object[] { new { topic = _hub.AvailabilityTopic } },
+        availability_mode = "all",
+    };
+
+    private Task PublishDetectStateAsync(CancellationToken ct) =>
+        _cam.EventRecorder is not { } rec
+            ? Task.CompletedTask
+            : _hub.PublishAsync(StateTopic("detect"), rec.EventsEnabled ? "ON" : "OFF", ct);
 
     /// <summary>
     /// The HA "Record" switch drives the camera's shared on-demand session (the
@@ -1352,6 +1389,8 @@ internal sealed class CameraBridge
         // (cheap: publishing a retained ON/OFF is a no-op when unchanged). The switch
         // is announced on connect for every camera that supports suspend.
         await PublishSuspendStateAsync(ct).ConfigureAwait(false);
+        // Same for the Detection events master toggle (shared with the web UI).
+        await PublishDetectStateAsync(ct).ConfigureAwait(false);
         // Continuous segments start/stop without an event to ride on — the
         // periodic sweep keeps the Recording sensor honest for them (and heals
         // a publish that failed mid-outage). Runs regardless of online state:
@@ -1622,6 +1661,13 @@ internal sealed class CameraBridge
                     break;
                 case "record":
                     await SetRecordAsync(payload == "ON").ConfigureAwait(false);
+                    break;
+                case "detect":
+                    if (_cam.EventRecorder is { } eventsRecorder)
+                    {
+                        eventsRecorder.SetEventsEnabled(payload == "ON");
+                        await _hub.PublishAsync(StateTopic("detect"), payload == "ON" ? "ON" : "OFF", ct).ConfigureAwait(false);
+                    }
                     break;
                 case "suspend":
                     if (_cam.SetSuspended is { } setSuspend)

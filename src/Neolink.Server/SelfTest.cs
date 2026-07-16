@@ -1689,6 +1689,52 @@ public static class SelfTest
                 "per-camera availability topic must NOT gate the suspend switch");
         });
 
+        Test("HA detection-events switch: shares the web UI setting + persists", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                // A real recorder over a real settings store: the HA switch and the
+                // web UI toggle must be the SAME setting, not two flags that drift.
+                var hub = new Streaming.StreamHub("detectcam");
+                var settings = new Recording.RecordingSettings(dir);
+                var recorder = new Recording.EventRecorder("detectcam", hub,
+                    new StubCameraControl("detectcam"),
+                    new Recording.EventStore(Path.Combine(dir, "rec")),
+                    new Config.RecordingConfig(), settings);
+                var cam = new Web.WebCameraInfo("detectcam",
+                    new List<Web.WebStreamInfo>(), new StubCameraControl("detectcam"), null)
+                    { EventRecorder = recorder };
+                var mqttHub = new Mqtt.HomeAssistantMqtt(
+                    new Config.MqttConfig { Broker = "127.0.0.1", Port = 1 }, // never connected
+                    new List<Web.WebCameraInfo> { cam }, "test");
+                var bridge = new Mqtt.CameraBridge(cam, mqttHub);
+
+                Assert(recorder.EventsEnabled, "detection events default to on");
+                bridge.HandleCommandAsync("detect", "OFF").GetAwaiter().GetResult();
+                Assert(!recorder.EventsEnabled, "HA OFF flips the shared setting");
+                Assert(!recorder.OnDemandAvailable, "master switch off gates on-demand too");
+                Assert(!new Recording.RecordingSettings(dir).Get("detectcam").Events,
+                    "the flip persists to settings.json (what the web UI reads)");
+                bridge.HandleCommandAsync("detect", "ON").GetAwaiter().GetResult();
+                Assert(recorder.EventsEnabled, "HA ON restores event capture");
+
+                // The setting lives on the server, so the switch must stay usable
+                // while the camera itself is offline: bridge-only availability.
+                var json = System.Text.Json.JsonSerializer.Serialize(
+                    bridge.DetectSwitchConfig(), Mqtt.HomeAssistantMqtt.DiscoveryJson);
+                Assert(json.Contains("\"availability\":[{\"topic\":\"neolink/bridge/state\"}]"),
+                    $"detect switch availability must be bridge-only, got: {json}");
+                Assert(!json.Contains("detectcam/state"),
+                    "per-camera availability topic must NOT gate the detect switch");
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+        });
+
         Test("camera state store: suspend flag round-trip + restart persistence", () =>
         {
             var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");

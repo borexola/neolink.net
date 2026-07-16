@@ -8,6 +8,14 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### New
 
+- **Detection events switch in Home Assistant**: the "Detection events" master
+  toggle from the web UI's camera settings is now also a switch on the camera's
+  HA device, so automations can pause and resume event capture (say, stop
+  recording clips while someone is home). It is the same server-side setting the
+  web UI flips — the two stay in sync — and OFF stops the server recording event
+  clips for the camera (and on-demand capture); the camera keeps detecting, so
+  the detection binary_sensors still report. Like Suspend, the switch stays
+  usable while the camera is offline or asleep.
 - **Install the web UI as an app (PWA)**: Chrome/Edge offer an install icon in
   the address bar, iOS Safari has *Share → Add to Home Screen*, macOS Safari
   *File → Add to Dock*. The installed app is the same server-rendered UI in its

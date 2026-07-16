@@ -607,6 +607,7 @@ config, so a **device per camera** appears automatically — no YAML in HA.
 | Doorbell | `event` | Video doorbells: every button press publishes an MQTT event (`event_type: press`, `device_class: doorbell`) — the natural trigger for ring automations |
 | Visitor | `binary_sensor` | Momentary doorbell-press pulse; HA clears it itself after a few seconds |
 | Record on demand | `switch` | **Record a clip on demand from HA**, regardless of what the camera detects — one clip, stops by itself; see below (appears when the server records events for this camera) |
+| Detection events | `switch` | The camera's **master toggle for event capture** — the same "Detection events" switch as the web UI's camera settings, so the two always agree. OFF stops the server recording event clips for this camera (and on-demand capture) until switched back on. The camera keeps detecting, so the detection binary_sensors above still report — this pauses recording, it isn't a sensor disarm. Stays usable while the camera is offline (appears when the server records events for this camera) |
 | Suspend (beta) | `switch` | ON = Neolink.NET holds no connection to the camera, so it isn't viewed or recorded here (the camera itself keeps running — its own SD/cloud recording is unaffected). Stays usable while the camera is intentionally offline |
 | Recording | `binary_sensor` | ON while the server is writing this camera's footage right now — an event clip (detection or on-demand) or a continuous segment |
 | Battery | `sensor` | Battery cameras; charge status + temperature as attributes |

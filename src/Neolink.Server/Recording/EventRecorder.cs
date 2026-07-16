@@ -128,7 +128,16 @@ public sealed class EventRecorder
 
     /// <summary>On-demand capture needs the camera's master events switch on —
     /// the event loop discards every push, external or not, while it is off.</summary>
-    public bool OnDemandAvailable => _settings.Get(_camera).Events;
+    public bool OnDemandAvailable => EventsEnabled;
+
+    /// <summary>The camera's "Detection events" master switch — the live setting
+    /// behind the web UI toggle; while off, every detection push is discarded.</summary>
+    public bool EventsEnabled => _settings.Get(_camera).Events;
+
+    /// <summary>Flips the master switch at runtime and persists it, exactly like
+    /// the web UI's Events toggle — the HA switch shares this one path.</summary>
+    public void SetEventsEnabled(bool on) =>
+        _settings.Update(_camera, events: on, continuous: null, eventTypes: null, setEventTypes: false);
 
     /// <summary>The cap every on-demand session runs to (recording.max_clip_seconds).</summary>
     public int OnDemandMaxSeconds => _cfg.MaxClipSeconds;
