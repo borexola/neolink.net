@@ -2129,6 +2129,15 @@ public static class WebApi
 
         if (webUi)
         {
+            // The PWA service worker ships as an RCL asset under _content/, but it
+            // must control the whole app ("/"). Browsers cap a worker's scope at
+            // its script's directory unless the response carries this header.
+            app.Use(async (ctx, next) =>
+            {
+                if (ctx.Request.Path.Equals("/_content/Neolink.WebClient/sw.js", StringComparison.OrdinalIgnoreCase))
+                    ctx.Response.Headers["Service-Worker-Allowed"] = "/";
+                await next();
+            });
             app.UseStaticFiles();     // physical wwwroot (published layout)
             app.UseAntiforgery();
             app.MapStaticAssets();    // manifest assets incl. the framework's blazor.web.js

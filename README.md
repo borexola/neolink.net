@@ -909,6 +909,16 @@ issue with them so the mapping can be extended.
 
 ## Web UI notes
 
+- **Install as an app (PWA)**: the web UI installs as a desktop/mobile app —
+  Chrome and Edge show an install icon in the address bar (or *menu → Cast, save
+  and share → Install*), iPhone/iPad use Safari's *Share → Add to Home Screen*,
+  macOS Safari has *File → Add to Dock*. The installed app is the same live UI
+  in its own window with its own icon; nothing is cached, so it is always
+  exactly as current as the server it talks to. When the server is unreachable
+  it shows a branded screen that reconnects by itself instead of the browser's
+  error page. Installing requires a secure context: HTTPS (a TLS reverse proxy
+  is the usual way) or plain `localhost` — on a plain `http://lan-ip` page
+  browsers hide the install option, though the UI itself works as always.
 - **H.265 in the browser**: sub streams are H.264 and play everywhere. Main streams on
   many Reolink models are H.265, which browsers only decode with hardware support
   (Safari, Edge, Chrome with HW decode; not Firefox). The UI detects this and suggests

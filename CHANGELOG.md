@@ -8,6 +8,14 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### New
 
+- **Install the web UI as an app (PWA)**: Chrome/Edge offer an install icon in
+  the address bar, iOS Safari has *Share → Add to Home Screen*, macOS Safari
+  *File → Add to Dock*. The installed app is the same server-rendered UI in its
+  own window with the Neolink icon — nothing is cached, so it is always exactly
+  as current as the server. When the server is unreachable a branded screen
+  takes the place of the browser error page and reconnects automatically.
+  Installing needs a secure context (HTTPS or `localhost`); on plain
+  `http://lan-ip` the UI works as before, browsers just hide the install option.
 - **Wake-capture for battery cameras (opt-in)**: a sleep-friendly battery camera
   normally only connects when a viewer opens its stream, so motion events while
   nobody is watching are missed. `"wake_capture": true` keeps a cheap liveness

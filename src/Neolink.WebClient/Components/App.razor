@@ -13,6 +13,11 @@
     <link rel="icon" type="image/svg+xml" href="_content/Neolink.WebClient/favicon.svg" />
     <link rel="icon" type="image/png" sizes="256x256" href="_content/Neolink.WebClient/favicon.png" />
     <link rel="apple-touch-icon" href="_content/Neolink.WebClient/favicon.png" />
+    @* PWA: lets browsers install the app as its own window (Chrome/Edge "Install
+       app", Safari "Add to Dock"/home screen). The UI stays server-rendered —
+       the installed app is the same live client in a standalone window. *@
+    <link rel="manifest" href="_content/Neolink.WebClient/manifest.webmanifest" />
+    <meta name="theme-color" content="#0b0d12" />
     <HeadOutlet @rendermode="InteractiveServer" />
 </head>
 

@@ -1734,4 +1734,16 @@
         ssGet(key) { return sessionStorage.getItem(key); },
         ssSet(key, value) { sessionStorage.setItem(key, value); },
     };
+
+    // PWA service worker (see sw.js — install support + offline screen, no
+    // caching). Registered only when the app is served from the origin root:
+    // under a base-path proxy (HA ingress) the prefix is a rotating per-session
+    // token, so a worker registered there would just pile up dead scopes.
+    // The script lives under _content/, so claiming scope "/" needs the
+    // Service-Worker-Allowed header the server sets on this one file.
+    if ('serviceWorker' in navigator && new URL(document.baseURI).pathname === '/') {
+        navigator.serviceWorker
+            .register('/_content/Neolink.WebClient/sw.js', { scope: '/' })
+            .catch(() => { /* http on a LAN address: not a secure context — fine */ });
+    }
 })();
