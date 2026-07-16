@@ -41,6 +41,10 @@ namespace Neolink.Mqtt;
 ///                    for this camera (and on-demand). The camera keeps detecting,
 ///                    so the detection sensors above still report. Bridge-only
 ///                    availability, like Suspend; announced with the event recorder
+///   • switch:        Continuous recording — the web UI's 24/7 "record around the
+///                    clock" toggle; ON tapes continuously (retention still applies).
+///                    Bridge-only availability, like Suspend; announced whenever a
+///                    continuous recorder runs (Baichuan or generic RTSP)
 ///   • binary_sensor: recording — ON while the server is writing this camera's
 ///                    footage (an event clip, whatever triggered it, or a
 ///                    continuous segment)
@@ -169,6 +173,15 @@ public sealed class HomeAssistantMqtt
         }
     }
 
+    /// <summary>Re-publishes a camera's volatile HA states immediately — invoked when
+    /// one of its settings changed via the web UI/API, so Home Assistant reflects it
+    /// within a moment instead of after the periodic refresh, keeping automations from
+    /// acting on a stale switch. No-op for an unknown camera / when MQTT is disabled.</summary>
+    public Task RepublishCameraAsync(string cameraName) =>
+        _cameras.TryGetValue(Sanitize(cameraName), out var cam)
+            ? cam.RepublishAsync(CancellationToken.None)
+            : Task.CompletedTask;
+
     /// <summary>Feeds one camera's alarm push into its bridge (called from the camera connection).</summary>
     public void OnMotion(string cameraName, MotionPush push)
     {
@@ -185,8 +198,14 @@ public sealed class HomeAssistantMqtt
 
     // ------------------------------------------------------------------ MQTT plumbing
 
-    internal Task PublishAsync(string topic, string payload, CancellationToken ct = default) =>
-        _client.PublishAsync(topic, payload, retain: true, ct);
+    /// <summary>Test seam: observe every string publish without standing up a broker.</summary>
+    internal Action<string, string>? PublishObserver;
+
+    internal Task PublishAsync(string topic, string payload, CancellationToken ct = default)
+    {
+        PublishObserver?.Invoke(topic, payload);
+        return _client.PublishAsync(topic, payload, retain: true, ct);
+    }
 
     internal Task PublishAsync(string topic, byte[] payload, CancellationToken ct = default) =>
         _client.PublishAsync(topic, payload, retain: true, ct);
@@ -589,6 +608,14 @@ internal sealed class CameraBridge
             await PublishSuspendStateAsync(ct).ConfigureAwait(false);
         }
 
+        // 24/7 recording switch — universal like suspend (any camera that records
+        // continuously, Baichuan or generic RTSP), so announced before the split.
+        if (_cam.SetContinuousEnabled != null)
+        {
+            await AnnounceEntityAsync("switch", "continuous", ContinuousSwitchConfig(), ct).ConfigureAwait(false);
+            await PublishContinuousStateAsync(ct).ConfigureAwait(false);
+        }
+
         if (!_cam.SupportsEvents)
         {
             // Generic RTSP camera: no detection pushes and no Baichuan commands —
@@ -682,6 +709,31 @@ internal sealed class CameraBridge
         _cam.Suspended == null
             ? Task.CompletedTask
             : _hub.PublishAsync(StateTopic("suspend"), _cam.Suspended() ? "ON" : "OFF", ct);
+
+    /// <summary>Continuous (24/7) recording — the web UI's "Record around the clock"
+    /// toggle. ON tapes continuously (retention still applies); it is the same
+    /// persisted server setting the UI flips, and the recorder reads it live, so the
+    /// switch takes effect at once. Availability is bridge-only, like Suspend, so it
+    /// stays controllable while the camera is offline or asleep.</summary>
+    // Internal (not private) so the selftest can assert the bridge-only availability.
+    internal object ContinuousSwitchConfig() => new
+    {
+        name = "Continuous recording",
+        unique_id = $"neolink_{Id}_continuous",
+        state_topic = StateTopic("continuous"),
+        command_topic = CommandTopic("continuous"),
+        payload_on = "ON",
+        payload_off = "OFF",
+        icon = "mdi:record-circle-outline",
+        device = Device(),
+        availability = new object[] { new { topic = _hub.AvailabilityTopic } },
+        availability_mode = "all",
+    };
+
+    private Task PublishContinuousStateAsync(CancellationToken ct) =>
+        _cam.ContinuousEnabled == null
+            ? Task.CompletedTask
+            : _hub.PublishAsync(StateTopic("continuous"), _cam.ContinuousEnabled() ? "ON" : "OFF", ct);
 
     /// <summary>Generic cameras: online/offline as a diagnostic connectivity sensor.</summary>
     private object ConnectivityConfig() => new
@@ -1391,6 +1443,8 @@ internal sealed class CameraBridge
         await PublishSuspendStateAsync(ct).ConfigureAwait(false);
         // Same for the Detection events master toggle (shared with the web UI).
         await PublishDetectStateAsync(ct).ConfigureAwait(false);
+        // ...and the 24/7 recording switch (also flippable from the web UI).
+        await PublishContinuousStateAsync(ct).ConfigureAwait(false);
         // Continuous segments start/stop without an event to ride on — the
         // periodic sweep keeps the Recording sensor honest for them (and heals
         // a publish that failed mid-outage). Runs regardless of online state:
@@ -1446,6 +1500,42 @@ internal sealed class CameraBridge
             {
                 await PublishHttpExtrasAsync(ct).ConfigureAwait(false);
             }
+        }
+    }
+
+    /// <summary>Immediately re-publishes the states a web-UI/API change can move, so
+    /// Home Assistant doesn't wait for the periodic refresh (an automation must not
+    /// act on a stale switch). The cheap server-side switches (suspend, detection
+    /// events, 24/7 recording, on-demand record) always; the camera-side states
+    /// (night vision, floodlight/spotlight, PIR, volume, auto-track, picture) only
+    /// when the camera is online and its features are already known. Never throws —
+    /// a failed publish heals on the next periodic refresh.</summary>
+    public async Task RepublishAsync(CancellationToken ct)
+    {
+        try
+        {
+            await PublishSuspendStateAsync(ct).ConfigureAwait(false);
+            await PublishDetectStateAsync(ct).ConfigureAwait(false);
+            await PublishContinuousStateAsync(ct).ConfigureAwait(false);
+            await PublishRecordingStateAsync(force: true).ConfigureAwait(false);
+            if (_cam.EventRecorder is { } rec)
+                await _hub.PublishAsync(StateTopic("record"), rec.OnDemand != null ? "ON" : "OFF", ct)
+                    .ConfigureAwait(false);
+
+            if (!_control.Online || !_featuresAnnounced) return;
+            var caps = await TryGetCapabilitiesAsync(ct).ConfigureAwait(false);
+            var feat = caps?.Features;
+            if (feat?.Led == true) await PublishLedAsync(ct).ConfigureAwait(false);
+            if (feat?.Pir == true) await PublishPirAsync(ct).ConfigureAwait(false);
+            if (_httpExtrasKnown)
+            {
+                _lastHttpPublish = DateTime.UtcNow; // this publish counts; don't double up on the next refresh
+                await PublishHttpExtrasAsync(ct).ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"MQTT: immediate re-publish for '{Id}' failed: {Log.Flatten(ex)}");
         }
     }
 
@@ -1674,6 +1764,13 @@ internal sealed class CameraBridge
                     {
                         setSuspend(payload == "ON");
                         await _hub.PublishAsync(StateTopic("suspend"), payload == "ON" ? "ON" : "OFF", ct).ConfigureAwait(false);
+                    }
+                    break;
+                case "continuous":
+                    if (_cam.SetContinuousEnabled is { } setContinuous)
+                    {
+                        setContinuous(payload == "ON");
+                        await _hub.PublishAsync(StateTopic("continuous"), payload == "ON" ? "ON" : "OFF", ct).ConfigureAwait(false);
                     }
                     break;
                 case "ptz_up" or "ptz_down" or "ptz_left" or "ptz_right" when payload == "PRESS":

@@ -430,7 +430,14 @@ foreach (var cam in config.Cameras)
         SetSuspended: suspendables.Count == 0 ? null : SetCamSuspended,
         // The open segment from the recorder's memory — the day listing trusts
         // this over the file's mtime, which is stale while the handle is open.
-        ActiveSegment: continuousRecorder == null ? null : () => continuousRecorder.ActiveSegment)
+        ActiveSegment: continuousRecorder == null ? null : () => continuousRecorder.ActiveSegment,
+        // 24/7 recording on/off — the same persisted setting the web UI toggles;
+        // the recorder reads it live, so flipping it starts/stops taping at once.
+        // Offered (Baichuan and generic RTSP alike) whenever a continuous recorder runs.
+        ContinuousEnabled: continuousRecorder == null || recordingSettings == null ? null
+            : () => recordingSettings.Get(cam.Name).Continuous,
+        SetContinuousEnabled: continuousRecorder == null || recordingSettings == null ? null
+            : v => recordingSettings.Update(cam.Name, events: null, continuous: v, eventTypes: null, setEventTypes: false))
         // The recorder rides along so the web API and the MQTT bridge share one
         // on-demand recording session per camera (UI button ≡ HA Record switch).
         { EventRecorder = eventRecorder });
@@ -539,6 +546,9 @@ if (config.WebPort > 0)
             Log.Warn("Shutting down for a UI-requested restart");
             shutdown.Cancel();
         },
+        // Let a web-UI setting change reflect in Home Assistant right away, rather
+        // than on the bridge's ~20s refresh, so automations don't act on a stale switch.
+        OnCameraChanged = mqtt == null ? null : mqtt.RepublishCameraAsync,
     };
 
     tasks.Add(Task.Run(async () =>

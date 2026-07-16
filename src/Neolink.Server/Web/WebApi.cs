@@ -30,12 +30,15 @@ public sealed record WebStreamInfo(string Kind, string Path, IStreamHub Hub);
 /// <param name="Suspended">Probe: has the user suspended this camera in Neolink (no connection held)?</param>
 /// <param name="SetSuspended">Suspends/resumes the camera at runtime and persists it; null when unsupported.</param>
 /// <param name="ActiveSegment">Probe: the continuous segment being written right now (day, file, media seconds) — the recorder's in-memory truth for the day listing.</param>
+/// <param name="ContinuousEnabled">Probe: is 24/7 recording switched ON for this camera (the persisted setting, not whether a segment is open right now)? Null when the camera has no continuous recorder.</param>
+/// <param name="SetContinuousEnabled">Turns 24/7 recording on/off at runtime and persists it (same setting as the web UI toggle); null when unsupported.</param>
 public sealed record WebCameraInfo(string Name, List<WebStreamInfo> Streams, ICameraControl Control,
     HashSet<string>? PermittedUsers, Func<bool>? ContinuousActive = null, bool SupportsEvents = true,
     Func<BatteryPush?>? Battery = null, Func<bool>? Asleep = null,
     Func<bool?>? SirenOn = null, Func<bool?>? PrivacyOn = null,
     Func<bool>? Suspended = null, Action<bool>? SetSuspended = null,
-    Func<(string Date, string File, double Seconds)?>? ActiveSegment = null)
+    Func<(string Date, string File, double Seconds)?>? ActiveSegment = null,
+    Func<bool>? ContinuousEnabled = null, Action<bool>? SetContinuousEnabled = null)
 {
     /// <summary>The camera's event recorder when server-side event recording runs —
     /// the shared entry point for on-demand clips (web UI button and HA switch).</summary>
@@ -75,6 +78,11 @@ public sealed class WebApiOptions
     public LogBuffer? Logs { get; init; }
     /// <summary>Gracefully stops the process; the supervisor (docker/systemd) restarts it.</summary>
     public required Action RestartRequested { get; init; }
+    /// <summary>Invoked (fire-and-forget) with a camera name after a web-UI/API change
+    /// to one of its settings, so the Home Assistant bridge can re-publish that
+    /// camera's state at once instead of waiting for its periodic refresh. Null when
+    /// MQTT isn't configured.</summary>
+    public Func<string, Task>? OnCameraChanged { get; init; }
 }
 
 /// <summary>
@@ -1040,6 +1048,13 @@ public static class WebApi
             }
         }
 
+        // Once a web-UI/API change has actually applied to a camera setting, nudge the
+        // Home Assistant bridge to re-publish that camera's state right away
+        // (fire-and-forget) — otherwise HA only catches up on its ~20s periodic
+        // refresh, and an automation could act on a stale switch in the meantime.
+        // No-op when MQTT isn't configured; a failed publish heals on the next refresh.
+        void NudgeHa(string cameraName) => _ = o.OnCameraChanged?.Invoke(cameraName);
+
         app.MapGet("/api/cameras/{name}/capabilities", (string name, HttpContext ctx) =>
             ExecAsync(name, ctx, mutating: false, async (control, reqCt) =>
             {
@@ -1172,6 +1187,7 @@ public static class WebApi
                     return Results.Json(new { error = "irBrightness must be 0-100" }, statusCode: 400);
                 await control.SetLedStateAsync(req.State, req.LightState,
                     req.DoorbellLightState, req.IrBrightness, reqCt);
+                NudgeHa(name);
                 return Results.Json(new { ok = true });
             }));
 
@@ -1190,6 +1206,7 @@ public static class WebApi
                 if (req.Enabled == null)
                     return Results.Json(new { error = "provide enabled: true|false" }, statusCode: 400);
                 await control.SetPirEnabledAsync(req.Enabled.Value, reqCt);
+                NudgeHa(name);
                 return Results.Json(new { ok = true });
             }));
 
@@ -1252,6 +1269,7 @@ public static class WebApi
             ExecAsync(name, ctx, mutating: true, async (control, reqCt) =>
             {
                 await control.SirenAsync(req.On, reqCt);
+                NudgeHa(name);
                 return Results.Json(new { ok = true, on = req.On });
             }));
 
@@ -1278,6 +1296,7 @@ public static class WebApi
                 if (req.On == null)
                     return Results.Json(new { error = "provide on: true|false" }, statusCode: 400);
                 await control.SetPrivacyModeAsync(req.On.Value, reqCt);
+                NudgeHa(name);
                 return Results.Json(new { ok = true, on = req.On });
             }));
 
@@ -1314,6 +1333,7 @@ public static class WebApi
             if (req.Suspended is not { } s)
                 return Results.Json(new { error = "provide suspended: true|false" }, statusCode: 400);
             cam.SetSuspended(s);
+            NudgeHa(name);
             return Results.Json(new { ok = true, suspended = s });
         });
 
@@ -1346,6 +1366,7 @@ public static class WebApi
                 if (req.Auto is { } auto)
                     task.SetElementValue("enable", auto ? 1 : 0);
                 await control.SetFloodlightTasksAsync(task, reqCt);
+                NudgeHa(name);
                 return Results.Json(ShapeFloodlight(task));
             }));
 
@@ -1367,6 +1388,7 @@ public static class WebApi
                 if (req.Brightness == null && req.On == null && req.Mode == null)
                     return Results.Json(new { error = "provide brightness (0-100), on (bool) and/or mode (int)" }, statusCode: 400);
                 await control.SetWhiteLedAsync(req.Brightness, req.On, req.Mode, reqCt);
+                NudgeHa(name);
                 var wl = await control.GetWhiteLedAsync(reqCt);
                 return wl == null
                     ? Results.Json(new { ok = true })
@@ -1431,6 +1453,7 @@ public static class WebApi
                     return Results.Json(new { error = "antiFlicker must be Outdoor, 50HZ or 60HZ" }, statusCode: 400);
                 await control.SetImageSettingsAsync(req.Bright, req.Contrast, req.Saturation,
                     req.Hue, req.Sharpen, req.DayNight, req.AntiFlicker, req.Flip, req.Mirror, reqCt);
+                NudgeHa(name);
                 return Results.Json(new { ok = true });
             }));
 
@@ -1441,6 +1464,7 @@ public static class WebApi
                 if (req.Volume is not { } vol || vol is < 0 or > 100)
                     return Results.Json(new { error = "provide volume: 0-100" }, statusCode: 400);
                 await control.SetVolumeAsync(vol, reqCt);
+                NudgeHa(name);
                 return Results.Json(new { ok = true, volume = vol });
             }));
 
@@ -1497,6 +1521,7 @@ public static class WebApi
                 if (req.On == null)
                     return Results.Json(new { error = "provide on: true|false" }, statusCode: 400);
                 await control.SetAutoTrackAsync(req.On.Value, reqCt);
+                NudgeHa(name);
                 return Results.Json(new { ok = true, on = req.On });
             }));
 
@@ -1830,6 +1855,7 @@ public static class WebApi
                     archiveContinuous: archiveContinuous,
                     archiveRetentionDays: Retention(req.ArchiveRetentionDays),
                     setArchiveRetention: req.ArchiveRetentionDays != null);
+                NudgeHa(cam.Name);
                 return Results.Json(ShapeSettings(cam, updated));
             });
         }

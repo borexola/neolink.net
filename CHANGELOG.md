@@ -8,6 +8,21 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### New
 
+- **Home Assistant reflects camera changes instantly**: changing a camera setting
+  in the web UI — detection events, 24/7 recording, suspend, night vision,
+  floodlight/spotlight, PIR, siren, privacy, volume, auto-tracking or the picture
+  settings — now re-publishes that camera's state to Home Assistant the moment it
+  applies, instead of on the bridge's periodic (~20s) refresh. Previously a web-UI
+  change could take up to ~20 seconds to show in HA — long enough for an automation
+  to act on a stale switch. Changes made from HA already applied immediately; this
+  closes the gap for changes made in the web UI, so the two never disagree for long.
+- **Continuous (24/7) recording switch in Home Assistant**: the web UI's "Record
+  around the clock" toggle is now also a switch on the camera's HA device, so
+  around-the-clock recording can be turned on and off from HA and automations. It
+  is the same server-side setting the web UI flips — the two stay in sync — and
+  the recorder picks up the change at once. Available whenever continuous
+  recording runs for the camera (Baichuan or generic RTSP), and, like Suspend, it
+  stays usable while the camera is offline or asleep.
 - **Detection events switch in Home Assistant**: the "Detection events" master
   toggle from the web UI's camera settings is now also a switch on the camera's
   HA device, so automations can pause and resume event capture (say, stop

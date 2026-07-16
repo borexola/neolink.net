@@ -1735,6 +1735,103 @@ public static class SelfTest
             }
         });
 
+        Test("HA continuous-recording switch: shares the web UI setting + persists", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                // Wire the switch exactly as Program.cs does — to the shared settings
+                // store — so the HA switch and the web UI's 24/7 toggle are one setting.
+                var settings = new Recording.RecordingSettings(dir);
+                var cam = new Web.WebCameraInfo("reccam",
+                    new List<Web.WebStreamInfo>(), new StubCameraControl("reccam"), null,
+                    ContinuousEnabled: () => settings.Get("reccam").Continuous,
+                    SetContinuousEnabled: v => settings.Update("reccam", events: null, continuous: v,
+                        eventTypes: null, setEventTypes: false));
+                var hub = new Mqtt.HomeAssistantMqtt(
+                    new Config.MqttConfig { Broker = "127.0.0.1", Port = 1 }, // never connected
+                    new List<Web.WebCameraInfo> { cam }, "test");
+                var bridge = new Mqtt.CameraBridge(cam, hub);
+
+                Assert(!settings.Get("reccam").Continuous, "24/7 recording defaults off");
+                bridge.HandleCommandAsync("continuous", "ON").GetAwaiter().GetResult();
+                Assert(settings.Get("reccam").Continuous, "HA ON turns 24/7 recording on");
+                Assert(new Recording.RecordingSettings(dir).Get("reccam").Continuous,
+                    "the flip persists to settings.json (what the web UI reads)");
+                bridge.HandleCommandAsync("continuous", "OFF").GetAwaiter().GetResult();
+                Assert(!settings.Get("reccam").Continuous, "HA OFF turns 24/7 recording off");
+
+                // Server-side setting → bridge-only availability, so it stays usable
+                // while the camera is offline or asleep.
+                var json = System.Text.Json.JsonSerializer.Serialize(
+                    bridge.ContinuousSwitchConfig(), Mqtt.HomeAssistantMqtt.DiscoveryJson);
+                Assert(json.Contains("\"availability\":[{\"topic\":\"neolink/bridge/state\"}]"),
+                    $"continuous switch availability must be bridge-only, got: {json}");
+                Assert(!json.Contains("reccam/state"),
+                    "per-camera availability topic must NOT gate the continuous switch");
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+        });
+
+        Test("HA re-publish nudge: a web-UI change reflects at once (no 20s wait)", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                // Bridge wired like Program.cs: the switches read the shared settings
+                // store, and RepublishCameraAsync is what the web endpoints call after
+                // persisting a change — it must publish the CURRENT state immediately.
+                var settings = new Recording.RecordingSettings(dir);
+                var recorder = new Recording.EventRecorder("nudgecam", new Streaming.StreamHub("nudgecam"),
+                    new StubCameraControl("nudgecam"),
+                    new Recording.EventStore(Path.Combine(dir, "rec")),
+                    new Config.RecordingConfig(), settings);
+                var cam = new Web.WebCameraInfo("nudgecam",
+                    new List<Web.WebStreamInfo>(), new StubCameraControl("nudgecam"), null,
+                    ContinuousEnabled: () => settings.Get("nudgecam").Continuous,
+                    SetContinuousEnabled: v => settings.Update("nudgecam", events: null, continuous: v,
+                        eventTypes: null, setEventTypes: false))
+                    { EventRecorder = recorder };
+                var hub = new Mqtt.HomeAssistantMqtt(
+                    new Config.MqttConfig { Broker = "127.0.0.1", Port = 1 }, // never connected
+                    new List<Web.WebCameraInfo> { cam }, "test");
+
+                // Capture every publish without a broker.
+                var published = new Dictionary<string, string>();
+                hub.PublishObserver = (topic, payload) => published[topic] = payload;
+
+                // Simulate the web UI turning 24/7 recording ON (persist), then the
+                // endpoint nudging the bridge — HA must see ON right away.
+                settings.Update("nudgecam", events: null, continuous: true,
+                    eventTypes: null, setEventTypes: false);
+                hub.RepublishCameraAsync("nudgecam").GetAwaiter().GetResult();
+
+                Assert(published.TryGetValue("neolink/nudgecam/continuous", out var cont) && cont == "ON",
+                    $"nudge must publish continuous=ON immediately, got: {(cont ?? "<none>")}");
+                Assert(published.ContainsKey("neolink/nudgecam/detect"),
+                    "nudge must also refresh the detection-events switch state");
+
+                // Flip back off and nudge again — the new state must land, not the old.
+                settings.Update("nudgecam", events: null, continuous: false,
+                    eventTypes: null, setEventTypes: false);
+                hub.RepublishCameraAsync("nudgecam").GetAwaiter().GetResult();
+                Assert(published["neolink/nudgecam/continuous"] == "OFF",
+                    "a second nudge must publish the NEW state (OFF), not the stale one");
+
+                // Unknown camera is a safe no-op (must not throw).
+                hub.RepublishCameraAsync("does-not-exist").GetAwaiter().GetResult();
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+        });
+
         Test("camera state store: suspend flag round-trip + restart persistence", () =>
         {
             var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
