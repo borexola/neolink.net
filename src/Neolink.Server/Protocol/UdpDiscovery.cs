@@ -287,7 +287,9 @@ public static class UdpDiscovery
                     handshakeCts.Cancel();
                     try { await sender.ConfigureAwait(false); } catch { }
                     Log.Info(P($"UDP session established — cid {reply.Cid}, did {reply.Did} " +
-                               $"(camera at {r.RemoteEndPoint})"));
+                               $"(camera at {r.RemoteEndPoint}" +
+                               (reply.Timers != null ? $", timers {reply.Timers}" : "") + ")"));
+                    Log.Debug(P($"D2C_C_R payload: {Condense(replyXml)}"));
                     return new Session(udp, (IPEndPoint)r.RemoteEndPoint, reply.Cid, reply.Did);
                 }
                 if (reply is { Root: "D2C_C_R" })

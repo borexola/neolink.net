@@ -70,9 +70,21 @@ public sealed class BcUdpConnection : IBcConnection
     private readonly object _rxGate = new();
     private uint _rxNext;
     private readonly SortedDictionary<uint, byte[]> _rxBuffer = new();
-    private bool _confirmLogged; // "session confirmed (C2D_A)" said once
+    // ---- Diagnostics (all Debug-level; silent unless NEOLINK_LOG=debug). The UDP
+    // battery transport is experimental and hard to reproduce here, so the session
+    // is heavily instrumented to pin down camera-initiated closes from one capture.
+    private bool _confirmLogged, _connIdWarned;
+    private readonly DateTime _t0 = DateTime.UtcNow;
+    private long _rxData, _rxCtrl, _txAck, _txHb, _txC2dA, _txData;
+    private uint _rxLastPid, _rxMaxPid;
+    private DateTime _lastRxUtc, _lastDataUtc, _lastCtrlUtc;
+    // Per-session tally of the camera's control messages (D2C_T, D2C_HB, ...), so the
+    // one-line D2C_DISC summary shows what the camera sent — no debug level needed.
+    private readonly Dictionary<string, int> _ctrlTally = new();
+    private readonly Task _recvLoop, _readLoop, _hbLoop, _retxLoop, _ackLoop, _diagLoop;
 
-    private readonly Task _recvLoop, _readLoop, _hbLoop, _retxLoop, _ackLoop;
+    private string El => $"+{(DateTime.UtcNow - _t0).TotalMilliseconds:0}ms";
+    private static bool Dbg => Log.Level <= LogLevel.Debug;
 
     private BcUdpConnection(UdpDiscovery.Session session, string tag, CancellationToken appCt)
     {
@@ -84,6 +96,7 @@ public sealed class BcUdpConnection : IBcConnection
         _context = new BcContext(Encryption);
         try { _udp.Client.ReceiveBufferSize = 1 << 20; } catch { } // 1 MB: absorb video bursts
         _cts = CancellationTokenSource.CreateLinkedTokenSource(appCt);
+        _diagLoop = Task.Run(() => DiagLoopAsync(_cts.Token));
         _recvLoop = Task.Run(() => RecvLoopAsync(_cts.Token));
         _readLoop = Task.Run(() => ReadLoopAsync(_cts.Token));
         _hbLoop = Task.Run(() => HeartbeatLoopAsync(_cts.Token));
@@ -140,8 +153,8 @@ public sealed class BcUdpConnection : IBcConnection
     public async Task SendAsync(BcMessage msg, CancellationToken ct)
     {
         var bytes = BcCodec.Serialize(msg, Encryption);
-        if (Log.Level <= LogLevel.Debug)
-            Log.Debug($"{_tag}: BC(udp) send msgId={msg.Meta.MsgId} bytes={bytes.Length}");
+        if (Dbg) Log.Debug($"{_tag}: udp {El} → BC msgId={msg.Meta.MsgId} ({bytes.Length}B, " +
+                           $"{(bytes.Length + ChunkSize - 1) / ChunkSize} data pkt)");
         await _sendLock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
@@ -157,6 +170,7 @@ public sealed class BcUdpConnection : IBcConnection
                     _unacked[id] = (pkt, DateTime.UtcNow);
                 }
                 await SendRawAsync(pkt, ct).ConfigureAwait(false);
+                _txData++;
             }
         }
         finally { _sendLock.Release(); }
@@ -173,21 +187,52 @@ public sealed class BcUdpConnection : IBcConnection
             {
                 UdpReceiveResult r;
                 try { r = await _udp.ReceiveAsync(ct).ConfigureAwait(false); }
-                catch (SocketException) { continue; } // transient (e.g. ICMP) — keep listening
+                catch (SocketException se) // transient (e.g. ICMP) — keep listening
+                {
+                    if (Dbg) Log.Debug($"{_tag}: udp {El} recv socket signal {se.SocketErrorCode}");
+                    continue;
+                }
+                _lastRxUtc = DateTime.UtcNow;
                 var d = r.Buffer;
                 switch (BcUdp.PeekKind(d))
                 {
-                    case BcUdp.Kind.Data when BcUdp.TryParseData(d, out _, out var pid, out var payload):
+                    case BcUdp.Kind.Data when BcUdp.TryParseData(d, out var dcid, out var pid, out var payload):
+                        _rxData++;
+                        _lastDataUtc = DateTime.UtcNow;
+                        _rxLastPid = pid;
+                        if (pid > _rxMaxPid) _rxMaxPid = pid;
+                        // Data should be stamped with our cid; a mismatch is a red flag
+                        // worth surfacing once, at Info (it may explain acks being ignored).
+                        if (!_connIdWarned && dcid != _cid)
+                        {
+                            _connIdWarned = true;
+                            Log.Info($"{_tag}: UDP note — camera stamps data with connId {dcid}, not our cid {_cid}");
+                        }
+                        if (Dbg && _rxData == 1)
+                            Log.Debug($"{_tag}: udp {El} first DATA pid={pid} connId={dcid} ({payload.Length}B)");
                         await OnDataAsync(pid, payload, ct).ConfigureAwait(false);
                         break;
-                    case BcUdp.Kind.Ack when BcUdp.TryParseAck(d, out _, out var gid, out var apid):
+                    case BcUdp.Kind.Ack when BcUdp.TryParseAck(d, out var acid, out var gid, out var apid):
+                        if (Dbg) Log.Debug($"{_tag}: udp {El} ← ACK connId={acid} group={(int)gid} pid={(int)apid}");
                         if (gid != BcUdp.NoneReceived && apid != BcUdp.NoneReceived) OnAck(apid);
                         break;
                     case BcUdp.Kind.Discovery
                         when UdpDiscovery.TryParseDiscovery(d, out _, out var xml, out _):
-                        if (xml.Contains("_DISC", StringComparison.Ordinal))
+                        _rxCtrl++;
+                        _lastCtrlUtc = DateTime.UtcNow;
+                        var root = ControlRoot(xml);
+                        _ctrlTally[root] = _ctrlTally.GetValueOrDefault(root) + 1;
+                        // Full per-message timeline stays at Debug (off by default).
+                        if (Dbg) Log.Debug($"{_tag}: udp {El} ← CONTROL {Condense(xml)}");
+                        if (root.Contains("DISC", StringComparison.Ordinal))
                         {
-                            Log.Info($"{_tag}: UDP camera closed the session (D2C_DISC)");
+                            var sinceData = _lastDataUtc == default ? -1 : (DateTime.UtcNow - _lastDataUtc).TotalMilliseconds;
+                            // One compact Info line (no debug level needed): everything
+                            // needed to see WHY the camera closed and what it sent.
+                            Log.Info($"{_tag}: UDP camera closed the session (D2C_DISC) after {(DateTime.UtcNow - _t0).TotalSeconds:0.0}s — " +
+                                     $"rx {_rxData} data (last {sinceData:0}ms ago), camera sent [{TallyString()}]; " +
+                                     $"we sent {_txAck} acks/{_txHb} hb/{_txC2dA} C2D_A; " +
+                                     (_confirmLogged ? "session confirmed" : "camera never sent D2C_T"));
                             _cts.Cancel();
                             return;
                         }
@@ -196,6 +241,10 @@ public sealed class BcUdpConnection : IBcConnection
                         if (xml.Contains("<D2C_T>", StringComparison.Ordinal))
                             await SendC2dAAsync(xml, ct).ConfigureAwait(false);
                         // Everything else (D2C_HB heartbeats) is a keep-alive; ignore.
+                        break;
+                    default:
+                        if (Dbg) Log.Debug($"{_tag}: udp {El} ← UNRECOGNIZED {d.Length}B " +
+                                           $"{Convert.ToHexString(d.AsSpan(0, Math.Min(16, d.Length)))}");
                         break;
                 }
             }
@@ -256,14 +305,37 @@ public sealed class BcUdpConnection : IBcConnection
         }
         catch { /* fall back to defaults */ }
 
+        _txC2dA++;
         if (!_confirmLogged)
         {
             _confirmLogged = true;
-            Log.Debug($"{_tag}: UDP session confirmed (C2D_A: sid {sid}, conn {conn})");
+            Log.Debug($"{_tag}: udp {El} → C2D_A (confirm) sid {sid}, conn {conn}");
         }
         var pkt = UdpDiscovery.BuildDiscovery((uint)Random.Shared.Next(1, int.MaxValue),
             UdpDiscovery.BuildC2dA(sid, conn, _cid, _did, 1350));
         await SendRawAsync(pkt, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>Once-a-second session heartbeat for the log: full traffic state so a
+    /// capture shows the exact cadence and what went quiet before a D2C_DISC.</summary>
+    private async Task DiagLoopAsync(CancellationToken ct)
+    {
+        if (!Dbg) return;
+        try
+        {
+            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+            while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false))
+            {
+                int unacked; lock (_txGate) unacked = _unacked.Count;
+                uint rxNext; lock (_rxGate) rxNext = _rxNext;
+                double dataAge = _lastDataUtc == default ? -1 : (DateTime.UtcNow - _lastDataUtc).TotalMilliseconds;
+                double rxAge = _lastRxUtc == default ? -1 : (DateTime.UtcNow - _lastRxUtc).TotalMilliseconds;
+                Log.Debug($"{_tag}: udp {El} state — rx {_rxData} data (next {rxNext}, maxPid {_rxMaxPid}, " +
+                          $"lastData {dataAge:0}ms, lastRx {rxAge:0}ms), rxCtrl {_rxCtrl}; " +
+                          $"tx {_txData} data ({unacked} unacked), {_txAck} acks, {_txHb} hb, {_txC2dA} C2D_A");
+            }
+        }
+        catch (OperationCanceledException) { }
     }
 
     /// <summary>
@@ -287,10 +359,24 @@ public sealed class BcUdpConnection : IBcConnection
                 }
                 await SendRawAsync(BcUdp.BuildAck(_did, group, ackId, 0, ReadOnlySpan<byte>.Empty), ct)
                     .ConfigureAwait(false);
+                if (_txAck++ == 0) Log.Debug($"{_tag}: udp {El} → first ACK (connId=did {_did}, every {AckInterval.TotalMilliseconds:0}ms)");
             }
         }
         catch (OperationCanceledException) { }
     }
+
+    private static string Condense(string xml) =>
+        string.Join("", xml.Split('\n', '\r').Select(s => s.Trim()));
+
+    /// <summary>Inner element name of a control XML (D2C_T, D2C_HB, D2C_DISC, ...).</summary>
+    private static string ControlRoot(string xml)
+    {
+        try { return System.Xml.Linq.XElement.Parse(xml).Elements().FirstOrDefault()?.Name.LocalName ?? "?"; }
+        catch { return "?"; }
+    }
+
+    private string TallyString() =>
+        _ctrlTally.Count == 0 ? "none" : string.Join(" ", _ctrlTally.Select(kv => $"{kv.Key}×{kv.Value}"));
 
     private void OnAck(uint pid)
     {
@@ -313,8 +399,9 @@ public sealed class BcUdpConnection : IBcConnection
             while (!ct.IsCancellationRequested)
             {
                 var msg = await BcCodec.ReadMessageAsync(stream, _context, ct).ConfigureAwait(false);
-                if (Log.Level <= LogLevel.Debug)
-                    Log.Debug($"{_tag}: BC(udp) recv msgId={msg.Meta.MsgId} class=0x{msg.Meta.Class:x4} msgNum={msg.Meta.MsgNum}");
+                if (Dbg)
+                    Log.Debug($"{_tag}: udp {El} ← BC msgId={msg.Meta.MsgId} class=0x{msg.Meta.Class:x4} " +
+                              $"msgNum={msg.Meta.MsgNum} resp=0x{msg.Meta.ResponseCode:x4}");
                 Channel<BcMessage>? target;
                 lock (_subGate) { _subscribers.TryGetValue(msg.Meta.MsgId, out target); }
                 if (target != null)
@@ -362,6 +449,7 @@ public sealed class BcUdpConnection : IBcConnection
                 var hb = UdpDiscovery.BuildDiscovery((uint)Random.Shared.Next(1, int.MaxValue),
                     UdpDiscovery.BuildC2dHb(_cid, _did));
                 await SendRawAsync(hb, ct).ConfigureAwait(false);
+                if (_txHb++ == 0) Log.Debug($"{_tag}: udp control → C2D_HB (heartbeat, {Heartbeat.TotalSeconds:0.#}s)");
             }
         }
         catch (OperationCanceledException) { }
@@ -416,7 +504,7 @@ public sealed class BcUdpConnection : IBcConnection
         catch { }
         _cts.Cancel();
         try { _udp.Close(); } catch { }
-        foreach (var loop in new[] { _recvLoop, _readLoop, _hbLoop, _retxLoop, _ackLoop })
+        foreach (var loop in new[] { _recvLoop, _readLoop, _hbLoop, _retxLoop, _ackLoop, _diagLoop })
         {
             try { await loop.ConfigureAwait(false); } catch { }
         }
