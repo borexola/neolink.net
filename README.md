@@ -842,7 +842,23 @@ from our side):
   (`"always_on": true`); it is not in the web-UI camera editor.
 - While asleep there are **no motion events, no MQTT updates, no recording, no
   snapshots** — the camera is off the network on purpose. It still records
-  PIR events to its own SD card, as it does with the official app.
+  PIR events to its own SD card, as it does with the official app. See
+  **wake-capture** below to close this gap without keeping the camera awake.
+
+### Wake-capture (catch events without `always_on`)
+
+By default a sleep-friendly battery camera only connects when *you* open its
+stream, so a motion event while nobody is watching is missed. Set
+`"wake_capture": true` per camera to change that: while the camera sleeps,
+Neolink.NET runs a **cheap liveness poll** (every few seconds) and connects the
+instant the camera wakes *itself* for motion — capturing that event — then lets it
+sleep again. The poll never reaches a sleeping camera (its radio is off), so it
+costs **no battery** and is silent in the log. This is the middle ground between
+sleep-friendly (misses events) and `always_on` (catches everything but drains the
+battery). It has no effect with `always_on` (which never sleeps) or on non-battery
+cameras. Note it may miss the first second or two of an event — Neolink connects a
+moment after the camera wakes — and on a very busy camera it trends toward
+`always_on`-like battery use.
 
 ### UDP-only battery models (experimental)
 

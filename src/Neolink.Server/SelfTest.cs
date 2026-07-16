@@ -232,6 +232,7 @@ public static class SelfTest
                       "uid": "95270000ABCDEFGH",
                       "udp_probe": true,
                       "udp": true,
+                      "wake_capture": true,
                     },
                   ],
                 }
@@ -257,6 +258,7 @@ public static class SelfTest
                 AssertEq(cfg.Cameras[1].Uid ?? "", "95270000ABCDEFGH");
                 Assert(cfg.Cameras[1].UdpProbe, "udp_probe parsed");
                 Assert(cfg.Cameras[1].Udp && !cfg.Cameras[0].Udp, "udp transport flag parsed (opt-in, default off)");
+                Assert(cfg.Cameras[1].WakeCapture && !cfg.Cameras[0].WakeCapture, "wake_capture flag parsed (opt-in, default off)");
                 // Tiered-storage keys must round-trip through the parser — the
                 // archive UI only appears when archive_path survives loading.
                 AssertEq(cfg.Recording!.Path, "/recordings");
@@ -339,6 +341,11 @@ public static class SelfTest
         Test("bcudp transport: handshake + reliable out-of-order reassembly", () =>
         {
             RunBcUdpTransport().GetAwaiter().GetResult();
+        });
+
+        Test("bcudp wake-capture liveness probe (reachable vs silent)", () =>
+        {
+            RunWakeProbe().GetAwaiter().GetResult();
         });
 
         Test("camera discovery sweep: ONVIF parse + recommendation table", () =>
@@ -3072,6 +3079,41 @@ public static class SelfTest
         await conn.SendAsync(outPing, cts.Token);
         for (int i = 0; i < 50 && clientDataPackets == 0; i++) await Task.Delay(50, cts.Token);
         Assert(clientDataPackets > 0, "camera received the client's UDP data packet");
+    }
+
+    /// <summary>Wake-capture liveness probe: silent when nothing answers (asleep),
+    /// true the moment a camera answers discovery (awake).</summary>
+    private static async Task RunWakeProbe()
+    {
+        const string uid = "TESTUID0000000LO";
+        // Nothing listening → probe returns false quickly.
+        Assert(!await UdpDiscovery.IsReachableAsync("127.0.0.1", uid, TimeSpan.FromMilliseconds(600), CancellationToken.None),
+            "liveness probe is false while the camera is asleep");
+
+        // Bring up a responder on 2015 → probe returns true.
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var cam = new System.Net.Sockets.UdpClient(
+            new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 2015));
+        var responder = Task.Run(async () =>
+        {
+            while (!cts.IsCancellationRequested)
+            {
+                System.Net.Sockets.UdpReceiveResult r;
+                try { r = await cam.ReceiveAsync(cts.Token); } catch { return; }
+                if (UdpDiscovery.TryParseDiscovery(r.Buffer, out _, out var xml, out _)
+                    && xml.Contains("<C2D_C>", StringComparison.Ordinal))
+                {
+                    int cid = int.Parse(xml.Split("<cid>")[1].Split("</cid>")[0]);
+                    var reply = $"<P2P><D2C_C_R><rsp>0</rsp><cid>{cid}</cid><did>3</did></D2C_C_R></P2P>";
+                    try { await cam.SendAsync(UdpDiscovery.BuildDiscovery(9, reply), r.RemoteEndPoint, cts.Token); } catch { }
+                }
+            }
+        }, cts.Token);
+
+        Assert(await UdpDiscovery.IsReachableAsync("127.0.0.1", uid, TimeSpan.FromSeconds(3), cts.Token),
+            "liveness probe is true the moment the camera answers");
+        cts.Cancel();
+        try { await responder; } catch { }
     }
 
     private static void Assert(bool cond, string what)

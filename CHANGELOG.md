@@ -8,6 +8,15 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### New
 
+- **Wake-capture for battery cameras (opt-in)**: a sleep-friendly battery camera
+  normally only connects when a viewer opens its stream, so motion events while
+  nobody is watching are missed. `"wake_capture": true` keeps a cheap liveness
+  poll running while the camera sleeps and connects the instant it wakes itself
+  (motion), captures the event, then lets it sleep again — catching events without
+  holding the camera awake like `always_on`. The poll can't reach a sleeping
+  camera (radio off), so it costs no battery and is silent in the log. Default off
+  (unchanged park-until-viewer behavior); no effect with `always_on` or on
+  non-battery cameras.
 - **Baichuan-over-UDP transport for battery-only cameras (experimental, opt-in)**:
   some battery models (parts of the Argus line) never listen on TCP — they speak
   Baichuan over UDP — so they could never connect. Setting a camera's `uid`

@@ -141,6 +141,7 @@ public sealed class NeolinkConfig
         bool record = true;
         bool udpProbe = false;
         bool udp = false;
+        bool wakeCapture = false;
         bool? alwaysOn = null;
         List<string>? permitted = null;
 
@@ -160,6 +161,7 @@ public sealed class NeolinkConfig
                 case "alwayson": alwaysOn = prop.Value.GetBoolean(); break;
                 case "udpprobe": udpProbe = prop.Value.GetBoolean(); break;
                 case "udp": udp = prop.Value.GetBoolean(); break;
+                case "wakecapture": wakeCapture = prop.Value.GetBoolean(); break;
                 // Generic (non-Reolink) camera: pull these RTSP URLs directly.
                 case "rtsp" or "rtspmain": rtspMain = prop.Value.GetString(); break;
                 case "rtspsub": rtspSub = prop.Value.GetString(); break;
@@ -176,7 +178,7 @@ public sealed class NeolinkConfig
         }
 
         return BuildCamera(name, username, password, address, uid, stream, channelId, permitted, httpAddress,
-            record, rtspMain, rtspSub, alwaysOn, udpProbe, udp);
+            record, rtspMain, rtspSub, alwaysOn, udpProbe, udp, wakeCapture);
     }
 
     private static RecordingConfig ParseJsonRecording(JsonElement el)
@@ -357,7 +359,8 @@ public sealed class NeolinkConfig
                 MiniToml.GetString(c, "rtsp_sub"),
                 MiniToml.GetBool(c, "always_on"),
                 MiniToml.GetBool(c, "udp_probe") ?? false,
-                MiniToml.GetBool(c, "udp") ?? false));
+                MiniToml.GetBool(c, "udp") ?? false,
+                MiniToml.GetBool(c, "wake_capture") ?? false));
         }
         return config;
     }
@@ -371,7 +374,7 @@ public sealed class NeolinkConfig
     private static CameraConfig BuildCamera(string? name, string? username, string? password,
         string? address, string? uid, string stream, byte channelId, List<string>? permitted,
         string? httpAddress = null, bool record = true, string? rtspMain = null, string? rtspSub = null,
-        bool? alwaysOn = null, bool udpProbe = false, bool udp = false)
+        bool? alwaysOn = null, bool udpProbe = false, bool udp = false, bool wakeCapture = false)
     {
         if (name == null) throw new FormatException("camera entry missing \"name\"");
 
@@ -426,6 +429,7 @@ public sealed class NeolinkConfig
             Uid = string.IsNullOrWhiteSpace(uid) ? null : uid.Trim(),
             UdpProbe = udpProbe,
             Udp = udp,
+            WakeCapture = wakeCapture,
         };
     }
 
@@ -674,4 +678,10 @@ public sealed class CameraConfig
     /// instead of TCP — for battery-only models (Argus family) that never listen on
     /// TCP. Requires "uid". The default (false) is the unchanged TCP path.</summary>
     public bool Udp { get; init; }
+    /// <summary>Battery cameras (opt-in): while sleep-friendly and unwatched, keep a
+    /// cheap liveness poll running so Neolink connects the moment the camera wakes
+    /// itself (motion) and captures the event — instead of only connecting on viewer
+    /// demand. Default false = the classic park-until-viewer behavior. No effect with
+    /// always_on (never sleeps) or on non-battery cameras.</summary>
+    public bool WakeCapture { get; init; }
 }

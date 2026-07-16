@@ -32,6 +32,10 @@ public sealed class CameraService : ILiveCameraSource
     private static readonly TimeSpan DemandWindow = TimeSpan.FromSeconds(20);
     /// <summary>How long a sleep-friendly stream keeps running after the last viewer leaves.</summary>
     private static readonly TimeSpan IdleGrace = TimeSpan.FromSeconds(60);
+    /// <summary>Wake-capture: how often to check whether a sleeping camera has woken.</summary>
+    private static readonly TimeSpan WakeScanInterval = TimeSpan.FromSeconds(5);
+    /// <summary>Wake-capture liveness probe timeout — short so a sleeping camera fails fast.</summary>
+    private static readonly TimeSpan WakeProbeTimeout = TimeSpan.FromSeconds(2);
 
     private readonly CameraConfig _config;
     private readonly StreamKind _kind;
@@ -62,6 +66,7 @@ public sealed class CameraService : ILiveCameraSource
     private volatile bool _suspended;      // user pressed "suspend": hold no connection at all
     private volatile CancellationTokenSource? _activeStream; // the live session's CTS, to interrupt on suspend
     private bool _sleepHintLogged;
+    private bool _scanLogged; // "wake-capture watching" said once
     // Discovery-probe state per camera NAME (shared across its Main/Sub services,
     // so they don't both sweep). We probe often for a short window — likely to
     // catch a briefly-woken battery camera — then stop for good.
@@ -182,11 +187,33 @@ public sealed class CameraService : ILiveCameraSource
             if (AllowSleep && !DemandNow)
             {
                 _parked = true;
-                Log.Info($"{Tag}: parked — letting the battery camera sleep (open the stream to reconnect)");
                 try
                 {
-                    while (!DemandNow)
-                        await Task.Delay(500, ct).ConfigureAwait(false);
+                    if (_config.WakeCapture)
+                    {
+                        // Wake-capture (opt-in): instead of parking blind, watch for
+                        // the camera to wake ITSELF (motion) and connect the moment it
+                        // does, so its events are caught without holding it awake. A
+                        // sleeping camera's radio is off, so the liveness probes don't
+                        // reach it and cost it nothing; they're logged at Debug so the
+                        // steady polling never clutters the log. We fall through to
+                        // connect when the camera answers OR a viewer arrives.
+                        if (!_scanLogged)
+                        {
+                            _scanLogged = true;
+                            Log.Info($"{Tag}: sleep-friendly (wake-capture) — will connect when the camera wakes itself " +
+                                     "(motion) or a viewer opens the stream");
+                        }
+                        while (!DemandNow && !await ProbeAwakeAsync(ct).ConfigureAwait(false))
+                            await Task.Delay(WakeScanInterval, ct).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        Log.Info($"{Tag}: parked — letting the battery camera sleep (open the stream to reconnect)");
+                        while (!DemandNow)
+                            await Task.Delay(500, ct).ConfigureAwait(false);
+                        Log.Info($"{Tag}: viewer waiting — reconnecting");
+                    }
                 }
                 catch (OperationCanceledException)
                 {
@@ -196,7 +223,6 @@ public sealed class CameraService : ILiveCameraSource
                 {
                     _parked = false;
                 }
-                Log.Info($"{Tag}: viewer waiting — reconnecting");
                 backoff = MinBackoff;
             }
 
@@ -322,6 +348,36 @@ public sealed class CameraService : ILiveCameraSource
         catch (Exception ex)
         {
             Log.Warn($"{Tag}: [discover] sweep crashed: {Log.Flatten(ex)}");
+        }
+    }
+
+    /// <summary>
+    /// Cheap liveness probe for wake-capture: is the camera answering right now?
+    /// A short-timeout UDP discovery reply (udp cameras) or TCP connect (everything
+    /// else). Never throws and never logs — it runs every few seconds while the
+    /// camera sleeps, and a sleeping camera simply doesn't answer.
+    /// </summary>
+    private async Task<bool> ProbeAwakeAsync(CancellationToken ct)
+    {
+        try
+        {
+            if (_config.Udp)
+                return await UdpDiscovery.IsReachableAsync(_config.Host, _config.Uid!, WakeProbeTimeout, ct)
+                    .ConfigureAwait(false);
+
+            using var tcp = new System.Net.Sockets.TcpClient(System.Net.Sockets.AddressFamily.InterNetwork);
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(WakeProbeTimeout);
+            await tcp.ConnectAsync(_config.Host, _config.Port, cts.Token).ConfigureAwait(false);
+            return true;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw; // real shutdown — let the caller unwind
+        }
+        catch
+        {
+            return false; // asleep / unreachable — the expected common case
         }
     }
 

@@ -131,6 +131,15 @@
       // "uid": "95270000ABCDEFGH",
       // "udp": true,
 
+      // Wake-capture (battery cameras): while sleep-friendly and unwatched, keep a
+      // cheap liveness poll running so Neolink connects the moment the camera wakes
+      // ITSELF (motion) and captures the event - instead of only connecting when a
+      // viewer opens the stream. The poll doesn't reach a sleeping camera (its radio
+      // is off), so it costs no battery, and it's silent in the log. This catches
+      // events without holding the camera awake 24/7 like always_on. No effect with
+      // always_on (never sleeps) or on non-battery cameras.
+      // "wake_capture": true,
+
       // Optional: restrict this camera to specific users from "users" above.
       // "permitted_users": [ "me" ]
     }

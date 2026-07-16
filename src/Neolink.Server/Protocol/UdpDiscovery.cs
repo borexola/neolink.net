@@ -141,6 +141,76 @@ public static class UdpDiscovery
     internal static string BuildC2dHb(int cid, int did) =>
         $"<P2P><C2D_HB><cid>{cid}</cid><did>{did}</did></C2D_HB></P2P>";
 
+    /// <summary>
+    /// Cheap liveness check: is a UDP camera answering discovery right now? Sends a
+    /// few C2D_C hellos to the known IP and returns true on the first D2C_C_R,
+    /// WITHOUT establishing a session (nothing to tear down). Silent and short — it
+    /// is the wake-capture poll, run every few seconds while the camera sleeps.
+    /// </summary>
+    internal static async Task<bool> IsReachableAsync(string host, string uid, TimeSpan timeout, CancellationToken ct)
+    {
+        IPAddress? ip = IPAddress.TryParse(host, out var lit) ? lit : null;
+        if (ip == null)
+        {
+            try { ip = (await Dns.GetHostAddressesAsync(host, ct).ConfigureAwait(false))
+                .FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetwork); }
+            catch { return false; }
+        }
+        if (ip == null || ip.AddressFamily != AddressFamily.InterNetwork) return false;
+
+        UdpClient? udp = null;
+        for (int i = 0; i < 4 && udp == null; i++)
+        {
+            try { udp = new UdpClient(new IPEndPoint(IPAddress.Any, Random.Shared.Next(53500, 54000))); }
+            catch (SocketException) { }
+        }
+        if (udp == null) return false;
+
+        using (udp)
+        {
+            int localPort = ((IPEndPoint)udp.Client.LocalEndPoint!).Port;
+            var xml = BuildC2dC(uid, localPort, Random.Shared.Next(1, int.MaxValue), xmlDeclaration: false);
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(timeout);
+
+            var sender = Task.Run(async () =>
+            {
+                while (!cts.IsCancellationRequested)
+                {
+                    foreach (var port in CameraPorts)
+                    {
+                        try { await udp.SendAsync(BuildDiscovery((uint)Random.Shared.Next(1, int.MaxValue), xml),
+                            new IPEndPoint(ip, port), cts.Token).ConfigureAwait(false); }
+                        catch (OperationCanceledException) { return; }
+                        catch (SocketException) { }
+                    }
+                    try { await Task.Delay(300, cts.Token).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { return; }
+                }
+            }, cts.Token);
+
+            try
+            {
+                while (!cts.IsCancellationRequested)
+                {
+                    UdpReceiveResult r;
+                    try { r = await udp.ReceiveAsync(cts.Token).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { break; }
+                    catch (SocketException) { continue; }
+                    if (TryParseDiscovery(r.Buffer, out _, out var reply, out _)
+                        && reply.Contains("D2C_C_R", StringComparison.Ordinal))
+                    {
+                        cts.Cancel();
+                        try { await sender.ConfigureAwait(false); } catch { }
+                        return true;
+                    }
+                }
+            }
+            catch (OperationCanceledException) { }
+            return false;
+        }
+    }
+
     /// <summary>An established UDP session: the open socket, the endpoint the camera
     /// actually answered from, and the two negotiated connection ids (cid = ours,
     /// did = the camera's). The caller owns the socket from here on.</summary>
