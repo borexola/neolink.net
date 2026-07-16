@@ -3011,6 +3011,7 @@ public static class SelfTest
         using var cam = new System.Net.Sockets.UdpClient(
             new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 2015));
         int clientDataPackets = 0;
+        int clientAckPackets = 0;
 
         // The canned message the "camera" will send us: a header-only ping, built
         // and serialized exactly as the real code would (unencrypted session).
@@ -3058,6 +3059,10 @@ public static class SelfTest
                     clientDataPackets++;
                     await cam.SendAsync(BcUdp.BuildAck(cid, 0, pid, 0, ReadOnlySpan<byte>.Empty), r.RemoteEndPoint, cts.Token);
                 }
+                else if (BcUdp.TryParseAck(r.Buffer, out _, out _, out _))
+                {
+                    clientAckPackets++; // the continuous ack timer — the keepalive the camera needs
+                }
             }
         }, cts.Token);
 
@@ -3079,6 +3084,11 @@ public static class SelfTest
         await conn.SendAsync(outPing, cts.Token);
         for (int i = 0; i < 50 && clientDataPackets == 0; i++) await Task.Delay(50, cts.Token);
         Assert(clientDataPackets > 0, "camera received the client's UDP data packet");
+
+        // The continuous ack timer must fire on its own (the keepalive/flow-control
+        // the camera needs to keep the session open) — not just when data arrives.
+        for (int i = 0; i < 40 && clientAckPackets < 3; i++) await Task.Delay(50, cts.Token);
+        Assert(clientAckPackets >= 3, "client sends acks continuously (keepalive), not only on receipt");
     }
 
     /// <summary>Wake-capture liveness probe: silent when nothing answers (asleep),

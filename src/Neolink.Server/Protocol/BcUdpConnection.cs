@@ -31,7 +31,12 @@ public sealed class BcUdpConnection : IBcConnection
     // (20-byte data header + IP/UDP overhead) so nothing fragments.
     private const int ChunkSize = 1024;
     private static readonly TimeSpan RetxAfter = TimeSpan.FromMilliseconds(500);
-    private static readonly TimeSpan Heartbeat = TimeSpan.FromSeconds(2);
+    // Match the official client: a 1 s heartbeat plus a continuous ~20 ms ack that
+    // doubles as flow control and keepalive — the camera closes the session (clean
+    // D2C_DISC, ~8 s) if it stops seeing acks, so acking must never be gated behind
+    // downstream delivery.
+    private static readonly TimeSpan Heartbeat = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan AckInterval = TimeSpan.FromMilliseconds(20);
 
     private readonly UdpClient _udp;
     private readonly IPEndPoint _camera;
@@ -47,7 +52,12 @@ public sealed class BcUdpConnection : IBcConnection
     private readonly object _subGate = new();
 
     private readonly CancellationTokenSource _cts;
-    private readonly Pipe _pipe = new();
+    // A generous pause threshold so the receive loop's writes complete synchronously
+    // under normal video rates — a blocked write would stall socket draining and,
+    // with it, the ack timer's view of progress.
+    private readonly Pipe _pipe = new(new PipeOptions(
+        pauseWriterThreshold: 8 * 1024 * 1024, resumeWriterThreshold: 4 * 1024 * 1024,
+        useSynchronizationContext: false));
 
     // Outbound reliability.
     private readonly SemaphoreSlim _sendLock = new(1, 1);
@@ -61,7 +71,7 @@ public sealed class BcUdpConnection : IBcConnection
     private uint _rxNext;
     private readonly SortedDictionary<uint, byte[]> _rxBuffer = new();
 
-    private readonly Task _recvLoop, _readLoop, _hbLoop, _retxLoop;
+    private readonly Task _recvLoop, _readLoop, _hbLoop, _retxLoop, _ackLoop;
 
     private BcUdpConnection(UdpDiscovery.Session session, string tag, CancellationToken appCt)
     {
@@ -71,11 +81,13 @@ public sealed class BcUdpConnection : IBcConnection
         _did = session.DeviceId;
         _tag = tag;
         _context = new BcContext(Encryption);
+        try { _udp.Client.ReceiveBufferSize = 1 << 20; } catch { } // 1 MB: absorb video bursts
         _cts = CancellationTokenSource.CreateLinkedTokenSource(appCt);
         _recvLoop = Task.Run(() => RecvLoopAsync(_cts.Token));
         _readLoop = Task.Run(() => ReadLoopAsync(_cts.Token));
         _hbLoop = Task.Run(() => HeartbeatLoopAsync(_cts.Token));
         _retxLoop = Task.Run(() => RetxLoopAsync(_cts.Token));
+        _ackLoop = Task.Run(() => AckLoopAsync(_cts.Token));
     }
 
     public static async Task<BcUdpConnection> ConnectAsync(string host, string uid, TimeSpan timeout,
@@ -188,7 +200,6 @@ public sealed class BcUdpConnection : IBcConnection
     private async Task OnDataAsync(uint pid, byte[] payload, CancellationToken ct)
     {
         List<byte[]>? deliver = null;
-        uint group, ackId;
         lock (_rxGate)
         {
             if (pid == _rxNext)
@@ -206,17 +217,42 @@ public sealed class BcUdpConnection : IBcConnection
             {
                 _rxBuffer[pid] = payload; // out of order — hold until the gap fills
             }
-            // pid < _rxNext: already delivered; drop but still re-ack below.
-
-            if (_rxNext == 0) { group = BcUdp.NoneReceived; ackId = BcUdp.NoneReceived; }
-            else { group = 0; ackId = _rxNext - 1; }
+            // pid < _rxNext: already delivered; drop. The ack timer re-acks anyway.
         }
 
+        // Acking is NOT done here — a dedicated timer (AckLoopAsync) sends the
+        // cumulative ack continuously, so the camera keeps seeing acks even if this
+        // delivery write briefly stalls. The generous pipe threshold keeps the write
+        // synchronous under normal video rates, so the receive loop keeps draining.
         if (deliver != null)
             foreach (var chunk in deliver)
                 await _pipe.Writer.WriteAsync(chunk, ct).ConfigureAwait(false);
+    }
 
-        await SendRawAsync(BcUdp.BuildAck(_did, group, ackId, 0, ReadOnlySpan<byte>.Empty), ct).ConfigureAwait(false);
+    /// <summary>
+    /// Continuous cumulative ack — the flow-control + keepalive signal the camera
+    /// expects (the official client sends it every ~10 ms regardless of new data).
+    /// Sending it on its own timer, decoupled from delivery, is what stops the
+    /// camera closing the session with a clean D2C_DISC after a few seconds.
+    /// </summary>
+    private async Task AckLoopAsync(CancellationToken ct)
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(AckInterval);
+            while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false))
+            {
+                uint group, ackId;
+                lock (_rxGate)
+                {
+                    if (_rxNext == 0) { group = BcUdp.NoneReceived; ackId = BcUdp.NoneReceived; }
+                    else { group = 0; ackId = _rxNext - 1; }
+                }
+                await SendRawAsync(BcUdp.BuildAck(_did, group, ackId, 0, ReadOnlySpan<byte>.Empty), ct)
+                    .ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) { }
     }
 
     private void OnAck(uint pid)
@@ -343,7 +379,7 @@ public sealed class BcUdpConnection : IBcConnection
         catch { }
         _cts.Cancel();
         try { _udp.Close(); } catch { }
-        foreach (var loop in new[] { _recvLoop, _readLoop, _hbLoop, _retxLoop })
+        foreach (var loop in new[] { _recvLoop, _readLoop, _hbLoop, _retxLoop, _ackLoop })
         {
             try { await loop.ConfigureAwait(false); } catch { }
         }
