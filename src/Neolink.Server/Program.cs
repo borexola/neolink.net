@@ -44,7 +44,7 @@ for (int i = 0; i < argList.Count; i++)
         case var s when s.StartsWith("--config="):
             configPath = s["--config=".Length..];
             break;
-        case "rtsp" or "selftest":
+        case "rtsp" or "selftest" or "probe":
             command = a;
             break;
         default:
@@ -101,6 +101,28 @@ try
 catch (Exception ex)
 {
     return Fail($"Failed to load config '{configPath}': {ex.Message}");
+}
+
+// On-demand camera-discovery diagnostic: run the sweep once, now, for every
+// Baichuan camera, then exit. This is the way to probe a battery camera —
+// wake it (motion or the Reolink app), run this immediately, and the report
+// lands while it is awake, instead of waiting for the background sweep's next
+// 15-minute window to happen to coincide with a wake. Add --verbose for the
+// full ability-table dump.
+if (command == "probe")
+{
+    var targets = config.Cameras.Where(c => !c.IsGenericRtsp).ToList();
+    if (targets.Count == 0)
+        return Fail("No Baichuan cameras in the config to probe (generic RTSP cameras are skipped)");
+    using var probeCts = new CancellationTokenSource();
+    Console.CancelKeyPress += (_, e) => { e.Cancel = true; probeCts.Cancel(); };
+    foreach (var cam in targets)
+    {
+        try { await CameraProbe.SweepAsync($"{cam.Name} (probe)", cam, probeCts.Token); }
+        catch (OperationCanceledException) { break; }
+        catch (Exception ex) { Log.Warn($"{cam.Name} (probe): [discover] sweep failed: {Log.Flatten(ex)}"); }
+    }
+    return 0;
 }
 
 // Capture log lines from here on for the web UI's admin log stream — created
@@ -668,6 +690,7 @@ static void PrintHelp()
         USAGE:
             neolink.net [rtsp] --config <config.json>     Serve all configured cameras over RTSP
             neolink.net selftest [--config <samples-dir>] Run built-in protocol self-tests
+            neolink.net probe --config <config.json>      Run the camera-discovery diagnostic once and exit
             neolink.net --version
             neolink.net --help
 

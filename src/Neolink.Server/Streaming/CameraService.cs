@@ -62,10 +62,13 @@ public sealed class CameraService : ILiveCameraSource
     private volatile bool _suspended;      // user pressed "suspend": hold no connection at all
     private volatile CancellationTokenSource? _activeStream; // the live session's CTS, to interrupt on suspend
     private bool _sleepHintLogged;
-    // Last diagnostic discovery sweep, keyed by camera NAME so the Main and Sub
-    // services for one camera don't both sweep — whichever fails first claims
-    // the 15-minute window and the other skips.
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTime> _udpProbedAt = new();
+    // Discovery-probe state per camera NAME (shared across its Main/Sub services,
+    // so they don't both sweep). We probe often for a short window — likely to
+    // catch a briefly-woken battery camera — then stop for good.
+    private sealed class ProbeState { public DateTime First; public DateTime Last; public bool StopLogged; }
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, ProbeState> _probeState = new();
+    private static readonly TimeSpan ProbeEvery = TimeSpan.FromMinutes(2);
+    private static readonly TimeSpan ProbeWindow = TimeSpan.FromMinutes(15);
 
     public CameraService(CameraConfig config, StreamKind kind, IMediaSink hub, TimeSpan startupDelay)
     {
@@ -284,17 +287,33 @@ public sealed class CameraService : ILiveCameraSource
     }
 
     /// <summary>
-    /// The opt-in camera-discovery diagnostic (<see cref="CameraProbe"/>), rate-limited
-    /// so an unreachable camera logs one thorough sweep per quarter hour instead of one
-    /// per reconnect attempt. Never lets a sweep failure disturb the retry loop.
+    /// The opt-in camera-discovery diagnostic (<see cref="CameraProbe"/>). While an
+    /// unreachable camera stays down, it sweeps once every <see cref="ProbeEvery"/>
+    /// for a <see cref="ProbeWindow"/> window (from the first sweep) and then stops
+    /// for good — frequent enough to catch a battery camera during a brief wake,
+    /// without probing forever. Shared across the camera's stream services; never
+    /// lets a sweep failure disturb the retry loop.
     /// </summary>
     private async Task MaybeUdpProbeAsync(CancellationToken ct)
     {
-        // One sweep per camera per 15 min, shared across its stream services.
         var now = DateTime.UtcNow;
-        if (_udpProbedAt.TryGetValue(_config.Name, out var last) && now - last < TimeSpan.FromMinutes(15))
-            return;
-        _udpProbedAt[_config.Name] = now;
+        var st = _probeState.GetOrAdd(_config.Name, _ => new ProbeState());
+        lock (st)
+        {
+            if (st.First == default) st.First = now;
+            else if (now - st.First > ProbeWindow)
+            {
+                if (!st.StopLogged)
+                {
+                    st.StopLogged = true;
+                    Log.Info($"{Tag}: [discover] discovery probing stopped — the {ProbeWindow.TotalMinutes:0}-minute " +
+                             "window has elapsed; restart Neolink to probe again");
+                }
+                return;
+            }
+            if (st.Last != default && now - st.Last < ProbeEvery) return;
+            st.Last = now;
+        }
         try
         {
             await CameraProbe.SweepAsync(Tag, _config, ct).ConfigureAwait(false);
