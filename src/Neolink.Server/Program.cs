@@ -532,30 +532,38 @@ foreach (var (services, name, recorderSink) in motionTargets)
 {
     var bridge = mqtt;
     if (recorderSink == null && bridge == null) continue;
-    // Every stream service listens (each holds its own camera session), but only
-    // the LEADER — the first service with a live connection — forwards, so a
-    // camera with both main and sub connected doesn't double-fire events (a
-    // doorbell press must ring automations once). With only the sub stream
-    // connected, its session leads and detections still flow.
-    var all = services;
-    CameraService? Leader() => all.FirstOrDefault(s => s.LiveCamera != null);
+    // Every stream service listens (each holds its own camera session) and every
+    // session may forward: cameras deliver alarm pushes on ONE or ALL of their
+    // live sessions depending on model/firmware, so gating to a chosen session
+    // can go deaf. The cost is that a camera pushing on all sessions delivers
+    // duplicates — suppressed by a short identical-push window: cross-session
+    // copies of one event arrive within milliseconds of each other, while a
+    // camera's own re-pushes of ongoing motion are seconds apart (and a doorbell
+    // cannot physically be pressed twice in 400 ms).
+    var dedupGate = new object();
+    string? lastSig = null;
+    DateTime lastAt = DateTime.MinValue;
+    var window = TimeSpan.FromMilliseconds(400);
     foreach (var svc in services)
     {
-        var self = svc;
         svc.MotionSink = push =>
         {
-            if (!ReferenceEquals(self, Leader())) return;
+            var sig = $"{push.Status}|{string.Join(",", push.AiTypes)}|{push.External}";
+            lock (dedupGate)
+            {
+                var now = DateTime.UtcNow;
+                if (sig == lastSig && now - lastAt < window)
+                    return; // the same event, heard on another session
+                lastSig = sig;
+                lastAt = now;
+            }
             recorderSink?.Invoke(push);
             bridge?.OnMotion(name, push);
         };
         // Unsolicited status pushes (Wi-Fi signal, siren, floodlight) only feed the
-        // bridge; the listener only runs when the sink is set.
+        // bridge; duplicates are idempotent state sets, so they pass ungated.
         if (bridge != null)
-            svc.StatusSink = push =>
-            {
-                if (ReferenceEquals(self, Leader()))
-                    bridge.OnStatus(name, push);
-            };
+            svc.StatusSink = push => bridge.OnStatus(name, push);
     }
 }
 // The reverse direction — HA's "Record" switch starting an on-demand recording —

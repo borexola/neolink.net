@@ -231,9 +231,12 @@ in the README). Paste the matching section below into the GitHub release.
   unheard. The camera is one device: it now reads online when ANY of its
   sessions is live, commands ride whichever session exists (primary preferred),
   battery/siren/privacy readings come from any session, and every stream
-  service listens for detection pushes — with a leader gate so a camera with
-  both streams connected still fires each event exactly once (a doorbell press
-  must ring automations once, not twice).
+  service listens for detection pushes and may forward them — cameras deliver
+  alarm pushes on one OR all of their sessions depending on firmware, so no
+  single session can be trusted to hear everything. Cross-session duplicates
+  (copies of one event arriving within milliseconds on two connections) are
+  suppressed by a short identical-push window, so a doorbell press still rings
+  automations exactly once.
 - **The sidebar battery icon now shows the level**: it was a fixed empty
   outline no matter the charge; the body now fills in proportion to the
   percentage (a bolt still replaces it while charging).
