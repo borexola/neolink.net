@@ -137,7 +137,10 @@ in exchange you get an integration light enough to leave running forever.
   and is also logged and recorded as a "Doorbell pressed" event with pre-roll
   like any other detection
 - Two-level availability (service + per-camera), retained state so HA repopulates
-  after restarts; MQTT 3.1.1 spoken natively — no external MQTT library
+  after restarts; MQTT 3.1.1 spoken natively — no external MQTT library.
+  **A battery camera dozing on purpose stays available** — its retained readings
+  (battery, switches, last states) remain visible, an **Asleep** sensor says why
+  they're paused, and only a genuinely unreachable camera reads Unavailable
 - See [Home Assistant (MQTT)](#home-assistant-mqtt) for setup and the full entity list
 
 **Protocol / robustness**
@@ -662,6 +665,7 @@ config, so a **device per camera** appears automatically — no YAML in HA.
 | Suspend (beta) | `switch` | ON = Neolink.NET holds no connection to the camera, so it isn't viewed or recorded here (the camera itself keeps running — its own SD/cloud recording is unaffected). Stays usable while the camera is intentionally offline |
 | Recording | `binary_sensor` | ON while the server is writing this camera's footage right now — an event clip (detection or on-demand) or a continuous segment |
 | Battery | `sensor` | Battery cameras; charge status + temperature as attributes |
+| Asleep | `binary_sensor` | Battery cameras: ON while the camera is dozing **on purpose** (parked between viewers). The camera stays *available* in HA with its retained readings while it naps — latched detection sensors are cleared on the way into the nap — and only a genuinely unreachable camera reads Unavailable (diagnostic) |
 | Wi-Fi signal | `sensor` | Diagnostic; RSSI in dBm from the camera's own status pushes (Wi-Fi cameras) |
 | Siren | `switch` | Sound the siren until turned off (audio-alarm cameras); state follows the camera's own siren pushes, so it stays honest even when the camera's rules trigger it |
 | Siren sounding | `binary_sensor` | Read-only: ON while the siren is sounding (appears on the first status push) |

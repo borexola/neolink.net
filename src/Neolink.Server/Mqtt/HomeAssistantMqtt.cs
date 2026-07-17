@@ -608,6 +608,11 @@ internal sealed class CameraBridge
             await PublishSuspendStateAsync(ct).ConfigureAwait(false);
         }
 
+        // Asleep sensor (battery cameras): makes dozing-on-purpose visible in HA —
+        // and explains why battery/detection readings pause while it naps.
+        if (_cam.Asleep != null)
+            await AnnounceEntityAsync("binary_sensor", "asleep", AsleepSensorConfig(), ct).ConfigureAwait(false);
+
         // 24/7 recording switch — universal like suspend (any camera that records
         // continuously, Baichuan or generic RTSP), so announced before the split.
         if (_cam.SetContinuousEnabled != null)
@@ -709,6 +714,25 @@ internal sealed class CameraBridge
         _cam.Suspended == null
             ? Task.CompletedTask
             : _hub.PublishAsync(StateTopic("suspend"), _cam.Suspended() ? "ON" : "OFF", ct);
+
+    /// <summary>Asleep (battery cameras): ON while every stream is parked on purpose
+    /// so the camera can doze — as opposed to streaming (OFF) or genuinely offline
+    /// (the camera reads unavailable). Bridge-only availability, like Suspend, so
+    /// the sensor itself stays readable while the camera naps.</summary>
+    // Internal (not private) so the selftest can assert the bridge-only availability.
+    internal object AsleepSensorConfig() => new
+    {
+        name = "Asleep",
+        unique_id = $"neolink_{Id}_asleep",
+        state_topic = StateTopic("asleep"),
+        payload_on = "ON",
+        payload_off = "OFF",
+        icon = "mdi:sleep",
+        entity_category = "diagnostic",
+        device = Device(),
+        availability = new object[] { new { topic = _hub.AvailabilityTopic } },
+        availability_mode = "all",
+    };
 
     /// <summary>Continuous (24/7) recording — the web UI's "Record around the clock"
     /// toggle. ON tapes continuously (retention still applies); it is the same
@@ -1631,12 +1655,33 @@ internal sealed class CameraBridge
         return everOnline && nowUtc - offlineSince.Value < grace;
     }
 
+    /// <summary>The availability POLICY: a battery camera parked on purpose (dozing
+    /// between viewers) counts as alive — its retained states stay meaningful in HA.
+    /// Suspend does not (deliberately offline), and a camera we WANT but cannot
+    /// reach is not parked, so it still reads offline after the grace.</summary>
+    internal static bool AliveByPolicy(bool live, bool asleep, bool suspended) =>
+        live || (asleep && !suspended);
+
     private async Task PublishAvailabilityAsync(CancellationToken ct)
     {
         bool live = _control.Online;
+        bool suspended = _cam.Suspended?.Invoke() ?? false;
+        bool asleep = !suspended && (_cam.Asleep?.Invoke() ?? false);
         if (live) _everOnline = true;
-        bool online = AvailabilityOnline(live, _everOnline, ref _offlineSince, DateTime.UtcNow, OfflineGrace);
+        bool online = AvailabilityOnline(AliveByPolicy(live, asleep, suspended),
+            _everOnline, ref _offlineSince, DateTime.UtcNow, OfflineGrace);
         _lastOnline = online;
+        // Entering the nap with a detection still latched would freeze a phantom
+        // "Detected" on dashboards for hours; a sleeping camera detects nothing,
+        // so clear them. No pushes can race this: the connection is down.
+        if (!live && asleep && _sensorOn.Count > 0)
+        {
+            foreach (var label in _sensorOn.ToList())
+                await _hub.PublishAsync(StateTopic(label), "OFF", ct).ConfigureAwait(false);
+            _sensorOn.Clear();
+        }
+        if (_cam.Asleep != null)
+            await _hub.PublishAsync(StateTopic("asleep"), !live && asleep ? "ON" : "OFF", ct).ConfigureAwait(false);
         await _hub.PublishAsync(AvailabilityTopic, online ? "online" : "offline", ct).ConfigureAwait(false);
     }
 

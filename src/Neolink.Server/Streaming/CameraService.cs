@@ -456,6 +456,15 @@ public sealed class CameraService : ILiveCameraSource
             externalStatusSink?.Invoke(push);
         };
         Task statusTask = Task.Run(() => WatchStatusGuardedAsync(camera, statusSink, linked.Token), CancellationToken.None);
+        // UDP battery firmware wants to see a LIVING CLIENT, not just transport
+        // acks: the official client asks something at the BC layer every 5 s, and
+        // an idle session gets recycled after ~1-2 min even with every msg-234
+        // keepalive answered (field logs: D2C_DISC at 45-105 s). Ping like the
+        // reference client does; the request itself is the activity signal, so a
+        // firmware that never answers pings is tolerated.
+        Task? pingTask = _config.Udp
+            ? Task.Run(() => PingLoopAsync(camera, linked.Token), CancellationToken.None)
+            : null;
         DateTime? idleSince = null;
         try
         {
@@ -539,6 +548,37 @@ public sealed class CameraService : ILiveCameraSource
                 try { await motionTask.ConfigureAwait(false); } catch { }
             }
             try { await statusTask.ConfigureAwait(false); } catch { }
+            if (pingTask != null)
+            {
+                try { await pingTask.ConfigureAwait(false); } catch { }
+            }
+        }
+    }
+
+    /// <summary>Session-activity ping for UDP cameras: msg 93 every 5 s, like the
+    /// official client. An unanswered ping is logged once and pinging continues —
+    /// the request is what proves the client alive; a dead connection is noticed
+    /// by the video stream, which tears the session down.</summary>
+    private async Task PingLoopAsync(IBcCamera camera, CancellationToken ct)
+    {
+        bool quiet = false;
+        while (!ct.IsCancellationRequested)
+        {
+            try { await Task.Delay(TimeSpan.FromSeconds(5), ct).ConfigureAwait(false); }
+            catch (OperationCanceledException) { return; }
+            try
+            {
+                await camera.PingAsync(ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) { return; }
+            catch (Exception ex)
+            {
+                if (!quiet)
+                {
+                    quiet = true;
+                    Log.Debug($"{Tag}: ping (msg 93) unanswered ({ex.Message}) — continuing to ping for session activity");
+                }
+            }
         }
     }
 

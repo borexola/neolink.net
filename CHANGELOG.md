@@ -30,6 +30,19 @@ in the README). Paste the matching section below into the GitHub release.
   rate" instead of inventing a fill date; a fresh install stays quiet for its
   first ~6 hours while it gathers data. `GET /api/storage` carries the same
   numbers (`forecastState`, `forecastDays`).
+- **Home Assistant: a sleeping battery camera is no longer "Unavailable"**:
+  per-camera availability used to mean "connected right now", so a battery
+  camera parked on purpose between viewers dragged every entity — battery
+  reading, switches, detection sensors — to Unavailable within a minute of
+  each nap. Parked-on-purpose now counts as alive: the device keeps its
+  retained readings visible while it dozes, latched detection sensors are
+  cleared on the way into the nap (no phantom "Detected" frozen for hours),
+  and a new diagnostic **Asleep** sensor says why readings are paused.
+  Nothing else moves: a suspended camera still reads offline (deliberate), a
+  genuinely unreachable camera still goes Unavailable after the same 45 s
+  grace, and mains/TCP cameras are untouched. Detections while asleep still
+  need the camera awake — enable `wake_capture` to reconnect the moment the
+  camera wakes itself on PIR.
 - **The brand dot becomes a padlock when footage encryption is on**: the glowing
   dot next to the NEOLINK.NET logo turns into a padlock in the same accent glow
   whenever the server encrypts footage at rest, so anyone signed in can see at
@@ -257,7 +270,12 @@ in the README). Paste the matching section below into the GitHub release.
   the session with a clean `D2C_DISC` after ~8.5 s — media and acks flowing
   the whole time. Every message 234 is now answered immediately; the
   disconnect diagnostic counts keepalives received/answered so the exchange
-  is visible in the logs.
+  is visible in the logs. Field testing then showed a second, longer timer:
+  with all keepalives answered the camera still recycled an "idle" client
+  after ~1-2 minutes, because we never ASKED it anything after login. The
+  official client pings the camera (message 93) every 5 seconds; UDP
+  sessions now do the same — the request itself is the "a human is here"
+  signal, so firmware that never answers pings is tolerated.
 - **Timeline lanes no longer trail behind "now" on some filesystems**: the day
   listing derived every segment's duration from the file's mtime, but an OPEN
   file's directory mtime is stale on NTFS (updated lazily on close) and on

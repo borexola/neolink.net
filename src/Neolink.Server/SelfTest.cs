@@ -1572,6 +1572,23 @@ public static class SelfTest
             DateTime? off3 = null;
             Assert(!Mqtt.CameraBridge.AvailabilityOnline(false, false, ref off3, t0, grace),
                 "never-online = offline now");
+
+            // The availability POLICY layered on top: parked-on-purpose (battery
+            // doze) counts as alive so retained states stay visible in HA;
+            // suspend stays deliberately offline; a camera we WANT but cannot
+            // reach is neither live nor asleep and reads offline.
+            Assert(Mqtt.CameraBridge.AliveByPolicy(live: true, asleep: false, suspended: false), "streaming = alive");
+            Assert(Mqtt.CameraBridge.AliveByPolicy(live: false, asleep: true, suspended: false), "asleep on purpose = alive");
+            Assert(!Mqtt.CameraBridge.AliveByPolicy(live: false, asleep: true, suspended: true), "suspended = not alive even if parked");
+            Assert(!Mqtt.CameraBridge.AliveByPolicy(live: false, asleep: false, suspended: false), "unreachable = not alive");
+
+            // A parked camera that has NEVER connected (server booted while it
+            // slept) is still available — it is healthy, just dozing.
+            DateTime? off4 = null;
+            Assert(Mqtt.CameraBridge.AvailabilityOnline(
+                    Mqtt.CameraBridge.AliveByPolicy(live: false, asleep: true, suspended: false),
+                    everOnline: false, ref off4, t0, grace),
+                "boot-time-parked battery camera = online in HA");
         });
 
         Test("HTTP-API extras: preset/quick-reply/SD/auto-track/image parsing", () =>
@@ -1779,6 +1796,13 @@ public static class SelfTest
                 $"suspend switch availability must be bridge-only, got: {json}");
             Assert(!json.Contains("suspendcam/state"),
                 "per-camera availability topic must NOT gate the suspend switch");
+
+            // The Asleep sensor must be readable while the camera naps: bridge-only
+            // availability too, or it could never say "asleep".
+            var asleepJson = System.Text.Json.JsonSerializer.Serialize(
+                bridge.AsleepSensorConfig(), Mqtt.HomeAssistantMqtt.DiscoveryJson);
+            Assert(asleepJson.Contains("\"availability\":[{\"topic\":\"neolink/bridge/state\"}]"),
+                $"asleep sensor availability must be bridge-only, got: {asleepJson}");
         });
 
         Test("HA detection-events switch: shares the web UI setting + persists", () =>
