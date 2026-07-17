@@ -484,6 +484,7 @@ internal sealed class CameraBridge
     private int? _wifiDbm;
     private bool? _sirenOn, _floodlightOn;
     private bool _hasFloodlight, _hasIr, _hasSnapshot;
+    private bool _isBattery; // from the capability probe — gates the Asleep sensor
     // HTTP-API extras (beta): probed once when the camera first comes online.
     private bool _hasVolume, _hasAutoTrack;
     private IReadOnlyList<PtzPresetInfo>? _presets;
@@ -607,11 +608,6 @@ internal sealed class CameraBridge
             await AnnounceEntityAsync("switch", "suspend", SuspendSwitchConfig(), ct).ConfigureAwait(false);
             await PublishSuspendStateAsync(ct).ConfigureAwait(false);
         }
-
-        // Asleep sensor (battery cameras): makes dozing-on-purpose visible in HA —
-        // and explains why battery/detection readings pause while it naps.
-        if (_cam.Asleep != null)
-            await AnnounceEntityAsync("binary_sensor", "asleep", AsleepSensorConfig(), ct).ConfigureAwait(false);
 
         // 24/7 recording switch — universal like suspend (any camera that records
         // continuously, Baichuan or generic RTSP), so announced before the split.
@@ -781,7 +777,13 @@ internal sealed class CameraBridge
         if (caps?.Features is not { } f) return;
 
         if (f.Battery)
+        {
+            _isBattery = true;
             await AnnounceEntityAsync("sensor", "battery", BatterySensorConfig(), ct).ConfigureAwait(false);
+            // Asleep sensor: only battery cameras nap, so only they get the
+            // entity — a wired camera must not sprout a permanently-OFF sensor.
+            await AnnounceEntityAsync("binary_sensor", "asleep", AsleepSensorConfig(), ct).ConfigureAwait(false);
+        }
         // The siren is a SWITCH: ON sounds until OFF. Its state topic is the same
         // one the camera's own status pushes (msg 547) feed, so HA tracks reality
         // even when the siren was set off by the camera's own detection rules.
@@ -1680,7 +1682,9 @@ internal sealed class CameraBridge
                 await _hub.PublishAsync(StateTopic(label), "OFF", ct).ConfigureAwait(false);
             _sensorOn.Clear();
         }
-        if (_cam.Asleep != null)
+        // Battery cameras only (from the capability probe): wired cameras never
+        // nap, and must not get an asleep topic/entity at all.
+        if (_isBattery && _cam.Asleep != null)
             await _hub.PublishAsync(StateTopic("asleep"), !live && asleep ? "ON" : "OFF", ct).ConfigureAwait(false);
         await _hub.PublishAsync(AvailabilityTopic, online ? "online" : "offline", ct).ConfigureAwait(false);
     }

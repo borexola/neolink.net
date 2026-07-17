@@ -1454,6 +1454,14 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     color: var(--muted);
     flex: 0 0 auto;
 }
+
+/* "Querying the camera" hint while capabilities lazy-load: keep the spinner on
+   the text baseline so the row reads as one line. */
+.campanel-probing {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
 .campanel-devbar .devbar-model {
     color: var(--text);
     font-weight: 600;

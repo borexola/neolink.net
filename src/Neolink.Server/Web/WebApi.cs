@@ -43,6 +43,11 @@ public sealed record WebCameraInfo(string Name, List<WebStreamInfo> Streams, ICa
     /// <summary>The camera's event recorder when server-side event recording runs —
     /// the shared entry point for on-demand clips (web UI button and HA switch).</summary>
     public EventRecorder? EventRecorder { get; set; }
+
+    /// <summary>The configured network address (host, or host:port when non-default) —
+    /// shown on the camera-settings identity strip. Null for generic RTSP cameras
+    /// (their address lives in the stream URL) or when unknown.</summary>
+    public string? Address { get; init; }
 }
 
 /// <summary>Everything the web API needs from the host.</summary>
@@ -1004,6 +1009,9 @@ public static class WebApi
             {
                 name = c.Name,
                 online = c.Control.Online,
+                // The configured host (for the settings identity strip) — already
+                // known to anyone who can reach this API; not sensitive on a LAN.
+                address = c.Address,
                 // 24/7 footage being written right now (drives the UI's REC badge)
                 recording = c.ContinuousActive?.Invoke() ?? false,
                 // Battery cameras: intentionally disconnected (dozing) vs offline,

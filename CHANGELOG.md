@@ -8,6 +8,17 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### New
 
+- **Camera settings show the camera's address**: the identity strip at the top
+  of each camera's settings (next to model, firmware, hardware, serial) now
+  includes its configured network address (host, or host:port on a non-default
+  port). It stays visible even while the camera is offline — that's exactly when
+  knowing which IP to go check is useful.
+- **Camera settings open instantly**: the panel no longer sits on a single
+  "Querying camera…" screen until every capability probe finishes. The parts
+  the server already knows — the recording settings and the camera's address —
+  render immediately, and the device info and controls (which have to be read
+  from the camera) fill in behind a small "Querying the camera…" hint. The
+  recording tab is usable while that runs, and even while the camera is offline.
 - **Browser alerts — per-camera, per-detection notifications**: the new
   *Alerts* tab in settings (visible to every user) picks which detections pop
   a system notification, camera by camera — person, vehicle, animal, package,

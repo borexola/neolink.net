@@ -53,22 +53,20 @@
             </div>
         </div>
     }
-    else if (_caps != null && !_caps.Online)
+    else
     {
-        <div class="notice">Camera is offline (reconnecting). Controls appear when it comes back.</div>
-    }
-    else if (_caps != null)
-    {
-        @* Identity strip: the camera's vitals stay in view while the tab body
-           scrolls below — no more hunting for "which firmware was this again".
-           Generic RTSP cameras report none of this, so the strip stays away. *@
-        @if (_caps.Version != null || _http?.WifiSignal != null || _http?.SdCards is { Count: > 0 })
+        @* Identity strip: the address is known upfront and shows immediately; the
+           camera's own vitals (model/firmware/serial, Wi-Fi, SD) fill in once it
+           answers. Generic RTSP cameras report none, so the strip is just the
+           address (or nothing). *@
+        @if (_caps?.Version != null || !string.IsNullOrEmpty(Camera?.Address) || _http?.WifiSignal != null || _http?.SdCards is { Count: > 0 })
         {
         <div class="campanel-devbar">
-            @if (!string.IsNullOrEmpty(_caps.Version?.Model)) { <span class="devbar-item devbar-model" title="Model">@_caps.Version!.Model</span> }
-            @if (!string.IsNullOrEmpty(_caps.Version?.Firmware)) { <span class="devbar-item"><span class="devbar-k">Firmware</span>@_caps.Version!.Firmware</span> }
-            @if (!string.IsNullOrEmpty(_caps.Version?.Hardware)) { <span class="devbar-item"><span class="devbar-k">Hardware</span>@_caps.Version!.Hardware</span> }
-            @if (!string.IsNullOrEmpty(_caps.Version?.Serial)) { <span class="devbar-item"><span class="devbar-k">Serial</span>@_caps.Version!.Serial</span> }
+            @if (!string.IsNullOrEmpty(_caps?.Version?.Model)) { <span class="devbar-item devbar-model" title="Model">@_caps!.Version!.Model</span> }
+            @if (!string.IsNullOrEmpty(_caps?.Version?.Firmware)) { <span class="devbar-item"><span class="devbar-k">Firmware</span>@_caps!.Version!.Firmware</span> }
+            @if (!string.IsNullOrEmpty(_caps?.Version?.Hardware)) { <span class="devbar-item"><span class="devbar-k">Hardware</span>@_caps!.Version!.Hardware</span> }
+            @if (!string.IsNullOrEmpty(_caps?.Version?.Serial)) { <span class="devbar-item"><span class="devbar-k">Serial</span>@_caps!.Version!.Serial</span> }
+            @if (!string.IsNullOrEmpty(Camera?.Address)) { <span class="devbar-item" title="Configured network address"><span class="devbar-k">Address</span>@Camera!.Address</span> }
             @if (_http?.WifiSignal is { } wifi) { <span class="devbar-item"><span class="devbar-k">Wi-Fi</span>@WifiLabel(wifi)</span> }
             @if (_http?.SdCards is { Count: > 0 } cards)
             {
@@ -80,6 +78,19 @@
         </div>
         }
 
+        @* The camera is still answering: the server-side recording settings are
+           already usable above; device info and controls slot in when it replies. *@
+        @if (_probing)
+        {
+            <div class="notice small campanel-probing">
+                <span class="btn-spinner"></span> Querying the camera — device info and controls appear in a moment.
+            </div>
+        }
+        else if (_caps is { Online: false } && _recording == null)
+        {
+            <div class="notice">Camera is offline (reconnecting). Controls appear when it comes back.</div>
+        }
+
         <div class="settings-tabs campanel-tabs" role="tablist">
             @* Recording leads and is the default: it's the most-visited tab. *@
             @if (_recording != null)
@@ -88,8 +99,9 @@
                         @onclick='() => _camTab = "recording"'>@UiIcon.Render("rec", 13) Recording</button>
             }
             @* A generic RTSP camera has no device controls at all — don't offer an
-               empty tab when the recording one exists. *@
-            @if (HasDeviceControls || _recording == null)
+               empty tab when the recording one exists. The tab waits for the camera
+               to answer (its body reads capabilities), so it appears once online. *@
+            @if (_caps is { Online: true } && (HasDeviceControls || _recording == null))
             {
                 <button class="settings-tab @(_camTab == "controls" ? "active" : "")" role="tab"
                         @onclick='() => _camTab = "controls"'>
@@ -108,7 +120,9 @@
            Recording tab is one big card and gets the full width. *@
         <div class="campanel-body">
         <div class="campanel-cols @(_camTab == "recording" ? "one-col" : "")">
-        @if (_camTab == "controls")
+        @* The controls body reads capabilities/features, so it only renders once
+           the camera has answered (_caps != null) — the probing hint covers the wait. *@
+        @if (_camTab == "controls" && _caps != null)
         {
         @if (_profiles is { Count: > 0 })
         {
@@ -778,7 +792,7 @@
             </div>
         }
 
-        @if (_camTab == "controls" && Camera?.CanSuspend == true)
+        @if (_camTab == "controls" && _caps != null && Camera?.CanSuspend == true)
         {
             <div class="campanel-section">
                 <div class="campanel-section-title">@UiIcon.Render("eye-off", 13) SUSPEND <span class="beta-tag">BETA</span></div>
@@ -819,7 +833,7 @@
             </div>
         }
 
-        @if (_camTab == "controls" && _caps.Features?.Reboot != false)
+        @if (_camTab == "controls" && _caps != null && _caps.Features?.Reboot != false)
         {
             <div class="campanel-section">
                 <div class="campanel-section-title">@UiIcon.Render("wrench", 13) MAINTENANCE</div>
@@ -918,6 +932,10 @@
         || _caps?.Features is { } f && (f.Battery || f.Ptz || f.Zoom || f.Led || f.Siren
             || f.Privacy || f.Pir || f.Reboot);
     private bool _loading;
+    /// <summary>Phase 2 in flight: the camera is being queried for its capabilities
+    /// and control state. The server-side recording settings already render; this
+    /// gates the "querying the camera" hint and the device-controls tab.</summary>
+    private bool _probing;
     private string? _error;
     // Action feedback: a green (applied) / red (rejected) toast at the panel's
     // bottom edge that dismisses itself. The sequence number keeps a stale
@@ -1331,6 +1349,7 @@
     private async Task LoadAsync()
     {
         _loading = true;
+        _probing = false;
         _error = _toast = null;
         _caps = null;
         _recording = null;
@@ -1364,15 +1383,26 @@
             _suspended = su.GetBoolean();
         }
 
-        // Capability discovery drives everything else; the camera answers control
-        // commands one at a time, so the remaining queries run sequentially.
+        // Phase 1 — known upfront, no camera round-trip: the recording settings are
+        // pure server state (retention, event-type filter), readable even while the
+        // camera is offline. Fetch and render them FIRST so the panel is useful in a
+        // few milliseconds instead of waiting on the camera's capability probe.
+        _recording = await GetAsync<ApiRecordingSettings>("recording"); // null when the server records nothing
+        if (_recording != null) _camTab = "recording";
+        _loading = false;
+        _probing = true;
+        StateHasChanged();
+
+        // Phase 2 — the slow part: capability discovery probes the camera with a
+        // handful of commands, and each control read is another round-trip. Runs in
+        // the background behind the "querying the camera" hint; the device-controls
+        // tab appears once this lands.
         _caps = await GetAsync<ApiCapabilities>("capabilities");
         if (_caps is { Online: true })
         {
-            _recording = await GetAsync<ApiRecordingSettings>("recording"); // null when the server records nothing
-            // Recording is the panel's default tab — chosen HERE (first load) so
-            // the remaining queries fill the other tab in the background.
-            if (_recording != null) _camTab = "recording";
+            // A camera that came online since phase 1 (or records nothing) still
+            // wants the controls tab as its default.
+            if (_recording == null) _camTab = "controls";
             _profiles = (await GetAsync<ApiStreamProfiles>("streaminfo"))?.Profiles;
             if (_caps.Features?.Battery == true) _battery = await GetAsync<JsonElement?>("battery");
             if (_caps.Features?.Led == true) _led = await GetAsync<JsonElement?>("led");
@@ -1391,6 +1421,7 @@
             }
         }
         _loading = false;
+        _probing = false;
     }
 
     private Task CloseAsync() => OnClose.InvokeAsync();

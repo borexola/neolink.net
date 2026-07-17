@@ -463,6 +463,11 @@ foreach (var cam in config.Cameras)
     bool IsCamSuspended() =>
         (camServices.Count > 0 && camServices.All(s => s.Suspended))
         || (pullServices.Count > 0 && pullServices.All(s => s.Suspended));
+    // Configured address for the settings identity strip: host, plus :port when
+    // the camera is on a non-default Baichuan port. Generic RTSP cameras keep
+    // their address in the stream URL, so leave theirs unset.
+    var camAddress = cam.IsGenericRtsp || string.IsNullOrWhiteSpace(cam.Host) ? null
+        : cam.Port is 9000 or 0 ? cam.Host : $"{cam.Host}:{cam.Port}";
     webCameras.Add(new WebCameraInfo(cam.Name, webStreams, control, permitted,
         ContinuousActive: continuousRecorder == null ? null : () => continuousRecorder.IsWriting,
         SupportsEvents: !cam.IsGenericRtsp,
@@ -486,7 +491,7 @@ foreach (var cam in config.Cameras)
             : v => recordingSettings.Update(cam.Name, events: null, continuous: v, eventTypes: null, setEventTypes: false))
         // The recorder rides along so the web API and the MQTT bridge share one
         // on-demand recording session per camera (UI button ≡ HA Record switch).
-        { EventRecorder = eventRecorder });
+        { EventRecorder = eventRecorder, Address = camAddress });
     if (primaryService != null)
         motionTargets.Add((camServices, cam.Name, recorderSink));
 }
