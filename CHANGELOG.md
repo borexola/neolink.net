@@ -8,6 +8,17 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### New
 
+- **Browser alerts — per-camera, per-detection notifications**: the new
+  *Alerts* tab in settings (visible to every user) picks which detections pop
+  a system notification, camera by camera — person, vehicle, animal, package,
+  doorbell, crying, perimeter types, motion. Clicking a notification opens the
+  exact clip. Works while the app is open — tab or installed PWA, foreground
+  or minimized (nothing arrives once it is fully closed); a per-camera-and-type
+  cooldown (default 60 s) keeps a busy driveway from firing twenty times, and
+  a page load never replays history as a burst of stale alerts. Preferences
+  persist per account (`/api/me/settings/notifications`) and follow you across
+  browsers; the notification permission itself is per device. Like two-way
+  talk, browsers only allow notifications on HTTPS or localhost.
 - **Snapshot endpoint — `GET /api/cameras/{name}/snapshot.jpg`**: a current
   still image straight from the camera's own JPEG snapshot command, for
   notification thumbnails, wall dashboards and scripts. Poll-friendly by
@@ -237,6 +248,17 @@ in the README). Paste the matching section below into the GitHub release.
   (copies of one event arriving within milliseconds on two connections) are
   suppressed by a short identical-push window, so a doorbell press still rings
   automations exactly once.
+- **Wake-capture no longer keeps the battery camera awake**: parking and
+  probing immediately was a self-defeating loop — the just-released camera
+  (or one whose other stream was still viewed) answered the first probe, was
+  treated as "woke itself", and got reconnected 50 ms after "disconnecting so
+  the battery camera can sleep"; the probes themselves also reset the
+  camera's doze timer. The trigger is now the **sleep→wake edge**: after
+  parking there is a probe-free settle window (90 s) so the camera can doze
+  off, then sparse probes (30 s) until it is seen asleep once — and only a
+  probe answered AFTER that counts as "the camera woke itself" (PIR/motion)
+  and connects to catch the event. A viewer opening the stream still connects
+  immediately at any point.
 - **The sidebar battery icon now shows the level**: it was a fixed empty
   outline no matter the charge; the body now fills in proportion to the
   percentage (a bolt still replaces it while charging).

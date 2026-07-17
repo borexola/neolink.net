@@ -79,3 +79,22 @@ self.addEventListener('fetch', e => {
       headers: { 'Content-Type': 'text/html; charset=utf-8' },
     })));
 });
+
+// Browser alerts: clicking a notification lands on the exact clip. Focus an
+// existing window when one is open (and steer it to the event), otherwise open
+// a fresh one — the standard PWA notification-click dance.
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  const url = e.notification.data && e.notification.data.url;
+  e.waitUntil((async () => {
+    const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const c of wins) {
+      if ('focus' in c) {
+        await c.focus();
+        if (url && 'navigate' in c) { try { await c.navigate(url); } catch { } }
+        return;
+      }
+    }
+    if (url) await self.clients.openWindow(url);
+  })());
+});

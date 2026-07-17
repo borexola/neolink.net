@@ -843,6 +843,8 @@
                     }
                     <button class="settings-tab @(_settingsTab == "connection" ? "active" : "")" role="tab"
                             @onclick='() => _settingsTab = "connection"'>@UiIcon.Render("activity", 13) Connection</button>
+                    <button class="settings-tab @(_settingsTab == "alerts" ? "active" : "")" role="tab"
+                            @onclick='() => _settingsTab = "alerts"'>@UiIcon.Render("bell", 13) Alerts</button>
                     @if (_adminHasRecording)
                     {
                         <button class="settings-tab @(_settingsTab == "recording" ? "active" : "")" role="tab"
@@ -964,7 +966,77 @@
                         </div>
                     }
 
-                    @if (_settingsTab is not ("connection" or "users") && _adminConfig == null)
+                    @if (_settingsTab == "alerts")
+                    {
+                        <div class="campanel-section">
+                            <div class="campanel-section-title">@UiIcon.Render("bell", 13) BROWSER ALERTS</div>
+                            <div class="notice small">
+                                Pop a system notification when a chosen camera reports a chosen detection —
+                                on <b>this device</b>, while the app is open (tab or installed app, foreground
+                                or minimized; nothing arrives once it is fully closed). Clicking a
+                                notification opens the exact clip.
+                                @(_authEnabled ? "Preferences follow your account across browsers." :
+                                                 "Preferences are stored in this browser.")
+                            </div>
+                            @if (_notifPerm == "unsupported")
+                            {
+                                <div class="notice error">
+                                    This browser doesn't expose notifications on this page — they need a
+                                    secure context: <b>HTTPS</b> (e.g. your reverse proxy) or
+                                    <code>http://localhost</code>. Same rule as two-way talk.
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="control-row"><span>Alerts</span>
+                                    <button class="chip @(_alerts.Enabled ? "" : "chip-off")"
+                                            @onclick="ToggleAlertsEnabledAsync">@(_alerts.Enabled ? "on" : "off")</button>
+                                </div>
+                                <div class="control-row"><span>Browser permission</span>
+                                    @if (_notifPerm == "granted")
+                                    {
+                                        <span title="This browser will show notifications from this site">granted ✓</span>
+                                    }
+                                    else if (_notifPerm == "denied")
+                                    {
+                                        <span title="Notifications were blocked for this site — re-allow them in the browser's site settings (the lock icon in the address bar)">blocked — re-allow in the browser's site settings</span>
+                                    }
+                                    else
+                                    {
+                                        <button class="chip" @onclick="RequestNotifPermAsync">Allow notifications…</button>
+                                    }
+                                </div>
+                                <div class="control-row"><span>Cooldown per camera &amp; type (seconds)</span>
+                                    <input class="ret-input" type="number" min="0" step="5"
+                                           title="After an alert fires, further identical detections from that camera stay quiet this long — so an active driveway doesn't fire twenty times."
+                                           value="@_alerts.CooldownSeconds"
+                                           @onchange="SetAlertCooldownAsync" /></div>
+                                <div class="campanel-divider"></div>
+                                <div class="campanel-subtitle">WHICH DETECTIONS ALERT — PER CAMERA</div>
+                                @foreach (var cam in _cameras)
+                                {
+                                    <div class="control-row rec-types-row" @key="cam.Name">
+                                        <span>@cam.Name</span>
+                                        <div class="stream-options">
+                                            @foreach (var label in AlertLabels)
+                                            {
+                                                <button class="chip @(AlertLabelOn(cam.Name, label) ? "" : "chip-off")"
+                                                        title="@(AlertLabelOn(cam.Name, label) ? "Alerting" : "Silent")"
+                                                        @onclick="() => ToggleAlertLabelAsync(cam.Name, label)">@label</button>
+                                            }
+                                        </div>
+                                    </div>
+                                }
+                                <div class="notice small">
+                                    Nothing selected = that camera never alerts. Labels only fire when the
+                                    matching detection reaches the server — the camera does the detecting,
+                                    and the server must be recording events for it.
+                                </div>
+                            }
+                        </div>
+                    }
+
+                    @if (_settingsTab is not ("connection" or "users" or "alerts") && _adminConfig == null)
                     {
                         @if (_adminError != null)
                         {
@@ -976,7 +1048,7 @@
                         }
                     }
 
-                    @if (_adminConfig != null && _settingsTab is not ("notifications" or "connection" or "users"))
+                    @if (_adminConfig != null && _settingsTab is not ("notifications" or "connection" or "users" or "alerts"))
                     {
                         <div class="notice small">
                             Editing <code>@_adminConfigPath</code>.
@@ -1290,7 +1362,7 @@
                         </div>
                     }
 
-                    @if (_adminConfig != null && _settingsTab is not ("notifications" or "connection" or "users"))
+                    @if (_adminConfig != null && _settingsTab is not ("notifications" or "connection" or "users" or "alerts"))
                     {
                         <div class="notice small">
                             Restart stops the service; your container/systemd restart policy brings it back within seconds
@@ -1717,6 +1789,8 @@
             await LoadPersistedAsync();
             _loaded = true;
             await RefreshAuthAsync();
+            try { _notifPerm = await JS.InvokeAsync<string>("neolink.notifState"); } catch { }
+            await LoadAlertPrefsAsync();
             await RefreshCamerasAsync();
             await RefreshEventsAsync();
             ApplyRoute(); // deep links (/cameras/{name}) need the camera list first
@@ -2051,6 +2125,7 @@
         _setupDismissed = false;
         await JS.InvokeVoidAsync("neolink.lsSet", SetupDismissKey, "");
         await LoadUserSettingsAsync();
+        await LoadAlertPrefsAsync();
         await RefreshCamerasAsync();
         await RefreshEventsAsync();
         // A deep link (/cameras/{name}) opened on an auth-enabled server could
@@ -3105,10 +3180,173 @@
             // Keep an open player in sync (the clip appears once an ongoing event closes).
             if (_playEvent != null)
                 _playEvent = _events.FirstOrDefault(e => e.Id == _playEvent.Id) ?? _playEvent;
+            if (list != null) await MaybeNotifyAsync(list);
         }
         catch
         {
             _eventsSupported = false;
+        }
+    }
+
+    // ------------------------------------------------------------ browser alerts
+    // Per-detection notifications, riding the existing 10 s event poll. Rules are
+    // per ACCOUNT (saved via /api/me/settings/notifications, mirrored to
+    // localStorage), the browser permission is per device.
+
+    private sealed class AlertPrefs
+    {
+        public bool Enabled { get; set; }
+        public int CooldownSeconds { get; set; } = 60;
+        public Dictionary<string, List<string>> Cameras { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static readonly string[] AlertLabels =
+    {
+        "person", "vehicle", "animal", "package", "doorbell", "crying",
+        "line-crossing", "intrusion", "loitering", "motion",
+    };
+
+    private const string AlertPrefsKey = "neolink.alerts";
+    private AlertPrefs _alerts = new();
+    private string _notifPerm = "default"; // granted | denied | default | unsupported
+    private readonly HashSet<string> _alertSeen = new();
+    private bool _alertSeenSeeded;
+    private readonly Dictionary<string, DateTime> _alertLastFired = new();
+
+    private async Task LoadAlertPrefsAsync()
+    {
+        try
+        {
+            var json = await JS.InvokeAsync<string?>("neolink.lsGet", AlertPrefsKey);
+            if (json != null && JsonSerializer.Deserialize<AlertPrefs>(json) is { } local)
+                _alerts = local;
+        }
+        catch { }
+        if (string.IsNullOrEmpty(_authToken)) return;
+        try
+        {
+            using var res = await Http.SendAsync(ApiRequest(HttpMethod.Get, "/api/me/settings/notifications"));
+            if (!res.IsSuccessStatusCode) return;
+            var json = await res.Content.ReadAsStringAsync();
+            if (string.IsNullOrWhiteSpace(json) || json.Trim() == "{}") return;
+            if (JsonSerializer.Deserialize<AlertPrefs>(json, new JsonSerializerOptions(JsonSerializerDefaults.Web)) is { } server)
+            {
+                _alerts = server;
+                try { await JS.InvokeVoidAsync("neolink.lsSet", AlertPrefsKey, JsonSerializer.Serialize(_alerts)); } catch { }
+            }
+        }
+        catch { }
+    }
+
+    private async Task SaveAlertPrefsAsync()
+    {
+        var json = JsonSerializer.Serialize(_alerts);
+        try { await JS.InvokeVoidAsync("neolink.lsSet", AlertPrefsKey, json); } catch { }
+        if (string.IsNullOrEmpty(_authToken)) return;
+        try
+        {
+            var req = ApiRequest(HttpMethod.Put, "/api/me/settings/notifications");
+            req.Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
+            using var _ = await Http.SendAsync(req);
+        }
+        catch { /* transient: localStorage still has it */ }
+    }
+
+    private async Task ToggleAlertsEnabledAsync()
+    {
+        _alerts.Enabled = !_alerts.Enabled;
+        // Turning on without permission yet: ask right away (this click IS the
+        // user gesture the browser requires for the permission prompt).
+        if (_alerts.Enabled && _notifPerm == "default")
+            await RequestNotifPermAsync();
+        await SaveAlertPrefsAsync();
+    }
+
+    private async Task RequestNotifPermAsync()
+    {
+        try { _notifPerm = await JS.InvokeAsync<string>("neolink.notifRequest"); } catch { }
+    }
+
+    private async Task SetAlertCooldownAsync(ChangeEventArgs e)
+    {
+        if (int.TryParse((string?)e.Value, out var s) && s >= 0)
+        {
+            _alerts.CooldownSeconds = s;
+            await SaveAlertPrefsAsync();
+        }
+    }
+
+    private bool AlertLabelOn(string cam, string label) =>
+        _alerts.Cameras.TryGetValue(cam, out var l) && l.Contains(label, StringComparer.OrdinalIgnoreCase);
+
+    private async Task ToggleAlertLabelAsync(string cam, string label)
+    {
+        if (!_alerts.Cameras.TryGetValue(cam, out var l))
+            _alerts.Cameras[cam] = l = new List<string>();
+        if (!l.Remove(label)) l.Add(label);
+        if (l.Count == 0) _alerts.Cameras.Remove(cam);
+        await SaveAlertPrefsAsync();
+    }
+
+    /// <summary>Firmware label dialects → the chip vocabulary (ApiEvent's names).</summary>
+    private static string NormAlertLabel(string l) => l.ToLowerInvariant() switch
+    {
+        "crossline" or "cross_line" or "tripwire" => "line-crossing",
+        "intrude" or "region" or "perimeter" => "intrusion",
+        "linger" or "loiter" => "loitering",
+        "visitor" => "doorbell",
+        var x => x,
+    };
+
+    private async Task MaybeNotifyAsync(List<ApiEvent> list)
+    {
+        // First fetch = history, not news: seed silently so a page load (or a
+        // reconnect after downtime) never fires a burst of stale alerts.
+        if (!_alertSeenSeeded)
+        {
+            foreach (var e in list) _alertSeen.Add(e.Id);
+            _alertSeenSeeded = true;
+            return;
+        }
+        var live = _alerts.Enabled && _notifPerm == "granted" && _alerts.Cameras.Count > 0;
+        foreach (var ev in list)
+        {
+            if (!_alertSeen.Add(ev.Id)) continue;
+            if (!live) continue;
+            // Events older than a few minutes are catch-up, not "happening now".
+            if (DateTime.UtcNow - ev.Start > TimeSpan.FromMinutes(3)) continue;
+            if (!_alerts.Cameras.TryGetValue(ev.Camera, out var wanted)) continue;
+            var labels = ev.Labels.Count > 0
+                ? ev.Labels.Select(NormAlertLabel).Distinct().ToList()
+                : new List<string> { "motion" };
+            var hits = labels.Where(l => wanted.Contains(l, StringComparer.OrdinalIgnoreCase))
+                .OrderBy(l => l).ToList();
+            if (hits.Count == 0) continue;
+            var key = $"{ev.Camera}|{string.Join(",", hits)}";
+            var cooldown = TimeSpan.FromSeconds(Math.Max(0, _alerts.CooldownSeconds));
+            if (_alertLastFired.TryGetValue(key, out var last) && DateTime.UtcNow - last < cooldown)
+                continue;
+            _alertLastFired[key] = DateTime.UtcNow;
+            try
+            {
+                await JS.InvokeVoidAsync("neolink.notifShow", new
+                {
+                    title = ev.Title,
+                    body = $"{ev.Camera} · {ev.Start.ToLocalTime():HH:mm:ss}",
+                    tag = ev.Id,
+                    url = $"/events?event={Uri.EscapeDataString(ev.Id)}",
+                    icon = "/_content/Neolink.WebClient/icons/icon-192.png",
+                    image = ev.HasThumb ? EventArtifactUrl(ev, "thumb") : null,
+                });
+            }
+            catch { /* notification failures must never disturb the poll */ }
+        }
+        // The seen-set only ever grows within a session; cap it so a week-long
+        // dashboard tab doesn't hoard ids (500 covers the poll's window).
+        if (_alertSeen.Count > 2000)
+        {
+            var keep = list.Select(e => e.Id).ToHashSet();
+            _alertSeen.RemoveWhere(id => !keep.Contains(id));
         }
     }
 

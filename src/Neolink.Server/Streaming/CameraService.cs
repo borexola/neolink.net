@@ -34,6 +34,12 @@ public sealed class CameraService : ILiveCameraSource
     private static readonly TimeSpan IdleGrace = TimeSpan.FromSeconds(60);
     /// <summary>Wake-capture: how often to check whether a sleeping camera has woken.</summary>
     private static readonly TimeSpan WakeScanInterval = TimeSpan.FromSeconds(5);
+    /// <summary>Probe-free window after parking: the camera needs quiet to doze off,
+    /// and our own discovery probes would reset its idle timer.</summary>
+    private static readonly TimeSpan WakeSettleWindow = TimeSpan.FromSeconds(90);
+    /// <summary>Probe cadence while the camera is still awake after our release
+    /// (sibling stream, Reolink app, slow dozer) — sparse on purpose.</summary>
+    private static readonly TimeSpan AwaitSleepInterval = TimeSpan.FromSeconds(30);
     /// <summary>Wake-capture liveness probe timeout — short so a sleeping camera fails fast.</summary>
     private static readonly TimeSpan WakeProbeTimeout = TimeSpan.FromSeconds(2);
 
@@ -191,21 +197,52 @@ public sealed class CameraService : ILiveCameraSource
                 {
                     if (_config.WakeCapture)
                     {
-                        // Wake-capture (opt-in): instead of parking blind, watch for
-                        // the camera to wake ITSELF (motion) and connect the moment it
-                        // does, so its events are caught without holding it awake. A
-                        // sleeping camera's radio is off, so the liveness probes don't
-                        // reach it and cost it nothing; they're logged at Debug so the
-                        // steady polling never clutters the log. We fall through to
-                        // connect when the camera answers OR a viewer arrives.
+                        // Wake-capture (opt-in): watch for the camera to wake ITSELF
+                        // (motion) and connect the moment it does, so its events are
+                        // caught without holding it awake. The trigger is the
+                        // sleep→wake EDGE, never mere reachability: right after we
+                        // release the camera it is still awake (and while a sibling
+                        // stream keeps streaming it stays awake), so "it answered a
+                        // probe" proves nothing — and probing an awake camera resets
+                        // its doze timer, the very thing that must not happen. So:
+                        // a probe-free settle window first (let it doze off), then
+                        // sparse probes until it is seen ASLEEP once, and only a
+                        // reachable answer AFTER that means "the camera woke itself".
                         if (!_scanLogged)
                         {
                             _scanLogged = true;
-                            Log.Info($"{Tag}: sleep-friendly (wake-capture) — will connect when the camera wakes itself " +
-                                     "(motion) or a viewer opens the stream");
+                            Log.Info($"{Tag}: sleep-friendly (wake-capture) — letting the camera doze; " +
+                                     "will connect when it wakes itself (motion) or a viewer opens the stream");
                         }
-                        while (!DemandNow && !await ProbeAwakeAsync(ct).ConfigureAwait(false))
-                            await Task.Delay(WakeScanInterval, ct).ConfigureAwait(false);
+                        bool sawAsleep = false;
+                        var nextProbe = DateTime.UtcNow + WakeSettleWindow;
+                        while (!DemandNow)
+                        {
+                            await Task.Delay(TimeSpan.FromSeconds(1), ct).ConfigureAwait(false);
+                            if (DemandNow) break;
+                            if (DateTime.UtcNow < nextProbe) continue;
+                            if (!await ProbeAwakeAsync(ct).ConfigureAwait(false))
+                            {
+                                if (!sawAsleep)
+                                {
+                                    sawAsleep = true;
+                                    Log.Info($"{Tag}: camera is asleep — armed to connect on its next self-wake");
+                                }
+                                nextProbe = DateTime.UtcNow + WakeScanInterval;
+                            }
+                            else if (sawAsleep)
+                            {
+                                Log.Info($"{Tag}: camera woke itself — connecting to catch the event");
+                                break;
+                            }
+                            else
+                            {
+                                // Still awake since our release (a sibling stream, the
+                                // Reolink app, or a slow dozer): wait for real sleep,
+                                // probing sparsely so we never hold it awake ourselves.
+                                nextProbe = DateTime.UtcNow + AwaitSleepInterval;
+                            }
+                        }
                     }
                     else
                     {

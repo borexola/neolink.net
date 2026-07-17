@@ -1800,6 +1800,39 @@
         // (e.g. dismissing the "no sign-in" security banner).
         ssGet(key) { return sessionStorage.getItem(key); },
         ssSet(key, value) { sessionStorage.setItem(key, value); },
+
+        // ---- Browser alerts (per-detection notifications) -------------------
+        // Notification is only defined in secure contexts (HTTPS or localhost),
+        // so "unsupported" doubles as the http-on-LAN signal.
+        notifState() {
+            return ('Notification' in window) ? Notification.permission : 'unsupported';
+        },
+        async notifRequest() {
+            if (!('Notification' in window)) return 'unsupported';
+            try { return await Notification.requestPermission(); }
+            catch { return Notification.permission; }
+        },
+        // Raise via the service worker when available (survives tab minimize and
+        // renders richer on Android); plain Notification as the fallback. The tag
+        // (event id) collapses duplicates across open tabs.
+        async notifShow(o) {
+            if (!('Notification' in window) || Notification.permission !== 'granted') return false;
+            const url = o.url && o.url.startsWith('/') ? location.origin + o.url : o.url;
+            const opts = {
+                body: o.body || '', tag: o.tag || undefined,
+                icon: o.icon || undefined, image: o.image || undefined,
+                data: { url },
+            };
+            try {
+                const reg = await navigator.serviceWorker?.getRegistration();
+                if (reg) { await reg.showNotification(o.title, opts); return true; }
+            } catch { /* fall through to the plain API */ }
+            try {
+                const n = new Notification(o.title, opts);
+                n.onclick = () => { try { window.focus(); if (url) location.assign(url); } catch { } n.close(); };
+                return true;
+            } catch { return false; }
+        },
     };
 
     // PWA service worker (see sw.js — install support + offline screen, no

@@ -118,6 +118,12 @@ in exchange you get an integration light enough to leave running forever.
   failures — with a "resolved" follow-up when each clears. SMTP configured in
   the UI; the password is encrypted at rest; fully isolated so a bad mail server
   can't affect anything else — see [Email notifications](#email-notifications)
+- **Browser alerts (per user)**: the settings *Alerts* tab picks which
+  detections pop a system notification, camera by camera (person, vehicle,
+  doorbell, ...); clicking one opens the exact clip. Fires while the app is
+  open — tab or installed PWA, foreground or minimized — with a per-camera
+  cooldown against detection storms. Preferences persist per account and
+  follow you across browsers. Needs HTTPS (or localhost), like two-way talk
 - Everything persists in browser localStorage: server address, layout, tile
   assignments, window geometry
 - Adaptive jitter buffer that measures each stream's delivery cadence
@@ -934,11 +940,14 @@ from our side):
 
 By default a sleep-friendly battery camera only connects when *you* open its
 stream, so a motion event while nobody is watching is missed. Set
-`"wake_capture": true` per camera to change that: while the camera sleeps,
-Neolink.NET runs a **cheap liveness poll** (every few seconds) and connects the
-instant the camera wakes *itself* for motion — capturing that event — then lets it
-sleep again. The poll never reaches a sleeping camera (its radio is off), so it
-costs **no battery** and is silent in the log. This is the middle ground between
+`"wake_capture": true` per camera to change that: Neolink.NET watches for the
+**sleep→wake edge** and connects the instant the camera wakes *itself* for
+motion — capturing that event — then lets it sleep again. Concretely, after the
+last viewer leaves: a probe-free settle window (~90 s) lets the camera doze off
+undisturbed, then sparse liveness probes wait until it is actually asleep (the
+log says *"armed to connect on its next self-wake"*), and only a probe answered
+**after** that counts as a self-wake. Probes never reach a sleeping camera (its
+radio is off), so they cost **no battery**. This is the middle ground between
 sleep-friendly (misses events) and `always_on` (catches everything but drains the
 battery). It has no effect with `always_on` (which never sleeps) or on non-battery
 cameras. Note it may miss the first second or two of an event — Neolink connects a
