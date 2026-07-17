@@ -22,7 +22,7 @@ public sealed record ApiStream(string Kind, string Path, bool Ready, string? Cod
 /// <param name="OnDemand">On-demand clip capture state; null when the camera can't record events.</param>
 public sealed record ApiCamera(string Name, bool Online, List<ApiStream> Streams, bool Recording = false,
     bool Asleep = false, ApiBattery? Battery = null, ApiOnDemand? OnDemand = null, bool Privacy = false,
-    bool Suspended = false, bool CanSuspend = false, string? Address = null);
+    bool Suspended = false, bool CanSuspend = false, string? Address = null, bool Udp = false);
 
 /// <summary>On-demand clip capture (the tile record button / HA Record switch):
 /// one clip, stopped automatically at MaxSeconds.</summary>

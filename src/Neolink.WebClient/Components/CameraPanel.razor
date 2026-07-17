@@ -67,6 +67,7 @@
             @if (!string.IsNullOrEmpty(_caps?.Version?.Hardware)) { <span class="devbar-item"><span class="devbar-k">Hardware</span>@_caps!.Version!.Hardware</span> }
             @if (!string.IsNullOrEmpty(_caps?.Version?.Serial)) { <span class="devbar-item"><span class="devbar-k">Serial</span>@_caps!.Version!.Serial</span> }
             @if (!string.IsNullOrEmpty(Camera?.Address)) { <span class="devbar-item" title="Configured network address"><span class="devbar-k">Address</span>@Camera!.Address</span> }
+            @if (Camera?.Udp == true) { <span class="devbar-item" title="Connected over UDP (Baichuan-over-UDP) — beta support for battery-only models"><span class="devbar-k">Transport</span>UDP <span class="beta-tag">BETA</span></span> }
             @if (_http?.WifiSignal is { } wifi) { <span class="devbar-item"><span class="devbar-k">Wi-Fi</span>@WifiLabel(wifi)</span> }
             @if (_http?.SdCards is { Count: > 0 } cards)
             {

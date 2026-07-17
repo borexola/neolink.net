@@ -758,6 +758,7 @@
                 const st = stOf(box);
                 const v = box.querySelector('video');
                 if (!v) return;
+                const wasZoomed = box.classList.contains('zoomed');
                 st.z = Math.min(MAXZ, Math.max(1, st.z));
                 st.tx = Math.min(0, Math.max(box.clientWidth * (1 - st.z), st.tx));
                 st.ty = Math.min(0, Math.max(box.clientHeight * (1 - st.z), st.ty));
@@ -767,6 +768,15 @@
                 } else {
                     v.style.transformOrigin = '0 0';
                     v.style.transform = `translate(${st.tx}px, ${st.ty}px) scale(${st.z})`;
+                }
+                // A PAUSED video can go black on the first zoom: the transform
+                // promotes it to a composited layer, and with no new frames
+                // arriving the stale frame never lands in it — until something
+                // (a mouse drag) forces a repaint. Re-presenting the current
+                // frame via a zero seek repaints it immediately. Once per
+                // zoom-in only, so panning stays smooth.
+                if (!wasZoomed && st.z > 1 && v.paused && v.readyState >= 2) {
+                    try { v.currentTime = v.currentTime; } catch { /* detached */ }
                 }
                 box.classList.toggle('zoomed', st.z > 1);
                 if (st.z > 1) zoomedBoxes.add(box); else zoomedBoxes.delete(box);

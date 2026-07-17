@@ -1351,6 +1351,7 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
        (maximize/minimize taking seconds to register on iOS). */
     .zoom-on video, .quick-view-media video, .event-player-media video { touch-action: none; }
 
+
     /* The camera name leaves the bottom bar for the translucent top-right float. */
     .tile-name-float { display: block; }
     .tile-bar .tile-name { display: none; }
@@ -2770,6 +2771,16 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 .tile:fullscreen:hover .zoom-hud,
 .tile:fullscreen.zoomed .zoom-hud {
     display: flex;
+}
+
+/* Zoomable surfaces keep their video on its own compositor layer from the
+   start: promoting it only when the first zoom transform lands can leave a
+   PAUSED video's stale frame unpainted — black until a mouse drag forces a
+   repaint. Cheap: zoom-on only ever marks the active surface (maximized tile,
+   quick view, event player), never the whole wall. */
+.zoom-on video,
+.tile:fullscreen video {
+    will-change: transform;
 }
 
 .zoom-badge {

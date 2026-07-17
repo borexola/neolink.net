@@ -155,7 +155,7 @@ in the README). Paste the matching section below into the GitHub release.
   camera (radio off), so it costs no battery and is silent in the log. Default off
   (unchanged park-until-viewer behavior); no effect with `always_on` or on
   non-battery cameras.
-- **Baichuan-over-UDP transport for battery-only cameras (experimental, opt-in)**:
+- **Baichuan-over-UDP transport for battery-only cameras (beta, opt-in)**:
   some battery models (parts of the Argus line) never listen on TCP — they speak
   Baichuan over UDP — so they could never connect. Setting a camera's `uid`
   (Reolink app → device info, or the sticker) and `"udp": true` connects it over
@@ -164,8 +164,11 @@ in the README). Paste the matching section below into the GitHub release.
   so video, events, battery and controls all work exactly as on the TCP path. The
   default is unchanged TCP; the UDP path runs only when `"udp": true` is set. The
   camera must still be awake and reachable by `address` on the LAN — UDP can't wake
-  a sleeping camera. Experimental: please report a UDP camera that connects but
-  misbehaves.
+  a sleeping camera (pair with `wake_capture` to catch its self-wakes). UDP
+  cameras carry a **UDP BETA badge** in the sidebar and on their settings panel,
+  so it's always clear which transport a camera runs on. Validated on real
+  hardware (Argus Eco Pro) thanks to Rihan9's patient testing and log captures
+  across many beta rounds (issue #39).
 - **Studio layout for the timeline (opt-in)**: a Studio toggle in the timeline
   toolbar switches the page to a video-editor arrangement — the camera monitors
   fill the top of the screen and the editing desk (transport controls, camera
@@ -250,6 +253,13 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Fixed
 
+- **Zooming a paused clip no longer blacks out the video**: digitally zooming
+  in the event pop-up (or any zoom surface) while the video was paused could
+  show black until the mouse was dragged over it — applying the first zoom
+  promotes the video to its own compositor layer, and with no new frames
+  arriving the last frame never landed in it. Zoomable surfaces now keep their
+  video pre-composited (`will-change: transform`), and the current frame is
+  re-presented once on zoom-in as a belt-and-braces repaint.
 - **Watching only the sub stream no longer reads as "camera offline"**: the
   camera's online state, Home Assistant availability, camera controls, and the
   motion/status listeners were all bound to the MAIN stream's connection — so a

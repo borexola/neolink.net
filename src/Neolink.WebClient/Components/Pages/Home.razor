@@ -117,6 +117,11 @@
                      @onclick="() => OpenCameraMain(cam)">
                     <span class="dot @(cam.Online ? "on" : cam.Asleep ? "doze" : "off")"></span>
                     <span class="cam-name">@cam.Name</span>
+                    @if (cam.Udp)
+                    {
+                        @* Baichuan-over-UDP battery camera: beta transport, badge it. *@
+                        <span class="beta-tag" title="Connected over UDP (Baichuan-over-UDP) — beta support for battery-only models like the Argus family">UDP BETA</span>
+                    }
                     @if (cam.Battery is { } bat)
                     {
                         @* Battery-powered camera: level + charging hint. *@

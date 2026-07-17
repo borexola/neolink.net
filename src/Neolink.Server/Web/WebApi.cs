@@ -48,6 +48,10 @@ public sealed record WebCameraInfo(string Name, List<WebStreamInfo> Streams, ICa
     /// shown on the camera-settings identity strip. Null for generic RTSP cameras
     /// (their address lives in the stream URL) or when unknown.</summary>
     public string? Address { get; init; }
+
+    /// <summary>Baichuan-over-UDP transport (beta): UDP-only battery models
+    /// (Argus family). Surfaced so the UI can badge these cameras as beta.</summary>
+    public bool Udp { get; init; }
 }
 
 /// <summary>Everything the web API needs from the host.</summary>
@@ -1012,6 +1016,8 @@ public static class WebApi
                 // The configured host (for the settings identity strip) — already
                 // known to anyone who can reach this API; not sensitive on a LAN.
                 address = c.Address,
+                // Baichuan-over-UDP transport (beta) — the UI badges these cameras.
+                udp = c.Udp,
                 // 24/7 footage being written right now (drives the UI's REC badge)
                 recording = c.ContinuousActive?.Invoke() ?? false,
                 // Battery cameras: intentionally disconnected (dozing) vs offline,

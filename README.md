@@ -954,13 +954,13 @@ cameras. Note it may miss the first second or two of an event — Neolink connec
 moment after the camera wakes — and on a very busy camera it trends toward
 `always_on`-like battery use.
 
-### UDP-only battery models (experimental)
+### UDP-only battery models (beta)
 
 Some battery-only models (parts of the Argus line) never listen on TCP at all —
 they speak Baichuan **over UDP** — so they log `Connection refused` forever on the
-normal path, and a port scan shows no open ports. Neolink.NET can connect to these
-over UDP: set the camera's **UID** (Reolink app → device info, or the sticker) and
-`"udp": true` in its config entry:
+normal path, and a port scan shows no open ports. Neolink.NET supports these
+over UDP as a **beta**: set the camera's **UID** (Reolink app → device info, or
+the sticker) and `"udp": true` in its config entry:
 
 ```jsonc
 { "name": "Retro", "username": "admin", "password": "…",
@@ -968,10 +968,20 @@ over UDP: set the camera's **UID** (Reolink app → device info, or the sticker)
 ```
 
 The camera still has to be **awake and on your LAN** (the same sleep limitation
-applies — UDP can't wake a sleeping camera). Once connected, everything is the same
-as the TCP path: video, events, battery, recording and controls all work, because
-only the transport differs. This path is **experimental** — if a UDP camera
-connects but misbehaves, please open an issue with the log.
+applies — UDP can't wake a sleeping camera; pair it with
+[`wake_capture`](#wake-capture-catch-events-without-always_on) to catch its
+self-wakes). Once connected, everything is the same as the TCP path: video,
+events, battery, recording and controls all work, because only the transport
+differs. UDP cameras carry a **UDP BETA badge** in the sidebar and on their
+settings panel so it's always clear which transport a camera runs on. As a beta,
+rough edges are possible — if a UDP camera connects but misbehaves, please open
+an issue with the log.
+
+Validated against real hardware (Argus Eco Pro) — with thanks to
+**[Rihan9](https://github.com/Rihan9)**, whose patient testing and log captures
+across many beta rounds pinned down the protocol's keepalive and session
+behavior and made this support work
+([#39](https://github.com/borexola/neolink.net/issues/39)).
 
 ## Perimeter protection (line/zone crossing)
 
