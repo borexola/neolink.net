@@ -271,7 +271,11 @@ public static class WebApi
 
         // Once any account exists, every /api call (except the auth handshake
         // itself) requires a valid session. The Blazor UI shell stays public so
-        // the login screen can render.
+        // the login screen can render. Exception: snapshot URLs may instead carry
+        // RTSP Basic credentials — they are the still-image twin of the rtsp://
+        // stream URLs, consumed by the same kind of client (HA generic camera,
+        // scripts) that already holds those credentials; the endpoint validates
+        // them itself (per-camera permissions included).
         app.Use(async (ctx, next) =>
         {
             if (userStore.Enabled
@@ -281,6 +285,15 @@ public static class WebApi
                 var user = SessionUser(ctx);
                 if (user == null)
                 {
+                    if (IsSnapshotPath(ctx.Request.Path)
+                        && ctx.Request.Headers.Authorization.ToString()
+                            .StartsWith("Basic ", StringComparison.OrdinalIgnoreCase))
+                    {
+                        await next(); // the snapshot handler checks the Basic credentials
+                        return;
+                    }
+                    if (IsSnapshotPath(ctx.Request.Path))
+                        ctx.Response.Headers.WWWAuthenticate = "Basic realm=\"neolink\"";
                     ctx.Response.StatusCode = 401;
                     await ctx.Response.WriteAsJsonAsync(new { error = "authentication required" });
                     return;
@@ -1233,11 +1246,35 @@ public static class WebApi
             string, (byte[] Jpeg, DateTime AtUtc)>(StringComparer.OrdinalIgnoreCase);
         var snapGates = new System.Collections.Concurrent.ConcurrentDictionary<
             string, SemaphoreSlim>(StringComparer.OrdinalIgnoreCase);
+        // Snapshot auth: a web-UI session qualifies (the middleware validated it),
+        // and so do the RTSP user credentials over HTTP Basic — the snapshot is
+        // the still-image twin of the rtsp:// stream URLs: same users, same
+        // per-camera permissions, so a client that already plays
+        // rtsp://user:pass@host/cam can fetch http://user:pass@host/api/cameras/cam/snapshot.jpg.
+        IResult? SnapshotAuth(HttpContext ctx, WebCameraInfo cam)
+        {
+            if (ctx.Items.ContainsKey("authUser"))
+                return null;
+            var creds = NetUtil.DecodeBasicAuth(ctx.Request.Headers.Authorization);
+            if (creds != null
+                && users.TryGetValue(creds.Value.User, out var expected)
+                && NetUtil.FixedTimeEquals(expected, creds.Value.Pass)
+                && (cam.PermittedUsers == null || cam.PermittedUsers.Contains(creds.Value.User)))
+                return null;
+            // Nothing configured to authenticate against → open, like the streams.
+            if (!userStore.Enabled && (cam.PermittedUsers == null || users.Count == 0))
+                return null;
+            ctx.Response.Headers.WWWAuthenticate = "Basic realm=\"neolink\"";
+            return Results.Json(new { error = "authentication required" }, statusCode: 401);
+        }
+
         async Task<IResult> SnapshotAsync(string name, HttpContext ctx)
         {
             var cam = cameras.FirstOrDefault(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase));
             if (cam == null)
                 return Results.Json(new { error = $"unknown camera '{name}'" }, statusCode: 404);
+            if (SnapshotAuth(ctx, cam) is { } denied)
+                return denied;
             double maxAge = 5;
             if (double.TryParse(ctx.Request.Query["maxAge"], System.Globalization.NumberStyles.Float,
                     System.Globalization.CultureInfo.InvariantCulture, out var q) && q >= 0)
@@ -2420,6 +2457,13 @@ public static class WebApi
     /// reach clients without a typed model. Leaves: numbers stay numbers; repeated
     /// element names become arrays; attributes are prefixed with '@'.
     /// </summary>
+    /// <summary>True for /api/cameras/{name}/snapshot[.jpg] — the paths whose auth
+    /// additionally accepts RTSP Basic credentials (see the session middleware).</summary>
+    private static bool IsSnapshotPath(PathString path) =>
+        path.StartsWithSegments("/api/cameras")
+        && (path.Value!.EndsWith("/snapshot.jpg", StringComparison.OrdinalIgnoreCase)
+            || path.Value.EndsWith("/snapshot", StringComparison.OrdinalIgnoreCase));
+
     /// <summary>The worst storage-tier state for the wall banner: null when recording
     /// is off or every tier is healthy, else the most urgent tier's summary.</summary>
     private static object? ShapeStorage(StorageLocations? storage)

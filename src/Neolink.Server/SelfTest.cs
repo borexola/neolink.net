@@ -3114,7 +3114,9 @@ public static class SelfTest
                     Port = port,
                     WebUi = false,
                     Cameras = new[] { cam, snapCam },
-                    Users = new Dictionary<string, string>(),
+                    // One RTSP user: the snapshot endpoint accepts these over
+                    // HTTP Basic, like the rtsp:// stream URLs do.
+                    Users = new Dictionary<string, string> { ["rtspuser"] = "rtsp pass" },
                     RtspPort = 8654,
                     Events = store,
                     RecordingSettings = new Recording.RecordingSettings(dir),
@@ -3214,7 +3216,32 @@ public static class SelfTest
                 // The gate: every /api route except the auth handshake now needs a session.
                 AssertEq((int)http.GetAsync("/api/cameras").Result.StatusCode, 401);
                 AssertEq((int)http.GetAsync("/api/features").Result.StatusCode, 401);
-                AssertEq((int)http.GetAsync("/api/cameras/snapcam/snapshot.jpg").Result.StatusCode, 401);
+                using (var res = http.GetAsync("/api/cameras/snapcam/snapshot.jpg").Result)
+                {
+                    AssertEq((int)res.StatusCode, 401);
+                    Assert(res.Headers.WwwAuthenticate.Any(h => h.Scheme == "Basic"),
+                        "snapshot 401 challenges for Basic (HA generic camera flow)");
+                }
+                // RTSP Basic credentials open the snapshot even with accounts on —
+                // the still-image twin of the rtsp:// stream URLs. Wrong password
+                // stays out.
+                string BasicHdr(string u, string p) =>
+                    Convert.ToBase64String(Encoding.UTF8.GetBytes($"{u}:{p}"));
+                using (var req = new HttpRequestMessage(HttpMethod.Get, "/api/cameras/snapcam/snapshot.jpg"))
+                {
+                    req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
+                        "Basic", BasicHdr("rtspuser", "rtsp pass"));
+                    using var res = http.Send(req);
+                    AssertEq((int)res.StatusCode, 200);
+                    AssertEq(res.Content.Headers.ContentType!.MediaType!, "image/jpeg");
+                }
+                using (var req = new HttpRequestMessage(HttpMethod.Get, "/api/cameras/snapcam/snapshot.jpg"))
+                {
+                    req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
+                        "Basic", BasicHdr("rtspuser", "wrong pass"));
+                    using var res = http.Send(req);
+                    AssertEq((int)res.StatusCode, 401);
+                }
                 AssertEq((int)http.GetAsync("/api/auth/status").Result.StatusCode, 200);
 
                 // Both token transports authenticate: Bearer header (component fetches)

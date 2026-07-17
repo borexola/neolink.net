@@ -15,8 +15,12 @@ in the README). Paste the matching section below into the GitHub release.
   single-flight gate collapse a poll storm into one camera command, and a
   sleeping battery camera is **never woken by a poll** — it serves its last
   frame, honestly labelled via `X-Snapshot-Age` / `X-Snapshot-Stale` headers.
-  Cameras without the command (generic RTSP) return 404; same auth as the rest
-  of the API. See "Snapshots over HTTP" in the README.
+  Cameras without the command (generic RTSP) return 404. Auth works like the
+  stream URLs: the RTSP user credentials open it over HTTP Basic — same
+  per-camera permitted rules, and they keep working when web-UI accounts are
+  on — so `http://user:pass@host:8655/api/cameras/{name}/snapshot.jpg` pairs
+  with the rtsp:// URL you already use (a web session or `?token=` works
+  too). See "Snapshots over HTTP" in the README.
 - **Storage forecast — "fills in ~23 days at the current rate"**: the Monitor's
   DISK FREE card and per-location storage cards now project when each disk runs
   out. Free space is sampled every 15 minutes and persisted in the state dir

@@ -820,12 +820,15 @@ http://neolink:8655/api/cameras/Driveway/snapshot.jpg
   response, plus `X-Snapshot-Stale: true` when it's older than requested. No
   frame at all yet → `503` with a JSON error.
 - Cameras without the snapshot command (generic RTSP cameras) return `404`.
-- With web-UI accounts enabled the endpoint needs a session like the rest of
-  the API — append `?token=` (tokens last 30 days). Home Assistant users
-  usually don't need this endpoint at all: with MQTT enabled each camera
-  already publishes a **Snapshot** `camera` entity, and
-  `image: /api/camera_proxy/camera.{name}_snapshot` attaches it to a
-  notification with HA handling the auth.
+- **Auth works like the stream URLs**: the same RTSP user credentials you use
+  in `rtsp://user:pass@host:8654/{camera}/subStream` open the snapshot over
+  HTTP Basic — `http://user:pass@host:8655/api/cameras/{camera}/snapshot.jpg`,
+  or the username/password fields of HA's Generic Camera integration — with
+  the same per-camera `permitted` rules, and it keeps working when web-UI
+  accounts are enabled (a web session or `?token=` works too). With neither
+  RTSP users nor accounts configured the URL is open, exactly like the
+  streams. (HA users with MQTT also get a **Snapshot** `camera` entity for
+  free — `image: /api/camera_proxy/camera.{name}_snapshot` in a notification.)
 
 ## Email notifications
 
