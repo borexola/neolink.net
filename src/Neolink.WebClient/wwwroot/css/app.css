@@ -1883,6 +1883,51 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     gap: 6px;
 }
 
+/* Browser-alerts per-camera picker: one card per camera so it's obvious which
+   detection chips belong to which camera (the old flat rows blended together). */
+.alert-cams {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 8px;
+}
+.alert-cam {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 9px 11px;
+    background: var(--panel-2, rgba(255, 255, 255, 0.02));
+}
+/* A camera with at least one alert selected reads as "active" at a glance. */
+.alert-cam.has-alerts {
+    border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+    background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+.alert-cam-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+.alert-cam-name {
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--text);
+}
+.alert-cam-count {
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    flex: 0 0 auto;
+}
+.alert-cam.has-alerts .alert-cam-count { color: var(--accent); }
+.alert-cam-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
 /* ------------------------------------------------------------ events (NVR) */
 
 /* Frigate-style review strip across the top of the stage.

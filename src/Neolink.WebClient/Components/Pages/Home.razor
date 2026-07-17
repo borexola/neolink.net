@@ -1006,32 +1006,41 @@
                                         <button class="chip" @onclick="RequestNotifPermAsync">Allow notifications…</button>
                                     }
                                 </div>
-                                <div class="control-row"><span>Cooldown per camera &amp; type (seconds)</span>
-                                    <input class="ret-input" type="number" min="0" step="5"
-                                           title="After an alert fires, further identical detections from that camera stay quiet this long — so an active driveway doesn't fire twenty times."
-                                           value="@_alerts.CooldownSeconds"
-                                           @onchange="SetAlertCooldownAsync" /></div>
-                                <div class="campanel-divider"></div>
-                                <div class="campanel-subtitle">WHICH DETECTIONS ALERT — PER CAMERA</div>
-                                @foreach (var cam in _cameras)
+                                @if (_alerts.Enabled)
                                 {
-                                    <div class="control-row rec-types-row" @key="cam.Name">
-                                        <span>@cam.Name</span>
-                                        <div class="stream-options">
-                                            @foreach (var label in AlertLabels)
-                                            {
-                                                <button class="chip @(AlertLabelOn(cam.Name, label) ? "" : "chip-off")"
-                                                        title="@(AlertLabelOn(cam.Name, label) ? "Alerting" : "Silent")"
-                                                        @onclick="() => ToggleAlertLabelAsync(cam.Name, label)">@label</button>
-                                            }
-                                        </div>
+                                    <div class="control-row"><span>Cooldown per camera &amp; type (seconds)</span>
+                                        <input class="ret-input" type="number" min="0" step="5"
+                                               title="After an alert fires, further identical detections from that camera stay quiet this long — so an active driveway doesn't fire twenty times."
+                                               value="@_alerts.CooldownSeconds"
+                                               @onchange="SetAlertCooldownAsync" /></div>
+                                    <div class="campanel-divider"></div>
+                                    <div class="campanel-subtitle">WHICH DETECTIONS ALERT — PER CAMERA</div>
+                                    <div class="notice small">
+                                        Nothing selected = that camera never alerts. Labels only fire when the
+                                        matching detection reaches the server — the camera does the detecting,
+                                        and the server must be recording events for it.
+                                    </div>
+                                    <div class="alert-cams">
+                                        @foreach (var cam in _cameras)
+                                        {
+                                            var on = AlertOnCount(cam.Name);
+                                            <div class="alert-cam @(on > 0 ? "has-alerts" : "")" @key="cam.Name">
+                                                <div class="alert-cam-head">
+                                                    <span class="alert-cam-name">@cam.Name</span>
+                                                    <span class="alert-cam-count">@(on > 0 ? $"{on} on" : "off")</span>
+                                                </div>
+                                                <div class="alert-cam-chips">
+                                                    @foreach (var label in AlertLabels)
+                                                    {
+                                                        <button class="chip @(AlertLabelOn(cam.Name, label) ? "" : "chip-off")"
+                                                                title="@(AlertLabelOn(cam.Name, label) ? "Alerting on this detection" : "Silent")"
+                                                                @onclick="() => ToggleAlertLabelAsync(cam.Name, label)">@label</button>
+                                                    }
+                                                </div>
+                                            </div>
+                                        }
                                     </div>
                                 }
-                                <div class="notice small">
-                                    Nothing selected = that camera never alerts. Labels only fire when the
-                                    matching detection reaches the server — the camera does the detecting,
-                                    and the server must be recording events for it.
-                                </div>
                             }
                         </div>
                     }
@@ -1395,13 +1404,18 @@
                                 @(_notifSaving ? "Saving…" : (_notif.Enabled ? "Save notifications" : "Save"))</button>
                         </div>
                     }
-                    else if (_settingsTab is "connection" or "users")
+                    else if (_settingsTab is "connection" or "users" or "alerts")
                     {
+                        @* Instant-save tabs: nothing here touches config.json or needs a
+                           restart, so the Save/Restart footer must not appear. *@
                         <div class="settings-foot-btns">
                             <span class="event-sub">
-                                @(_settingsTab == "connection"
-                                    ? "Saved instantly — these settings live in this browser only."
-                                    : "User changes apply immediately; no restart needed.")
+                                @(_settingsTab switch
+                                {
+                                    "connection" => "Saved instantly — these settings live in this browser only.",
+                                    "alerts" => "Saved instantly to your account — no config.json, no restart.",
+                                    _ => "User changes apply immediately; no restart needed.",
+                                })
                             </span>
                             <span class="tile-spacer"></span>
                             @if (_authUser != null)
@@ -3278,6 +3292,10 @@
 
     private bool AlertLabelOn(string cam, string label) =>
         _alerts.Cameras.TryGetValue(cam, out var l) && l.Contains(label, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>How many detection labels this camera alerts on (0 = never alerts).</summary>
+    private int AlertOnCount(string cam) =>
+        _alerts.Cameras.TryGetValue(cam, out var l) ? l.Count(AlertLabels.Contains) : 0;
 
     private async Task ToggleAlertLabelAsync(string cam, string label)
     {

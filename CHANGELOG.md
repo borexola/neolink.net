@@ -29,7 +29,12 @@ in the README). Paste the matching section below into the GitHub release.
   a page load never replays history as a burst of stale alerts. Preferences
   persist per account (`/api/me/settings/notifications`) and follow you across
   browsers; the notification permission itself is per device. Like two-way
-  talk, browsers only allow notifications on HTTPS or localhost.
+  talk, browsers only allow notifications on HTTPS or localhost. The tab is
+  honest about its nature: alerts save instantly (its footer says so — no
+  config.json, no restart, and the server Save/Restart buttons never appear
+  there), the per-camera picker only shows while alerts are on, and each
+  camera is its own card — name on top, its detection chips below, with an
+  accent highlight and an "N on" count on cameras that alert.
 - **Snapshot endpoint — `GET /api/cameras/{name}/snapshot.jpg`**: a current
   still image straight from the camera's own JPEG snapshot command, for
   notification thumbnails, wall dashboards and scripts. Poll-friendly by
