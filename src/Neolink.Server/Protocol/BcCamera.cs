@@ -314,7 +314,23 @@ public sealed class BcCamera : IBcCamera
             var list = msg.Xml?.RawElement("AlarmEventList");
             if (list == null)
             {
-                // Some firmware variants push different XML on the motion channel
+                // DayNightEventList is a benign housekeeping push: the camera
+                // announcing it flipped its day/night IR mode. It rides the motion
+                // channel but is not an alarm and not a doorbell — keep it at Debug
+                // so it never masquerades as an unmapped event in the INF log.
+                if (msg.Xml?.RawElement("DayNightEventList") != null)
+                {
+                    var dn = msg.Xml.RawElement("DayNightEventList")!.ToString(SaveOptions.DisableFormatting);
+                    // Visible under NEOLINK_DEBUG_ALARMS (labelled "ignored" so a
+                    // capture stays complete), silent otherwise.
+                    if (Log.AlarmXml)
+                        Log.Info($"BC {_logTag}: day/night mode push (ignored) {dn}");
+                    else
+                        Log.Debug($"BC {_logTag}: day/night mode push (ignored) {dn}");
+                    continue;
+                }
+
+                // Anything else is a firmware variant we don't map yet
                 // (doorbell/visitor pushes among the suspects) — surface the first
                 // one seen so the mapping can be extended from a real sample.
                 if (msg.Xml != null && (!_oddMotionPushLogged || Log.AlarmXml))

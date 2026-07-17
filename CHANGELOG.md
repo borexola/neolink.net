@@ -188,6 +188,14 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Fixed
 
+- **Day/night mode switches stop nagging the log**: cameras announce every
+  IR day↔night flip with a `DayNightEventList` push on the motion channel. The
+  server treated any non-alarm push as an unmapped event and logged it at INF
+  with a "please report if this coincides with a doorbell press" note, so a
+  camera that switched to night mode each evening produced a scary-looking line
+  that had nothing to do with doorbells. Day/night pushes are now recognized as
+  benign housekeeping and kept at Debug; the report note is reserved for pushes
+  that are genuinely unmapped.
 - **Timeline Studio: focusing the only camera no longer leaves dead space**:
   with a single camera loaded, clicking its monitor used to switch to the
   program-monitor-plus-thumbnail-rail layout anyway — shoving the lone monitor
