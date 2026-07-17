@@ -1688,6 +1688,15 @@ public static class SelfTest
             var s2 = Streaming.CameraControl.ParseImageSettings(img, null);
             Assert(s2 is { Bright: 128, DayNight: null, Flip: null, Mirror: null },
                 "missing ISP half -> null extras");
+
+            // Indoor firmwares (E1 line) report antiFlicker "Off"; the canonical
+            // value list must carry it or HA rejects every state publish
+            // ("Invalid option for select...anti_flicker: 'Off'").
+            Assert(Streaming.ImageSettings.AntiFlickerValues.SequenceEqual(
+                new[] { "Off", "Outdoor", "50HZ", "60HZ" }), "antiFlicker values include Off");
+            var ispOff = Obj("""{"dayNight":"Auto","antiFlicker":"Off","rotation":0,"mirroring":0}""");
+            Assert(Streaming.CameraControl.ParseImageSettings(img, ispOff).AntiFlicker == "Off",
+                "antiFlicker Off parses through untouched");
         });
 
         Test("config editor: camera add/edit/delete round-trip + masking", () =>

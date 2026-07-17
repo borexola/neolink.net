@@ -30,9 +30,15 @@ public sealed record StreamEncSetting(string Stream, uint Width, uint Height, ui
 
 /// <summary>Picture settings read over the HTTP API. The five adjustments are
 /// 0-255 (128 = neutral); a null field means the camera doesn't report it.
-/// DayNight is "Auto"|"Color"|"Black&amp;White", AntiFlicker "Outdoor"|"50HZ"|"60HZ".</summary>
+/// DayNight is "Auto"|"Color"|"Black&amp;White", AntiFlicker one of
+/// <see cref="ImageSettings.AntiFlickerValues"/>.</summary>
 public sealed record ImageSettings(int? Bright, int? Contrast, int? Saturation, int? Hue, int? Sharpen,
-    string? DayNight, string? AntiFlicker, bool? Flip, bool? Mirror);
+    string? DayNight, string? AntiFlicker, bool? Flip, bool? Mirror)
+{
+    /// <summary>Every antiFlicker value seen across firmwares. Indoor models
+    /// (E1 line) report and accept "Off"; outdoor models omit it.</summary>
+    public static readonly string[] AntiFlickerValues = { "Off", "Outdoor", "50HZ", "60HZ" };
+}
 
 /// <summary>One saved PTZ preset slot (HTTP API). Disabled slots are free.</summary>
 public sealed record PtzPresetInfo(int Id, string Name, bool Enabled);

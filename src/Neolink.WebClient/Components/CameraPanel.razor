@@ -427,6 +427,7 @@
                         <select class="@(_pendingAntiFlicker != null ? "input-pending" : "")"
                                 value="@(_pendingAntiFlicker ?? img.AntiFlicker)"
                                 disabled="@_applying" @onchange='e => StageAntiFlicker((string?)e.Value)'>
+                            <option value="Off">off</option>
                             <option value="Outdoor">outdoor</option>
                             <option value="50HZ">50 Hz</option>
                             <option value="60HZ">60 Hz</option>

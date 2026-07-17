@@ -1644,11 +1644,10 @@ public static class WebApi
                     && req.AntiFlicker == null && req.Flip == null && req.Mirror == null)
                     return Results.Json(new { error = "provide at least one picture setting" }, statusCode: 400);
                 string[] dayNights = { "Auto", "Color", "Black&White" };
-                string[] flickers = { "Outdoor", "50HZ", "60HZ" };
                 if (req.DayNight != null && !dayNights.Contains(req.DayNight))
                     return Results.Json(new { error = "dayNight must be Auto, Color or Black&White" }, statusCode: 400);
-                if (req.AntiFlicker != null && !flickers.Contains(req.AntiFlicker))
-                    return Results.Json(new { error = "antiFlicker must be Outdoor, 50HZ or 60HZ" }, statusCode: 400);
+                if (req.AntiFlicker != null && !Streaming.ImageSettings.AntiFlickerValues.Contains(req.AntiFlicker))
+                    return Results.Json(new { error = "antiFlicker must be Off, Outdoor, 50HZ or 60HZ" }, statusCode: 400);
                 await control.SetImageSettingsAsync(req.Bright, req.Contrast, req.Saturation,
                     req.Hue, req.Sharpen, req.DayNight, req.AntiFlicker, req.Flip, req.Mirror, reqCt);
                 NudgeHa(name);

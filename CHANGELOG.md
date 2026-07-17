@@ -4,6 +4,19 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
+## 0.9.1 — unreleased
+
+### Fixed
+
+- **Home Assistant no longer rejects the anti-flicker state on indoor cameras**:
+  indoor firmwares (the E1 line among them) report a fourth anti-flicker value,
+  `Off`, which the bridge's select entity didn't announce — so every periodic
+  state publish made HA log `Invalid option for select....anti_flicker: 'Off'`
+  (hundreds of occurrences over a few days). `Off` is now a first-class option
+  everywhere: the HA select announces it (and defensively keeps any novel value
+  a camera currently reports), the HA command handler accepts it, the web API
+  validates it, and the camera panel's anti-flicker dropdown offers it.
+
 ## 0.9.0
 
 ### New

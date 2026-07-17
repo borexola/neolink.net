@@ -875,8 +875,16 @@ internal sealed class CameraBridge
         else
             await ClearEntityAsync("select", "day_night", ct).ConfigureAwait(false);
         if (_imgCaps?.AntiFlicker != null)
+        {
+            // Announce every value any firmware is known to use — indoor models
+            // report "Off" — and keep whatever this camera currently reports even
+            // if it's novel, or HA rejects every state publish as an invalid option.
+            var flickerOptions = ImageSettings.AntiFlickerValues;
+            if (_imgCaps.AntiFlicker is { Length: > 0 } cur && !flickerOptions.Contains(cur))
+                flickerOptions = flickerOptions.Append(cur).ToArray();
             await AnnounceEntityAsync("select", "anti_flicker", SelectConfig("Anti-flicker", "anti_flicker",
-                new[] { "Outdoor", "50HZ", "60HZ" }, "mdi:sine-wave"), ct).ConfigureAwait(false);
+                flickerOptions, "mdi:sine-wave"), ct).ConfigureAwait(false);
+        }
         else
             await ClearEntityAsync("select", "anti_flicker", ct).ConfigureAwait(false);
         if (_imgCaps?.Flip != null)
@@ -1882,7 +1890,7 @@ internal sealed class CameraBridge
                         payload, null, null, null, ct).ConfigureAwait(false);
                     await _hub.PublishAsync(StateTopic("day_night"), payload, ct).ConfigureAwait(false);
                     break;
-                case "anti_flicker" when payload is "Outdoor" or "50HZ" or "60HZ":
+                case "anti_flicker" when ImageSettings.AntiFlickerValues.Contains(payload):
                     await _control.SetImageSettingsAsync(null, null, null, null, null,
                         null, payload, null, null, ct).ConfigureAwait(false);
                     await _hub.PublishAsync(StateTopic("anti_flicker"), payload, ct).ConfigureAwait(false);
