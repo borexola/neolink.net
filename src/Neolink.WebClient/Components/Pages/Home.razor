@@ -122,7 +122,7 @@
                         @* Battery-powered camera: level + charging hint. *@
                         <span class="cam-battery @(bat.Percent <= 20 && !bat.Charging ? "battery-low" : "")"
                               title="Battery-powered camera: @(bat.Percent)%@(bat.Charging ? ", charging" : "")">
-                            @UiIcon.Render(bat.Charging ? "bolt" : "battery", 11)@bat.Percent%
+                            @(bat.Charging ? UiIcon.Render("bolt", 11) : UiIcon.RenderBattery(bat.Percent, 11))@bat.Percent%
                         </span>
                     }
                     @if (cam.Suspended)

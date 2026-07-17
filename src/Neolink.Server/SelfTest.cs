@@ -1591,6 +1591,19 @@ public static class SelfTest
                 "boot-time-parked battery camera = online in HA");
         });
 
+        Test("sidebar battery icon: fill bar tracks the percentage", () =>
+        {
+            // The icon must READ the level, not just decorate the number.
+            Assert(Neolink.WebClient.UiIcon.RenderBattery(100).Value.Contains("width=\"13\""),
+                "full battery fills the whole body");
+            Assert(Neolink.WebClient.UiIcon.RenderBattery(50).Value.Contains("width=\"6.5\""),
+                "half battery fills half the body");
+            Assert(!Neolink.WebClient.UiIcon.RenderBattery(0).Value.Contains("fill=\"currentColor\""),
+                "empty battery has no fill bar");
+            Assert(Neolink.WebClient.UiIcon.RenderBattery(150).Value.Contains("width=\"13\""),
+                "overshoot clamps to full");
+        });
+
         Test("HTTP-API extras: preset/quick-reply/SD/auto-track/image parsing", () =>
         {
             static System.Text.Json.Nodes.JsonArray Arr(string json) =>

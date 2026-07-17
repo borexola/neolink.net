@@ -289,7 +289,7 @@ if (config.Recording != null)
 
 // Motion pushes fan out to the recorder and/or the MQTT bridge; wired after both
 // exist (the bridge needs the camera list, built below).
-var motionTargets = new List<(CameraService Primary, string Name, Action<MotionPush>? RecorderSink)>();
+var motionTargets = new List<(IReadOnlyList<CameraService> Services, string Name, Action<MotionPush>? RecorderSink)>();
 
 // Per-camera runtime state that survives restarts (today: the SUSPEND flag —
 // Neolink holds no connection to the camera, so it can't be viewed or recorded).
@@ -373,7 +373,10 @@ foreach (var cam in config.Cameras)
             : new ReolinkHttpApi(httpAddr, cam.Username, cam.Password, cam.ChannelId);
         var primary = primaryService
             ?? throw new InvalidOperationException($"camera '{cam.Name}' has no streams");
-        control = new CameraControl(primary, httpApi);
+        // All stream services: the camera is online if ANY session is live (a
+        // viewer watching only the sub stream must not read as "offline"), and
+        // commands fall back to whichever session exists.
+        control = new CameraControl(primary, httpApi, camServices);
 
         // Two-way talk is opt-in (ui.talk). When on, this camera's RTSP mounts can
         // serve an ONVIF audio backchannel (go2rtc / HA WebRTC) — DESCRIBE still
@@ -440,7 +443,11 @@ foreach (var cam in config.Cameras)
     }
 
     // Registered after the recorders so the web API can report live REC state.
+    // Battery/siren/privacy readings scan every stream service (primary first —
+    // camServices[0]): each session probes and receives pushes on its own, so a
+    // viewer watching only the sub stream still gets fresh readings.
     var battery = primaryService;
+    var readers = camServices;
     var sleepers = camServices;
     // Suspend applies to every stream of the camera (Baichuan or generic RTSP);
     // reading it back is "all streams held" (they toggle together). Persist here so
@@ -459,12 +466,12 @@ foreach (var cam in config.Cameras)
     webCameras.Add(new WebCameraInfo(cam.Name, webStreams, control, permitted,
         ContinuousActive: continuousRecorder == null ? null : () => continuousRecorder.IsWriting,
         SupportsEvents: !cam.IsGenericRtsp,
-        Battery: battery == null ? null : () => battery.Battery,
+        Battery: battery == null ? null : () => readers.Select(s => s.Battery).FirstOrDefault(b => b != null),
         // Asleep = every stream of the camera is parked on purpose (battery doze),
         // as opposed to offline-because-unreachable.
         Asleep: sleepers.Count == 0 ? null : () => sleepers.All(s => s.Parked),
-        SirenOn: battery == null ? null : () => battery.SirenOn,
-        PrivacyOn: battery == null ? null : () => battery.PrivacyOn,
+        SirenOn: battery == null ? null : () => readers.Select(s => s.SirenOn).FirstOrDefault(v => v != null),
+        PrivacyOn: battery == null ? null : () => readers.Select(s => s.PrivacyOn).FirstOrDefault(v => v != null),
         Suspended: suspendables.Count == 0 ? null : IsCamSuspended,
         SetSuspended: suspendables.Count == 0 ? null : SetCamSuspended,
         // The open segment from the recorder's memory — the day listing trusts
@@ -481,7 +488,7 @@ foreach (var cam in config.Cameras)
         // on-demand recording session per camera (UI button ≡ HA Record switch).
         { EventRecorder = eventRecorder });
     if (primaryService != null)
-        motionTargets.Add((primaryService, cam.Name, recorderSink));
+        motionTargets.Add((camServices, cam.Name, recorderSink));
 }
 
 // Resource sampler: feeds the UI's monitor page AND the server's own Home
@@ -521,19 +528,35 @@ if (config.Mqtt is { } mqttCfg)
 {
     mqtt = new HomeAssistantMqtt(mqttCfg, webCameras, Version) { Monitor = monitor, Storage = storage };
 }
-foreach (var (primary, name, recorderSink) in motionTargets)
+foreach (var (services, name, recorderSink) in motionTargets)
 {
     var bridge = mqtt;
     if (recorderSink == null && bridge == null) continue;
-    primary.MotionSink = push =>
+    // Every stream service listens (each holds its own camera session), but only
+    // the LEADER — the first service with a live connection — forwards, so a
+    // camera with both main and sub connected doesn't double-fire events (a
+    // doorbell press must ring automations once). With only the sub stream
+    // connected, its session leads and detections still flow.
+    var all = services;
+    CameraService? Leader() => all.FirstOrDefault(s => s.LiveCamera != null);
+    foreach (var svc in services)
     {
-        recorderSink?.Invoke(push);
-        bridge?.OnMotion(name, push);
-    };
-    // Unsolicited status pushes (Wi-Fi signal, siren, floodlight) only feed the
-    // bridge; the listener only runs when the sink is set.
-    if (bridge != null)
-        primary.StatusSink = push => bridge.OnStatus(name, push);
+        var self = svc;
+        svc.MotionSink = push =>
+        {
+            if (!ReferenceEquals(self, Leader())) return;
+            recorderSink?.Invoke(push);
+            bridge?.OnMotion(name, push);
+        };
+        // Unsolicited status pushes (Wi-Fi signal, siren, floodlight) only feed the
+        // bridge; the listener only runs when the sink is set.
+        if (bridge != null)
+            svc.StatusSink = push =>
+            {
+                if (ReferenceEquals(self, Leader()))
+                    bridge.OnStatus(name, push);
+            };
+    }
 }
 // The reverse direction — HA's "Record" switch starting an on-demand recording —
 // needs no wiring here: the bridge reaches the recorder via WebCameraInfo.

@@ -223,6 +223,20 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Fixed
 
+- **Watching only the sub stream no longer reads as "camera offline"**: the
+  camera's online state, Home Assistant availability, camera controls, and the
+  motion/status listeners were all bound to the MAIN stream's connection — so a
+  viewer watching only the sub stream had live video playing while the sidebar
+  showed OFFLINE, HA marked everything Unavailable, and detections went
+  unheard. The camera is one device: it now reads online when ANY of its
+  sessions is live, commands ride whichever session exists (primary preferred),
+  battery/siren/privacy readings come from any session, and every stream
+  service listens for detection pushes — with a leader gate so a camera with
+  both streams connected still fires each event exactly once (a doorbell press
+  must ring automations once, not twice).
+- **The sidebar battery icon now shows the level**: it was a fixed empty
+  outline no matter the charge; the body now fills in proportion to the
+  percentage (a bolt still replaces it while charging).
 - **Day/night mode switches stop nagging the log**: cameras announce every
   IR day↔night flip with a `DayNightEventList` push on the motion channel. The
   server treated any non-alarm push as an unmapped event and logged it at INF

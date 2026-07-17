@@ -327,6 +327,22 @@ public static class UiIcon
             "stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" " +
             $"aria-hidden=\"true\">{body}</svg>");
     }
+
+    /// <summary>The battery outline with a fill bar matching the charge level, so
+    /// the icon itself reads the percentage at a glance (13 = the inner width of
+    /// the "battery" glyph's body minus padding).</summary>
+    public static MarkupString RenderBattery(int percent, int size = 15)
+    {
+        double w = Math.Clamp(percent, 0, 100) / 100.0 * 13;
+        var fill = w <= 0 ? "" :
+            $"<rect x=\"3.5\" y=\"8.5\" width=\"{w.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)}\" " +
+            "height=\"7\" rx=\"1\" fill=\"currentColor\" stroke=\"none\"/>";
+        return new MarkupString(
+            $"<svg class=\"nl-icon\" width=\"{size}\" height=\"{size}\" viewBox=\"0 0 24 24\" fill=\"none\" " +
+            "stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" " +
+            "aria-hidden=\"true\"><rect x=\"1\" y=\"6\" width=\"18\" height=\"12\" rx=\"2\"/>" +
+            $"<line x1=\"23\" y1=\"11\" x2=\"23\" y2=\"13\"/>{fill}</svg>");
+    }
 }
 
 /// <summary>One grid slot: which camera/stream is shown there (or empty).</summary>

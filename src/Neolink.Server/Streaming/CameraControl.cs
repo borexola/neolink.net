@@ -209,6 +209,7 @@ public sealed class CameraControl : ICameraControl
     private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(4);
 
     private readonly ILiveCameraSource _source;
+    private readonly IReadOnlyList<ILiveCameraSource> _sources;
     private readonly ReolinkHttpApi? _httpApi;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
@@ -217,21 +218,39 @@ public sealed class CameraControl : ICameraControl
     private IBcCamera? _capsSession;
     private CameraCapabilities? _caps;
 
-    public CameraControl(ILiveCameraSource source, ReolinkHttpApi? httpApi = null)
+    /// <param name="allSources">Every stream service of this camera. The camera is
+    /// ONE device with up to three connections (main/sub/extern): it is online if
+    /// ANY of them is live, and commands ride whichever session exists — otherwise
+    /// a viewer watching only the sub stream leaves the "camera" reading offline
+    /// (and HA unavailable) while its video plays. Commands still prefer
+    /// <paramref name="source"/> (the primary) when it is connected.</param>
+    public CameraControl(ILiveCameraSource source, ReolinkHttpApi? httpApi = null,
+        IReadOnlyList<ILiveCameraSource>? allSources = null)
     {
         _source = source;
+        _sources = allSources is { Count: > 0 } ? allSources : new[] { source };
         _httpApi = httpApi;
     }
 
     public string CameraName => _source.Name;
-    public bool Online => _source.LiveCamera != null;
+    public bool Online => _sources.Any(s => s.LiveCamera != null);
+
+    /// <summary>The primary stream's session when connected, else any live one.</summary>
+    private IBcCamera? AnyLive()
+    {
+        if (_source.LiveCamera is { } primary) return primary;
+        foreach (var s in _sources)
+            if (s.LiveCamera is { } c)
+                return c;
+        return null;
+    }
 
     private async Task<T> WithCameraAsync<T>(Func<IBcCamera, Task<T>> op, CancellationToken ct)
     {
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            var camera = _source.LiveCamera ?? throw new CameraOfflineException(CameraName);
+            var camera = AnyLive() ?? throw new CameraOfflineException(CameraName);
             return await op(camera).ConfigureAwait(false);
         }
         finally
@@ -811,7 +830,7 @@ public sealed class CameraControl : ICameraControl
             throw new TalkBusyException(CameraName);
         try
         {
-            var camera = _source.LiveCamera ?? throw new CameraOfflineException(CameraName);
+            var camera = AnyLive() ?? throw new CameraOfflineException(CameraName);
 
             // The ability query is a one-shot command: take the command gate for
             // it like every other command, then stream without holding anything.
