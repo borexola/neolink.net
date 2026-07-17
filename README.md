@@ -486,6 +486,7 @@ config file (in Docker: the `/config` mount), so they survive restarts:
 | `segment_minutes` | `10` | Continuous recording: time limit for one segment file |
 | `max_segment_size_mb` | `256` | Continuous recording: size limit for one segment file — a new file starts at the next keyframe once the segment reaches this size *or* `segment_minutes`, whichever comes first (keeps high-bitrate streams from producing huge files) |
 | `continuous_retention_days` | = `retention_days` | Days to keep continuous footage (`0` = forever) |
+| `encrypt` | `false` | **Beta:** encrypt new footage at rest (AES-256-GCM) — see [Encrypting footage](#encrypting-footage-beta) |
 
 Everything is fragmented MP4 (H.264/H.265 passthrough, video-only) playable in
 the browser and by ffmpeg/VLC. Storage layout is plain files, with everything
@@ -520,6 +521,12 @@ opt-in and existing setups keep behaving exactly as before:
   Assistant add-on no extra mapping is needed: point `archive_path` at a
   folder under `/share` or `/media` — NAS shares added in HA under
   Settings → System → Storage appear there automatically.
+  While an archive pass moves footage, admins see it live: a
+  **background-process strip** in the live view's sidebar (under the storage
+  banners) shows what is being archived — camera, day, bytes moved — with a
+  progress bar and percentage, and disappears when the pass finishes. The same
+  strip is the home for any future long-running server work admins should know
+  about (`GET /api/background` serves it; admin-only once accounts exist).
 
 Capacity is watched for you: when any configured location climbs past **90%
 used**, the web UI shows an amber warning banner; if one actually runs out of
@@ -527,6 +534,40 @@ space, recording to it halts cleanly (no partial files) with a **red** banner
 until space is freed — recording resumes automatically. When split storage is
 configured, the 📈 Monitor page grows a STORAGE section showing every
 location's free space live.
+
+#### Encrypting footage (beta)
+
+Opt-in encryption at rest for everything the server records: turn on
+**Server settings → Recording → Encrypt footage (beta)** (or set
+`"recording": { "encrypt": true }`) and restart. From then on new event clips,
+ambient previews, thumbnails and 24/7 segments are written as chunked
+**AES-256-GCM** — a stolen disk, a NAS share mounted elsewhere, or a copied
+backup exposes nothing, and any in-place tampering is detected on read.
+
+- **Playback is unaffected.** Files decrypt transparently when served: live
+  timeline scrubbing, seeking (HTTP range requests decrypt only the chunks a
+  seek touches), event previews and downloads/exports all behave exactly as
+  before. AES-GCM is hardware-accelerated, so the cost is a fraction of a
+  percent of one core even at main-stream bitrates.
+- **Old footage keeps playing.** The format is sniffed per file: plaintext
+  recordings from before the switch (or after turning it back off) are served
+  raw forever, side by side with encrypted ones. Nothing is re-encrypted or
+  migrated. Footage recorded while encryption was ON also keeps playing after
+  turning it OFF — the key stays available either way.
+- **The key** is derived from the server secret: the `NEOLINK_SECRET_KEY`
+  environment variable (32 bytes, base64/hex — the recommended way: the key
+  then never touches the footage disk) or the auto-generated `secret.key` in
+  the state dir. **Back it up** — without it, encrypted footage is
+  unrecoverable, by design. If `secret.key` lives on the same disk as the
+  recordings, a thief gets both: prefer the env var, or keep the state dir on
+  the OS disk.
+- **What it does not do:** event metadata (`event.json` — labels and
+  timestamps, no imagery) stays plaintext so the index stays cheap; exports
+  are decrypted downloads by definition; and like any at-rest encryption it
+  cannot protect against an attacker with full access to the *running* host.
+  If you control the machine, full-disk encryption (LUKS, BitLocker, ZFS)
+  gives the same guarantee for the whole system — this feature is for setups
+  where you can't control the volume (e.g. the HA add-on on an existing disk).
 
 > ⚠ **Docker: map a volume for every configured tier.** Missing directories
 > are created at startup so recording never blocks — but if a configured

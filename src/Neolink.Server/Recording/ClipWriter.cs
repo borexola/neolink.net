@@ -260,7 +260,7 @@ public sealed class ClipWriter : IDisposable
 
     private void WriteLoop(byte[] init, Dictionary<string, List<int>> boxes)
     {
-        FileStream? file = null;
+        Stream? file = null;
         bool failed = false;
         var syncPoints = new List<(ulong Time, long Offset)>();
         // Per-sample bookkeeping for the classic finalize. Each fragment is one
@@ -269,8 +269,9 @@ public sealed class ClipWriter : IDisposable
         var samples = new List<SampleRec>();
         try
         {
-            // Large buffer: fewer, bigger writes are what HDDs want.
-            file = new FileStream(_path, FileMode.Create, FileAccess.ReadWrite, FileShare.Read, 1 << 20);
+            // The vault picks plain (large write buffer — what HDDs want) or
+            // encrypted (chunked AES-256-GCM) per the recording.encrypt setting.
+            file = FootageVault.Create(_path);
             file.Write(init);
             StorageMetrics.AddBytes(init.Length);
         }
@@ -349,7 +350,7 @@ public sealed class ClipWriter : IDisposable
     }
 
     /// <summary>Backfills the total duration into the init-segment headers.</summary>
-    private void PatchDurations(FileStream file, Dictionary<string, List<int>> boxes)
+    private void PatchDurations(Stream file, Dictionary<string, List<int>> boxes)
     {
         ulong decodeTime = (ulong)Volatile.Read(ref _decodeTime);
         if (decodeTime == 0) return;
@@ -386,7 +387,7 @@ public sealed class ClipWriter : IDisposable
     /// the cause of minute-long timeline seeks over remote links. A crash
     /// anywhere in here leaves a valid fragmented file behind.
     /// </summary>
-    private void FinalizeClassic(FileStream file, byte[] init, List<SampleRec> samples)
+    private void FinalizeClassic(Stream file, byte[] init, List<SampleRec> samples)
     {
         if (!samples.Any(s => s.Track == 1))
             throw new InvalidOperationException("no video samples");
@@ -399,7 +400,7 @@ public sealed class ClipWriter : IDisposable
 
     /// <summary>The commit step: one box head turns the whole fragment region
     /// into skippable free space (64-bit "largesize" form when it exceeds 4 GB).</summary>
-    private static void CommitFreeSpan(FileStream file, long start, long end)
+    private static void CommitFreeSpan(Stream file, long start, long end)
     {
         file.Seek(start, SeekOrigin.Begin);
         file.Write(FreeHeader(end - start)); // largesize form overwrites retired header content
@@ -434,8 +435,7 @@ public sealed class ClipWriter : IDisposable
     /// </summary>
     public static bool RefinalizeClassic(string path)
     {
-        using var file = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.Read,
-            1 << 20, FileOptions.SequentialScan);
+        using var file = FootageVault.OpenReadWrite(path); // sniffs plain vs encrypted
         if (!IsFragmented(file)) return false; // already finalized (free) or foreign
         var scan = ScanFragmented(file);
         file.Seek(0, SeekOrigin.End);
@@ -452,7 +452,7 @@ public sealed class ClipWriter : IDisposable
     /// live fragmented header carries an mvex box, so that is the discriminator
     /// (checked by walking the moov's child HEADERS, a few seeks, no payload
     /// reads).</summary>
-    internal static bool IsFragmented(FileStream file)
+    internal static bool IsFragmented(Stream file)
     {
         Span<byte> head = stackalloc byte[8];
         file.Seek(0, SeekOrigin.Begin);
@@ -488,7 +488,7 @@ public sealed class ClipWriter : IDisposable
     /// reads on a cold spinning disk, which is where terabyte archives live —
     /// reading straight through goes at full disk streaming speed instead.
     /// </summary>
-    internal static FragmentedScan ScanFragmented(FileStream file)
+    internal static FragmentedScan ScanFragmented(Stream file)
     {
         long end = file.Length;
         long pos = 0; // bytes consumed so far — the stream never seeks backwards
@@ -760,7 +760,7 @@ public sealed class ClipWriter : IDisposable
     /// Appends the mfra box: one tfra entry per keyframe (media time → moof file
     /// offset) plus the mfro trailer players use to find the index from the file end.
     /// </summary>
-    private static void WriteMfra(FileStream file, List<(ulong Time, long Offset)> syncPoints)
+    private static void WriteMfra(Stream file, List<(ulong Time, long Offset)> syncPoints)
     {
         if (syncPoints.Count == 0) return;
         int tfraSize = 24 + syncPoints.Count * 19;
@@ -798,7 +798,7 @@ public sealed class ClipWriter : IDisposable
         file.Write(buf);
     }
 
-    private static void WriteU32At(FileStream file, long offset, uint value)
+    private static void WriteU32At(Stream file, long offset, uint value)
     {
         var buf = new byte[4];
         BinaryPrimitives.WriteUInt32BigEndian(buf, value);

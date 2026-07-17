@@ -53,12 +53,13 @@
             }
         </div>
 
-        @if (Lagging)
-        {
-            <span class="tl-lag" title="The streams can't sustain @SpeedLabel(_speed) right now (server delivery or browser decoding is the limit) — the timeline slows down until they catch up">
-                ⏳ catching up…
-            </span>
-        }
+        @* Always in the layout, only shown while lagging: appearing/disappearing
+           used to reflow the toolbar and shove the clock/export controls onto
+           another line at some widths. Reserved space cannot jump. *@
+        <span class="tl-lag @(Lagging ? "" : "tl-lag-idle")"
+              title="The streams can't sustain @SpeedLabel(_speed) right now (server delivery or browser decoding is the limit) — the timeline slows down until they catch up">
+            ⏳ catching up…
+        </span>
 
         <span class="tool-spacer"></span>
 
@@ -1399,8 +1400,13 @@
 
     // ------------------------------------------------------------ studio layout
 
+    // Focus needs at least TWO monitors: one for the program view and one or more
+    // for the thumbnail rail. Promoting the only camera is meaningless — it is
+    // already the sole monitor — and the 3-column program·divider·rail grid would
+    // leave the rail column empty, shoving the lone monitor left with dead space
+    // on the right.
     private bool FocusActive =>
-        _studio && _focusCam != null
+        _studio && _focusCam != null && Included.Count() > 1
         && Included.Any(c => string.Equals(c.Name, _focusCam, StringComparison.OrdinalIgnoreCase));
 
     private bool IsFocus(string cam) => string.Equals(cam, _focusCam, StringComparison.OrdinalIgnoreCase);
@@ -1413,10 +1419,12 @@
     }
 
     /// <summary>Studio only: a click promotes the tile to the program monitor;
-    /// a click on the program monitor restores the equal grid.</summary>
+    /// a click on the program monitor restores the equal grid. A lone camera has
+    /// nothing to promote against, so the click is a no-op (and never leaves a
+    /// stale focus that would spring the rail open when a second camera joins).</summary>
     private void ToggleFocus(string cam)
     {
-        if (!_studio) return;
+        if (!_studio || Included.Count() <= 1) { _focusCam = null; return; }
         _focusCam = IsFocus(cam) ? null : cam;
     }
 

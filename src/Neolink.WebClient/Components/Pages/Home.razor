@@ -21,7 +21,15 @@
                the toolbar's Restore view button (no-op when nothing is maximized). *@
             <span class="brand-home" role="button" title="Back to the full camera wall"
                   @onclick="RestoreView">
-                <span class="brand-dot"></span> NEOLINK<span class="brand-net">.NET</span>
+                @if (_footageEncrypted)
+                {
+                    <span class="brand-lock" title="Footage encryption is on — recordings are stored encrypted">@UiIcon.Render("lock", 12)</span>
+                }
+                else
+                {
+                    <span class="brand-dot"></span>
+                }
+                NEOLINK<span class="brand-net">.NET</span>
             </span>
             <button class="icon-btn" title="Server settings" @onclick="OpenServerSettingsAsync">@UiIcon.Render("gear", 18)</button>
         </div>
@@ -75,6 +83,10 @@
             <button class="icon-btn" title="Refresh" @onclick="RefreshCamerasAsync">@UiIcon.Render("refresh", 13)</button>
         </div>
 
+        @* The camera list is the ONLY part of the sidebar that scrolls, so the
+           footer (and the background-process strip above it) stay pinned no matter
+           how many cameras there are. *@
+        <div class="sidebar-cams">
         @if (_error != null)
         {
             <div class="notice error">@_error</div>
@@ -169,6 +181,38 @@
                  @ondragover:preventDefault="true"
                  @ondrop="() => DropOnCamAsync(null)" @ondrop:preventDefault="true">
                 drop here to move it last
+            </div>
+        }
+        </div>
+
+        @* Background server work admins should see (archiving, ...): name, current
+           item, a progress bar and a dismiss (hides THIS run; the next run shows
+           again). Pinned just above the account row; only renders while something
+           runs, for admins (everyone on a no-auth server), unless hidden globally
+           by ui.show_background_tasks. *@
+        @if (_showBgTasks && (!_authEnabled || _authAdmin) && _bgTasks.Count > 0)
+        {
+            <div class="bg-tasks">
+                @foreach (var t in _bgTasks)
+                {
+                    <div class="bg-task">
+                        <div class="bg-task-head">
+                            <span class="bg-task-name">@t.Name</span>
+                            @if (t.Percent is double pct)
+                            {
+                                <span class="bg-task-pct">@pct.ToString("0")%</span>
+                            }
+                            <button class="bg-task-dismiss" title="Hide until the next run" @onclick="() => DismissBgTask(t.Id)">✕</button>
+                        </div>
+                        @if (t.Detail is { Length: > 0 })
+                        {
+                            <div class="bg-task-detail" title="@t.Detail">@t.Detail</div>
+                        }
+                        <div class="bg-task-bar@(t.Percent == null ? " bg-task-indet" : "")">
+                            <div class="bg-task-fill" style="width:@((t.Percent ?? 100).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture))%"></div>
+                        </div>
+                    </div>
+                }
             </div>
         }
 
@@ -717,7 +761,17 @@
     {
         <div class="auth-overlay">
             <div class="auth-box">
-                <div class="brand"><span class="brand-dot"></span> NEOLINK<span class="brand-net">.NET</span></div>
+                <div class="brand">
+                    @if (_footageEncrypted)
+                    {
+                        <span class="brand-lock" title="Footage encryption is on">@UiIcon.Render("lock", 12)</span>
+                    }
+                    else
+                    {
+                        <span class="brand-dot"></span>
+                    }
+                    NEOLINK<span class="brand-net">.NET</span>
+                </div>
                 @if (!_resetMode)
                 {
                     <label>Username</label>
@@ -962,6 +1016,13 @@
                             <b>HTTPS</b> or <b>localhost</b> pages — on a plain http:// address the
                             mic button will report that a secure connection is required.
                         </div>
+                        @AdminToggle("Show background-process strip", "ui.showBackgroundTasks")
+                        <div class="notice small">
+                            The sidebar strip that shows admins live server work (footage
+                            archiving progress, and future long-running jobs). Turn off to hide
+                            it for everyone; you can also dismiss a single run from the strip
+                            itself. Applies after a restart.
+                        </div>
                     </div>
                     }
 
@@ -1084,6 +1145,47 @@
                             @AdminSelect("Record stream", "recording.stream", "auto", "mainStream", "subStream", "externStream")
                             @AdminField("Segment length (minutes)", "recording.segmentMinutes", "number")
                             @AdminField("Continuous retention (days, blank = event value)", "recording.continuousRetentionDays", "number")
+                            <div class="campanel-divider"></div>
+                            @AdminToggle("Encrypt footage", "recording.encrypt", beta: true)
+                            <div class="notice small">
+                                <b>Beta.</b> New footage — event clips, previews, thumbnails and 24/7
+                                segments — is written encrypted (AES-256-GCM) so a stolen disk or a
+                                copied backup exposes nothing. Playback, seeking and exports work
+                                exactly as before; footage recorded before turning this on keeps
+                                playing unencrypted. Applies after a restart, to new recordings only.
+                                ⚠ The key is the server's <b>secret.key</b> in the state dir (or
+                                <b>NEOLINK_SECRET_KEY</b>) — <b>back it up</b>: without it, encrypted
+                                footage is unrecoverable.
+                            </div>
+                            @if (_adminEnc is { } enc)
+                            {
+                                <div class="notice small">
+                                    Key in use:
+                                    @if (enc.Source == "env")
+                                    {
+                                        <b>NEOLINK_SECRET_KEY</b><text> (environment — not stored on disk)</text>
+                                    }
+                                    else if (enc.Source == "file")
+                                    {
+                                        <b>secret.key</b><text> at </text><code>@enc.File</code>
+                                    }
+                                    else
+                                    {
+                                        <b>in-memory only</b><text> (state dir unwritable — fix before enabling!)</text>
+                                    }
+                                    <text> · fingerprint </text><code>@enc.Fingerprint</code>
+                                    — match this against your backup to confirm it is the same key.
+                                </div>
+                                @if (enc.OnFootageDisk)
+                                {
+                                    <div class="notice warn small">
+                                        ⚠ The key file sits on the <b>same disk</b> as the footage it
+                                        protects — a stolen disk would carry its own key. Point
+                                        <code>ui.state_dir</code> at a different disk, or supply the key
+                                        via <code>NEOLINK_SECRET_KEY</code> so it never touches disk.
+                                    </div>
+                                }
+                            }
                         </div>
                     }
 
@@ -1250,7 +1352,8 @@
                         {
                             <div class="notice pending">
                                 @pending unsaved change@(pending == 1 ? "" : "s") — nothing is written until
-                                you click <b>Save to config.json</b>. Closing this panel discards them.
+                                you click <b>Save to config.json</b> (or <b>Restart</b>, which saves first).
+                                Closing this panel discards them.
                             </div>
                         }
                         <div class="settings-foot-btns">
@@ -1260,16 +1363,24 @@
                                    this button only writes the field edits. *@
                                 <button class="chip @(AdminPendingCount > 0 ? "chip-active" : "")" disabled="@(!_adminWritable)"
                                         @onclick="SaveServerSettingsAsync">Save to config.json</button>
+                                @if (AdminPendingCount > 0)
+                                {
+                                    <button class="chip chip-off" title="Drop the staged edits — fields snap back to what config.json says"
+                                            @onclick="DiscardServerSettings">Discard</button>
+                                }
                             }
                             <span class="tile-spacer"></span>
                             @if (!_confirmRestart)
                             {
-                                <button class="chip chip-danger" title="Stop the service so the restart policy brings it back — needed to apply saved changes"
-                                        @onclick="() => _confirmRestart = true">Restart service…</button>
+                                <button class="chip chip-danger"
+                                        title="@(AdminPendingCount > 0
+                                            ? "Save the staged changes to config.json, then stop the service so the restart policy brings it back with them applied"
+                                            : "Stop the service so the restart policy brings it back — needed to apply saved changes")"
+                                        @onclick="() => _confirmRestart = true">@(AdminPendingCount > 0 ? "Save & restart…" : "Restart service…")</button>
                             }
                             else
                             {
-                                <button class="chip chip-danger" @onclick="RestartServiceAsync">Confirm restart</button>
+                                <button class="chip chip-danger" @onclick="RestartServiceAsync">@(AdminPendingCount > 0 ? "Confirm save & restart" : "Confirm restart")</button>
                                 <button class="chip" @onclick="() => _confirmRestart = false">Cancel</button>
                             }
                         </div>
@@ -1611,6 +1722,7 @@
             ApplyRoute(); // deep links (/cameras/{name}) need the camera list first
             StateHasChanged();
             _ = PollLoopAsync();
+            _ = BgTasksLoopAsync();
             return;
         }
         await ReconcilePlayersAsync();
@@ -2114,6 +2226,12 @@
 
     private bool _adminHasRecording;
     private bool _adminHasMqtt;
+    private ApiKeyInfo? _adminEnc;
+    /// <summary>Footage encryption is active on the server (from /api/features):
+    /// the brand dot renders as a padlock so everyone can see it at a glance.</summary>
+    private bool _footageEncrypted;
+    /// <summary>Server allows the admin background-process strip (ui.show_background_tasks).</summary>
+    private bool _showBgTasks = true;
 
     private async Task DismissUpdateAsync()
     {
@@ -2162,6 +2280,7 @@
             _adminConfig = cfg.Settings;
             _adminWritable = cfg.Writable;
             _adminConfigPath = cfg.Path;
+            _adminEnc = cfg.Encryption;
             _adminHasRecording = cfg.Settings.TryGetProperty("recording", out var r)
                 && r.ValueKind == JsonValueKind.Object;
             _adminHasMqtt = cfg.Settings.TryGetProperty("mqtt", out var m)
@@ -2463,20 +2582,28 @@
         builder.CloseElement();
     };
 
-    private RenderFragment AdminToggle(string label, string path) => builder =>
+    private RenderFragment AdminToggle(string label, string path, bool beta = false) => builder =>
     {
         bool edited = AdminValue(path) != AdminRawValue(path);
         builder.OpenElement(0, "div");
         builder.AddAttribute(1, "class", "control-row" + (edited ? " edited" : ""));
         builder.OpenElement(2, "span");
         builder.AddContent(3, label);
+        if (beta)
+        {
+            builder.AddContent(4, " ");
+            builder.OpenElement(5, "span");
+            builder.AddAttribute(6, "class", "beta-tag");
+            builder.AddContent(7, "BETA");
+            builder.CloseElement();
+        }
         builder.CloseElement();
         bool on = AdminBool(path);
-        builder.OpenElement(4, "button");
-        builder.AddAttribute(5, "class", $"chip {(on ? "" : "chip-off")}{(edited ? " edited" : "")}");
-        builder.AddAttribute(6, "onclick",
+        builder.OpenElement(8, "button");
+        builder.AddAttribute(9, "class", $"chip {(on ? "" : "chip-off")}{(edited ? " edited" : "")}");
+        builder.AddAttribute(10, "onclick",
             EventCallback.Factory.Create(this, () => _adminEdits[path] = (!on).ToString().ToLowerInvariant()));
-        builder.AddContent(7, on ? "on" : "off");
+        builder.AddContent(11, on ? "on" : "off");
         builder.CloseElement();
         builder.CloseElement();
     };
@@ -2510,7 +2637,12 @@
         builder.CloseElement();
     };
 
-    private async Task SaveServerSettingsAsync()
+    private Task SaveServerSettingsAsync() => SaveServerSettingsCoreAsync();
+
+    /// <summary>Writes the staged field edits to config.json. Returns false when
+    /// nothing was written because of an error (the restart path must not proceed
+    /// on a failed save); "no changes" counts as success.</summary>
+    private async Task<bool> SaveServerSettingsCoreAsync()
     {
         _adminError = _adminStatus = null;
         var payload = new Dictionary<string, object?>();
@@ -2534,6 +2666,7 @@
                 case "ui.stateDir": ui["stateDir"] = AdminValue(path); break;
                 case "ui.resetAdminPassword": ui["resetAdminPassword"] = AdminBool(path); break;
                 case "ui.talk": ui["talk"] = AdminBool(path); break;
+                case "ui.showBackgroundTasks": ui["showBackgroundTasks"] = AdminBool(path); break;
                 case "recording.path": rec["path"] = AdminValue(path); break;
                 case "recording.retentionDays": rec["retentionDays"] = Int(path); break;
                 case "recording.preSeconds": rec["preSeconds"] = Int(path); break;
@@ -2542,13 +2675,14 @@
                 case "recording.stream": rec["stream"] = AdminValue(path); break;
                 case "recording.segmentMinutes": rec["segmentMinutes"] = Int(path); break;
                 case "recording.continuousRetentionDays": rec["continuousRetentionDays"] = Int(path); break;
+                case "recording.encrypt": rec["encrypt"] = AdminBool(path); break;
                 case "mqtt.statsInterval": mqtt["statsInterval"] = Int(path); break;
             }
         }
         if (ui.Count > 0) payload["ui"] = ui;
         if (rec.Count > 0) payload["recording"] = rec;
         if (mqtt.Count > 0) payload["mqtt"] = mqtt;
-        if (payload.Count == 0) { _adminStatus = "No changes to save."; return; }
+        if (payload.Count == 0) { _adminStatus = "No changes to save."; return true; }
 
         try
         {
@@ -2558,33 +2692,61 @@
             if (!res.IsSuccessStatusCode)
             {
                 _adminError = await ApiErrorAsync(res) ?? $"Save failed ({(int)res.StatusCode})";
-                return;
+                return false;
             }
             _adminEdits.Clear();
             await OpenServerSettingsAsync(); // reload the saved state
             _adminStatus = "Saved. Restart the service to apply the changes.";
+            return true;
         }
         catch (Exception ex)
         {
             _adminError = ex.Message;
+            return false;
         }
+    }
+
+    /// <summary>Drops every staged (unsaved) field edit — the panel snaps back to
+    /// what config.json actually says.</summary>
+    private void DiscardServerSettings()
+    {
+        _adminEdits.Clear();
+        _adminError = null;
+        _adminStatus = "Changes discarded.";
     }
 
     private async Task RestartServiceAsync()
     {
         _confirmRestart = false;
         _adminStatus = null;
+        // Restart implies save: staged edits are written first, so the restart
+        // actually applies what the user is looking at. A failed save aborts the
+        // restart — bouncing the service without the changes would be worse.
+        if (AdminPendingCount > 0 && _adminWritable)
+        {
+            if (!await SaveServerSettingsCoreAsync()) return;
+        }
+        // Put up the full-screen "restarting" overlay NOW, while the circuit is
+        // still alive — the moment the request lands the server begins shutting
+        // down and we get no more messages until it is back. The overlay is pure
+        // browser code from here: it waits for the server to go down and return,
+        // then reloads. (It also covers Blazor's generic reconnect modal.)
+        try { await JS.InvokeVoidAsync("neolink.showRestarting", _server); } catch { }
         try
         {
             using var res = await Http.SendAsync(ApiRequest(HttpMethod.Post, "/api/admin/restart"));
-            _adminStatus = res.IsSuccessStatusCode
-                ? "Restarting… the service will be back in a few seconds; this page reconnects on its own."
-                : await ApiErrorAsync(res) ?? "Restart request failed.";
+            // The overlay owns the UX from here; a non-success reply is worth noting
+            // in case the restart was refused and the server is actually still up.
+            if (!res.IsSuccessStatusCode)
+            {
+                try { await JS.InvokeVoidAsync("neolink.hideRestarting"); } catch { }
+                _adminStatus = await ApiErrorAsync(res) ?? "Restart request failed.";
+            }
         }
-        catch (Exception ex)
+        catch
         {
-            // Expected: the server may drop the connection as it shuts down.
-            _adminStatus = $"Restart requested ({ex.Message}). The service will be back shortly.";
+            // Expected: the server drops the connection as it shuts down. The
+            // overlay is already up and will reload when the server returns.
         }
     }
 
@@ -2711,6 +2873,72 @@
         await RefreshCamerasAsync();
         await RefreshEventsAsync();
         await SaveAsync();
+    }
+
+    // ------------------------------------------------------------ background-process strip (admins)
+
+    private sealed record BgTask(string Id, string Name, string? Detail, double? Percent);
+    private sealed record ApiBgTask(string? Id, string? Name, string? Detail, double? Percent);
+    private List<BgTask> _bgTasks = new();
+    private bool _bgStop;
+    // Background jobs the admin dismissed for this session — a new run gets a new
+    // id, so "dismiss" hides only THIS run, not the next one.
+    private readonly HashSet<string> _bgDismissed = new();
+
+    /// <summary>Polls the admin background-process feed: a lazy 10 s check while
+    /// nothing runs, tightening to 2 s while a job is active so its progress bar
+    /// actually moves. Non-admins (and unreachable servers) simply never show it.</summary>
+    private async Task BgTasksLoopAsync()
+    {
+        while (!_bgStop)
+        {
+            bool active = false;
+            try { active = await RefreshBgTasksAsync(); }
+            catch { /* server unreachable: the camera poll reports it */ }
+            try { await Task.Delay(TimeSpan.FromSeconds(active ? 2 : 10)); }
+            catch { return; }
+        }
+    }
+
+    private async Task<bool> RefreshBgTasksAsync()
+    {
+        // Hidden globally (ui.show_background_tasks off) or not an admin: never poll.
+        if (!_showBgTasks || (_authEnabled && !_authAdmin))
+        {
+            if (_bgTasks.Count > 0) { _bgTasks = new(); StateHasChanged(); }
+            return false;
+        }
+        using var res = await Http.SendAsync(ApiRequest(HttpMethod.Get, "/api/background"));
+        if (!res.IsSuccessStatusCode)
+        {
+            if (_bgTasks.Count > 0) { _bgTasks = new(); StateHasChanged(); }
+            return false;
+        }
+        var list = await res.Content.ReadFromJsonAsync<List<ApiBgTask>>() ?? new();
+        var next = list
+            .Where(t => t.Id is { Length: > 0 } id && !_bgDismissed.Contains(id))
+            .Select(t => new BgTask(t.Id!, string.IsNullOrWhiteSpace(t.Name) ? "Working…" : t.Name!, t.Detail, t.Percent))
+            .ToList();
+        // Forget dismissals for jobs that have finished, so the set can't grow
+        // without bound and a reused id (never happens — ids are GUIDs) is safe.
+        _bgDismissed.RemoveWhere(id => !list.Any(t => t.Id == id));
+        // Whether anything is RUNNING (drives the poll cadence) is separate from
+        // whether anything is SHOWN — a dismissed-but-running job still polls fast.
+        bool anyRunning = list.Count > 0;
+        if (!next.SequenceEqual(_bgTasks))
+        {
+            _bgTasks = next;
+            StateHasChanged();
+        }
+        return anyRunning;
+    }
+
+    /// <summary>Hide a background job's card for this browser session; a later run
+    /// (new id) shows again.</summary>
+    private void DismissBgTask(string id)
+    {
+        _bgDismissed.Add(id);
+        _bgTasks = _bgTasks.Where(t => t.Id != id).ToList();
     }
 
     // ------------------------------------------------------------ on-demand clip recording
@@ -2847,6 +3075,8 @@
                 _latestVersion = features.LatestVersion;
                 if (!string.IsNullOrEmpty(features.RepoUrl)) _repoUrl = features.RepoUrl;
                 _storage = features.Storage;
+                _footageEncrypted = features.Encrypted;
+                _showBgTasks = features.ShowBackgroundTasks;
             }
         }
         catch
@@ -3935,6 +4165,7 @@
 
     public async ValueTask DisposeAsync()
     {
+        _bgStop = true;
         _pollTimer?.Dispose();
         if (_talkCamera != null)
         {

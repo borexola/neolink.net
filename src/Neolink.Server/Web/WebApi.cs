@@ -62,11 +62,15 @@ public sealed class WebApiOptions
     public bool ArchiveAvailable { get; init; }
     /// <summary>Configured storage tiers and their capacity (feeds the monitor and the full-storage banners).</summary>
     public StorageLocations? Storage { get; init; }
+    /// <summary>The server secret (key source/fingerprint reporting for admins).</summary>
+    public Neolink.Notifications.SecretProtector? Secrets { get; init; }
     public required UserStore UserStore { get; init; }
     public bool ResetAdminPassword { get; init; }
     public double TrickleSpeed { get; init; } = 4;
     /// <summary>Beta: two-way talk (browser mic → camera speaker). Off unless ui.talk enables it.</summary>
     public bool TalkEnabled { get; init; }
+    /// <summary>Show the admin background-process strip in the web UI (ui.show_background_tasks).</summary>
+    public bool ShowBackgroundTasks { get; init; } = true;
     public required string Version { get; init; }
     public required string ConfigPath { get; init; }
     public UpdateChecker? Updates { get; init; }
@@ -179,14 +183,17 @@ public static class WebApi
         catch (Exception ex)
         {
             Log.Debug($"Recordings: no virtual index for {Path.GetFileName(path)} ({Log.Flatten(ex)}); serving raw");
-            return Results.File(path, "video/mp4", enableRangeProcessing: true);
+            // Still through the vault: an encrypted file must decrypt on this
+            // fallback path too (a plaintext file comes back as a raw FileStream).
+            return Results.Stream(FootageVault.OpenRead(path), "video/mp4", enableRangeProcessing: true);
         }
     }
     private sealed record PasswordRequest(string? Password);
     private sealed record AdminUiSettings(double? TrickleSpeed, string? StateDir, bool? ResetAdminPassword,
-        bool? Talk = null);
+        bool? Talk = null, bool? ShowBackgroundTasks = null);
     private sealed record AdminRecordingSettings(string? Path, int? RetentionDays, int? PreSeconds,
-        int? PostSeconds, int? MaxClipSeconds, string? Stream, int? SegmentMinutes, int? ContinuousRetentionDays);
+        int? PostSeconds, int? MaxClipSeconds, string? Stream, int? SegmentMinutes, int? ContinuousRetentionDays,
+        bool? Encrypt = null);
     /// <summary>Only the cadence is UI-editable; broker/credentials stay file-only.</summary>
     private sealed record AdminMqttSettings(int? StatsInterval);
     private sealed record AdminConfigRequest(string? Bind, int? BindPort, int? WebPort, string? WebBind,
@@ -413,7 +420,25 @@ public static class WebApi
             if (AdminOnly(ctx) is { } denied) return denied;
             try
             {
-                return Results.Json(ConfigEditor.Describe(o.ConfigPath));
+                // Which encryption key the RUNNING server uses (source + one-way
+                // fingerprint, never the key), and whether the key file sits on
+                // the same disk as the footage it protects — the admin must be
+                // able to see both without shell access.
+                object? enc = null;
+                if (o.Secrets is { } sec)
+                {
+                    bool onFootageDisk = sec.KeyFile is { } kf
+                        && o.Storage != null && o.Storage.SharesVolumeWith(kf, out _);
+                    enc = new
+                    {
+                        enabled = Recording.FootageVault.EncryptingNew,
+                        source = sec.KeySource,
+                        fingerprint = sec.Fingerprint,
+                        file = sec.KeyFile,
+                        onFootageDisk,
+                    };
+                }
+                return Results.Json(ConfigEditor.Describe(o.ConfigPath, enc));
             }
             catch (Exception ex)
             {
@@ -440,6 +465,7 @@ public static class WebApi
                         var ui = ConfigEditor.Section(root, "ui");
                         if (u.TrickleSpeed != null) ConfigEditor.Set(ui, "trickle_speed", u.TrickleSpeed);
                         if (u.Talk != null) ConfigEditor.Set(ui, "talk", u.Talk);
+                        if (u.ShowBackgroundTasks != null) ConfigEditor.Set(ui, "show_background_tasks", u.ShowBackgroundTasks);
                         if (u.StateDir != null)
                             ConfigEditor.Set(ui, "state_dir", u.StateDir.Length == 0 ? null : u.StateDir);
                         if (u.ResetAdminPassword != null)
@@ -465,6 +491,7 @@ public static class WebApi
                         if (r.SegmentMinutes != null) ConfigEditor.Set(rec, "segment_minutes", r.SegmentMinutes);
                         if (r.ContinuousRetentionDays != null)
                             ConfigEditor.Set(rec, "continuous_retention_days", r.ContinuousRetentionDays);
+                        if (r.Encrypt != null) ConfigEditor.Set(rec, "encrypt", r.Encrypt);
                     }
 
                     if (req.Mqtt is { StatsInterval: { } statsInterval })
@@ -898,15 +925,36 @@ public static class WebApi
             continuous = events != null && RecordingConfig.ContinuousEnabled,
             trickleSpeed,
             talk = o.TalkEnabled, // beta, opt-in via ui.talk
+            showBackgroundTasks = o.ShowBackgroundTasks,
 
             version = o.Version,
             latestVersion = o.Updates?.Latest,
             repoUrl = UpdateChecker.RepoUrl,
+            // Footage encryption active on this server — the UI swaps the brand
+            // dot for a padlock so anyone signed in can see recordings are
+            // protected at rest.
+            encrypted = Recording.FootageVault.EncryptingNew,
             // Worst storage tier state, for the live view's banner: "warn" when
             // any tier is >= 90% used, "full" when one is out of space (recording
             // to it has halted). Rides this endpoint so the wall needs no extra poll.
             storage = ShapeStorage(o.Storage),
         }));
+
+        // Background jobs the admin should know about (footage archiving, ...),
+        // with progress — feeds the web UI's background-process strip. Admin only
+        // once accounts exist; open on a no-auth server, like the other admin
+        // surfaces there.
+        app.MapGet("/api/background", (HttpContext ctx) =>
+            userStore.Enabled && !IsAdmin(ctx)
+                ? Results.Json(new { error = "admin only" }, statusCode: 403)
+                : Results.Json(BackgroundTasks.Active().Select(t => new
+                {
+                    id = t.Id,
+                    name = t.Name,
+                    detail = t.Detail,
+                    percent = t.Percent is double p ? Math.Round(p, 1) : (double?)null,
+                    startedUtc = t.StartedUtc,
+                })));
 
         // Every configured storage location and its capacity (monitor page).
         app.MapGet("/api/storage", () =>
@@ -1608,7 +1656,7 @@ public static class WebApi
                 var path = events.ArtifactPath(id, "thumb.jpg");
                 return path == null
                     ? Results.Json(new { error = "no thumbnail for this event" }, statusCode: 404)
-                    : Results.File(path, "image/jpeg");
+                    : Results.Stream(FootageVault.OpenRead(path), "image/jpeg"); // decrypts when encrypted
             });
 
             // The clip's low-res sub-stream twin, used by the strip's ambient previews.
@@ -1997,8 +2045,9 @@ public static class WebApi
                             var entry = zip.CreateEntry(f, System.IO.Compression.CompressionLevel.NoCompression);
                             try { entry.LastWriteTime = File.GetLastWriteTime(path); } catch { }
                             await using var es = entry.Open();
-                            await using var fs = new FileStream(path, FileMode.Open, FileAccess.Read,
-                                FileShare.ReadWrite | FileShare.Delete, 81920, useAsync: true);
+                            // Through the vault: an export is a plaintext download by
+                            // definition, so encrypted segments decrypt on the way out.
+                            await using var fs = FootageVault.OpenRead(path);
                             await fs.CopyToAsync(es, ctx.RequestAborted).ConfigureAwait(false);
                         }
                     }

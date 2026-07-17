@@ -675,7 +675,7 @@ public sealed class EventRecorder
             var jpeg = await _control.SnapshotAsync(ct).ConfigureAwait(false);
             if (jpeg is not { Length: > 100 } || jpeg[0] != 0xFF || jpeg[1] != 0xD8)
                 return; // not a JPEG (or camera doesn't support snapshots)
-            await File.WriteAllBytesAsync(Path.Combine(_store.EventDir(rec), "thumb.jpg"), jpeg, ct)
+            await FootageVault.WriteAllBytesAsync(Path.Combine(_store.EventDir(rec), "thumb.jpg"), jpeg, ct)
                 .ConfigureAwait(false);
             rec.HasThumb = true;
             _store.Save(rec);

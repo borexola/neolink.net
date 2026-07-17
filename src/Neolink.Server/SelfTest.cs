@@ -1165,6 +1165,27 @@ public static class SelfTest
             }
         });
 
+        Test("background-task registry: begin/report/complete lifecycle", () =>
+        {
+            AssertEq(BackgroundTasks.Active().Count, 0);
+            using (var t = BackgroundTasks.Begin("Archiving footage", "measuring", 0))
+            {
+                var a = BackgroundTasks.Active();
+                AssertEq(a.Count, 1);
+                AssertEq(a[0].Name, "Archiving footage");
+                AssertEq(a[0].Detail!, "measuring");
+                t.Report("cam1 · 2026-01-01", 250); // over-100 clamps
+                a = BackgroundTasks.Active();
+                AssertEq(a[0].Detail!, "cam1 · 2026-01-01");
+                AssertEq(a[0].Percent!.Value, 100d);
+                t.Report(percent: 42.5); // detail sticks when only percent moves
+                a = BackgroundTasks.Active();
+                AssertEq(a[0].Percent!.Value, 42.5);
+                AssertEq(a[0].Detail!, "cam1 · 2026-01-01");
+            }
+            AssertEq(BackgroundTasks.Active().Count, 0);
+        });
+
         Test("archive lifecycle: move at age, serve from archive, delete from archive", () =>
         {
             var baseDir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
@@ -1192,11 +1213,23 @@ public static class SelfTest
                 store.Load();
                 Assert(store.Find($"cam1~{dayOld}~080000-arc1") != null, "old event indexed from live");
 
+                // The progress pre-measure sees exactly the work the pass will do:
+                // cam1's event half + continuous half, byte-accurate.
+                var policy = new Recording.EventStore.CameraStoragePolicy(
+                    EventDays: 7, ContinuousDays: 7,
+                    ArchiveEvents: true, ArchiveContinuous: true, ArchiveDeleteDays: 30);
+                var plan = store.MeasureArchivePlan(_ => policy);
+                AssertEq(plan.Halves, 2);
+                long expectBytes = new FileInfo(Path.Combine(oldEvDir, "event.json")).Length
+                    + new FileInfo(Path.Combine(oldEvDir, "clip.mp4")).Length
+                    + new FileInfo(Path.Combine(oldCont, "08-00-00.mp4")).Length;
+                AssertEq(plan.Bytes, expectBytes);
+
                 // Archive on for both types: retention 7 days = footage moves at
                 // day 7 (instead of deletion); archive deletes after 30.
-                store.Cleanup(_ => new Recording.EventStore.CameraStoragePolicy(
-                    EventDays: 7, ContinuousDays: 7,
-                    ArchiveEvents: true, ArchiveContinuous: true, ArchiveDeleteDays: 30));
+                store.Cleanup(_ => policy);
+                // The progress entry the pass registered is gone once it finishes.
+                AssertEq(BackgroundTasks.Active().Count, 0);
 
                 Assert(!Directory.Exists(Path.Combine(live, "cam1", dayOld)), "aged day left the live tier");
                 Assert(File.Exists(Path.Combine(arch, "cam1", dayOld, "detections", "080000-arc1", "clip.mp4")),
@@ -1862,6 +1895,53 @@ public static class SelfTest
             }
         });
 
+        Test("secret key: source + fingerprint reporting", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                // File-based: first construction generates secret.key; the report
+                // says so, and the fingerprint is stable across restarts.
+                var sp = new Notifications.SecretProtector(dir);
+                AssertEq(sp.KeySource, "file");
+                Assert(sp.KeyFile != null && sp.KeyFile.EndsWith(Notifications.SecretProtector.KeyFileName),
+                    "file-based key reports its path");
+                Assert(sp.Fingerprint.Length == 12 && sp.Fingerprint.All(Uri.IsHexDigit),
+                    "fingerprint is 12 hex chars");
+                AssertEq(new Notifications.SecretProtector(dir).Fingerprint, sp.Fingerprint);
+
+                // Env-based: the variable wins over the file, source says "env",
+                // and the fingerprint is the SHA-256 prefix of THAT key.
+                var envKey = new byte[32];
+                for (int i = 0; i < 32; i++) envKey[i] = (byte)(i + 1);
+                Environment.SetEnvironmentVariable(Notifications.SecretProtector.KeyEnvVar,
+                    Convert.ToBase64String(envKey));
+                try
+                {
+                    var spe = new Notifications.SecretProtector(dir);
+                    AssertEq(spe.KeySource, "env");
+                    Assert(spe.KeyFile == null, "env key has no file path");
+                    AssertEq(spe.Fingerprint,
+                        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(envKey))[..12].ToLowerInvariant());
+                }
+                finally
+                {
+                    Environment.SetEnvironmentVariable(Notifications.SecretProtector.KeyEnvVar, null);
+                }
+
+                // Same-volume detection: a key file inside the recordings root is,
+                // by definition, on the same filesystem as the Recordings tier.
+                var storage = new Recording.StorageLocations(new Config.RecordingConfig { Path = dir });
+                Assert(storage.SharesVolumeWith(Path.Combine(dir, "secret.key"), out var tier)
+                    && tier.Length > 0, "key file on the footage volume is detected");
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+        });
+
         Test("secret protector: AES-256-GCM round-trip + tamper detection", () =>
         {
             var key = new byte[32];
@@ -2203,6 +2283,254 @@ public static class SelfTest
             }
         });
 
+        Test("footage encryption: round-trip, seek, patch, tamper, plaintext compat", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            var key = new byte[32];
+            for (int i = 0; i < 32; i++) key[i] = (byte)(i + 1);
+            try
+            {
+                Recording.FootageVault.Configure(key, encryptNew: true);
+                var path = Path.Combine(dir, "footage.bin");
+
+                // 200 KB spans four 64 KiB slots (three full + a short tail).
+                var data = new byte[200_000];
+                for (int i = 0; i < data.Length; i++) data[i] = (byte)(i * 31 + 7);
+                using (var w = Recording.FootageVault.Create(path))
+                    w.Write(data);
+
+                var disk = File.ReadAllBytes(path);
+                Assert(Encoding.ASCII.GetString(disk, 0, 7) == "NLNKENC", "encrypted magic on disk");
+                Assert(disk.AsSpan().IndexOf(data.AsSpan(0, 64)) < 0, "no plaintext run survives on disk");
+                Assert(disk.Length > data.Length && disk.Length < data.Length + 4096,
+                    $"overhead stays tiny (header + 28 B/slot), got {disk.Length - data.Length}");
+
+                // Full read + random-access seeks, including a slot boundary and the tail.
+                using (var r = Recording.FootageVault.OpenRead(path))
+                {
+                    AssertEq(r.Length, (long)data.Length);
+                    var all = new byte[data.Length];
+                    r.ReadExactly(all);
+                    Assert(all.AsSpan().SequenceEqual(data), "full read round-trips");
+                    Span<byte> probe = stackalloc byte[40];
+                    foreach (int at in new[] { 65_516, 131_072, 12_345, 199_960 })
+                    {
+                        r.Seek(at, SeekOrigin.Begin);
+                        r.ReadExactly(probe);
+                        Assert(probe.SequenceEqual(data.AsSpan(at, 40)), $"seek+read at {at}");
+                    }
+                }
+
+                // In-place patch (what finalize does): bytes land, everything else intact.
+                using (var rw = Recording.FootageVault.OpenReadWrite(path))
+                {
+                    rw.Seek(12_345, SeekOrigin.Begin);
+                    rw.Write(new byte[] { 0xAA, 0xBB, 0xCC, 0xDD });
+                    rw.Seek(199_000, SeekOrigin.Begin); // tail slot too
+                    rw.Write(new byte[] { 0x11, 0x22 });
+                }
+                data[12_345] = 0xAA; data[12_346] = 0xBB; data[12_347] = 0xCC; data[12_348] = 0xDD;
+                data[199_000] = 0x11; data[199_001] = 0x22;
+                using (var r = Recording.FootageVault.OpenRead(path))
+                {
+                    var all = new byte[data.Length];
+                    r.ReadExactly(all);
+                    Assert(all.AsSpan().SequenceEqual(data), "patched file round-trips");
+                }
+
+                // A FUTURE format version must be rejected loudly — never sniffed
+                // as "not encrypted" and served as plaintext video.
+                var vNext = File.ReadAllBytes(path);
+                vNext[7] = 2; // bump the version byte in "NLNKENC\x01"
+                var vNextPath = Path.Combine(dir, "footage-v2.bin");
+                File.WriteAllBytes(vNextPath, vNext);
+                bool vRejected = false;
+                try { using var _ = Recording.FootageVault.OpenRead(vNextPath); }
+                catch (InvalidDataException ex) when (ex.Message.Contains("upgrade")) { vRejected = true; }
+                Assert(vRejected, "unknown format version is rejected with an upgrade hint");
+
+                // Tampering a middle slot is DETECTED; a damaged final slot reads
+                // as a truncated tail (the live-file trade), never as wrong bytes.
+                var tampered = File.ReadAllBytes(path);
+                tampered[32 + 28 + 1000] ^= 0x01; // inside slot 0's ciphertext
+                File.WriteAllBytes(path, tampered);
+                bool threw = false;
+                try
+                {
+                    using var r = Recording.FootageVault.OpenRead(path);
+                    r.ReadExactly(new byte[1000]);
+                }
+                catch (InvalidDataException) { threw = true; }
+                Assert(threw, "mid-file tamper fails authentication");
+                tampered[32 + 28 + 1000] ^= 0x01; // restore
+                int slotSize = 64 * 1024 + 28;
+                tampered[32 + 3 * slotSize + 100] ^= 0x01; // final (short) slot
+                File.WriteAllBytes(path, tampered);
+                using (var r = Recording.FootageVault.OpenRead(path))
+                {
+                    var got = new byte[data.Length];
+                    int n = 0, read;
+                    while ((read = r.Read(got, n, got.Length - n)) > 0) n += read;
+                    AssertEq(n, 3 * 64 * 1024); // clean slots serve; the torn tail ends the stream
+                    Assert(got.AsSpan(0, n).SequenceEqual(data.AsSpan(0, n)), "intact slots still correct");
+                }
+                tampered[32 + 3 * slotSize + 100] ^= 0x01;
+                File.WriteAllBytes(path, tampered); // restore for the wrong-key check
+
+                // The wrong key must fail loudly, not decode garbage.
+                var wrong = (byte[])key.Clone();
+                wrong[0] ^= 0xFF;
+                Recording.FootageVault.Configure(wrong, encryptNew: true);
+                threw = false;
+                try
+                {
+                    using var r = Recording.FootageVault.OpenRead(path);
+                    r.ReadExactly(new byte[1000]);
+                }
+                catch (InvalidDataException) { threw = true; }
+                Assert(threw, "wrong key fails authentication");
+
+                // Plaintext compatibility: with encryption OFF the vault writes and
+                // serves plain files — and still decrypts old encrypted ones.
+                Recording.FootageVault.Configure(key, encryptNew: false);
+                var plainPath = Path.Combine(dir, "plain.bin");
+                using (var w = Recording.FootageVault.Create(plainPath))
+                    w.Write(data.AsSpan(0, 1000));
+                Assert(File.ReadAllBytes(plainPath).AsSpan(0, 1000).SequenceEqual(data.AsSpan(0, 1000)),
+                    "encryption off writes plain bytes");
+                using (var r = Recording.FootageVault.OpenRead(plainPath))
+                    AssertEq(r.Length, 1000L);
+                using (var r = Recording.FootageVault.OpenRead(path))
+                {
+                    var all = new byte[data.Length];
+                    r.ReadExactly(all); // key still configured → old encrypted footage plays
+                    Assert(all.AsSpan().SequenceEqual(data), "encrypted footage outlives the toggle");
+                }
+
+                // Config parse: recording.encrypt reaches the setting (JSON + TOML).
+                var cfgJson = Path.Combine(dir, "c.json");
+                File.WriteAllText(cfgJson, $$"""
+                    { "cameras": [], "recording": { "path": {{System.Text.Json.JsonSerializer.Serialize(dir)}}, "encrypt": true } }
+                    """);
+                Assert(Config.NeolinkConfig.Load(cfgJson).Recording!.Encrypt, "json recording.encrypt parses");
+                var cfgToml = Path.Combine(dir, "c.toml");
+                File.WriteAllText(cfgToml, $"[recording]\npath = \"{dir.Replace("\\", "\\\\")}\"\nencrypt = true\n");
+                Assert(Config.NeolinkConfig.Load(cfgToml).Recording!.Encrypt, "toml recording.encrypt parses");
+            }
+            finally
+            {
+                Recording.FootageVault.Configure(null, encryptNew: false); // leave no key behind for other tests
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+        });
+
+        Test("footage encryption: ClipWriter → playback path end-to-end", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            var key = new byte[32];
+            for (int i = 0; i < 32; i++) key[i] = (byte)(0x40 + i);
+            try
+            {
+                Recording.FootageVault.Configure(key, encryptNew: true);
+
+                // A real clip through the real writer, encrypted at rest.
+                var hub = new Streaming.StreamHub("enctest");
+                byte[] Nal(byte type, int len)
+                {
+                    var nal = new byte[len];
+                    Array.Fill(nal, (byte)0xAA);
+                    nal[0] = type;
+                    nal[1] = 0x80;
+                    return nal;
+                }
+                byte[] Au(params byte[][] nals)
+                {
+                    var ms = new MemoryStream();
+                    foreach (var n in nals) { ms.Write(new byte[] { 0, 0, 0, 1 }); ms.Write(n); }
+                    return ms.ToArray();
+                }
+                var sps = new byte[] { 0x67, 0x42, 0xE0, 0x1F, 0xA0 };
+                var pps = new byte[] { 0x68, 0xCE, 0x38, 0x80 };
+                hub.PublishVideo(new VideoFrame(VideoCodec.H264, Keyframe: true, Microseconds: 0, UnixTime: null,
+                    Au(sps, pps, Nal(0x65, 40))));
+                var path = Path.Combine(dir, "clip.mp4");
+                var writer = Recording.ClipWriter.TryCreate(path, hub)!;
+                long index = 0;
+                uint ts = 1000;
+                writer.Add(new Streaming.HubVideo(index, Au(Nal(0x65, 40)), true, ts));
+                for (int i = 0; i < 5; i++)
+                    writer.Add(new Streaming.HubVideo(index += 2, Au(Nal(0x41, 25)), false, ts += 3000));
+                writer.Dispose();
+                Assert(writer.Completion.Wait(TimeSpan.FromSeconds(10)), "writer finalizes");
+                Assert(!writer.Faulted, "no write faults");
+
+                // On disk: ciphertext. Through the serving path: a classic MP4.
+                var disk = File.ReadAllBytes(path);
+                Assert(Encoding.ASCII.GetString(disk, 0, 7) == "NLNKENC", "clip is encrypted at rest");
+                byte[] served;
+                using (var v = Recording.VirtualMp4.Open(path))
+                {
+                    served = new byte[v.Length];
+                    v.ReadExactly(served);
+                    // Range-style read (what HTTP seeking does) matches the full view.
+                    Span<byte> slice = stackalloc byte[64];
+                    v.Seek(served.Length - 100, SeekOrigin.Begin);
+                    v.ReadExactly(slice);
+                    Assert(slice.SequenceEqual(served.AsSpan(served.Length - 100, 64)), "ranged read matches");
+                }
+                AssertEq(Encoding.ASCII.GetString(served, 4, 4), "ftyp");
+                var tail = Encoding.ASCII.GetString(served, served.Length - 2048, 2048);
+                Assert(tail.Contains("moov") && tail.Contains("stco"), "decrypted clip carries the classic index");
+
+                // Thumbnails ride the same vault.
+                var jpeg = new byte[] { 0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3, 4 };
+                var thumbPath = Path.Combine(dir, "thumb.jpg");
+                Recording.FootageVault.WriteAllBytesAsync(thumbPath, jpeg, CancellationToken.None)
+                    .GetAwaiter().GetResult();
+                Assert(!File.ReadAllBytes(thumbPath).AsSpan().StartsWith(jpeg), "thumb is encrypted at rest");
+                using (var r = Recording.FootageVault.OpenRead(thumbPath))
+                {
+                    var got = new byte[jpeg.Length];
+                    r.ReadExactly(got);
+                    Assert(got.AsSpan().SequenceEqual(jpeg), "thumb decrypts");
+                }
+
+                // An OLD-LAYOUT (fragmented) encrypted file — what a crash leaves
+                // behind — must serve through the virtual index AND survive the
+                // in-place upgrade, both through the decrypting layer.
+                var init = FMp4.BuildInit(VideoCodec.H264, sps, pps, null, 640, 360);
+                var fragPath = Path.Combine(dir, "frag.mp4");
+                using (var fs = Recording.FootageVault.Create(fragPath))
+                {
+                    fs.Write(init);
+                    ulong dt = 0;
+                    for (int i = 0; i < 10; i++)
+                    {
+                        var sample = new byte[24];
+                        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(sample, 20);
+                        sample[4] = i % 5 == 0 ? (byte)0x65 : (byte)0x41;
+                        fs.Write(FMp4.BuildFragment((uint)(i + 1), dt, 3000, sample, i % 5 == 0));
+                        dt += 3000;
+                    }
+                }
+                using (var v = Recording.VirtualMp4.Open(fragPath))
+                {
+                    var head = new byte[8];
+                    v.ReadExactly(head);
+                    AssertEq(Encoding.ASCII.GetString(head, 4, 4), "ftyp");
+                }
+                Assert(Recording.ClipWriter.RefinalizeClassic(fragPath), "encrypted fragmented file upgrades in place");
+                Assert(!Recording.ClipWriter.RefinalizeClassic(fragPath), "second run is a no-op");
+            }
+            finally
+            {
+                Recording.FootageVault.Configure(null, encryptNew: false);
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+        });
+
         Test("clip writer muxes an AAC audio track", () =>
         {
             var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
@@ -2391,7 +2719,12 @@ public static class SelfTest
                 }
                 Assert(Poll(() =>
                 {
-                    var boxes = TopBoxes(File.ReadAllBytes(first));
+                    // IsWriting drops at Dispose, but the writer's thread may
+                    // still hold the handle — "file busy" means "not yet".
+                    byte[] bytes;
+                    try { bytes = File.ReadAllBytes(first); }
+                    catch (IOException) { return false; }
+                    var boxes = TopBoxes(bytes);
                     return boxes.Count == 3 && boxes[^1] == "moov";
                 }), "closed segment is finalized (playable, bounded)");
 
@@ -2696,6 +3029,8 @@ public static class SelfTest
             Directory.CreateDirectory(evDir);
             File.WriteAllText(Path.Combine(evDir, "event.json"),
                 $$"""{"id":"{{evId}}","camera":"apicam","startUtc":"2026-01-05T10:11:12Z","endUtc":"2026-01-05T10:11:30Z","labels":["person"]}""");
+            // A real config file: /api/admin/config reads and describes it.
+            File.WriteAllText(Path.Combine(dir, "config.json"), """{ "cameras": [] }""");
 
             using var cts = new CancellationTokenSource();
             Task? server = null;
@@ -2719,6 +3054,8 @@ public static class SelfTest
                     Events = store,
                     RecordingSettings = new Recording.RecordingSettings(dir),
                     UserStore = new Web.UserStore(dir),
+                    Secrets = new Neolink.Notifications.SecretProtector(dir),
+                    // The admin config endpoint reads the file — give it one.
                     Version = "0.0.0-selftest",
                     ConfigPath = Path.Combine(dir, "config.json"),
                     RestartRequested = () => { },
@@ -2767,6 +3104,18 @@ public static class SelfTest
                     AssertEq(preflight.Headers.GetValues("Access-Control-Allow-Origin").First(), "*");
                 }
 
+                // Background-process feed (no-auth server: open, like other admin
+                // surfaces). Empty when idle; a running job shows name+percent.
+                AssertEq(GetJson(http, "/api/background").GetArrayLength(), 0);
+                using (var job = BackgroundTasks.Begin("Archiving footage", "cam1 · 2026-01-01", 12.5))
+                {
+                    var bg = GetJson(http, "/api/background");
+                    AssertEq(bg.GetArrayLength(), 1);
+                    AssertEq(bg[0].GetProperty("name").GetString()!, "Archiving footage");
+                    AssertEq(bg[0].GetProperty("detail").GetString()!, "cam1 · 2026-01-01");
+                    AssertEq(bg[0].GetProperty("percent").GetDouble(), 12.5);
+                }
+
                 // First account = the admin; creating it turns authentication ON.
                 var setup = PostJson(http, "/api/auth/setup",
                     """{"username":"admin","password":"correct horse"}""");
@@ -2797,6 +3146,25 @@ public static class SelfTest
                     AssertEq((int)bad.StatusCode, 401);
                 var login = PostJson(http, "/api/auth/login", """{"username":"admin","password":"correct horse"}""");
                 Assert(login.GetProperty("token").GetString()!.Length > 20, "login issues a token");
+
+                // The admin config report includes the live encryption-key facts:
+                // source, one-way fingerprint (12 hex chars), never the key.
+                var adminCfg = GetJson(http, $"/api/admin/config{tokenQ}");
+                var encInfo = adminCfg.GetProperty("encryption");
+                AssertEq(encInfo.GetProperty("source").GetString()!, "file");
+                var fp = encInfo.GetProperty("fingerprint").GetString()!;
+                Assert(fp.Length == 12 && fp.All(Uri.IsHexDigit), "key fingerprint is 12 hex chars");
+                Assert(encInfo.GetProperty("file").GetString()!.EndsWith("secret.key"),
+                    "file-based key reports its path");
+
+                // With accounts on, the background feed is admin-only: a normal
+                // user gets 403, the admin still reads it.
+                using (var res = PostRaw(http, $"/api/users{tokenQ}", """{"username":"viewer","password":"viewer pass"}"""))
+                    AssertEq((int)res.StatusCode, 200);
+                var viewerTok = PostJson(http, "/api/auth/login", """{"username":"viewer","password":"viewer pass"}""")
+                    .GetProperty("token").GetString()!;
+                AssertEq((int)http.GetAsync($"/api/background?token={Uri.EscapeDataString(viewerTok)}").Result.StatusCode, 403);
+                AssertEq((int)http.GetAsync($"/api/background{tokenQ}").Result.StatusCode, 200);
 
                 // Per-camera recording switches round-trip through the API.
                 using (var req = new HttpRequestMessage(HttpMethod.Post, $"/api/cameras/apicam/recording{tokenQ}")

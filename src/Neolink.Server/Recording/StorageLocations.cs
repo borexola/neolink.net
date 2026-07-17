@@ -127,6 +127,37 @@ public sealed class StorageLocations
                 "configured. In Docker, recreate the container (docker compose up -d --force-recreate) " +
                 "and make sure the drives are mounted before Docker starts.");
 
+    /// <summary>
+    /// True when <paramref name="filePath"/>'s volume looks like the same
+    /// filesystem as a configured footage tier — the capacity-fingerprint
+    /// heuristic of <see cref="SharedVolumeWarnings"/> (equal total size,
+    /// near-equal free space; mount points and drive letters lie inside
+    /// containers). Used to warn when the footage-encryption key file lives on
+    /// the very disk it is supposed to protect. <paramref name="tier"/> names
+    /// the matching tier.
+    /// </summary>
+    public bool SharesVolumeWith(string filePath, out string tier)
+    {
+        tier = "";
+        string? dir;
+        try { dir = Path.GetDirectoryName(Path.GetFullPath(filePath)); }
+        catch { return false; }
+        if (dir == null) return false;
+        var probe = SafeProbe(dir);
+        if (probe is not { } p || p.Total == 0) return false;
+        foreach (var s in Sample())
+        {
+            // Free space drifts between the two probes on a busy disk — allow slack.
+            if (s.Online && s.TotalBytes == p.Total
+                && Math.Abs(s.FreeBytes - p.Free) < 256L << 20)
+            {
+                tier = s.Label;
+                return true;
+            }
+        }
+        return false;
+    }
+
     /// <summary>Capacity reading of every distinct location.</summary>
     public List<StorageStatus> Sample() =>
         Locations.Select(l =>

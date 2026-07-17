@@ -56,7 +56,22 @@ html, body {
     flex-direction: column;
     padding: 14px 12px;
     gap: 10px;
+    overflow: hidden; /* only the camera list scrolls (below), so the footer pins */
+}
+
+/* The camera list is the sole scroll region: it takes the leftover height and
+   scrolls internally, so the background-process strip and the account footer
+   stay pinned no matter how many cameras there are. min-height:0 lets a flex
+   child actually shrink below its content and scroll. */
+.sidebar-cams {
+    flex: 1 1 auto;
+    min-height: 0;
     overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    /* room so the last card isn't flush against the pinned strip below */
+    margin-bottom: 2px;
 }
 
 .brand {
@@ -87,6 +102,16 @@ html, body {
     background: var(--accent);
     box-shadow: 0 0 10px var(--accent);
 }
+
+/* Footage encryption on: the brand dot becomes a padlock — same accent, same glow. */
+.brand-lock {
+    display: inline-flex;
+    align-items: center;
+    color: var(--accent);
+    filter: drop-shadow(0 0 5px var(--accent));
+}
+
+.brand-home:hover .brand-lock { filter: drop-shadow(0 0 9px var(--accent)); }
 
 .brand-net {
     color: var(--accent);
@@ -701,7 +726,8 @@ video[data-live="1"] ~ .tile-status { display: none; }
     display: flex;
 }
 
-.reconnect-box {
+.reconnect-box,
+.restarting-box {
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -716,6 +742,33 @@ video[data-live="1"] ~ .tile-status { display: none; }
     text-align: center;
     animation: perf-toast-in 0.2s ease;
 }
+
+/* Deliberate "the admin asked to restart" screen — distinct from Blazor's
+   generic reconnect modal, and shown ON TOP of it (the circuit drops right
+   after). Pure browser-owned (see neolink.showRestarting): survives the
+   disconnect and reloads when the server answers again. */
+#neolink-restarting {
+    position: fixed;
+    inset: 0;
+    z-index: 300; /* above the reconnect modal (200) */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: color-mix(in srgb, var(--bg) 78%, transparent);
+    backdrop-filter: blur(5px) saturate(0.6);
+}
+
+.restarting-title { font-size: 16px; font-weight: 700; letter-spacing: 0.3px; }
+.restarting-sub {
+    color: var(--muted);
+    font-size: 13px;
+    max-width: 340px;
+    line-height: 1.5;
+}
+
+/* While our restarting screen is up, keep Blazor's reconnect modal hidden so
+   the user never sees the alarming generic "Connection lost". */
+body.is-restarting .reconnect-modal { display: none !important; }
 
 .reconnect-title {
     font-size: 16px;
@@ -3086,6 +3139,13 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     animation: talk-blink 1.4s ease-in-out infinite;
 }
 
+/* Not lagging: keep the pill's space (no toolbar reflow when it comes and goes),
+   just don't show it. */
+.tl-lag-idle {
+    visibility: hidden;
+    animation: none;
+}
+
 .tl-cams {
     display: flex;
     flex-wrap: wrap;
@@ -3596,6 +3656,87 @@ body.tl-colresizing, body.tl-colresizing * { cursor: col-resize !important; user
 }
 
 .storage-banner-full .sec-banner-text { color: #ff8a80; }
+
+/* Background-process strip (admins): server work in flight — archiving and
+   whatever reports next — with a live progress bar. Same footprint as the
+   banners above it; disappears entirely when nothing runs. */
+.bg-tasks {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: 0 0 auto; /* pinned just above the account footer, never scrolls away */
+    margin: 0;
+}
+
+.bg-task {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px 10px;
+    border: 1px solid color-mix(in srgb, var(--accent, #4da3ff) 45%, transparent);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--accent, #4da3ff) 10%, transparent);
+    min-width: 0; /* long detail text must ellipsize, not widen the sidebar */
+}
+
+.bg-task-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.bg-task-name { font-size: 12px; font-weight: 600; margin-right: auto; }
+
+.bg-task-pct {
+    font-size: 11px;
+    font-variant-numeric: tabular-nums; /* a counting percentage must not wobble */
+    opacity: .85;
+}
+
+/* Dismiss this run's card (it reappears on the next run). */
+.bg-task-dismiss {
+    flex: 0 0 auto;
+    border: none;
+    background: none;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 12px;
+    line-height: 1;
+    padding: 0 2px;
+    opacity: .7;
+}
+
+.bg-task-dismiss:hover { opacity: 1; color: var(--text); }
+
+.bg-task-detail {
+    font-size: 11px;
+    opacity: .75;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.bg-task-bar {
+    height: 4px;
+    border-radius: 2px;
+    overflow: hidden;
+    background: color-mix(in srgb, var(--accent, #4da3ff) 18%, transparent);
+}
+
+.bg-task-fill {
+    height: 100%;
+    border-radius: 2px;
+    background: var(--accent, #4da3ff);
+    transition: width .6s ease; /* polls every 2s: glide between readings */
+}
+
+/* No percentage yet: a gentle pulse says "running" without pretending progress. */
+.bg-task-indet .bg-task-fill { animation: bg-task-pulse 1.6s ease-in-out infinite; }
+
+@keyframes bg-task-pulse {
+    0%, 100% { opacity: .35; }
+    50% { opacity: .9; }
+}
 
 /* Event player speed control */
 .player-speed {

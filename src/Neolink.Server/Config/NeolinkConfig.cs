@@ -200,6 +200,7 @@ public sealed class NeolinkConfig
                 case "segmentminutes": rec.SegmentMinutes = prop.Value.GetInt32(); break;
                 case "maxsegmentsizemb": rec.MaxSegmentSizeMb = prop.Value.GetInt32(); break;
                 case "continuousretentiondays": rec.ContinuousRetentionDays = prop.Value.GetInt32(); break;
+                case "encrypt": rec.Encrypt = prop.Value.GetBoolean(); break;
                 default:
                     Log.Warn($"Config: ignoring unknown recording option '{prop.Name}'");
                     break;
@@ -253,6 +254,7 @@ public sealed class NeolinkConfig
                 case "resetadminpassword": config.Ui.ResetAdminPassword = prop.Value.GetBoolean(); break;
                 case "tricklespeed": config.Ui.TrickleSpeed = prop.Value.GetDouble(); break;
                 case "talk": config.Ui.Talk = prop.Value.GetBoolean(); break;
+                case "showbackgroundtasks": config.Ui.ShowBackgroundTasks = prop.Value.GetBoolean(); break;
                 default:
                     Log.Warn($"Config: ignoring unknown ui option '{prop.Name}'");
                     break;
@@ -310,6 +312,7 @@ public sealed class NeolinkConfig
             config.Ui.ResetAdminPassword = MiniToml.GetBool(ui, "reset_admin_password") ?? false;
             if (MiniToml.GetInt(ui, "trickle_speed") is { } ts) config.Ui.TrickleSpeed = ts;
             config.Ui.Talk = MiniToml.GetBool(ui, "talk") ?? false;
+            config.Ui.ShowBackgroundTasks = MiniToml.GetBool(ui, "show_background_tasks") ?? true;
         }
 
         if (MiniToml.GetTable(root, "recording") is { } rec)
@@ -328,6 +331,7 @@ public sealed class NeolinkConfig
                 SegmentMinutes = (int)(MiniToml.GetInt(rec, "segment_minutes") ?? 10),
                 MaxSegmentSizeMb = (int)(MiniToml.GetInt(rec, "max_segment_size_mb") ?? 256),
                 ContinuousRetentionDays = (int?)MiniToml.GetInt(rec, "continuous_retention_days"),
+                Encrypt = MiniToml.GetBool(rec, "encrypt") ?? false,
             };
         }
 
@@ -562,6 +566,9 @@ public sealed class UiConfig
     public double TrickleSpeed { get; set; } = 4;
     /// <summary>Beta: two-way talk (browser microphone → camera speaker). Off by default.</summary>
     public bool Talk { get; set; }
+    /// <summary>Show the admin background-process strip (archiving progress, ...) in
+    /// the sidebar. On by default; turn off to hide it for everyone.</summary>
+    public bool ShowBackgroundTasks { get; set; } = true;
 }
 
 /// <summary>MQTT / Home Assistant integration settings ("mqtt" in the config).</summary>
@@ -632,6 +639,13 @@ public sealed class RecordingConfig
     public int MaxSegmentSizeMb { get; set; } = 256;
     /// <summary>Days to keep continuous footage; null = same as RetentionDays.</summary>
     public int? ContinuousRetentionDays { get; set; }
+
+    /// <summary>Beta: encrypt newly written footage (clips, 24/7 segments, previews,
+    /// thumbnails) at rest with chunked AES-256-GCM. Existing plaintext footage keeps
+    /// playing; footage recorded while this was on stays playable after turning it
+    /// off. The key is the server secret (NEOLINK_SECRET_KEY or the state dir's
+    /// secret.key) — losing it means losing the encrypted footage.</summary>
+    public bool Encrypt { get; set; }
 
     public int EffectiveContinuousRetentionDays => ContinuousRetentionDays ?? RetentionDays;
 }

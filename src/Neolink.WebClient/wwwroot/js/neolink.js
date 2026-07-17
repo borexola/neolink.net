@@ -1716,6 +1716,73 @@
             const prefix = new URL(document.baseURI).pathname.replace(/\/+$/, "");
             return location.origin + prefix;
         },
+
+        // Full-screen "server is restarting" overlay. Shown the instant the admin
+        // confirms a restart — the Blazor circuit is about to drop and the client
+        // gets NO further server messages until it is back, so this runs entirely
+        // in the browser: it owns its own DOM, waits for the server to actually go
+        // down and then come back (two phases, so it can't reload against the
+        // still-alive old process), and reloads the page when it answers again.
+        showRestarting(server) {
+            if (document.getElementById('neolink-restarting')) return;
+            const base = (server && server.length) ? server : this.defaultServer();
+
+            const el = document.createElement('div');
+            el.id = 'neolink-restarting';
+            el.setAttribute('role', 'alertdialog');
+            el.setAttribute('aria-label', 'Server restarting');
+            el.innerHTML =
+                '<div class="restarting-box">' +
+                  '<div class="reconnect-spinner" aria-hidden="true"></div>' +
+                  '<div class="restarting-title">Restarting the server…</div>' +
+                  '<div class="restarting-sub" id="neolink-restarting-sub">' +
+                    'Applying your changes. This page will reload automatically when the server is back.' +
+                  '</div>' +
+                  '<button class="chip" id="neolink-restarting-reload" style="display:none" ' +
+                    'onclick="location.reload()">Reload now</button>' +
+                '</div>';
+            document.body.appendChild(el);
+            // Cover Blazor's own reconnect modal so the user sees ONE clear message.
+            document.body.classList.add('is-restarting');
+
+            const sub = el.querySelector('#neolink-restarting-sub');
+            const reloadBtn = el.querySelector('#neolink-restarting-reload');
+            const t0 = Date.now();
+            let sawDown = false;
+
+            const ping = () =>
+                fetch(base + '/api/features', { cache: 'no-store' })
+                    .then(() => true)   // ANY HTTP response (even 401) = server is up
+                    .catch(() => false); // network failure = still down
+
+            const tick = async () => {
+                const up = await ping();
+                const elapsed = Date.now() - t0;
+                if (up && (sawDown || elapsed > 25000)) {
+                    // Back up (or it bounced so fast we never caught it down): reload.
+                    sub.textContent = 'Server is back — reloading…';
+                    location.reload();
+                    return;
+                }
+                if (!up) {
+                    sawDown = true;
+                    sub.textContent = 'The server is going down and coming back. Waiting for it…';
+                }
+                // After a while with no luck, offer a manual reload but keep trying.
+                if (elapsed > 30000) reloadBtn.style.display = '';
+                setTimeout(tick, 1000);
+            };
+            // A short grace period lets the shutdown begin before the first probe,
+            // so we don't immediately see the old (still-up) process and bail early.
+            setTimeout(tick, 1200);
+        },
+
+        // Remove the restarting overlay — used only when the restart was REFUSED
+        // (server still up), so the admin isn't stuck behind a screen forever.
+        hideRestarting() {
+            document.getElementById('neolink-restarting')?.remove();
+            document.body.classList.remove('is-restarting');
+        },
         // Kicks off a browser download of a server-prepared file (the response's
         // Content-Disposition names it) — used by the timeline's footage export.
         download(url) {

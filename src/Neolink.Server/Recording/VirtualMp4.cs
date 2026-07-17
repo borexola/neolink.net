@@ -44,9 +44,9 @@ public static class VirtualMp4
     /// </summary>
     public static Stream Open(string path)
     {
-        // Big buffer: the index scan streams the file sequentially, and range
-        // serving afterwards reads in long sequential stretches too.
-        var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 1 << 20);
+        // The vault sniffs the format: encrypted footage decrypts transparently,
+        // plaintext gets a big sequential-read buffer as before.
+        var file = FootageVault.OpenRead(path);
         try
         {
             if (!ClipWriter.IsFragmented(file))
@@ -95,14 +95,14 @@ public static class VirtualMp4
     /// </summary>
     private sealed class VirtualClassicStream : Stream
     {
-        private readonly FileStream _file;
+        private readonly Stream _file;
         private readonly byte[] _moov;
         private readonly long _fragEnd;
         private readonly byte[] _patch;
         private readonly long _patchPos;
         private long _pos;
 
-        public VirtualClassicStream(FileStream file, long moovOff, long fragEnd, byte[] moov)
+        public VirtualClassicStream(Stream file, long moovOff, long fragEnd, byte[] moov)
         {
             _file = file;
             _fragEnd = fragEnd;

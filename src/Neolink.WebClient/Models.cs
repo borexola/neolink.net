@@ -104,7 +104,7 @@ public sealed record LocalApiInfo(string BaseUrl);
 /// <summary>Server capability flags (GET /api/features).</summary>
 public sealed record ApiFeaturesInfo(bool Events, bool Continuous, double TrickleSpeed = 4,
     string? Version = null, string? LatestVersion = null, string? RepoUrl = null,
-    ApiStorageState? Storage = null);
+    ApiStorageState? Storage = null, bool Encrypted = false, bool ShowBackgroundTasks = true);
 
 /// <summary>The worst storage tier's state (in /api/features); null = all healthy.</summary>
 public sealed record ApiStorageState(string Label, double UsedPercent, bool Full);
@@ -113,8 +113,16 @@ public sealed record ApiStorageState(string Label, double UsedPercent, bool Full
 public sealed record ApiStorageLocation(string Role, string Label, string Path,
     long TotalBytes, long FreeBytes, double UsedPercent, bool Online, bool Warn, bool Full);
 
-/// <summary>GET /api/admin/config — the editable server settings.</summary>
-public sealed record ApiAdminConfig(string Path, bool Writable, JsonElement Settings);
+/// <summary>GET /api/admin/config — the editable server settings, plus the live
+/// footage-encryption key report (source, one-way fingerprint — never the key).</summary>
+public sealed record ApiAdminConfig(string Path, bool Writable, JsonElement Settings,
+    ApiKeyInfo? Encryption = null);
+
+/// <summary>The running server's secret-key report: where the key comes from
+/// ("env"/"file"/"ephemeral"), its SHA-256 fingerprint prefix, the file path when
+/// file-based, and whether that file sits on the same disk as the footage.</summary>
+public sealed record ApiKeyInfo(bool Enabled, string Source, string Fingerprint,
+    string? File, bool OnFootageDisk);
 
 /// <summary>GET /api/admin/cameras — configured cameras for the settings editor.
 /// Passwords are never included (only HasPassword); RTSP URLs come masked.</summary>
@@ -277,6 +285,7 @@ public static class UiIcon
             "fs-enter" => "<path d=\"M8 3H5a2 2 0 0 0-2 2v3\"/><path d=\"M21 8V5a2 2 0 0 0-2-2h-3\"/><path d=\"M3 16v3a2 2 0 0 0 2 2h3\"/><path d=\"M16 21h3a2 2 0 0 0 2-2v-3\"/>",
             "fs-exit" => "<path d=\"M8 3v3a2 2 0 0 1-2 2H3\"/><path d=\"M21 8h-3a2 2 0 0 1-2-2V3\"/><path d=\"M3 16h3a2 2 0 0 1 2 2v3\"/><path d=\"M16 21v-3a2 2 0 0 1 2-2h3\"/>",
             "shield" => "<path d=\"M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z\"/>",
+            "lock" => "<rect x=\"3\" y=\"11\" width=\"18\" height=\"11\" rx=\"2\"/><path d=\"M7 11V7a5 5 0 0 1 10 0v4\"/>",
             "user" => "<path d=\"M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2\"/><circle cx=\"12\" cy=\"7\" r=\"4\"/>",
             "x" => "<line x1=\"18\" y1=\"6\" x2=\"6\" y2=\"18\"/><line x1=\"6\" y1=\"6\" x2=\"18\" y2=\"18\"/>",
             "mic" => "<path d=\"M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z\"/><path d=\"M19 10v2a7 7 0 0 1-14 0v-2\"/><line x1=\"12\" y1=\"19\" x2=\"12\" y2=\"23\"/><line x1=\"8\" y1=\"23\" x2=\"16\" y2=\"23\"/>",

@@ -248,6 +248,36 @@ var notifier = new Neolink.Notifications.Notifier(notificationStore, Environment
 var recordingHealth = new Neolink.Recording.RecordingHealth();
 tasks.Add(Task.Run(() => notifier.RunAsync(shutdown.Token)));
 
+// Footage encryption (beta, opt-in via recording.encrypt): new clips, segments
+// and thumbnails are written as chunked AES-256-GCM. The vault gets the key
+// whenever recording exists AT ALL — even with the switch off — so footage
+// recorded while it WAS on stays playable after toggling back. Reads sniff the
+// format, so plaintext and encrypted footage live side by side forever.
+if (config.Recording != null)
+{
+    FootageVault.Configure(secretProtector.DeriveSubKey("neolink-footage-master-v1"),
+        encryptNew: config.Recording.Encrypt);
+    if (config.Recording.Encrypt)
+    {
+        Log.Info("Recording: footage encryption is ON (beta) — new footage is written " +
+                 "AES-256-GCM; earlier plaintext footage keeps playing. Back up the key " +
+                 $"({Neolink.Notifications.SecretProtector.KeyEnvVar} or the state dir's " +
+                 $"{Neolink.Notifications.SecretProtector.KeyFileName}) — without it the footage is gone. " +
+                 $"Key in use: {secretProtector.KeySource}, fingerprint {secretProtector.Fingerprint}.");
+        // Encrypting footage with a key that lives ON the footage disk protects
+        // nothing against that disk being stolen — say so where it will be seen.
+        if (secretProtector is { KeySource: "file", KeyFile: { } keyFile }
+            && storage != null && storage.SharesVolumeWith(keyFile, out var keyTier))
+            Log.Warn($"Footage encryption: the key file ({keyFile}) sits on the SAME disk as the " +
+                     $"{keyTier} storage — a stolen disk would carry its own key. Move ui.state_dir " +
+                     $"to a different disk, or provide the key via " +
+                     $"{Neolink.Notifications.SecretProtector.KeyEnvVar} so it never touches disk.");
+        if (secretProtector.KeySource == "ephemeral")
+            Log.Warn("Footage encryption: the key is EPHEMERAL (unwritable state dir) — footage " +
+                     "encrypted this run becomes UNREADABLE after a restart. Fix the state dir now.");
+    }
+}
+
 // Motion pushes fan out to the recorder and/or the MQTT bridge; wired after both
 // exist (the bridge needs the camera list, built below).
 var motionTargets = new List<(CameraService Primary, string Name, Action<MotionPush>? RecorderSink)>();
@@ -530,10 +560,12 @@ if (config.WebPort > 0)
         Recording = config.Recording,
         ArchiveAvailable = storage?.HasArchiveTier ?? false,
         Storage = storage,
+        Secrets = secretProtector,
         UserStore = userStore,
         ResetAdminPassword = config.EffectiveResetAdminPassword,
         TrickleSpeed = config.Ui.TrickleSpeed,
         TalkEnabled = config.Ui.Talk,
+        ShowBackgroundTasks = config.Ui.ShowBackgroundTasks,
         Version = Version,
         ConfigPath = Path.GetFullPath(configPath),
         Updates = updates,

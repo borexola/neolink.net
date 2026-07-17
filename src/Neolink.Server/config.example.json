@@ -36,7 +36,12 @@
     // streams your microphone to the camera's speaker. Off by default; can also
     // be toggled from the web UI (Server settings → Web UI). Browsers only allow
     // microphone access on HTTPS or localhost pages.
-    "talk": false
+    "talk": false,
+
+    // Show the admin-only sidebar strip that reports live server work (footage
+    // archiving progress, and future long-running jobs). On by default; set false
+    // to hide it for everyone. Admins can also dismiss a single run from the strip.
+    "show_background_tasks": true
   },
 
   // Optional: recording to disk — motion/AI detection events (clips + thumbnails)
@@ -59,7 +64,10 @@
   //   "stream": "auto",                // which stream to record: auto|mainStream|subStream
   //   "segment_minutes": 10,           // continuous recording: max length of one file
   //   "max_segment_size_mb": 256,      // continuous recording: max size of one file (rolls at whichever hits first)
-  //   "continuous_retention_days": 7   // continuous footage retention (default = retention_days)
+  //   "continuous_retention_days": 7,  // continuous footage retention (default = retention_days)
+  //   "encrypt": false                 // BETA: encrypt new footage at rest (AES-256-GCM). Playback and
+  //                                    // old plaintext footage are unaffected. The key is NEOLINK_SECRET_KEY
+  //                                    // or the state dir's secret.key — back it up (see README)
   // },
 
   // Optional: publish to MQTT for Home Assistant (auto-discovery). Remove to disable.

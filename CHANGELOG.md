@@ -8,6 +8,51 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### New
 
+- **The brand dot becomes a padlock when footage encryption is on**: the glowing
+  dot next to the NEOLINK.NET logo turns into a padlock in the same accent glow
+  whenever the server encrypts footage at rest, so anyone signed in can see at
+  a glance that recordings are protected (hover it for the explanation).
+- **The encryption key is visible and sanity-checked**: the Recording settings
+  tab now reports which key the running server uses — `NEOLINK_SECRET_KEY`
+  (environment) or the state dir's `secret.key` with its full path — plus a
+  one-way fingerprint (SHA-256 prefix; the key itself is never shown) to match
+  against a backup. If the key file sits on the **same disk** as the footage it
+  protects, the tab and the startup log warn plainly: a stolen disk would carry
+  its own key — move `ui.state_dir` or use `NEOLINK_SECRET_KEY`. An ephemeral
+  key (unwritable state dir) is also called out before it can eat footage.
+- **Server settings: Save & restart, plus Discard**: with unsaved changes, the
+  Restart button becomes *Save & restart* — it writes the staged edits to
+  config.json first and only restarts when the save succeeded — and a new
+  *Discard* button drops the staged edits, snapping every field back to what
+  the file actually says. With nothing staged the buttons behave as before.
+  Confirming a restart now shows a clear full-screen **"Restarting the
+  server…"** screen instead of the generic "connection lost" flash: it is
+  browser-owned (the server stops talking the instant it goes down), waits for
+  the server to go down and come back, then reloads the page automatically.
+- **Background work is visible to admins**: while the server archives aged
+  footage, the live view's sidebar shows a progress card — what is moving
+  (camera and day), how much (bytes moved of the total, measured up front) and
+  a percentage with a live progress bar — and it disappears when the pass
+  completes. It is **pinned just above the account row** (so it never scrolls
+  away), **dismissible** per run (the ✕ hides this run; the next run shows
+  again), and can be turned off entirely with `ui.show_background_tasks: false`
+  (Server settings → General). The strip is a general home for background
+  processes admins should know about, fed by a new admin-only `GET /api/background`
+  endpoint (open on a no-auth server, like the other admin surfaces), so future
+  long-running jobs can report there too.
+- **The camera list scrolls on its own**: the sidebar's camera list now scrolls
+  in its own container, so the account row (and the background-process strip
+  above it) stay pinned at the bottom no matter how many cameras you have —
+  previously a long list pushed them off the bottom into the scroll.
+- **Footage encryption at rest (beta, opt-in)**: turn on *Server settings →
+  Recording → Encrypt footage* (or `"recording": { "encrypt": true }`) and new
+  event clips, previews, thumbnails and 24/7 segments are written as chunked
+  AES-256-GCM — a stolen disk or copied backup exposes nothing, and tampering
+  is detected on read. Playback, timeline seeking and exports are unaffected
+  (files decrypt transparently, hardware-accelerated, chunk-by-chunk on
+  demand), and plaintext footage from before the switch keeps playing side by
+  side, forever. The key is the server secret (NEOLINK_SECRET_KEY or the state
+  dir's secret.key) — back it up; without it encrypted footage is unrecoverable.
 - **Home Assistant reflects camera changes instantly**: changing a camera setting
   in the web UI — detection events, 24/7 recording, suspend, night vision,
   floodlight/spotlight, PIR, siren, privacy, volume, auto-tracking or the picture
@@ -143,6 +188,17 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Fixed
 
+- **Timeline Studio: focusing the only camera no longer leaves dead space**:
+  with a single camera loaded, clicking its monitor used to switch to the
+  program-monitor-plus-thumbnail-rail layout anyway — shoving the lone monitor
+  to the left with an empty rail column on the right. Focus now needs at least
+  two monitors (there is nothing to promote a lone camera against), so a single
+  camera just fills the whole area; the multi-camera focus behavior is unchanged.
+- **The timeline's "catching up" pill no longer reflows the toolbar**: it used
+  to appear and disappear from the layout, shoving the clock and export
+  controls onto another line at some window widths and snapping them back
+  moments later. Its space is now always reserved; only its visibility changes,
+  so the toolbar never jumps.
 - **UDP battery cameras no longer drop every ~8 seconds**: the camera runs one
   UDP session per connect-hello it answers — and the handshake retransmits its
   hello (two ports, every 500 ms) until the camera wakes, so the camera can end

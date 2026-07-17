@@ -392,6 +392,35 @@ public sealed class EventStore
     public void Cleanup(Func<string, CameraStoragePolicy> policyFor)
     {
         int events = 0, segments = 0, archivedHalves = 0, archiveDeleted = 0;
+
+        // Measure the archive work up front (read-only pass over the same
+        // conditions), so the admin's progress strip can show a real percentage
+        // while folders move — a cross-volume archive of a day's footage is the
+        // one retention step slow enough to watch. No archive work, no strip.
+        var (planHalves, planBytes) = MeasureArchivePlan(policyFor);
+        using var archTask = planHalves > 0
+            ? BackgroundTasks.Begin("Archiving footage",
+                $"moving {planHalves} folder(s), {SizeText(planBytes)}, to the archive", 0)
+            : null;
+        long movedBytes = 0;
+        double lastPct = -1;
+        string curItem = "";
+        void OnArchiveBytes(long b)
+        {
+            movedBytes += b;
+            double pct = planBytes > 0 ? Math.Min(100, movedBytes * 100.0 / planBytes) : 0;
+            if (pct - lastPct >= 0.5) // throttle: one report per half-percent
+            {
+                lastPct = pct;
+                archTask?.Report($"{curItem} — {SizeText(movedBytes)} of {SizeText(planBytes)}", pct);
+            }
+        }
+        void Announce(string cam, string day)
+        {
+            curItem = $"{cam} · {day}";
+            archTask?.Report($"{curItem} — {SizeText(movedBytes)} of {SizeText(planBytes)}");
+        }
+
         // The live pass covers every root that holds fresh footage (main +
         // the clips tier when distinct); the archive root is handled after.
         foreach (var root in Roots.Where(r => _archiveRoot == null || !SamePath(r, _archiveRoot)))
@@ -425,7 +454,10 @@ public sealed class EventStore
                     if (eventActs && day < eventCutoff)
                     {
                         if (archiveEvents)
-                            archivedHalves += ArchiveEventEntries(dayDir, camName, dayName) ? 1 : 0;
+                        {
+                            Announce(camName, dayName);
+                            archivedHalves += ArchiveEventEntries(dayDir, camName, dayName, OnArchiveBytes) ? 1 : 0;
+                        }
                         else
                             events += DeleteEventEntries(dayDir);
                     }
@@ -434,8 +466,9 @@ public sealed class EventStore
                         var contDir = Path.Combine(dayDir, "continuous");
                         if (archiveCont)
                         {
+                            if (Directory.Exists(contDir)) Announce(camName, dayName);
                             if (Directory.Exists(contDir) && MoveTree(contDir,
-                                    Path.Combine(_archiveRoot!, camName, dayName, "continuous")))
+                                    Path.Combine(_archiveRoot!, camName, dayName, "continuous"), OnArchiveBytes))
                                 archivedHalves++;
                         }
                         else if (DeleteTree(contDir))
@@ -476,6 +509,73 @@ public sealed class EventStore
             Log.Info($"Recordings: archive retention removed {archiveDeleted} expired day folder(s)");
     }
 
+    /// <summary>
+    /// Read-only twin of the archive branches in <see cref="Cleanup"/>: counts the
+    /// folder halves that WILL move to the archive this pass and sums their bytes,
+    /// so the move loop can report a real percentage. Keep its conditions in
+    /// lockstep with the archiving branches above.
+    /// </summary>
+    internal (int Halves, long Bytes) MeasureArchivePlan(Func<string, CameraStoragePolicy> policyFor)
+    {
+        if (_archiveRoot == null) return (0, 0);
+        int halves = 0;
+        long bytes = 0;
+        try
+        {
+            foreach (var root in Roots.Where(r => !SamePath(r, _archiveRoot)))
+            {
+                foreach (var cameraDir in Directory.EnumerateDirectories(root))
+                {
+                    var policy = policyFor(Path.GetFileName(cameraDir)!);
+                    int retentionDays = Math.Min(policy.EventDays, 36500);
+                    int continuousRetentionDays = Math.Min(policy.ContinuousDays, 36500);
+                    bool archiveEvents = policy.ArchiveEvents;
+                    bool archiveCont = policy.ArchiveContinuous;
+                    if (!archiveEvents && !archiveCont) continue;
+                    var eventCutoff = DateTime.Now.Date.AddDays(-retentionDays);
+                    var contCutoff = DateTime.Now.Date.AddDays(-continuousRetentionDays);
+
+                    foreach (var dayDir in Directory.EnumerateDirectories(cameraDir))
+                    {
+                        if (!DateTime.TryParseExact(Path.GetFileName(dayDir), "yyyy-MM-dd",
+                                null, System.Globalization.DateTimeStyles.None, out var day))
+                            continue;
+                        if (archiveEvents && retentionDays > 0 && day < eventCutoff)
+                        {
+                            long b = Directory.EnumerateDirectories(dayDir)
+                                .Where(e => !Path.GetFileName(e)!.Equals("continuous", StringComparison.OrdinalIgnoreCase))
+                                .Sum(TreeSize);
+                            if (b > 0 || Directory.EnumerateDirectories(dayDir)
+                                    .Any(e => !Path.GetFileName(e)!.Equals("continuous", StringComparison.OrdinalIgnoreCase)))
+                            {
+                                halves++;
+                                bytes += b;
+                            }
+                        }
+                        var contDir = Path.Combine(dayDir, "continuous");
+                        if (archiveCont && continuousRetentionDays > 0 && day < contCutoff
+                            && Directory.Exists(contDir))
+                        {
+                            halves++;
+                            bytes += TreeSize(contDir);
+                        }
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"Archive: cannot measure the pending work: {ex.Message}");
+        }
+        return (halves, bytes);
+    }
+
+    /// <summary>"512 MB" / "2.4 GB" for the progress strip.</summary>
+    internal static string SizeText(long bytes) =>
+        bytes >= 1L << 30 ? $"{bytes / (double)(1L << 30):0.0} GB"
+        : bytes >= 1L << 20 ? $"{bytes >> 20} MB"
+        : $"{Math.Max(1, bytes >> 10)} KB";
+
     /// <summary>Deletes archived days that have outlived their camera's archive window.</summary>
     private int CleanupArchive(Func<string, CameraStoragePolicy> policyFor)
     {
@@ -504,7 +604,7 @@ public sealed class EventStore
 
     /// <summary>Moves a day's event storage into the archive, keeping the index
     /// pointed at the new location so archived events stay playable.</summary>
-    private bool ArchiveEventEntries(string dayDir, string camName, string dayName)
+    private bool ArchiveEventEntries(string dayDir, string camName, string dayName, Action<long>? onBytes = null)
     {
         bool any = false;
         foreach (var entry in Directory.EnumerateDirectories(dayDir))
@@ -512,7 +612,7 @@ public sealed class EventStore
             var half = Path.GetFileName(entry)!;
             if (half.Equals("continuous", StringComparison.OrdinalIgnoreCase)) continue;
             var target = Path.Combine(_archiveRoot!, camName, dayName, half);
-            if (!MoveTree(entry, target)) continue;
+            if (!MoveTree(entry, target, onBytes)) continue;
             any = true;
             lock (_gate)
             {
@@ -551,7 +651,7 @@ public sealed class EventStore
     /// handles the copy+delete) and an existing target (contents merge). True when
     /// the source is gone afterwards.
     /// </summary>
-    internal static bool MoveTree(string src, string dst)
+    internal static bool MoveTree(string src, string dst, Action<long>? onBytes = null)
     {
         if (!Directory.Exists(src)) return false;
         try
@@ -562,18 +662,22 @@ public sealed class EventStore
                 try
                 {
                     Directory.Move(src, dst); // same volume: instant rename
+                    onBytes?.Invoke(TreeSize(dst));
                     return true;
                 }
                 catch (IOException) { /* cross-volume or racing writer: merge below */ }
             }
             Directory.CreateDirectory(dst);
             foreach (var dir in Directory.EnumerateDirectories(src))
-                MoveTree(dir, Path.Combine(dst, Path.GetFileName(dir)!));
+                MoveTree(dir, Path.Combine(dst, Path.GetFileName(dir)!), onBytes);
             foreach (var file in Directory.EnumerateFiles(src))
             {
                 var target = Path.Combine(dst, Path.GetFileName(file)!);
+                long len = 0;
+                try { len = new FileInfo(file).Length; } catch { }
                 if (File.Exists(target)) File.Delete(file); // already archived earlier
                 else File.Move(file, target);                // cross-volume safe
+                onBytes?.Invoke(len); // per file: real progress on slow cross-volume copies
             }
             TryDeleteIfEmpty(src);
             return !Directory.Exists(src);
@@ -583,6 +687,19 @@ public sealed class EventStore
             Log.Warn($"Archive: cannot move {src} -> {dst}: {ex.Message} (will retry next pass)");
             return false;
         }
+    }
+
+    /// <summary>Total bytes of all files under a directory (best effort — errors count 0).</summary>
+    internal static long TreeSize(string dir)
+    {
+        long total = 0;
+        try
+        {
+            foreach (var f in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
+                try { total += new FileInfo(f).Length; } catch { }
+        }
+        catch { }
+        return total;
     }
 
     /// <summary>

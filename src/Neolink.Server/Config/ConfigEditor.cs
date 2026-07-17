@@ -34,14 +34,17 @@ public static class ConfigEditor
         }
     }
 
-    /// <summary>The editable settings, read fresh from the file.</summary>
-    public static object Describe(string path)
+    /// <summary>The editable settings, read fresh from the file.
+    /// <paramref name="encryption"/> is the caller's live key report (source,
+    /// fingerprint, same-disk flag) — runtime state, not part of the file.</summary>
+    public static object Describe(string path, object? encryption = null)
     {
         var cfg = NeolinkConfig.Load(path);
         return new
         {
             path = Path.GetFullPath(path),
             writable = IsWritable(path),
+            encryption,
             settings = new
             {
                 bind = cfg.BindAddr,
@@ -55,6 +58,7 @@ public static class ConfigEditor
                     stateDir = cfg.Ui.StateDir,
                     resetAdminPassword = cfg.EffectiveResetAdminPassword,
                     talk = cfg.Ui.Talk,
+                    showBackgroundTasks = cfg.Ui.ShowBackgroundTasks,
                 },
                 recording = cfg.Recording == null ? null : new
                 {
@@ -66,6 +70,7 @@ public static class ConfigEditor
                     stream = cfg.Recording.Stream,
                     segmentMinutes = cfg.Recording.SegmentMinutes,
                     continuousRetentionDays = cfg.Recording.ContinuousRetentionDays,
+                    encrypt = cfg.Recording.Encrypt,
                 },
                 // Broker/credentials stay file-only; the UI adjusts the cadence.
                 mqtt = cfg.Mqtt == null ? null : new

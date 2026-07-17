@@ -34,6 +34,19 @@ public sealed class SecretProtector
 
     private readonly byte[] _key;
 
+    /// <summary>Where the active key came from: "env" (NEOLINK_SECRET_KEY),
+    /// "file" (the state dir's secret.key) or "ephemeral" (unwritable state dir —
+    /// nothing encrypted this run survives a restart).</summary>
+    public string KeySource { get; private set; } = "file";
+
+    /// <summary>Full path of the key file when <see cref="KeySource"/> is "file".</summary>
+    public string? KeyFile { get; private set; }
+
+    /// <summary>Short one-way identifier of the active key (first 12 hex chars of
+    /// its SHA-256) — lets the admin tell WHICH key is in use and match it against
+    /// a backup, without the key itself ever being shown.</summary>
+    public string Fingerprint => Convert.ToHexString(SHA256.HashData(_key))[..12].ToLowerInvariant();
+
     public SecretProtector(string stateDir) => _key = ResolveKey(stateDir);
 
     /// <summary>Test seam: use a fixed key without touching the filesystem.</summary>
@@ -41,7 +54,15 @@ public sealed class SecretProtector
     {
         if (key.Length != 32) throw new ArgumentException("key must be 32 bytes", nameof(key));
         _key = key;
+        KeySource = "test";
     }
+
+    /// <summary>Derives an independent 32-byte subkey from the master secret for
+    /// <paramref name="purpose"/> (HKDF-SHA256), so different subsystems — footage
+    /// encryption, secret tokens — never share the raw key material.</summary>
+    public byte[] DeriveSubKey(string purpose) =>
+        HKDF.DeriveKey(HashAlgorithmName.SHA256, _key, 32, salt: null,
+            info: System.Text.Encoding.UTF8.GetBytes(purpose));
 
     /// <summary>Encrypts UTF-8 <paramref name="plaintext"/> to a base64 token.</summary>
     public string Protect(string plaintext)
@@ -85,12 +106,16 @@ public sealed class SecretProtector
         }
     }
 
-    private static byte[] ResolveKey(string stateDir)
+    private byte[] ResolveKey(string stateDir)
     {
         var env = Environment.GetEnvironmentVariable(KeyEnvVar);
         if (!string.IsNullOrWhiteSpace(env))
         {
-            if (TryParseKey(env, out var k)) return k;
+            if (TryParseKey(env, out var k))
+            {
+                KeySource = "env";
+                return k;
+            }
             Log.Warn($"{KeyEnvVar} is set but is not a 32-byte base64/hex key — falling back to the key file.");
         }
 
@@ -100,13 +125,20 @@ public sealed class SecretProtector
             if (File.Exists(path))
             {
                 var existing = File.ReadAllBytes(path);
-                if (existing.Length == 32) return existing;
+                if (existing.Length == 32)
+                {
+                    KeySource = "file";
+                    KeyFile = Path.GetFullPath(path);
+                    return existing;
+                }
                 Log.Warn($"Secret key file {path} is malformed ({existing.Length} bytes) — regenerating.");
             }
             var key = RandomNumberGenerator.GetBytes(32);
             File.WriteAllBytes(path, key);
             if (!OperatingSystem.IsWindows())
                 File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            KeySource = "file";
+            KeyFile = Path.GetFullPath(path);
             return key;
         }
         catch (Exception ex)
@@ -116,6 +148,7 @@ public sealed class SecretProtector
             // secrets won't survive a restart (the user is told to fix the dir).
             Log.Warn($"Cannot persist the secret key at {path} ({ex.Message}); using an in-memory key " +
                      "(stored secrets will not survive a restart until the state dir is writable).");
+            KeySource = "ephemeral";
             return RandomNumberGenerator.GetBytes(32);
         }
     }
