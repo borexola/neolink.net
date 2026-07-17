@@ -8,6 +8,24 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### New
 
+- **Snapshot endpoint — `GET /api/cameras/{name}/snapshot.jpg`**: a current
+  still image straight from the camera's own JPEG snapshot command, for
+  notification thumbnails, wall dashboards and scripts. Poll-friendly by
+  design: a short per-camera cache (default 5 s, `?maxAge=` tunes it) plus a
+  single-flight gate collapse a poll storm into one camera command, and a
+  sleeping battery camera is **never woken by a poll** — it serves its last
+  frame, honestly labelled via `X-Snapshot-Age` / `X-Snapshot-Stale` headers.
+  Cameras without the command (generic RTSP) return 404; same auth as the rest
+  of the API. See "Snapshots over HTTP" in the README.
+- **Storage forecast — "fills in ~23 days at the current rate"**: the Monitor's
+  DISK FREE card and per-location storage cards now project when each disk runs
+  out. Free space is sampled every 15 minutes and persisted in the state dir
+  (storage-trend.json), so the trend survives restarts and covers up to a week.
+  The projection is the net trend, not the raw write rate — once retention
+  deletes as fast as the cameras record, it says "not filling at the current
+  rate" instead of inventing a fill date; a fresh install stays quiet for its
+  first ~6 hours while it gathers data. `GET /api/storage` carries the same
+  numbers (`forecastState`, `forecastDays`).
 - **The brand dot becomes a padlock when footage encryption is on**: the glowing
   dot next to the NEOLINK.NET logo turns into a padlock in the same accent glow
   whenever the server encrypts footage at rest, so anyone signed in can see at

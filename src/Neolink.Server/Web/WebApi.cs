@@ -62,6 +62,8 @@ public sealed class WebApiOptions
     public bool ArchiveAvailable { get; init; }
     /// <summary>Configured storage tiers and their capacity (feeds the monitor and the full-storage banners).</summary>
     public StorageLocations? Storage { get; init; }
+    /// <summary>Free-space trend per location — the "~N days until full" forecast on the monitor.</summary>
+    public StorageForecast? Forecast { get; init; }
     /// <summary>The server secret (key source/fingerprint reporting for admins).</summary>
     public Neolink.Notifications.SecretProtector? Secrets { get; init; }
     public required UserStore UserStore { get; init; }
@@ -100,6 +102,7 @@ public sealed class WebApiOptions
 ///   POST .../ptz /reboot; GET .../battery   — camera control
 ///   GET .../httpfeatures — combined HTTP-API extras (picture/volume/Wi-Fi/presets/
 ///   quick replies/auto-track/SD); POST .../image /volume /ptzpreset /quickreply /autotrack
+///   GET /api/cameras/{name}/snapshot.jpg     — a current still (server-cached; ?maxAge= seconds)
 ///   GET /api/events[?camera=&amp;reviewed=&amp;limit=] — recorded detection events (when enabled)
 ///   GET /api/events/{id}[/clip /thumb]      — one event / its artifacts; POST .../review to (un)dismiss
 ///   POST /api/events/delete {ids[],estimate} — bulk delete events + files (admin; ?estimate summarizes)
@@ -960,17 +963,26 @@ public static class WebApi
         app.MapGet("/api/storage", () =>
             o.Storage == null
                 ? Results.Json(new { error = "recording is not configured" }, statusCode: 404)
-                : Results.Json(o.Storage.Sample().Select(s => new
+                : Results.Json(o.Storage.Sample().Select(s =>
                 {
-                    role = s.Role.ToString().ToLowerInvariant(),
-                    label = s.Label,
-                    path = s.Path,
-                    totalBytes = s.TotalBytes,
-                    freeBytes = s.FreeBytes,
-                    usedPercent = Math.Round(s.UsedPercent, 1),
-                    online = s.Online,
-                    warn = s.Warn,
-                    full = s.Full,
+                    // "When does it fill?" from the persisted free-space trend:
+                    // measuring (no verdict yet) / steady (retention keeping up) /
+                    // filling with the projected days remaining.
+                    var (state, days) = o.Forecast?.Forecast(s.Path) ?? ("measuring", null);
+                    return new
+                    {
+                        role = s.Role.ToString().ToLowerInvariant(),
+                        label = s.Label,
+                        path = s.Path,
+                        totalBytes = s.TotalBytes,
+                        freeBytes = s.FreeBytes,
+                        usedPercent = Math.Round(s.UsedPercent, 1),
+                        online = s.Online,
+                        warn = s.Warn,
+                        full = s.Full,
+                        forecastState = state,
+                        forecastDays = days is { } d ? Math.Round(d, 1) : (double?)null,
+                    };
                 })));
 
         app.MapGet("/api/cameras", () =>
@@ -1210,6 +1222,93 @@ public static class WebApi
                     ? Results.Json(new { error = "no battery info" }, statusCode: 404)
                     : Results.Json(XmlToJson(battery));
             }));
+
+        // A current still image, straight from the camera's own JPEG snapshot
+        // command — the NVR primitive notification thumbnails and dashboards poll.
+        // Served from a short per-camera cache (default 5 s, ?maxAge= overrides)
+        // with a single-flight gate, so a poll storm reaches the camera once; a
+        // sleeping battery camera is NEVER woken for a poll (control commands
+        // require the live connection), it serves the last frame marked stale.
+        var snapCache = new System.Collections.Concurrent.ConcurrentDictionary<
+            string, (byte[] Jpeg, DateTime AtUtc)>(StringComparer.OrdinalIgnoreCase);
+        var snapGates = new System.Collections.Concurrent.ConcurrentDictionary<
+            string, SemaphoreSlim>(StringComparer.OrdinalIgnoreCase);
+        async Task<IResult> SnapshotAsync(string name, HttpContext ctx)
+        {
+            var cam = cameras.FirstOrDefault(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase));
+            if (cam == null)
+                return Results.Json(new { error = $"unknown camera '{name}'" }, statusCode: 404);
+            double maxAge = 5;
+            if (double.TryParse(ctx.Request.Query["maxAge"], System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out var q) && q >= 0)
+                maxAge = q;
+
+            IResult? Cached(bool allowStale)
+            {
+                if (!snapCache.TryGetValue(cam.Name, out var c))
+                    return null;
+                var age = DateTime.UtcNow - c.AtUtc;
+                if (!allowStale && age.TotalSeconds > maxAge)
+                    return null;
+                ctx.Response.Headers["X-Snapshot-Age"] = ((long)age.TotalSeconds).ToString();
+                if (age.TotalSeconds > maxAge)
+                    ctx.Response.Headers["X-Snapshot-Stale"] = "true";
+                // The server-side cache is the only cache: a browser/HA re-fetch
+                // must reach it, not a stored copy with the same URL.
+                ctx.Response.Headers.CacheControl = "no-store";
+                return Results.Bytes(c.Jpeg, "image/jpeg");
+            }
+
+            if (Cached(allowStale: false) is { } fresh)
+                return fresh;
+            var gate = snapGates.GetOrAdd(cam.Name, _ => new SemaphoreSlim(1, 1));
+            await gate.WaitAsync(ctx.RequestAborted);
+            try
+            {
+                if (Cached(allowStale: false) is { } won)
+                    return won; // refreshed by the request we queued behind
+                byte[]? jpeg = null;
+                string? unavailable = null;
+                try
+                {
+                    jpeg = await cam.Control.SnapshotAsync(ctx.RequestAborted);
+                }
+                catch (OperationCanceledException) when (ctx.RequestAborted.IsCancellationRequested)
+                {
+                    return Results.StatusCode(499);
+                }
+                catch (CameraOfflineException)
+                {
+                    unavailable = cam.Asleep?.Invoke() == true
+                        ? "camera is asleep (battery) — a snapshot poll does not wake it"
+                        : "camera offline (reconnecting)";
+                }
+                catch (TimeoutException) { unavailable = "camera did not reply"; }
+                catch (CameraCommandException ex) { unavailable = ex.Message; }
+                if (jpeg is { Length: > 100 } && jpeg[0] == 0xFF && jpeg[1] == 0xD8)
+                {
+                    snapCache[cam.Name] = (jpeg, DateTime.UtcNow);
+                    ctx.Response.Headers["X-Snapshot-Age"] = "0";
+                    ctx.Response.Headers.CacheControl = "no-store";
+                    return Results.Bytes(jpeg, "image/jpeg");
+                }
+                if (jpeg != null)
+                    unavailable ??= "camera returned an invalid snapshot";
+                if (unavailable == null)
+                    return Results.Json(new { error = "this camera does not support snapshots" }, statusCode: 404);
+                // An old frame beats no frame for a dashboard tile — serve the last
+                // one we have, honestly labelled (X-Snapshot-Age / X-Snapshot-Stale).
+                if (Cached(allowStale: true) is { } stale)
+                    return stale;
+                return Results.Json(new { error = unavailable }, statusCode: 503);
+            }
+            finally
+            {
+                gate.Release();
+            }
+        }
+        app.MapGet("/api/cameras/{name}/snapshot.jpg", SnapshotAsync);
+        app.MapGet("/api/cameras/{name}/snapshot", SnapshotAsync);
 
         app.MapGet("/api/cameras/{name}/led", (string name, HttpContext ctx) =>
             ExecAsync(name, ctx, mutating: false, async (control, reqCt) =>

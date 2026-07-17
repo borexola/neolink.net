@@ -68,7 +68,7 @@
                 <div class="mon-card">
                     <span class="mon-card-label">DISK FREE</span>
                     <span class="mon-card-value" style="color:@DiskColor()">@(Last is { DTot: > 0 } s3 ? Bytes(s3.DFree) : "—")</span>
-                    <span class="mon-card-sub">@(_info?.Disk ?? "volume")@(Last is { DTot: > 0 } su ? $" · {(su.DTot - su.DFree) * 100.0 / su.DTot:0}% used" : "")</span>
+                    <span class="mon-card-sub">@(_info?.Disk ?? "volume")@(Last is { DTot: > 0 } su ? $" · {(su.DTot - su.DFree) * 100.0 / su.DTot:0}% used" : "")@ForecastText(_storage.FirstOrDefault(l => l.Role == "main"))</span>
                 </div>
                 @if (Last is { Rec: >= 0 })
                 {
@@ -154,7 +154,7 @@
                             <span class="mon-card-value" style="color:@StorageColor(loc)">
                                 @(loc.Online ? $"{Bytes(loc.FreeBytes)} free" : "offline")
                             </span>
-                            <span class="mon-card-sub">@loc.Path@(loc.Online && loc.TotalBytes > 0 ? $" · {loc.UsedPercent:0}% of {Bytes(loc.TotalBytes)} used" : "")@(loc.Full ? " · FULL — recording halted" : loc.Warn ? " · getting full" : "")</span>
+                            <span class="mon-card-sub">@loc.Path@(loc.Online && loc.TotalBytes > 0 ? $" · {loc.UsedPercent:0}% of {Bytes(loc.TotalBytes)} used" : "")@(loc.Full ? " · FULL — recording halted" : loc.Warn ? " · getting full" : "")@(loc.Full ? "" : ForecastText(loc))</span>
                         </div>
                     }
                 </div>
@@ -595,6 +595,17 @@
         loc.Full || !loc.Online ? "var(--err)"
         : loc.Warn ? "#ffb020"
         : "var(--text)";
+
+    /// <summary>The free-space forecast as a card-sub suffix: filling → the projected
+    /// days, steady → retention is keeping up, measuring/old server → nothing.</summary>
+    private static string ForecastText(ApiStorageLocation? loc) => loc?.ForecastState switch
+    {
+        "filling" when loc.ForecastDays is { } d && d < 1 => " · fills within a day at the current rate",
+        "filling" when loc.ForecastDays is { } d =>
+            $" · fills in ~{(d < 10 ? d.ToString("0.#") : Math.Round(d).ToString("0"))} days at the current rate",
+        "steady" => " · not filling at the current rate",
+        _ => "",
+    };
 
     public async ValueTask DisposeAsync()
     {

@@ -238,6 +238,15 @@ if (config.Recording is { } recCfg)
     }
 }
 
+// Free-space trend per storage location (persisted in the state dir): feeds the
+// monitor's "~N days until full at the current rate" forecast.
+StorageForecast? storageForecast = null;
+if (storage != null)
+{
+    storageForecast = new StorageForecast(storage, stateDir);
+    tasks.Add(Task.Run(() => storageForecast.RunAsync(shutdown.Token)));
+}
+
 // Email notifications for critical alerts (opt-in, configured in the web UI).
 // Fully isolated: the notifier and its alert monitor run on their own tasks and
 // swallow every failure, so a mis-set or unreachable mail server can never affect
@@ -560,6 +569,7 @@ if (config.WebPort > 0)
         Recording = config.Recording,
         ArchiveAvailable = storage?.HasArchiveTier ?? false,
         Storage = storage,
+        Forecast = storageForecast,
         Secrets = secretProtector,
         UserStore = userStore,
         ResetAdminPassword = config.EffectiveResetAdminPassword,

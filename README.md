@@ -535,6 +535,15 @@ until space is freed — recording resumes automatically. When split storage is
 configured, the 📈 Monitor page grows a STORAGE section showing every
 location's free space live.
 
+The Monitor also **forecasts when each disk fills**: free space is sampled
+every 15 minutes (persisted across restarts, up to a week of trend), and the
+DISK FREE card and each storage card show *"fills in ~23 days at the current
+rate"*. The projection is the **net** trend, not the raw write rate — so once
+retention starts deleting as fast as the cameras record, it honestly says
+*"not filling at the current rate"* instead of inventing a fill date. A fresh
+install says nothing for the first ~6 hours while it gathers data
+(`GET /api/storage` carries the same numbers: `forecastState`/`forecastDays`).
+
 #### Encrypting footage (beta)
 
 Opt-in encryption at rest for everything the server records: turn on
@@ -791,6 +800,32 @@ the exact clip:
 (You can also trigger the automation on the Last event sensor itself — a state
 change *is* a new recording, and `trigger.to_state.state` is the id.) Clips
 that auto-open from such a link start muted; tap the speaker to unmute.
+
+### Snapshots over HTTP
+
+`GET /api/cameras/{name}/snapshot.jpg` returns a current still image, straight
+from the camera's own JPEG snapshot command — the classic NVR primitive for
+notification thumbnails, wall-mounted dashboards and scripts:
+
+```
+http://neolink:8655/api/cameras/Driveway/snapshot.jpg
+```
+
+- **Poll it as hard as you like**: the server answers from a short cache
+  (default 5 seconds; `?maxAge=` seconds tunes it, `?maxAge=0` forces a fresh
+  frame) and collapses simultaneous requests into one camera command, so a
+  dashboard refreshing every second still reaches the camera at a gentle pace.
+- **Battery cameras are never woken by a poll.** A sleeping camera serves its
+  last frame instead, honestly labelled: `X-Snapshot-Age` (seconds) is on every
+  response, plus `X-Snapshot-Stale: true` when it's older than requested. No
+  frame at all yet → `503` with a JSON error.
+- Cameras without the snapshot command (generic RTSP cameras) return `404`.
+- With web-UI accounts enabled the endpoint needs a session like the rest of
+  the API — append `?token=` (tokens last 30 days). Home Assistant users
+  usually don't need this endpoint at all: with MQTT enabled each camera
+  already publishes a **Snapshot** `camera` entity, and
+  `image: /api/camera_proxy/camera.{name}_snapshot` attaches it to a
+  notification with HA handling the auth.
 
 ## Email notifications
 

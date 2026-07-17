@@ -1165,6 +1165,65 @@ public static class SelfTest
             }
         });
 
+        Test("storage forecast: fill projection, steady state, persistence", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                const long GB = 1024L * 1024 * 1024;
+                long free = 500 * GB;
+                var locs = new Recording.StorageLocations(
+                    new Config.RecordingConfig { Path = Path.Combine(dir, "rec") },
+                    probe: _ => (1000 * GB, free));
+                var now = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+                var fc = new Recording.StorageForecast(locs, dir, () => now);
+                var mainPath = locs.MainRoot;
+
+                // Minutes of history extrapolate noise — the verdict stays "measuring".
+                fc.SampleNow();
+                now = now.AddMinutes(15); free -= GB;
+                fc.SampleNow();
+                AssertEq(fc.Forecast(mainPath).State, "measuring");
+
+                // A day of losing ~100 GB/day → the projection lands near
+                // free/rate (the FULL floor shaves a little off the runway).
+                for (int i = 0; i < 96; i++)
+                {
+                    now = now.AddMinutes(15);
+                    free -= 100 * GB / 96;
+                    fc.SampleNow();
+                }
+                var (state, days) = fc.Forecast(mainPath);
+                AssertEq(state, "filling");
+                Assert(days is > 3 and < 5, $"projected {days:0.00} days to full, expected ≈4");
+
+                // Persistence: a fresh instance (a server restart) reads the same
+                // trend from the state dir and reaches the same verdict.
+                var reborn = new Recording.StorageForecast(locs, dir, () => now);
+                AssertEq(reborn.Forecast(mainPath).State, "filling");
+
+                // Retention keeping up: flat free space over 7+ hours → "steady",
+                // never a fictional fill date.
+                var dir2 = Path.Combine(dir, "state2");
+                Directory.CreateDirectory(dir2);
+                var flat = new Recording.StorageForecast(locs, dir2, () => now);
+                for (int i = 0; i < 30; i++)
+                {
+                    now = now.AddMinutes(15);
+                    flat.SampleNow();
+                }
+                AssertEq(flat.Forecast(mainPath).State, "steady");
+
+                // Unknown path (or a location with no samples) stays "measuring".
+                AssertEq(fc.Forecast(Path.Combine(dir, "nope")).State, "measuring");
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+        });
+
         Test("background-task registry: begin/report/complete lifecycle", () =>
         {
             AssertEq(BackgroundTasks.Active().Count, 0);
@@ -3043,12 +3102,18 @@ public static class SelfTest
                 var cam = new Web.WebCameraInfo("apicam",
                     new List<Web.WebStreamInfo> { new("mainStream", "/apicam/mainStream", hub) },
                     new StubCameraControl("apicam"), PermittedUsers: null);
+                // A second, snapshot-capable camera: exercises /snapshot.jpg (the
+                // stub above answers null = "no snapshot support").
+                var snapControl = new SnapStub("snapcam");
+                var snapCam = new Web.WebCameraInfo("snapcam",
+                    new List<Web.WebStreamInfo> { new("mainStream", "/snapcam/mainStream", new Streaming.StreamHub("snapcam")) },
+                    snapControl, PermittedUsers: null);
                 server = Web.WebApi.RunAsync(new Web.WebApiOptions
                 {
                     BindAddr = "127.0.0.1",
                     Port = port,
                     WebUi = false,
-                    Cameras = new[] { cam },
+                    Cameras = new[] { cam, snapCam },
                     Users = new Dictionary<string, string>(),
                     RtspPort = 8654,
                     Events = store,
@@ -3090,7 +3155,7 @@ public static class SelfTest
 
                 // Camera list — what ApiCamera/ApiStream bind to; open while no accounts exist.
                 var cams = GetJson(http, "/api/cameras");
-                AssertEq(cams.GetArrayLength(), 1);
+                AssertEq(cams.GetArrayLength(), 2);
                 AssertEq(cams[0].GetProperty("name").GetString()!, "apicam");
                 var stream = cams[0].GetProperty("streams")[0];
                 AssertEq(stream.GetProperty("kind").GetString()!, "mainStream");
@@ -3103,6 +3168,28 @@ public static class SelfTest
                     AssertEq((int)preflight.StatusCode, 204);
                     AssertEq(preflight.Headers.GetValues("Access-Control-Allow-Origin").First(), "*");
                 }
+
+                // Snapshot endpoint: a JPEG from the camera, served through a short
+                // per-camera cache so a poll storm reaches the camera once.
+                using (var snap = http.GetAsync("/api/cameras/snapcam/snapshot.jpg").Result)
+                {
+                    AssertEq((int)snap.StatusCode, 200);
+                    AssertEq(snap.Content.Headers.ContentType!.MediaType!, "image/jpeg");
+                    var body = snap.Content.ReadAsByteArrayAsync().Result;
+                    Assert(body.Length == 200 && body[0] == 0xFF && body[1] == 0xD8, "JPEG body served");
+                    AssertEq(snap.Headers.GetValues("X-Snapshot-Age").First(), "0");
+                }
+                AssertEq(snapControl.Calls, 1);
+                using (var snap = http.GetAsync("/api/cameras/snapcam/snapshot.jpg").Result)
+                    AssertEq((int)snap.StatusCode, 200);
+                AssertEq(snapControl.Calls, 1); // second poll inside maxAge = cache hit
+                using (var snap = http.GetAsync("/api/cameras/snapcam/snapshot.jpg?maxAge=0").Result)
+                    AssertEq((int)snap.StatusCode, 200);
+                AssertEq(snapControl.Calls, 2); // maxAge=0 forces a fresh frame
+                // A camera without snapshot support (SnapshotAsync = null) is a 404,
+                // and so is a camera that does not exist.
+                AssertEq((int)http.GetAsync("/api/cameras/apicam/snapshot.jpg").Result.StatusCode, 404);
+                AssertEq((int)http.GetAsync("/api/cameras/nope/snapshot.jpg").Result.StatusCode, 404);
 
                 // Background-process feed (no-auth server: open, like other admin
                 // surfaces). Empty when idle; a running job shows name+percent.
@@ -3127,6 +3214,7 @@ public static class SelfTest
                 // The gate: every /api route except the auth handshake now needs a session.
                 AssertEq((int)http.GetAsync("/api/cameras").Result.StatusCode, 401);
                 AssertEq((int)http.GetAsync("/api/features").Result.StatusCode, 401);
+                AssertEq((int)http.GetAsync("/api/cameras/snapcam/snapshot.jpg").Result.StatusCode, 401);
                 AssertEq((int)http.GetAsync("/api/auth/status").Result.StatusCode, 200);
 
                 // Both token transports authenticate: Bearer header (component fetches)
@@ -3390,7 +3478,7 @@ public static class SelfTest
             uint? framerate, uint? bitrate, CancellationToken ct) => throw new NotSupportedException();
         public Task<System.Xml.Linq.XElement?> GetBatteryInfoAsync(CancellationToken ct) =>
             Task.FromResult<System.Xml.Linq.XElement?>(null);
-        public Task<byte[]?> SnapshotAsync(CancellationToken ct) => Task.FromResult<byte[]?>(null);
+        public virtual Task<byte[]?> SnapshotAsync(CancellationToken ct) => Task.FromResult<byte[]?>(null);
         public Task<System.Xml.Linq.XElement?> GetLedStateAsync(CancellationToken ct) =>
             Task.FromResult<System.Xml.Linq.XElement?>(null);
         public Task SetLedStateAsync(string? state, string? lightState,
@@ -3436,6 +3524,20 @@ public static class SelfTest
             Task.FromResult<IReadOnlyList<Streaming.SdCardInfo>?>(null);
         public virtual Task TalkAsync(int sampleRate, ChannelReader<byte[]> pcm, CancellationToken ct) =>
             throw new NotSupportedException();
+    }
+
+    /// <summary>A snapshot-capable camera returning a canned JPEG and counting
+    /// calls, so the endpoint's cache/single-flight behavior is observable.</summary>
+    private sealed class SnapStub(string name) : StubCameraControl(name)
+    {
+        public int Calls;
+        public override Task<byte[]?> SnapshotAsync(CancellationToken ct)
+        {
+            Interlocked.Increment(ref Calls);
+            var jpeg = new byte[200];
+            jpeg[0] = 0xFF; jpeg[1] = 0xD8; // SOI — enough to pass the sanity check
+            return Task.FromResult<byte[]?>(jpeg);
+        }
     }
 
     /// <summary>A talk-capable camera that records the PCM streamed to its speaker,

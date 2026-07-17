@@ -109,9 +109,12 @@ public sealed record ApiFeaturesInfo(bool Events, bool Continuous, double Trickl
 /// <summary>The worst storage tier's state (in /api/features); null = all healthy.</summary>
 public sealed record ApiStorageState(string Label, double UsedPercent, bool Full);
 
-/// <summary>GET /api/storage — one configured storage location and its capacity.</summary>
+/// <summary>GET /api/storage — one configured storage location and its capacity.
+/// ForecastState is "measuring" | "steady" | "filling" (ForecastDays set only when
+/// filling); both null when talking to an older server.</summary>
 public sealed record ApiStorageLocation(string Role, string Label, string Path,
-    long TotalBytes, long FreeBytes, double UsedPercent, bool Online, bool Warn, bool Full);
+    long TotalBytes, long FreeBytes, double UsedPercent, bool Online, bool Warn, bool Full,
+    string? ForecastState = null, double? ForecastDays = null);
 
 /// <summary>GET /api/admin/config — the editable server settings, plus the live
 /// footage-encryption key report (source, one-way fingerprint — never the key).</summary>
