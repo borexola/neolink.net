@@ -3654,6 +3654,7 @@ public static class SelfTest
         int clientC2dA = 0;
         int clientHbSameTid = 0, clientHbOtherTid = 0;
         int releasedOrphan = 0; // C2D_DISC for the duplicate session (did 8)
+        int kaReplies = 0;      // answers to the camera's BC keepalive (msg 234)
         uint hsTid = 0; // the tid of the C2D_C the mock accepted — the session's tid
         // Phase gates so the mock injects the duplicate-session traffic only after
         // the main body has finished its first round of asserts.
@@ -3723,6 +3724,18 @@ public static class SelfTest
                     // Prove the stream survived: another ping (pids 2 and 3, in order).
                     await cam.SendAsync(BcUdp.BuildData(cid, 2, pingBytes.AsSpan(0, half)), client, cts.Token);
                     await cam.SendAsync(BcUdp.BuildData(cid, 3, pingBytes.AsSpan(half)), client, cts.Token);
+                    // The camera's BC-layer keepalive QUESTION (msg 234): battery
+                    // firmware sends this over the data channel and recycles the
+                    // session (~8 s) if the client never answers it.
+                    var kaReq = Neolink.Bc.BcCodec.Serialize(
+                        Neolink.Bc.BcMessage.HeaderOnly(new Neolink.Bc.BcMeta
+                        {
+                            MsgId = Neolink.Bc.BcConstants.MsgIdUdpKeepAlive,
+                            Class = Neolink.Bc.BcConstants.ClassModern,
+                            MsgNum = 777,
+                        }),
+                        new Neolink.Bc.EncryptionState());
+                    await cam.SendAsync(BcUdp.BuildData(cid, 4, kaReq), client, cts.Token);
                     await phase3.Task;
                     var ourDisc = $"<P2P><D2C_DISC><cid>{cid}</cid><did>7</did></D2C_DISC></P2P>";
                     await cam.SendAsync(UdpDiscovery.BuildDiscovery(hsTid, ourDisc), client, cts.Token);
@@ -3746,9 +3759,15 @@ public static class SelfTest
                     else if (dx.Contains("<C2D_DISC>", StringComparison.Ordinal)
                              && dx.Contains("<did>8</did>", StringComparison.Ordinal)) releasedOrphan++;
                 }
-                else if (BcUdp.TryParseData(r.Buffer, out _, out var pid, out _))
+                else if (BcUdp.TryParseData(r.Buffer, out _, out var pid, out var payload))
                 {
                     clientDataPackets++;
+                    // The keepalive answer: msg 234 echoed with our msgNum and resp 200.
+                    if (payload.Length >= 20
+                        && System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(4)) == Neolink.Bc.BcConstants.MsgIdUdpKeepAlive
+                        && System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(14)) == 777
+                        && System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(16)) == 200)
+                        kaReplies++;
                     await cam.SendAsync(BcUdp.BuildAck(cid, 0, pid, 0, ReadOnlySpan<byte>.Empty), r.RemoteEndPoint, cts.Token);
                 }
                 else if (BcUdp.TryParseAck(r.Buffer, out _, out _, out _))
@@ -3808,6 +3827,12 @@ public static class SelfTest
         }
         for (int i = 0; i < 40 && releasedOrphan == 0; i++) await Task.Delay(50, cts.Token);
         Assert(releasedOrphan > 0, "client releases the duplicate session with C2D_DISC (did 8)");
+
+        // The camera's BC keepalive (msg 234) must be ANSWERED — echoed msgNum,
+        // response 200 — or real battery firmware declares the client dead and
+        // recycles the session with a clean D2C_DISC after ~8 s.
+        for (int i = 0; i < 60 && kaReplies == 0; i++) await Task.Delay(50, cts.Token);
+        Assert(kaReplies > 0, "client answers the camera's UDP keepalive (msg 234, resp 200, echoed msgNum)");
 
         // ...but a D2C_DISC addressed to OUR did must still close the connection,
         // promptly (well before the receive timeout).

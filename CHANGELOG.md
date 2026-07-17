@@ -247,6 +247,17 @@ in the README). Paste the matching section below into the GitHub release.
   releasing the session it opens instead of leaving it half-open. The
   disconnect diagnostic now records each control message's session id and
   arrival time, so any remaining close is attributable at a glance.
+- **UDP battery cameras: the camera's own keepalive is now ANSWERED** — the
+  actual root cause of the stubborn 8-second on / 4-second off cycle that
+  survived every transport fix above. The field diagnostics finally showed it:
+  the camera periodically asks a BC-layer keepalive question (message 234,
+  "UDP keep alive") over the data channel, and expects the client to echo it
+  back with response 200. Neolink.NET treated it as an unknown push and
+  dropped it, so battery firmware concluded the client was dead and recycled
+  the session with a clean `D2C_DISC` after ~8.5 s — media and acks flowing
+  the whole time. Every message 234 is now answered immediately; the
+  disconnect diagnostic counts keepalives received/answered so the exchange
+  is visible in the logs.
 - **Timeline lanes no longer trail behind "now" on some filesystems**: the day
   listing derived every segment's duration from the file's mtime, but an OPEN
   file's directory mtime is stale on NTFS (updated lazily on close) and on

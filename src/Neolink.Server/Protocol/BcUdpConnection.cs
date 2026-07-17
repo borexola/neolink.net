@@ -84,7 +84,7 @@ public sealed class BcUdpConnection : IBcConnection
     // is heavily instrumented to pin down camera-initiated closes from one capture.
     private bool _confirmLogged, _connIdWarned;
     private readonly DateTime _t0 = DateTime.UtcNow;
-    private long _rxData, _rxCtrl, _txAck, _txHb, _txC2dA, _txData;
+    private long _rxData, _rxCtrl, _txAck, _txHb, _txC2dA, _txData, _rxKa, _txKa;
     private uint _rxLastPid, _rxMaxPid;
     private DateTime _lastRxUtc, _lastDataUtc, _lastCtrlUtc;
     // Per-session tally of the camera's control messages (D2C_T, D2C_HB, ...), so the
@@ -266,6 +266,7 @@ public sealed class BcUdpConnection : IBcConnection
                             Log.Info($"{_tag}: UDP camera closed the session (D2C_DISC, our did {_did}) after {(DateTime.UtcNow - _t0).TotalSeconds:0.0}s — " +
                                      $"rx {_rxData} data (last {sinceData:0}ms ago), camera sent [{TallyString()}]; " +
                                      $"we sent {_txAck} acks/{_txHb} hb/{_txC2dA} C2D_A; " +
+                                     $"keepalive (msg 234): {_rxKa} from camera, {_txKa} answered; " +
                                      (_confirmLogged ? "session confirmed" : "camera never sent D2C_T"));
                             _cts.Cancel();
                             return;
@@ -386,7 +387,8 @@ public sealed class BcUdpConnection : IBcConnection
                 double rxAge = _lastRxUtc == default ? -1 : (DateTime.UtcNow - _lastRxUtc).TotalMilliseconds;
                 Log.Debug($"{_tag}: udp {El} state — rx {_rxData} data (next {rxNext}, maxPid {_rxMaxPid}, " +
                           $"lastData {dataAge:0}ms, lastRx {rxAge:0}ms), rxCtrl {_rxCtrl}; " +
-                          $"tx {_txData} data ({unacked} unacked), {_txAck} acks, {_txHb} hb, {_txC2dA} C2D_A");
+                          $"tx {_txData} data ({unacked} unacked), {_txAck} acks, {_txHb} hb, {_txC2dA} C2D_A, " +
+                          $"ka {_rxKa}rx/{_txKa}tx");
             }
         }
         catch (OperationCanceledException) { }
@@ -468,6 +470,39 @@ public sealed class BcUdpConnection : IBcConnection
                 if (Dbg)
                     Log.Debug($"{_tag}: udp {El} ← BC msgId={msg.Meta.MsgId} class=0x{msg.Meta.Class:x4} " +
                               $"msgNum={msg.Meta.MsgNum} resp=0x{msg.Meta.ResponseCode:x4}");
+                // Msg 234 is the camera's UDP-session keepalive QUESTION, not a
+                // push: it must be answered (echo the message, response 200) or a
+                // battery camera decides the client is gone and recycles the
+                // session with a clean D2C_DISC after ~8 s. The reference client
+                // replies from a dedicated handler; we reply inline here.
+                if (msg.Meta.MsgId == BcConstants.MsgIdUdpKeepAlive)
+                {
+                    if (_rxKa++ == 0)
+                        Log.Info($"{_tag}: camera sent its UDP keepalive (msg 234) — replying " +
+                                 "(unanswered, battery cameras drop the session after ~8s)");
+                    var pong = new BcMessage
+                    {
+                        Meta = new BcMeta
+                        {
+                            MsgId = BcConstants.MsgIdUdpKeepAlive,
+                            ChannelId = msg.Meta.ChannelId,
+                            MsgNum = msg.Meta.MsgNum,
+                            StreamType = msg.Meta.StreamType,
+                            ResponseCode = 200,
+                            Class = BcConstants.ClassModern,
+                        },
+                    };
+                    try
+                    {
+                        await SendAsync(pong, ct).ConfigureAwait(false);
+                        _txKa++;
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        Log.Debug($"{_tag}: keepalive reply failed: {ex.Message}");
+                    }
+                    continue;
+                }
                 Channel<BcMessage>? target;
                 lock (_subGate) { _subscribers.TryGetValue(msg.Meta.MsgId, out target); }
                 if (target != null)
