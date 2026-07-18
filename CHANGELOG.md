@@ -21,6 +21,37 @@ in the README). Paste the matching section below into the GitHub release.
   this cost and are unaffected. The selftest proves the fast path
   byte-identical to the reference implementation across every length shape.
 
+## 0.9.4 — unreleased
+
+### Fixed
+
+- **A 4K camera snapshot no longer disconnects the Home Assistant bridge every
+  2 minutes**: the bridge publishes each camera's JPEG snapshot to MQTT
+  (base64) for the HA camera entity, and Mosquitto 2.1+ ships a new default
+  2 MB `max_packet_size` — it answers a bigger publish by DISCONNECTING the
+  client ("oversize packet"), so one high-resolution camera (a dual-lens Duo's
+  snapshot easily exceeds 2 MB in base64) cycled the connection every camera
+  shares, exactly on the 2-minute snapshot refresh. The client now knows the
+  broker's limit (`mqtt.max_packet_size`, default 2 MB to match modern
+  Mosquitto) and drops an oversized publish with a one-time warning naming the
+  topic and size instead of ever sending it. And so the HA picture keeps
+  working on those cameras rather than going stale, the bridge now asks the
+  camera itself for a SMALL snapshot: the HTTP API's Snap command scales the
+  image at the source (the Baichuan snap already requests the sub stream, but
+  dual-lens firmwares ignore that and send the full panorama). Any camera —
+  dual-lens, 4K, whatever comes next — now feeds HA a right-sized preview;
+  the full-resolution HTTP snapshot endpoint is unaffected. To push large
+  images over MQTT anyway, raise `max_packet_size` both on the broker (a
+  Mosquitto customize file) and in the neolink `mqtt` config.
+- **Beta builds now self-report `X.Y.Z-beta.<build>`**: each beta push gets a
+  unique, identifiable version without consuming stable patch numbers, so
+  stable releases increment by exactly one from the previous release.
+- **De-flaked the RTP fragmentation self-test**: it filled its test NAL with
+  random bytes, which about once in a few thousand runs contained a spurious
+  `00 00 01` start code — the packetizer rightly split there and the test's
+  byte count came up short. The fill is now deterministic and start-code-free
+  (real encoders emulation-prevent start codes inside a NAL).
+
 ## 0.9.3
 
 ### Fixed

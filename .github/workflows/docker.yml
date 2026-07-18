@@ -64,10 +64,12 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # Release tags (vX.Y.Z) become the app's self-reported version; beta
-      # branch builds report "<csproj version>-beta" so the beta channel is
-      # unmistakable everywhere the version shows (web UI, startup log,
-      # /api/features). The Dockerfile falls back to the csproj <Version>
-      # when this is empty (local builds).
+      # branch builds report "<csproj version>-beta.<run>" so every beta push
+      # is unmistakable AND unique everywhere the version shows (web UI,
+      # startup log, /api/features) — without consuming stable patch numbers:
+      # the csproj stays at the NEXT stable version for the whole beta cycle,
+      # and each stable release increments by exactly one. The Dockerfile
+      # falls back to the csproj <Version> when this is empty (local builds).
       - id: ver
         if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/beta'
         run: |
@@ -75,7 +77,7 @@ jobs:
             echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
           else
             v=$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' src/Neolink.Server/Neolink.Server.csproj)
-            echo "version=${v%-beta}-beta" >> "$GITHUB_OUTPUT"
+            echo "version=${v%-beta}-beta.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
           fi
 
       - uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0

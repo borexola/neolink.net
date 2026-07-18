@@ -227,6 +227,7 @@ public sealed class NeolinkConfig
                 case "discovery": mqtt.Discovery = prop.Value.GetBoolean(); break;
                 case "discoveryprefix": mqtt.DiscoveryPrefix = prop.Value.GetString() ?? mqtt.DiscoveryPrefix; break;
                 case "keepalive": mqtt.KeepAliveSeconds = prop.Value.GetInt32(); break;
+                case "maxpacketsize" or "maxpacketbytes": mqtt.MaxPacketBytes = prop.Value.GetInt32(); break;
                 case "tls" or "ssl": mqtt.Tls = prop.Value.GetBoolean(); break;
                 case "statsinterval" or "statsintervalseconds":
                     mqtt.StatsIntervalSeconds = prop.Value.GetInt32(); break;
@@ -298,6 +299,7 @@ public sealed class NeolinkConfig
                 Discovery = MiniToml.GetBool(mqtt, "discovery") ?? true,
                 DiscoveryPrefix = MiniToml.GetString(mqtt, "discovery_prefix") ?? "homeassistant",
                 KeepAliveSeconds = (int)(MiniToml.GetInt(mqtt, "keepalive") ?? 30),
+                MaxPacketBytes = (int)(MiniToml.GetInt(mqtt, "max_packet_size") ?? 2_000_000),
                 Tls = MiniToml.GetBool(mqtt, "tls") ?? false,
                 StatsIntervalSeconds = (int)(MiniToml.GetInt(mqtt, "stats_interval") ?? 60),
             };
@@ -510,6 +512,8 @@ public sealed class NeolinkConfig
                 throw new FormatException($"Invalid mqtt.port {Mqtt.Port}");
             if (Mqtt.KeepAliveSeconds is < 5 or > 3600)
                 throw new FormatException("mqtt.keepalive must be 5..3600");
+            if (Mqtt.MaxPacketBytes is < 1024 or > 268_435_455)
+                throw new FormatException("mqtt.max_packet_size must be 1024..268435455 (the MQTT protocol maximum)");
             if (string.IsNullOrWhiteSpace(Mqtt.BaseTopic))
                 throw new FormatException("mqtt.base_topic must not be empty");
             if (Mqtt.StatsIntervalSeconds is not 0 and (< 5 or > 86400))
@@ -588,6 +592,11 @@ public sealed class MqttConfig
     /// <summary>Home Assistant's discovery prefix (matches its MQTT integration setting).</summary>
     public string DiscoveryPrefix { get; set; } = "homeassistant";
     public int KeepAliveSeconds { get; set; } = 30;
+    /// <summary>Largest MQTT packet the broker accepts (bytes). Mosquitto 2.1+
+    /// defaults to 2 MB and disconnects clients that exceed it; publishes over
+    /// this size are dropped with a warning instead of sent. Raise it here AND
+    /// on the broker to publish bigger payloads (e.g. 4K camera snapshots).</summary>
+    public int MaxPacketBytes { get; set; } = 2_000_000;
     /// <summary>Connect with TLS (broker port is usually 8883). Certificates are not validated.</summary>
     public bool Tls { get; set; }
     /// <summary>How often the server publishes its own health (CPU, memory, disk,

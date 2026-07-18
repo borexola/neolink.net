@@ -125,6 +125,7 @@ public sealed class HomeAssistantMqtt
             Password = cfg.Password,
             ClientId = cfg.ClientId,
             KeepAliveSeconds = cfg.KeepAliveSeconds,
+            MaxPacketBytes = cfg.MaxPacketBytes,
             Tls = cfg.Tls,
             WillTopic = _availabilityTopic,
             WillPayload = "offline",
@@ -1741,7 +1742,9 @@ internal sealed class CameraBridge
 
     private async Task PublishSnapshotAsync(CancellationToken ct)
     {
-        var jpeg = await TryAsync(() => _control.SnapshotAsync(ct)).ConfigureAwait(false);
+        // Small variant: brokers cap packet size (Mosquitto 2.1+ at 2 MB) and
+        // disconnect over it — a full dual-lens/4K snapshot doesn't fit.
+        var jpeg = await TryAsync(() => _control.SnapshotSmallAsync(ct)).ConfigureAwait(false);
         if (jpeg is { Length: > 100 })
         {
             _lastSnapshot = DateTime.UtcNow;
@@ -1765,7 +1768,7 @@ internal sealed class CameraBridge
 
     private async Task<bool> ProbeSnapshotAsync(CancellationToken ct)
     {
-        var jpeg = await TryAsync(() => _control.SnapshotAsync(ct)).ConfigureAwait(false);
+        var jpeg = await TryAsync(() => _control.SnapshotSmallAsync(ct)).ConfigureAwait(false);
         if (jpeg is not { Length: > 100 }) return false;
         _lastSnapshot = DateTime.UtcNow;
         await _hub.PublishAsync(StateTopic("snapshot"), Convert.ToBase64String(jpeg), ct).ConfigureAwait(false);

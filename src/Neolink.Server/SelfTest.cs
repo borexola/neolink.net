@@ -3752,6 +3752,7 @@ public static class SelfTest
             Host = "127.0.0.1",
             Port = port,
             ClientId = "selftest",
+            MaxPacketBytes = 16 * 1024,
         })
         { StreamWrapper = s => wrapped = new StallableStream(s) };
         var run = Task.Run(() => client.RunAsync(runCts.Token));
@@ -3765,6 +3766,13 @@ public static class SelfTest
             await ns.WriteAsync(new byte[] { 0x20, 0x02, 0x00, 0x00 });
             for (int i = 0; i < 250 && !client.IsConnected; i++) await Task.Delay(20);
             Assert(client.IsConnected, "client connected to the stub broker");
+
+            // A packet over the broker's size limit must be DROPPED, not sent —
+            // Mosquitto 2.1+ answers an oversized publish by disconnecting the
+            // client (a 4K snapshot would cycle the shared connection every 2 min).
+            bool sent = await client.PublishAsync("t/big", new byte[32 * 1024], retain: false, CancellationToken.None);
+            Assert(!sent, "oversized publish reports failure");
+            Assert(client.IsConnected, "oversized publish leaves the connection intact");
 
             // A caller cancelling its OWN token must not disturb the shared
             // connection: the write runs under the client's watchdog instead, so a

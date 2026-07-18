@@ -96,6 +96,12 @@ public interface ICameraControl
 
     /// <summary>A JPEG snapshot from the camera, or null if unsupported.</summary>
     Task<byte[]?> SnapshotAsync(CancellationToken ct);
+
+    /// <summary>A SMALL JPEG snapshot for size-limited consumers (the MQTT camera
+    /// entity — brokers cap packet size and disconnect over it). Cameras with an
+    /// HTTP API scale the image themselves; everything else falls back to the
+    /// regular snapshot, so the caller must still bound the size.</summary>
+    Task<byte[]?> SnapshotSmallAsync(CancellationToken ct) => SnapshotAsync(ct);
     Task<XElement?> GetLedStateAsync(CancellationToken ct);
 
     /// <summary>Read-modify-write of the LedState: null fields stay untouched.
@@ -416,6 +422,19 @@ public sealed class CameraControl : ICameraControl
 
     public Task<byte[]?> SnapshotAsync(CancellationToken ct) =>
         WithCameraAsync(camera => camera.SnapAsync(ct), ct);
+
+    /// <summary>The Baichuan snap requests subStream, but some firmwares (dual-lens
+    /// Duos among them) ignore that and return the full panorama — megabytes of
+    /// JPEG. The HTTP API's Snap honors explicit scaling, so prefer it here.</summary>
+    public async Task<byte[]?> SnapshotSmallAsync(CancellationToken ct)
+    {
+        if (_httpApi != null
+            && await HttpTryAsync<byte[]?>(async c =>
+                   await _httpApi!.SnapAsync(640, 360, c).ConfigureAwait(false), ct).ConfigureAwait(false)
+               is { } small)
+            return small;
+        return await SnapshotAsync(ct).ConfigureAwait(false);
+    }
 
     public Task<XElement?> GetLedStateAsync(CancellationToken ct) =>
         WithCameraAsync(camera => camera.GetLedStateAsync(ct: ct), ct);

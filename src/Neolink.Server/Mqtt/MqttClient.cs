@@ -19,6 +19,12 @@ public sealed class MqttClientOptions
     public string? WillTopic { get; init; }
     public string? WillPayload { get; init; }
     public bool WillRetain { get; init; } = true;
+
+    /// <summary>Largest packet the broker accepts. Mosquitto 2.1+ defaults to a
+    /// 2 MB max_packet_size and DISCONNECTS a client that exceeds it ("oversize
+    /// packet") — one big publish (a 4K camera snapshot) would kill the whole
+    /// connection. Oversized publishes are dropped with a warning instead.</summary>
+    public int MaxPacketBytes { get; init; } = 2_000_000;
 }
 
 /// <summary>
@@ -145,11 +151,27 @@ public sealed class MqttClient
     public Task<bool> PublishAsync(string topic, string payload, bool retain, CancellationToken ct) =>
         PublishAsync(topic, System.Text.Encoding.UTF8.GetBytes(payload), retain, ct);
 
+    private readonly HashSet<string> _oversizeWarned = new();
+
     public async Task<bool> PublishAsync(string topic, byte[] payload, bool retain, CancellationToken ct)
     {
         var stream = _stream;
         if (stream == null) return false;
         var packet = MqttPacket.BuildPublish(topic, payload, retain);
+        if (packet.Length > _opt.MaxPacketBytes)
+        {
+            // Never hand the broker a packet over its limit: it doesn't reject the
+            // one packet, it DISCONNECTS the client — one oversized camera snapshot
+            // would cycle the connection every camera shares.
+            bool first;
+            lock (_oversizeWarned) first = _oversizeWarned.Add(topic);
+            if (first)
+                Log.Warn($"MQTT: not publishing '{topic}' — the packet ({packet.Length / 1024} KB) exceeds " +
+                         $"mqtt.max_packet_size ({_opt.MaxPacketBytes / 1024} KB). Mosquitto 2.1+ disconnects " +
+                         "clients over its 2 MB default; raise max_packet_size on the broker AND in the neolink " +
+                         "config to publish payloads this large.");
+            return false;
+        }
         return await SendAsync(stream, packet, ct).ConfigureAwait(false);
     }
 

@@ -102,6 +102,45 @@ public sealed class ReolinkHttpApi : IDisposable
     public Task SetImageAsync(JsonObject image, CancellationToken ct) =>
         ExecAsync("SetImage", new JsonObject { ["Image"] = image.DeepClone() }, ct);
 
+    /// <summary>A JPEG snapshot scaled down by the camera itself (cmd=Snap with
+    /// width/height). Right-sizes the image at the source for size-limited
+    /// consumers (the MQTT camera entity): a dual-lens or 4K camera's full
+    /// snapshot easily exceeds broker packet limits. Firmwares that ignore the
+    /// scaling parameters return the full-size image; callers still guard the
+    /// size. Returns null when the camera answers with anything but a JPEG.</summary>
+    public async Task<byte[]?> SnapAsync(int width, int height, CancellationToken ct)
+    {
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            for (int attempt = 0; ; attempt++)
+            {
+                if (_token == null || DateTime.UtcNow >= _tokenExpiry)
+                    await LoginAsync(ct).ConfigureAwait(false);
+                // rs = anti-cache nonce; the official clients send one on every Snap.
+                var url = $"{_apiUrl}?cmd=Snap&channel={_channelId}&rs={Guid.NewGuid():N}" +
+                          $"&width={width}&height={height}&token={Uri.EscapeDataString(_token!)}";
+                using var res = await _http.GetAsync(url, ct).ConfigureAwait(false);
+                var bytes = await res.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
+                if (bytes.Length > 100 && bytes[0] == 0xFF && bytes[1] == 0xD8)
+                    return bytes; // JPEG magic — a real image
+                // Errors come back as a small JSON body (formatting varies per
+                // firmware, so don't pattern-match the rspCode) — most commonly a
+                // stale token after a camera reboot. Relogin and retry once.
+                if (attempt == 0 && bytes.Length < 4096 && bytes.Length > 0 && bytes[0] is (byte)'[' or (byte)'{')
+                {
+                    _token = null;
+                    continue;
+                }
+                return null;
+            }
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     /// <summary>Reads the ISP config (day/night mode, anti-flicker, flip/mirror, ...).</summary>
     public async Task<JsonObject> GetIspAsync(CancellationToken ct)
     {
