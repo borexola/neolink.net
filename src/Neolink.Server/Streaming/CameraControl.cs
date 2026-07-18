@@ -432,7 +432,11 @@ public sealed class CameraControl : ICameraControl
             && await HttpTryAsync<byte[]?>(async c =>
                    await _httpApi!.SnapAsync(640, 360, c).ConfigureAwait(false), ct).ConfigureAwait(false)
                is { } small)
+        {
+            Log.Debug($"{CameraName}: small snapshot via HTTP Snap ({small.Length / 1024} KB)");
             return small;
+        }
+        Log.Debug($"{CameraName}: HTTP small snapshot unavailable — using the Baichuan snap");
         return await SnapshotAsync(ct).ConfigureAwait(false);
     }
 

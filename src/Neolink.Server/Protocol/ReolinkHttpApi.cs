@@ -118,8 +118,12 @@ public sealed class ReolinkHttpApi : IDisposable
                 if (_token == null || DateTime.UtcNow >= _tokenExpiry)
                     await LoginAsync(ct).ConfigureAwait(false);
                 // rs = anti-cache nonce; the official clients send one on every Snap.
+                // snapType=sub asks for the SUB-stream-resolution image — honored
+                // far more widely than width/height (dual-lens Duos ignore those
+                // but do respect snapType); firmwares that know neither ignore
+                // unknown query parameters and send the full-size image.
                 var url = $"{_apiUrl}?cmd=Snap&channel={_channelId}&rs={Guid.NewGuid():N}" +
-                          $"&width={width}&height={height}&token={Uri.EscapeDataString(_token!)}";
+                          $"&snapType=sub&width={width}&height={height}&token={Uri.EscapeDataString(_token!)}";
                 using var res = await _http.GetAsync(url, ct).ConfigureAwait(false);
                 var bytes = await res.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
                 if (bytes.Length > 100 && bytes[0] == 0xFF && bytes[1] == 0xD8)
