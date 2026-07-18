@@ -89,39 +89,46 @@ public sealed class MediaFrameReader
         }
     }
 
+    // Headers are parsed IN PLACE from the peek buffer (parse, then consume) —
+    // this path runs for every frame, and allocating throwaway header arrays was
+    // measurable GC noise across many streams. Only the payload gets its own
+    // array, because the frame owns it beyond this call.
+
     private async ValueTask<MediaInfo> ReadInfoAsync(CancellationToken ct)
     {
-        var buf = await ReadBytesAsync(28, ct).ConfigureAwait(false);
+        var buf = await _stream.PeekAsync(28, ct).ConfigureAwait(false);
         // [0..4] header_size (=32), [4..8] width, [8..12] height, [12] unknown, [13] fps, then dates
-        uint width = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(4));
-        uint height = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(8));
-        byte fps = buf[13];
+        uint width = BinaryPrimitives.ReadUInt32LittleEndian(buf.Span[4..]);
+        uint height = BinaryPrimitives.ReadUInt32LittleEndian(buf.Span[8..]);
+        byte fps = buf.Span[13];
+        _stream.Consume(28);
         return new MediaInfo(width, height, fps);
     }
 
     private async ValueTask<VideoFrame> ReadVideoAsync(bool keyframe, CancellationToken ct)
     {
-        var head = await ReadBytesAsync(16, ct).ConfigureAwait(false);
-        // Byte compare, not GetString: this runs per frame, and the string was
+        var head = await _stream.PeekAsync(20, ct).ConfigureAwait(false);
+        var hs = head.Span;
+        // Byte compare, not GetString: this runs per frame, and the string is
         // only ever needed for the error message.
-        var codec = head[0] == (byte)'H' && head[1] == (byte)'2' && head[2] == (byte)'6' && head[3] == (byte)'4'
+        var codec = hs[0] == (byte)'H' && hs[1] == (byte)'2' && hs[2] == (byte)'6' && hs[3] == (byte)'4'
             ? VideoCodec.H264
-            : head[0] == (byte)'H' && head[1] == (byte)'2' && head[2] == (byte)'6' && head[3] == (byte)'5'
+            : hs[0] == (byte)'H' && hs[1] == (byte)'2' && hs[2] == (byte)'6' && hs[3] == (byte)'5'
                 ? VideoCodec.H265
                 : throw new InvalidDataException(
-                    $"Unrecognised video type '{Encoding.ASCII.GetString(head, 0, 4)}'");
-        uint payloadSize = BinaryPrimitives.ReadUInt32LittleEndian(head.AsSpan(4));
-        uint additionalHeaderSize = BinaryPrimitives.ReadUInt32LittleEndian(head.AsSpan(8));
-        uint microseconds = BinaryPrimitives.ReadUInt32LittleEndian(head.AsSpan(12));
-        // 4 more bytes of unknown
-        await ReadBytesAsync(4, ct).ConfigureAwait(false);
+                    $"Unrecognised video type '{Encoding.ASCII.GetString(hs[..4])}'");
+        uint payloadSize = BinaryPrimitives.ReadUInt32LittleEndian(hs[4..]);
+        uint additionalHeaderSize = BinaryPrimitives.ReadUInt32LittleEndian(hs[8..]);
+        uint microseconds = BinaryPrimitives.ReadUInt32LittleEndian(hs[12..]);
+        _stream.Consume(20); // 16-byte header + 4 unknown
 
         uint? unixTime = null;
         if (additionalHeaderSize >= 4)
         {
-            var t = await ReadBytesAsync(4, ct).ConfigureAwait(false);
+            var t = await _stream.PeekAsync(4, ct).ConfigureAwait(false);
             if (keyframe)
-                unixTime = BinaryPrimitives.ReadUInt32LittleEndian(t);
+                unixTime = BinaryPrimitives.ReadUInt32LittleEndian(t.Span);
+            _stream.Consume(4);
             if (additionalHeaderSize > 4)
                 await SkipAsync((int)(additionalHeaderSize - 4), ct).ConfigureAwait(false);
         }
@@ -136,8 +143,9 @@ public sealed class MediaFrameReader
 
     private async ValueTask<AacFrame> ReadAacAsync(CancellationToken ct)
     {
-        var head = await ReadBytesAsync(4, ct).ConfigureAwait(false);
-        ushort payloadSize = BinaryPrimitives.ReadUInt16LittleEndian(head.AsSpan(0));
+        var head = await _stream.PeekAsync(4, ct).ConfigureAwait(false);
+        ushort payloadSize = BinaryPrimitives.ReadUInt16LittleEndian(head.Span);
+        _stream.Consume(4);
         var data = await ReadBytesAsync(payloadSize, ct).ConfigureAwait(false);
         await SkipAsync(Padding(payloadSize), ct).ConfigureAwait(false);
         return new AacFrame(data);
@@ -145,11 +153,13 @@ public sealed class MediaFrameReader
 
     private async ValueTask<AdpcmFrame> ReadAdpcmAsync(CancellationToken ct)
     {
-        var head = await ReadBytesAsync(4, ct).ConfigureAwait(false);
-        ushort payloadSize = BinaryPrimitives.ReadUInt16LittleEndian(head.AsSpan(0));
+        var head = await _stream.PeekAsync(4, ct).ConfigureAwait(false);
+        ushort payloadSize = BinaryPrimitives.ReadUInt16LittleEndian(head.Span);
+        _stream.Consume(4);
         // Sub-header: u16 magic 0x0100, u16 half block size
-        var sub = await ReadBytesAsync(4, ct).ConfigureAwait(false);
-        ushort subMagic = BinaryPrimitives.ReadUInt16LittleEndian(sub.AsSpan(0));
+        var sub = await _stream.PeekAsync(4, ct).ConfigureAwait(false);
+        ushort subMagic = BinaryPrimitives.ReadUInt16LittleEndian(sub.Span);
+        _stream.Consume(4);
         if (subMagic != 0x0100)
             throw new InvalidDataException($"ADPCM data magic 0x{subMagic:x4} is invalid");
         if (payloadSize < 4)

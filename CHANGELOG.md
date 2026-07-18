@@ -24,6 +24,16 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Changed
 
+- **Fewer syscalls and copies on every stream**: three structural costs in the
+  per-frame path are gone. The camera read loop now reads through a 128 KB
+  buffer, collapsing the header-sized reads (one recv syscall each, hundreds
+  per second per stream — expensive under virtualization) into few large ones.
+  An RTSP viewer's video is written one access unit per send instead of one
+  RTP packet per send (~700 writes a second per 4K viewer before). And a media
+  message's payload is no longer copied and allocated a second time during
+  parsing — allocations per streamed byte measured 2.01 before, 1.01 after —
+  with frame headers now parsed in place instead of through throwaway arrays.
+
 - **Media decryption is dramatically cheaper on FullAes cameras**: firmwares
   that negotiate full-stream encryption (level 0x12 — most current Reolink
   models) AES-encrypt every video byte on the wire, and Neolink.NET decrypted

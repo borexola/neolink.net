@@ -126,8 +126,19 @@ public static class BcCodec
         int payloadLen = (int)(bodyLen - extLen);
         if (payloadLen > 0)
         {
-            var payloadRaw = new byte[payloadLen];
-            Array.Copy(body, (int)extLen, payloadRaw, 0, payloadLen);
+            // No extension (the common case for every streaming media message):
+            // the body IS the payload — reuse it instead of allocating and copying
+            // the entire frame again. body is never referenced after this point.
+            byte[] payloadRaw;
+            if (extLen == 0)
+            {
+                payloadRaw = body;
+            }
+            else
+            {
+                payloadRaw = new byte[payloadLen];
+                Array.Copy(body, (int)extLen, payloadRaw, 0, payloadLen);
+            }
             if (ctx.InBinMode.Contains(msgNum))
             {
                 var (kind, _) = ctx.Encryption.Snapshot();

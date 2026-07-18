@@ -22,6 +22,7 @@ public sealed class BcConnection : IBcConnection
 {
     private readonly TcpClient _tcp;
     private readonly NetworkStream _stream;
+    private readonly BufferedStream _readStream; // read side only; writes go to _stream directly
     private readonly Dictionary<uint, Channel<BcMessage>> _subscribers = new();
     private readonly HashSet<uint> _reportedUnhandled = new();
     private readonly object _subGate = new();
@@ -36,6 +37,13 @@ public sealed class BcConnection : IBcConnection
     {
         _tcp = tcp;
         _stream = tcp.GetStream();
+        // The read loop parses a 20-byte header, then the body, per message —
+        // hundreds of messages/s on a streaming camera. Unbuffered, every one of
+        // those small reads is its own recv() syscall (expensive under
+        // virtualization); buffering turns them into few large recvs. Reads only:
+        // the send path keeps writing the raw stream, so nothing is ever queued
+        // in this buffer on the way out.
+        _readStream = new BufferedStream(_stream, 128 * 1024);
         _context = new BcContext(Encryption);
         _cts = CancellationTokenSource.CreateLinkedTokenSource(appCt);
         _readLoop = Task.Run(() => ReadLoopAsync(_cts.Token));
@@ -70,7 +78,7 @@ public sealed class BcConnection : IBcConnection
         {
             while (!ct.IsCancellationRequested)
             {
-                var msg = await BcCodec.ReadMessageAsync(_stream, _context, ct).ConfigureAwait(false);
+                var msg = await BcCodec.ReadMessageAsync(_readStream, _context, ct).ConfigureAwait(false);
                 // Hot path: media arrives as one message per chunk, so guard the
                 // level BEFORE building the string — otherwise every video chunk
                 // pays for an interpolation that Info-level runs then discard.

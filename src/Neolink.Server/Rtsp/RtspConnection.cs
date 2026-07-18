@@ -438,7 +438,42 @@ public sealed class RtspConnection
         frame[1] = channel;
         BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(2), (ushort)rtpPacket.Length);
         rtpPacket.CopyTo(frame, 4);
+        await WriteGuardedAsync(frame, ct).ConfigureAwait(false);
+    }
 
+    /// <summary>
+    /// Sends one frame's worth of RTP packets as a SINGLE write. Interleaved video
+    /// used to cost one send syscall per RTP packet — ~700/s per viewer on a 4K
+    /// stream, which is real CPU under virtualization. All the '$'-framed packets
+    /// of an access unit are coalesced into one pooled buffer and one write.
+    /// </summary>
+    internal async Task SendInterleavedBatchAsync(byte channel, List<byte[]> rtpPackets, CancellationToken ct)
+    {
+        if (rtpPackets.Count == 0) return;
+        int total = 0;
+        foreach (var p in rtpPackets) total += 4 + p.Length;
+        var buf = System.Buffers.ArrayPool<byte>.Shared.Rent(total);
+        try
+        {
+            int off = 0;
+            foreach (var p in rtpPackets)
+            {
+                buf[off] = 0x24; // '$'
+                buf[off + 1] = channel;
+                BinaryPrimitives.WriteUInt16BigEndian(buf.AsSpan(off + 2), (ushort)p.Length);
+                p.CopyTo(buf, off + 4);
+                off += 4 + p.Length;
+            }
+            await WriteGuardedAsync(buf.AsMemory(0, total), ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<byte>.Shared.Return(buf);
+        }
+    }
+
+    private async Task WriteGuardedAsync(ReadOnlyMemory<byte> data, CancellationToken ct)
+    {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(TimeSpan.FromSeconds(10)); // slow-client guard
         try
@@ -446,7 +481,7 @@ public sealed class RtspConnection
             await _writeLock.WaitAsync(cts.Token).ConfigureAwait(false);
             try
             {
-                await _stream.WriteAsync(frame, cts.Token).ConfigureAwait(false);
+                await _stream.WriteAsync(data, cts.Token).ConfigureAwait(false);
             }
             finally
             {
@@ -643,8 +678,19 @@ internal sealed class RtspSession
                         }
                         var codec = hub.Codec ?? VideoCodec.H264;
                         var au = v.Keyframe ? EnsureParameterSets(hub, codec, v.AnnexB) : v.AnnexB;
-                        foreach (var rtp in Video.Packetizer.PacketizeVideo(codec, au, v.RtpTs))
-                            await SendAsync(Video, rtp, ct).ConfigureAwait(false);
+                        var packets = Video.Packetizer.PacketizeVideo(codec, au, v.RtpTs);
+                        if (Video.Tcp)
+                        {
+                            // One write per frame instead of one per packet (see
+                            // SendInterleavedBatchAsync). UDP keeps per-packet sends:
+                            // datagram boundaries ARE the packet boundaries.
+                            await _conn.SendInterleavedBatchAsync(Video.RtpChannel, packets, ct).ConfigureAwait(false);
+                        }
+                        else
+                        {
+                            foreach (var rtp in packets)
+                                await SendAsync(Video, rtp, ct).ConfigureAwait(false);
+                        }
                         break;
                     }
                     case HubAudioAac a when Audio != null:
