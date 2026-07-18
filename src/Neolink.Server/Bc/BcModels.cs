@@ -99,6 +99,7 @@ public sealed class EncryptionState
     private readonly object _gate = new();
     private EncryptionKind _kind = EncryptionKind.Unencrypted;
     private byte[]? _aesKey;
+    private System.Security.Cryptography.Aes? _aes; // keyed once per session; see EcbEncrypt
 
     public (EncryptionKind kind, byte[]? aesKey) Snapshot()
     {
@@ -110,13 +111,48 @@ public sealed class EncryptionState
         lock (_gate)
         {
             _kind = kind;
-            if (aesKey != null || kind is not (EncryptionKind.Aes or EncryptionKind.FullAes)) _aesKey = aesKey;
+            if (aesKey != null || kind is not (EncryptionKind.Aes or EncryptionKind.FullAes))
+            {
+                _aesKey = aesKey;
+                _aes?.Dispose();
+                _aes = null;
+            }
         }
     }
 
     public void SetAesKey(byte[] key)
     {
-        lock (_gate) { _aesKey = key; }
+        lock (_gate)
+        {
+            _aesKey = key;
+            _aes?.Dispose();
+            _aes = null;
+        }
+    }
+
+    /// <summary>
+    /// One-shot AES-128-ECB over block-aligned input with the session key. The keyed
+    /// AES instance (whose key schedule is the expensive part) lives for the whole
+    /// session instead of being rebuilt per message — under FullAes this runs for
+    /// every media message, so that rebuild used to dominate the protocol layer's
+    /// CPU. Serialized by the gate: the read loop is the only heavy caller, and an
+    /// occasional outgoing command holds it for microseconds.
+    /// </summary>
+    public void EcbEncrypt(ReadOnlySpan<byte> input, Span<byte> output)
+    {
+        lock (_gate)
+        {
+            if (_aesKey == null)
+                throw new InvalidOperationException("AES key not negotiated");
+            if (_aes == null)
+            {
+                _aes = System.Security.Cryptography.Aes.Create();
+                _aes.Mode = System.Security.Cryptography.CipherMode.ECB;
+                _aes.Padding = System.Security.Cryptography.PaddingMode.None;
+                _aes.Key = _aesKey;
+            }
+            _aes.EncryptEcb(input, output, System.Security.Cryptography.PaddingMode.None);
+        }
     }
 }
 

@@ -61,6 +61,34 @@ public static class SelfTest
             }
         });
 
+        Test("aes-cfb fast paths match the reference implementation", () =>
+        {
+            // The wire path now uses AesCfbDecrypt (one keystream pass) and
+            // AesCfbEncrypt (cached key schedule). Both must be byte-identical to
+            // the block-loop reference for every length shape: empty, sub-block,
+            // aligned, one over, and video-sized — a mismatch on FullAes firmware
+            // would corrupt every frame.
+            var key = Encoding.ASCII.GetBytes("0123456789ABCDEF");
+            var state = new Bc.EncryptionState();
+            state.Set(Bc.EncryptionKind.FullAes, key);
+            foreach (var len in new[] { 0, 1, 15, 16, 17, 31, 32, 33, 100, 1000, 65536 + 7 })
+            {
+                var plain = new byte[len];
+                Random.Shared.NextBytes(plain);
+                var refCipher = XmlCrypto.AesCfb(plain, key, encrypting: true);
+                AssertSeq(XmlCrypto.AesCfbEncrypt(plain, state), refCipher);
+                AssertSeq(XmlCrypto.AesCfbDecrypt(refCipher, state), plain);
+            }
+
+            // Rekeying mid-session (relogin) must not serve stale keystream from
+            // the cached AES instance.
+            var key2 = Encoding.ASCII.GetBytes("FEDCBA9876543210");
+            var probe = new byte[48];
+            Random.Shared.NextBytes(probe);
+            state.SetAesKey(key2);
+            AssertSeq(XmlCrypto.AesCfbDecrypt(XmlCrypto.AesCfb(probe, key2, encrypting: true), state), probe);
+        });
+
         Test("xml serialize/parse roundtrip", () =>
         {
             var body = new Bc.Xml.BcXmlBody
@@ -415,7 +443,10 @@ public static class SelfTest
             var packetizer = new Rtsp.RtpPacketizer(96);
             var bigNal = new byte[5000];
             bigNal[0] = 0x65;
-            Random.Shared.NextBytes(bigNal.AsSpan(1));
+            // Deterministic non-zero fill: random bytes can (1-in-thousands) contain
+            // a spurious 00 00 01 start code, which the packetizer rightly treats as
+            // a NAL boundary — real encoders emulation-prevent those inside a NAL.
+            for (int i = 1; i < bigNal.Length; i++) bigNal[i] = (byte)(i % 251 + 1);
             var au = new byte[4 + bigNal.Length];
             au[3] = 1;
             bigNal.CopyTo(au, 4);

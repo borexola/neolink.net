@@ -102,13 +102,14 @@ public sealed class MediaFrameReader
     private async ValueTask<VideoFrame> ReadVideoAsync(bool keyframe, CancellationToken ct)
     {
         var head = await ReadBytesAsync(16, ct).ConfigureAwait(false);
-        string typeStr = Encoding.ASCII.GetString(head, 0, 4);
-        var codec = typeStr switch
-        {
-            "H264" => VideoCodec.H264,
-            "H265" => VideoCodec.H265,
-            _ => throw new InvalidDataException($"Unrecognised video type '{typeStr}'"),
-        };
+        // Byte compare, not GetString: this runs per frame, and the string was
+        // only ever needed for the error message.
+        var codec = head[0] == (byte)'H' && head[1] == (byte)'2' && head[2] == (byte)'6' && head[3] == (byte)'4'
+            ? VideoCodec.H264
+            : head[0] == (byte)'H' && head[1] == (byte)'2' && head[2] == (byte)'6' && head[3] == (byte)'5'
+                ? VideoCodec.H265
+                : throw new InvalidDataException(
+                    $"Unrecognised video type '{Encoding.ASCII.GetString(head, 0, 4)}'");
         uint payloadSize = BinaryPrimitives.ReadUInt32LittleEndian(head.AsSpan(4));
         uint additionalHeaderSize = BinaryPrimitives.ReadUInt32LittleEndian(head.AsSpan(8));
         uint microseconds = BinaryPrimitives.ReadUInt32LittleEndian(head.AsSpan(12));

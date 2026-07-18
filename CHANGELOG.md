@@ -4,6 +4,23 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
+## 0.9.4 — unreleased
+
+### Changed
+
+- **Media decryption is dramatically cheaper on FullAes cameras**: firmwares
+  that negotiate full-stream encryption (level 0x12 — most current Reolink
+  models) AES-encrypt every video byte on the wire, and Neolink.NET decrypted
+  it 16 bytes at a time, rebuilding the AES key schedule for every message.
+  On an idle 2K camera that alone burned 15-20% of a CPU core with nobody
+  watching. Decryption now produces the whole keystream in a single AES pass
+  per message (CFB decryption has no serial dependency) with the keyed AES
+  cached for the life of the session, and XORs it out a word at a time; the
+  frame reader also stopped allocating a string per video frame. Cameras on
+  older encryption levels (XML-only AES, BCEncrypt, none) were never paying
+  this cost and are unaffected. The selftest proves the fast path
+  byte-identical to the reference implementation across every length shape.
+
 ## 0.9.3
 
 ### Fixed
