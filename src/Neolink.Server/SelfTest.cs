@@ -1657,10 +1657,9 @@ public static class SelfTest
 
         Test("event-type chips: only disproven types are hidden", () =>
         {
-            static bool Vis(string t, IReadOnlyList<Neolink.WebClient.ApiAiSensitivity>? ai, bool? bell) =>
+            static bool Vis(string t, IReadOnlyList<string>? ai, bool? bell) =>
                 Neolink.WebClient.Components.CameraPanel.EventTypeSupported(t, ai, bell);
-            var peopleOnly = new List<Neolink.WebClient.ApiAiSensitivity>
-                { new("people", 50, null) };
+            var peopleOnly = new List<string> { "people" };
             // The AI sweep answered, and only for people: person shows, the other
             // AI types are disproven and hide.
             Assert(Vis("person", peopleOnly, null), "answered type shows");
@@ -1669,7 +1668,7 @@ public static class SelfTest
             Assert(!Vis("package", peopleOnly, null), "unanswered package hides");
             // No sweep result (offline, no HTTP API): nothing is disproven.
             Assert(Vis("vehicle", null, null), "unprobed camera shows everything");
-            Assert(Vis("package", new List<Neolink.WebClient.ApiAiSensitivity>(), null),
+            Assert(Vis("package", new List<string>(), null),
                 "empty sweep result proves nothing");
             // Doorbell chip needs a doorbell; unknown shows.
             Assert(!Vis("doorbell", null, false), "non-doorbell hides the doorbell type");
@@ -1679,6 +1678,35 @@ public static class SelfTest
             Assert(Vis("crying", peopleOnly, false), "crying always shows");
             Assert(Vis("line-crossing", peopleOnly, false), "perimeter types always show");
             Assert(Vis("motion", peopleOnly, false), "motion always shows");
+        });
+
+        Test("camera state: detection-caps cache persists and survives suspend", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), "neolink-camstate-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var store = new Web.CameraStateStore(dir);
+                Assert(store.DetectionCaps("Cam").AiTypes == null, "unprobed camera has no cached types");
+                store.SetDetectionCaps("Cam", aiTypes: new List<string> { "people", "vehicle" });
+                store.SetDetectionCaps("Cam", doorbell: false);
+                // A partial update keeps the other signal.
+                var (ai, bell) = store.DetectionCaps("Cam");
+                Assert(ai!.SequenceEqual(new[] { "people", "vehicle" }) && bell == false,
+                    "both signals cached independently");
+                // The suspend toggle's keep-the-file-minimal pruning must not
+                // discard the cached capabilities.
+                store.SetSuspended("Cam", true);
+                store.SetSuspended("Cam", false);
+                var reloaded = new Web.CameraStateStore(dir);
+                var (ai2, bell2) = reloaded.DetectionCaps("Cam");
+                Assert(ai2 != null && ai2.SequenceEqual(new[] { "people", "vehicle" }) && bell2 == false,
+                    "cache survives a suspend round-trip and a reload from disk");
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
         });
 
         Test("HTTP-API extras: preset/quick-reply/SD/auto-track/image parsing", () =>

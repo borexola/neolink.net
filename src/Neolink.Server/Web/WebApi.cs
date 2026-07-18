@@ -98,6 +98,10 @@ public sealed class WebApiOptions
     /// camera's state at once instead of waiting for its periodic refresh. Null when
     /// MQTT isn't configured.</summary>
     public Func<string, Task>? OnCameraChanged { get; init; }
+    /// <summary>Per-camera persisted runtime state: suspend, plus the cached
+    /// detection-capability signals that let the settings dialog filter its
+    /// event-type chips before the live probe answers. Null in tests.</summary>
+    public CameraStateStore? CameraState { get; init; }
 }
 
 /// <summary>
@@ -1152,6 +1156,9 @@ public static class WebApi
                 if (!control.Online)
                     return Results.Json(new { online = false });
                 var caps = await control.GetCapabilitiesAsync(reqCt);
+                // Refresh the cached capability signals the recording tab filters
+                // its event-type chips with (only a change touches the disk).
+                o.CameraState?.SetDetectionCaps(name, doorbell: caps.Features.Doorbell);
                 return Results.Json(new
                 {
                     online = true,
@@ -1608,6 +1615,10 @@ public static class WebApi
                 var f = await control.GetHttpFeaturesAsync(reqCt);
                 if (f == null)
                     return Results.Json(new { error = "this camera has no HTTP API" }, statusCode: 404);
+                // Cache which AI types the per-type alarm probe answered for — the
+                // recording tab's chip filter reads it back before the next probe.
+                if (f.AiSensitivities is { Count: > 0 } ai)
+                    o.CameraState?.SetDetectionCaps(name, aiTypes: ai.Select(a => a.Type).ToList());
                 return Results.Json(new
                 {
                     image = f.Image == null ? null : new
@@ -2087,6 +2098,12 @@ public static class WebApi
                 // must show those as off until the user ticks them.
                 eventTypes = (IEnumerable<string>?)s.EventTypes ?? CameraRecordingSettings.DefaultLabels,
                 knownTypes = CameraRecordingSettings.KnownLabels,
+                // Cached capability signals from the last live probe (null = never
+                // probed): the panel filters its event-type chips with these
+                // IMMEDIATELY instead of showing everything and pruning once the
+                // camera answers — the list only shifts on a firmware change.
+                supportedAiTypes = o.CameraState?.DetectionCaps(cam.Name).AiTypes,
+                supportedDoorbell = o.CameraState?.DetectionCaps(cam.Name).Doorbell,
                 // Per-camera retention overrides (null = default) + the server defaults
                 // so the UI can label what "default" currently means.
                 eventRetentionDays = s.EventRetentionDays,

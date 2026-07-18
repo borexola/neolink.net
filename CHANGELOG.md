@@ -59,7 +59,11 @@ in the README). Paste the matching section below into the GitHub release.
   Types with no reliable capability signal (crying, the perimeter trio,
   motion) always show, as does everything while the camera is offline or has
   no HTTP API — only the disproven is hidden, never the unknown. A note says
-  when types were hidden.
+  when types were hidden. The verdicts are cached server-side
+  (camera-state.json), so the panel renders the filtered list IMMEDIATELY on
+  open instead of showing every type and pruning when the camera answers; the
+  live probe refreshes the cache, so the list only shifts when the camera's
+  answers actually changed (firmware update, camera swapped).
 
 - **Cameras with nothing to record idle at near-zero CPU**: a wired camera
   with nothing consuming its frames used to stream and process video around

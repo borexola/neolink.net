@@ -649,6 +649,7 @@ if (config.WebPort > 0)
         // Let a web-UI setting change reflect in Home Assistant right away, rather
         // than on the bridge's ~20s refresh, so automations don't act on a stale switch.
         OnCameraChanged = mqtt == null ? null : mqtt.RepublishCameraAsync,
+        CameraState = cameraState,
     };
 
     tasks.Add(Task.Run(async () =>

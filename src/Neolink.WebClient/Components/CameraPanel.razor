@@ -1831,8 +1831,17 @@
         _ => "•",
     };
 
+    // Live probe results win; the server's cached signals (in the phase-1
+    // /recording payload) fill in until then — so the chip list renders already
+    // filtered instead of showing everything and pruning when the probe lands.
+    // It only visibly shifts when the camera's answers changed (firmware update,
+    // camera swapped) — rare by design.
     private bool TypeChipVisible(string t) =>
-        EventTypeSupported(t, _http?.AiSensitivities, _caps?.Features?.Doorbell);
+        EventTypeSupported(t,
+            _http?.AiSensitivities is { Count: > 0 } live
+                ? live.Select(a => a.Type).ToList()
+                : _recording?.SupportedAiTypes,
+            _caps?.Features?.Doorbell ?? _recording?.SupportedDoorbell);
 
     /// <summary>
     /// Whether an event-type chip should be offered for this camera. Hide only
@@ -1842,7 +1851,7 @@
     /// trio, motion) always show — hiding on a guess would strand a camera that
     /// genuinely emits them. Null inputs mean "not probed yet": show everything.
     /// </summary>
-    public static bool EventTypeSupported(string type, IReadOnlyList<ApiAiSensitivity>? aiTypes, bool? doorbell) => type switch
+    public static bool EventTypeSupported(string type, IReadOnlyList<string>? aiTypes, bool? doorbell) => type switch
     {
         "person" => AiAnswered(aiTypes, "people"),
         "vehicle" => AiAnswered(aiTypes, "vehicle"),
@@ -1852,8 +1861,8 @@
         _ => true,
     };
 
-    private static bool AiAnswered(IReadOnlyList<ApiAiSensitivity>? ai, string type) =>
-        ai is not { Count: > 0 } || ai.Any(a => a.Type == type);
+    private static bool AiAnswered(IReadOnlyList<string>? ai, string type) =>
+        ai is not { Count: > 0 } || ai.Contains(type);
 
     private async Task SetRecordingAsync(bool? events = null, bool? continuous = null, List<string>? eventTypes = null,
         int? eventRetentionDays = null, int? continuousRetentionDays = null, string? recordStream = null,

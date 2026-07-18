@@ -225,7 +225,8 @@ public sealed record ApiRecordingSettings(bool Events, bool Continuous,
     List<string>? ScheduleDays = null, string? ScheduleStart = null, string? ScheduleEnd = null,
     bool ScheduleEnabled = false,
     bool ArchiveAvailable = false, bool ArchiveEvents = false,
-    bool ArchiveContinuous = false, int? ArchiveRetentionDays = null)
+    bool ArchiveContinuous = false, int? ArchiveRetentionDays = null,
+    List<string>? SupportedAiTypes = null, bool? SupportedDoorbell = null)
 {
     /// <summary>null EventTypes = every detection type is recorded.</summary>
     public bool TypeEnabled(string label) => EventTypes == null || EventTypes.Contains(label);

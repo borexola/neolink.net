@@ -23,6 +23,18 @@ public sealed class CameraStateStore
     public sealed class CameraState
     {
         public bool Suspended { get; set; }
+        /// <summary>AI detection types the camera's per-type alarm probe last
+        /// answered for (person/vehicle/dog_cat/package dialect) — cached so the
+        /// settings dialog can filter its event-type chips IMMEDIATELY instead of
+        /// showing everything and pruning when the live probe lands. Null = the
+        /// camera was never probed. Refreshed on every successful probe; a
+        /// firmware update or camera swap corrects it on the next panel open.</summary>
+        public List<string>? AiTypes { get; set; }
+        /// <summary>Whether the capability probe last saw a doorbell. Null = never probed.</summary>
+        public bool? Doorbell { get; set; }
+
+        [System.Text.Json.Serialization.JsonIgnore]
+        public bool IsDefault => !Suspended && AiTypes == null && Doorbell == null;
     }
 
     public CameraStateStore(string stateDir)
@@ -67,9 +79,46 @@ public sealed class CameraStateStore
             if (!_state.TryGetValue(camera, out var s))
                 _state[camera] = s = new CameraState();
             s.Suspended = suspended;
-            if (!s.Suspended) // keep the file minimal — only non-default state persists
+            if (s.IsDefault) // keep the file minimal — only non-default state persists
                 _state.Remove(camera);
             Save();
+        }
+    }
+
+    /// <summary>The cached detection-capability signals for a camera (see
+    /// <see cref="CameraState.AiTypes"/>); (null, null) when never probed.</summary>
+    public (IReadOnlyList<string>? AiTypes, bool? Doorbell) DetectionCaps(string camera)
+    {
+        lock (_gate)
+        {
+            return _state.TryGetValue(camera, out var s) ? (s.AiTypes, s.Doorbell) : (null, null);
+        }
+    }
+
+    /// <summary>Updates the cached signals from a live probe. A null argument means
+    /// "that signal wasn't probed this time — keep what's cached". Only an actual
+    /// change touches the disk (panels re-probe on every open).</summary>
+    public void SetDetectionCaps(string camera, IReadOnlyList<string>? aiTypes = null, bool? doorbell = null)
+    {
+        lock (_gate)
+        {
+            if (!_state.TryGetValue(camera, out var s))
+            {
+                if (aiTypes == null && doorbell == null) return;
+                _state[camera] = s = new CameraState();
+            }
+            bool changed = false;
+            if (aiTypes != null && (s.AiTypes == null || !s.AiTypes.SequenceEqual(aiTypes, StringComparer.Ordinal)))
+            {
+                s.AiTypes = aiTypes.ToList();
+                changed = true;
+            }
+            if (doorbell != null && s.Doorbell != doorbell)
+            {
+                s.Doorbell = doorbell;
+                changed = true;
+            }
+            if (changed) Save();
         }
     }
 
