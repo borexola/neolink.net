@@ -581,14 +581,34 @@ public sealed class ReolinkHttpApi : IDisposable
             ["action"] = action,
             ["param"] = param,
         });
-        using var content = new StringContent(body.ToJsonString(WireJson), Encoding.UTF8, "application/json");
+        var wire = body.ToJsonString(WireJson);
+        var client = longRunning ? LongHttp() : _http;
+
+        // Content is single-use, so build it per attempt.
+        async Task<HttpResponseMessage> SendAsync()
+        {
+            // Long-running commands (SD file searches) escape the 10s command
+            // cap; the caller's cancellation token is their only bound.
+            using var content = new StringContent(wire, Encoding.UTF8, "application/json");
+            return await client.PostAsync(url, content, ct).ConfigureAwait(false);
+        }
 
         HttpResponseMessage res;
         try
         {
-            // Long-running commands (SD file searches) escape the 10s command
-            // cap; the caller's cancellation token is their only bound.
-            res = await (longRunning ? LongHttp() : _http).PostAsync(url, content, ct).ConfigureAwait(false);
+            try
+            {
+                res = await SendAsync().ConfigureAwait(false);
+            }
+            catch (HttpRequestException) when (!ct.IsCancellationRequested)
+            {
+                // A pooled keep-alive connection the camera dropped SILENTLY (Wi-Fi
+                // power save, AP roam) fails the instant it is reused — the handler
+                // has now retired that dead connection, so a single retry opens a
+                // fresh one and succeeds. These commands are idempotent (reads, or
+                // a Set of the value the caller already chose), so retrying is safe.
+                res = await SendAsync().ConfigureAwait(false);
+            }
         }
         catch (HttpRequestException ex)
         {

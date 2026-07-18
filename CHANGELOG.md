@@ -16,10 +16,22 @@ in the README). Paste the matching section below into the GitHub release.
   camera that answers a fresh connection in milliseconds. Idle camera
   connections are now retired after 30 seconds (a sweep after a quiet period
   starts on fresh TCP — about 1ms on a LAN), and connects get their own 5s
-  bound so a dropped SYN fails fast. The "HTTP API is not answering" warning
-  also stops claiming "the port is open" — a no-reply timeout can't tell a
-  slow camera from dropped packets, and the advice now mentions
-  firewall/VLAN/Docker networking as suspects.
+  bound so a dropped SYN fails fast. A camera command that fails on a reused
+  (dropped) connection is also retried once on a fresh one — the retirement
+  above is preventive; the retry recovers the miss that slips through. The
+  "HTTP API is not answering" warning stops claiming "the port is open" — a
+  no-reply timeout can't tell a slow camera from dropped packets, and the
+  advice now mentions firewall/VLAN/Docker networking as suspects.
+
+- **HTTP features never fail silently again**: the camera-settings panel shows
+  every HTTP-backed section (picture, volume, OSD, sensitivity…) blank when
+  the feature sweep reads nothing. A recent change that fails the sweep fast on
+  an unreachable HTTP API also, unintentionally, stopped the "not answering"
+  warning from firing — leaving "no settings, no error" with no clue why (the
+  camera still streams fine over Baichuan, which masks it). The sweep now logs
+  one clear warning when it comes back completely empty on a real transport
+  failure, naming the likely causes (HTTP disabled on the camera, or
+  firewall/VLAN/Docker dropping HTTP traffic).
 
 - **Camera settings no longer randomly load "limited"**: the panel's HTTP
   feature sweep (picture, OSD, quick replies, volume, presets, sensitivity…)

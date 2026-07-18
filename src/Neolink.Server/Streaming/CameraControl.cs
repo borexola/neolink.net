@@ -800,21 +800,28 @@ public sealed class CameraControl : ICameraControl
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct);
         budget.CancelAfter(TimeSpan.FromSeconds(25));
         int forgiven = 0;
+        bool anyTransportFail = false;
         async Task<T?> Step<T>(Func<CancellationToken, Task<T?>> read)
         {
             var before = _httpRetryAt;
             try
             {
                 var v = await read(budget.Token).ConfigureAwait(false);
-                if (_httpRetryAt > before && forgiven < 2 && _httpApi!.HasLiveToken)
+                if (_httpRetryAt > before)
                 {
-                    forgiven++;
-                    _httpRetryAt = before;
+                    // This step armed the transport backoff — a real reach failure.
+                    anyTransportFail = true;
+                    if (forgiven < 2 && _httpApi!.HasLiveToken)
+                    {
+                        forgiven++;
+                        _httpRetryAt = before;
+                    }
                 }
                 return v;
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
+                anyTransportFail = true;
                 return default; // sweep budget spent — the cache stands in
             }
         }
@@ -842,11 +849,37 @@ public sealed class CameraControl : ICameraControl
             fresh.AutoTrack ?? c.AutoTrack, fresh.SdCards ?? c.SdCards,
             fresh.MdSensitivity ?? c.MdSensitivity, fresh.AiSensitivities ?? c.AiSensitivities,
             fresh.Osd ?? c.Osd);
-        bool hasContent = merged.Image != null || merged.Volume != null || merged.WifiSignal != null
+        bool freshContent = fresh.Image != null || fresh.Volume != null || fresh.WifiSignal != null
+            || fresh.PtzPresets != null || fresh.QuickReplies != null || fresh.AutoTrack != null
+            || fresh.SdCards != null || fresh.MdSensitivity != null || fresh.AiSensitivities != null
+            || fresh.Osd != null;
+        bool hasContent = freshContent
+            || merged.Image != null || merged.Volume != null || merged.WifiSignal != null
             || merged.PtzPresets != null || merged.QuickReplies != null || merged.AutoTrack != null
             || merged.SdCards != null || merged.MdSensitivity != null || merged.AiSensitivities != null
             || merged.Osd != null;
-        if (hasContent) _httpFeaturesCache = merged;
+        if (freshContent) _httpFeaturesCache = merged;
+
+        // Never fail silently. The panel shows every HTTP-backed section (picture,
+        // volume, OSD, sensitivity…) blank when the sweep reads nothing — and with
+        // fail-fast (backoff armed on the first step, the rest no-op) the streak
+        // that HttpTryAsync warns on never climbs, so the user gets "no settings,
+        // no error" and no idea why. If the whole sweep came back empty on a real
+        // transport failure and no more specific warning already fired (a rejected
+        // login explains itself; the streak warning covers slow flapping), say so
+        // once — with the same cooldown, so a flapping camera doesn't spam.
+        if (!freshContent && anyTransportFail && !_httpLoginWarned && !_httpUnreachableWarned
+            && DateTime.UtcNow >= _httpWarnCooldownUntil)
+        {
+            _httpUnreachableWarned = true;
+            _httpWarnCooldownUntil = DateTime.UtcNow + TimeSpan.FromMinutes(30);
+            Log.Warn($"{CameraName}: none of the camera's HTTP-API features answered — picture settings, " +
+                     "volume, OSD, Wi-Fi signal, PTZ presets and detection sensitivity stay unavailable. " +
+                     "The camera streams fine over Baichuan, so this is the HTTP API specifically: it may be " +
+                     "disabled on the camera (enable it in the Reolink app, or set 'http_address'), or " +
+                     "something between Neolink and the camera is dropping HTTP traffic " +
+                     "(firewall/VLAN rules, Docker networking). Reads resume automatically when it recovers.");
+        }
         return merged;
     }
 
