@@ -1463,7 +1463,7 @@ public static class SelfTest
             AssertEq(rl[1], (byte)0x02);
         });
 
-        Test("mqtt client: cancelled mid-write closes the socket (framing integrity)", () =>
+        Test("mqtt client: caller cancellation can't touch the socket; a stalled write closes it", () =>
             RunMqttCancelledWrite().GetAwaiter().GetResult());
 
         Test("server health sensors for Home Assistant", () =>
@@ -3674,10 +3674,10 @@ public static class SelfTest
     }
 
     /// <summary>Wraps the client's connection stream so the test can stall a write:
-    /// while <see cref="Stall"/> is set, WriteAsync parks on the caller's token —
-    /// exactly what a backpressured socket write looks like — so cancelling the
-    /// publish cancels it mid-frame. Real kernels buffer too much to reproduce
-    /// this with sockets alone (a 1 GB loopback send "completes" unread).</summary>
+    /// while <see cref="Stall"/> is set, WriteAsync parks on the token it was given —
+    /// exactly what a backpressured socket write looks like. Real kernels buffer
+    /// too much to reproduce this with sockets alone (a 1 GB loopback send
+    /// "completes" unread).</summary>
     private sealed class StallableStream(Stream inner) : Stream
     {
         public volatile bool Stall;
@@ -3735,16 +3735,28 @@ public static class SelfTest
             for (int i = 0; i < 250 && !client.IsConnected; i++) await Task.Delay(20);
             Assert(client.IsConnected, "client connected to the stub broker");
 
+            // A caller cancelling its OWN token must not disturb the shared
+            // connection: the write runs under the client's watchdog instead, so a
+            // camera session winding down mid-publish can't corrupt the framing.
+            using (var callerCts = new CancellationTokenSource())
+            {
+                callerCts.Cancel();
+                bool threw = false;
+                try { await client.PublishAsync("t", "x", retain: false, callerCts.Token); }
+                catch (OperationCanceledException) { threw = true; }
+                Assert(threw, "pre-cancelled caller is refused at the gate");
+                Assert(client.IsConnected, "caller cancellation leaves the connection intact");
+            }
+
             // Stall the stream and publish: the write parks like a backpressured
-            // socket, and the timeout cancels it mid-frame.
+            // socket until the client's own watchdog expires it mid-frame.
             wrapped!.Stall = true;
-            using var pubCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
-            bool cancelled = false;
-            try { await client.PublishAsync("t", "x", retain: false, pubCts.Token); }
-            catch (OperationCanceledException) { cancelled = true; }
-            Assert(cancelled, "stalled publish was cancelled mid-write");
+            client.WriteTimeout = TimeSpan.FromMilliseconds(200);
+            bool ok = await client.PublishAsync("t", "x", retain: false, CancellationToken.None)
+                .WaitAsync(TimeSpan.FromSeconds(5));
+            Assert(!ok, "stalled publish reports failure");
             for (int i = 0; i < 250 && client.IsConnected; i++) await Task.Delay(20);
-            Assert(!client.IsConnected, "connection reads as down after a mid-frame cancellation");
+            Assert(!client.IsConnected, "connection reads as down after a mid-frame stall");
             // The socket must actually close (broker sees EOF) — not linger half-open
             // collecting desynced pings until the broker kicks it as "oversize packet".
             int n = await ns.ReadAsync(buf).AsTask().WaitAsync(TimeSpan.FromSeconds(5));

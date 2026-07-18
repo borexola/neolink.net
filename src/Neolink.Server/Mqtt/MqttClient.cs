@@ -162,30 +162,37 @@ public sealed class MqttClient
         return await SendAsync(stream, packet, ct).ConfigureAwait(false);
     }
 
+    /// <summary>Cap on a single socket write. Only a genuinely wedged broker takes
+    /// this long; hitting it closes the connection. Internal so the selftest can
+    /// shrink it.</summary>
+    internal TimeSpan WriteTimeout { get; set; } = TimeSpan.FromSeconds(30);
+
     private async Task<bool> SendAsync(Stream stream, byte[] packet, CancellationToken ct)
     {
-        // Cancellation while waiting for the gate is harmless: nothing was written.
+        // The caller's token only gates the wait for the gate — cancelling there is
+        // harmless because nothing was written yet.
         await _writeGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            await stream.WriteAsync(packet, ct).ConfigureAwait(false);
-            await stream.FlushAsync(ct).ConfigureAwait(false);
+            // Once a frame starts, it must complete: callers (a camera session
+            // winding down, a timed-out probe) must never abort a write partway,
+            // or the frame boundary is lost and every later packet lands mid-frame —
+            // the broker absorbs the garbage and eventually kills the client with
+            // "oversize packet". So the write runs under its own watchdog, not the
+            // caller's token; one flaky camera can't disturb the shared connection.
+            using var writeCts = new CancellationTokenSource(WriteTimeout);
+            await stream.WriteAsync(packet, writeCts.Token).ConfigureAwait(false);
+            await stream.FlushAsync(writeCts.Token).ConfigureAwait(false);
             return true;
         }
         catch (Exception ex)
         {
-            // A write that failed or was cancelled may have put PART of the packet
-            // on the wire, so the frame boundary is unknowable — every later packet
-            // would land mid-frame and the broker eventually kills the client with
-            // "oversize packet" once the garbage parses as an absurd length. The
-            // only safe move is to close the socket and reconnect cleanly.
+            // A failed (or watchdog-expired) write may have put part of the packet
+            // on the wire; the only safe move is to close the socket and reconnect.
             _stream = null;
             try { stream.Close(); } catch { }
             if (ex is OperationCanceledException)
-            {
-                Log.Debug($"MQTT: a {packet.Length}-byte send was cancelled mid-frame — closing the connection to keep framing intact");
-                throw;
-            }
+                Log.Warn($"MQTT: a {packet.Length}-byte send stalled for {WriteTimeout.TotalSeconds:0}s — closing the connection to reconnect cleanly");
             return false;
         }
         finally

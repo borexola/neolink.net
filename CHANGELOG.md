@@ -4,7 +4,7 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
-## 0.9.2 — unreleased
+## 0.9.3 — unreleased
 
 ### Fixed
 
@@ -16,9 +16,15 @@ in the README). Paste the matching section below into the GitHub release.
   killed the session with `oversize packet` — observed against the Home
   Assistant Mosquitto add-on as a disconnect every ~2 minutes, reliably, with
   a clean reconnect each time (state republish on reconnect masked it, so the
-  main symptom was log churn and brief entity gaps). An interrupted send now
-  closes the socket immediately — the frame boundary is unknowable, so the only
-  safe move is a clean reconnect — and a self-test covers the exact scenario
+  main symptom was log churn and brief entity gaps). Two changes close it for
+  good. First, socket writes no longer run under the caller's cancellation at
+  all: once a frame starts, it completes, so a camera session winding down (a
+  flaky camera reconnecting, a timed-out probe) can never abort a publish
+  partway and poison the connection every other camera shares — this was
+  triggered in the field by adding one unstable camera to an otherwise healthy
+  set. Second, a write that does fail (or stalls for 30 s against a wedged
+  broker) closes the socket immediately — the frame boundary is unknowable, so
+  the only safe move is a clean reconnect. A self-test drives both rules
   against a stub broker socket.
 
 - **Home Assistant no longer rejects the anti-flicker state on indoor cameras**:
