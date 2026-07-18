@@ -22,12 +22,81 @@ in the README). Paste the matching section below into the GitHub release.
   battery cameras keep their full park (stronger medicine). No configuration
   needed.
 
+- **Camera SD-card playback (beta)**: the Events page grew a labelled
+  **Source** switch — *Server* (this server's recorded events) or *SD card* —
+  that browses the recordings a camera stored on its own SD card — the
+  footage that exists even when this server was down, plus the clips battery
+  cameras record locally without ever streaming. Pick a camera and a day
+  (days with recordings are offered as chips, read from the camera's own
+  calendar), and play or download any recording; playback streams straight
+  off the camera with no server-side copy. Needs the camera's Reolink HTTP
+  API (`http_address` / HTTP enabled) and a mounted SD card. Behind it:
+  `Search` (calendar + file list) and a gate-free streaming `Download` in the
+  HTTP client, and `GET /api/cameras/{name}/sdcard/{days|recordings|download}`.
+
+- **Detection sensitivity (beta)**: motion sensitivity (1-50, normalized
+  across the two firmware dialects — newer `MdAlarm` firmwares carry it
+  straight, older `Alarm` tables store it inverted) and per-type AI
+  sensitivity (person/vehicle/animal/face/package, 0-100) are now sliders in
+  the camera panel and `number` entities in Home Assistant. These tune the
+  camera's own thresholds, so its app notifications and this server's event
+  recording both follow.
+
+- **HDR and OSD control (beta)**: cameras whose ISP reports an `hdr` field
+  get an HDR select in the picture section (plain on/off or off/low/high —
+  the camera's own range table decides) and an HA `select`; the on-screen
+  display — camera-name and timestamp overlays with their positions, and the
+  Reolink watermark — is editable in a new panel section, with the position
+  options read from the camera's own range table.
+
+- **Firmware-update check (read-only)**: cameras that answer `CheckFirmware`
+  show an "Update" badge in the panel's device bar when Reolink offers newer
+  firmware, and Home Assistant gets a diagnostic `binary_sensor` with
+  device-class `update`. Nothing is ever installed from here — updating stays
+  in the Reolink app; the verdict is cached for hours so panel opens don't
+  turn into cloud traffic.
+
+- **The camera settings dialog is draggable and resizable (desktop)**: grab
+  the header to move it, the corner grip to resize — so a staged change (OSD,
+  picture) can be watched applying on the video *beneath* the modal instead of
+  behind it. It stays a modal (only ✕ dismisses), can't leave the screen's
+  usable area (dragging and resizing both clamp to an 8 px margin), phones
+  keep the fixed sheet, and closing discards the geometry — a reopened dialog
+  is always back to the centered default.
+
+- **Digital zoom on the Timeline monitors**: every visible monitor on the
+  Timeline page gets the same digital zoom as the live views — mouse-wheel on
+  the video zooms around the cursor (the studio's focused monitor included),
+  drag pans while zoomed, and each tile carries the familiar side HUD
+  (+ / − / 1:1 with a percentage badge). HUD clicks never toggle the studio
+  focus, and the studio's thumbnail rail hides the HUD (focus a monitor to
+  zoom it, like the snapshot button).
+
+- **SD-card file searches no longer masquerade as "no recordings"**: the file
+  search walks the camera's card — on an event-heavy day (doorbells) that
+  takes far longer than a config read, and it was tripping the 10-second
+  per-command cap; the failure then displayed as an innocent "No recordings
+  on the camera's SD card" even though the calendar showed the day as
+  recorded. File searches now run uncapped under their own 45-second budget,
+  a stream the firmware rejects searching no longer aborts the other one, a
+  failed search shows as a retryable error instead of an empty day, and a
+  day that parses to zero usable files logs what the camera actually
+  answered so unmapped firmware dialects are diagnosable from the log.
+
+- **Camera HTTP reads now budget for the login round-trip**: a config read
+  without a live session token pays for a `Login` before the command — and on
+  a Wi-Fi camera busy pushing streams (dual-lens Duos especially) the login
+  alone can take most of the old 6-second budget, so first reads kept timing
+  out, armed the retry backoff, and the panel's HTTP-backed sections went
+  missing while the camera's API was actually fine (the "responds too slowly"
+  warning at startup). Login-bearing calls now get the roomy 20-second
+  budget; calls riding a cached token keep the tight one.
+
 - **Digital zoom on the Events page**: the clip player on the dedicated
   `/events` page now has the same digital zoom as the live views and the event
   pop-up — mouse-wheel or pinch to zoom around the cursor, drag to pan while
   zoomed, double-click for 1:1, with the familiar side HUD (+ / − / 1:1 and a
   percentage badge; hover-revealed on desktop, always available on touch).
-
 - **On-video PTZ pad**: maximizing a PTZ camera (clicking it in the sidebar)
   now shows a small translucent **PTZ** pill in the bottom-right corner of the
   video. Clicking it opens a compact pan/tilt pad — hold an arrow to move,
@@ -35,6 +104,17 @@ in the README). Paste the matching section below into the GitHub release.
   settings dialog. The pad is deliberately non-intrusive: ghosted until
   hovered or opened, collapsed back to the pill per camera, and it claims the
   one tile corner no other overlay uses. Cameras without PTZ never show it.
+
+- **On-video camera rail (PTZ + talk)**: maximizing a camera now shows a
+  quiet glass pill on the right edge of the video, directly below the zoom
+  HUD — the two read as one column of controls. It carries a **PTZ** button
+  on pan/tilt cameras (opens a compact hold-to-pan pad that flies out to the
+  left — hold an arrow to move, release to stop, square to force-stop) and a
+  **mic** button on talk-capable cameras (same two-way talk as the toolbar
+  mic, with the red pulse while live). Deliberately non-intrusive: ghosted
+  until hovered, opened or talking, collapsed per camera, and clear of every
+  other overlay — the earlier corner placement collided with the camera name
+  and the resize grip. Cameras with neither feature never show it.
 
 ### Changed
 
@@ -61,9 +141,26 @@ in the README). Paste the matching section below into the GitHub release.
   this cost and are unaffected. The selftest proves the fast path
   byte-identical to the reference implementation across every length shape.
 
-## 0.9.4 — unreleased
-
 ### Fixed
+
+- **Applying a camera setting no longer makes its panel section vanish**: after
+  "Apply to camera" the panel re-reads every HTTP-API feature in one combined
+  sweep — and a camera still busy applying the write (an OSD/watermark change
+  re-renders the burned-in overlays; flip/mirror restarts the video pipeline)
+  can time out parts of that re-read, which then reported those features as
+  absent. The setting had applied fine, but its section disappeared from the
+  panel right after. The refresh now keeps the previous reading for any
+  feature the re-read couldn't reach instead of dropping the section.
+
+- **The event pop-up no longer goes black on the first zoom while playing**:
+  the first zoom promotes the video to its own composited layer, and the frame
+  already on screen doesn't reliably land in the new layer. The existing
+  repaint nudge (re-presenting the frame with a zero seek) only covered paused
+  clips — but a playing clip can sit black too when no fresh frame happens to
+  be due (a stalled buffer, a long GOP, the end of the clip). File-backed
+  players (the event pop-up and the /events page) now always get the nudge on
+  zoom-in; live tiles keep the paused-only rule, since a playing live stream
+  repaints on the next arriving frame anyway and a zero seek would jolt it.
 
 - **A 4K camera snapshot no longer disconnects the Home Assistant bridge every
   2 minutes**: the bridge publishes each camera's JPEG snapshot to MQTT

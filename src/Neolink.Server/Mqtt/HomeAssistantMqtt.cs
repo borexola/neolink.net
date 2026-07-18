@@ -57,6 +57,9 @@ namespace Neolink.Mqtt;
 ///   • button:        reboot and PTZ steps               (per capability)
 ///   • camera:        latest snapshot                    (when the camera supports it)
 ///   • number:        speaker volume 0-100, beta         (via the camera's HTTP API)
+///   • number:        motion/AI detection sensitivity    (via the camera's HTTP API)
+///   • select:        HDR off/on or off/low/high         (via the camera's HTTP API)
+///   • binary_sensor: firmware update available          (read-only; never installs)
 ///   • switch:        auto-tracking, beta                (GetAbility-gated, HTTP API)
 ///   • select:        PTZ preset — picking one moves the
 ///                    camera there, beta                 (via the camera's HTTP API)
@@ -493,6 +496,11 @@ internal sealed class CameraBridge
     private ImageSettings? _imgCaps;      // which picture fields this camera reports
     private bool _hasSpotlight, _hasWhiteLedBrightness, _isDoorbell, _ptzCapable;
     private bool _hasIrBrightness, _hasDoorbellLight; // from the LedState probe
+    private bool _hasMdSens;              // motion-detection sensitivity (1-50)
+    private string[]? _aiSensTypes;       // AI types the camera answered GetAiAlarm for
+    private bool _hasHdr;                 // ISP hdr field present
+    private int _hdrMax = 1;              // 1 = on/off, 2 = off/low/high
+    private bool _fwCheckable;            // the camera answers CheckFirmware
     /// <summary>The extras probe saw a working HTTP API. False keeps it retrying on
     /// the slow cadence — some cameras' HTTP side boots later than Baichuan, and one
     /// missed probe must not hide the entities until the bridge restarts.</summary>
@@ -898,7 +906,80 @@ internal sealed class CameraBridge
                 SwitchConfig("Mirror image", "img_mirror", "mdi:flip-horizontal", "config"), ct).ConfigureAwait(false);
         else
             await ClearEntityAsync("switch", "img_mirror", ct).ConfigureAwait(false);
+        // Detection sensitivity (beta): the camera's own thresholds — higher = more
+        // sensitive on both scales (MD is normalized server-side).
+        if (_hasMdSens)
+            await AnnounceEntityAsync("number", "md_sensitivity",
+                NumberConfig("Motion sensitivity", "md_sensitivity", 1, 50, "mdi:motion-sensor"), ct).ConfigureAwait(false);
+        else
+            await ClearEntityAsync("number", "md_sensitivity", ct).ConfigureAwait(false);
+        foreach (var aiType in CameraControl.AiAlarmTypes)
+        {
+            if (_aiSensTypes?.Contains(aiType) == true)
+                await AnnounceEntityAsync("number", $"ai_sens_{aiType}",
+                    NumberConfig($"{AiTypeLabel(aiType)} sensitivity", $"ai_sens_{aiType}", 0, 100,
+                        "mdi:motion-sensor"), ct).ConfigureAwait(false);
+            else
+                await ClearEntityAsync("number", $"ai_sens_{aiType}", ct).ConfigureAwait(false);
+        }
+        // HDR (beta): the range table decides on/off vs off/low/high.
+        if (_hasHdr)
+            await AnnounceEntityAsync("select", "hdr", SelectConfig("HDR", "hdr",
+                HdrOptions(), "mdi:hdr"), ct).ConfigureAwait(false);
+        else
+            await ClearEntityAsync("select", "hdr", ct).ConfigureAwait(false);
+        // Firmware update (read-only diagnostic): ON = Reolink offers a newer
+        // firmware. Neolink.NET never installs anything.
+        if (_fwCheckable)
+            await AnnounceEntityAsync("binary_sensor", "firmware_update", FirmwareUpdateConfig(), ct).ConfigureAwait(false);
+        else
+            await ClearEntityAsync("binary_sensor", "firmware_update", ct).ConfigureAwait(false);
     }
+
+    /// <summary>HA-friendly names for the GetAiAlarm ai_type tokens.</summary>
+    private static string AiTypeLabel(string aiType) => aiType switch
+    {
+        "people" => "Person",
+        "vehicle" => "Vehicle",
+        "dog_cat" => "Animal",
+        "face" => "Face",
+        "package" => "Package",
+        _ => aiType,
+    };
+
+    private string[] HdrOptions() => _hdrMax >= 2
+        ? new[] { "off", "low", "high" }
+        : new[] { "off", "on" };
+
+    /// <summary>hdr wire value → select option (values above the announced range
+    /// clamp to the top option so HA never rejects a state).</summary>
+    private string HdrLabel(int value) => _hdrMax >= 2
+        ? value <= 0 ? "off" : value == 1 ? "low" : "high"
+        : value <= 0 ? "off" : "on";
+
+    /// <summary>select option → hdr wire value; null = not an option we announced.</summary>
+    private int? HdrValue(string payload) => payload switch
+    {
+        "off" => 0,
+        "on" when _hdrMax < 2 => 1,
+        "low" when _hdrMax >= 2 => 1,
+        "high" when _hdrMax >= 2 => 2,
+        _ => null,
+    };
+
+    private object FirmwareUpdateConfig() => new
+    {
+        name = "Firmware update",
+        unique_id = $"neolink_{Id}_firmware_update",
+        state_topic = StateTopic("firmware_update"),
+        payload_on = "ON",
+        payload_off = "OFF",
+        device_class = "update",
+        entity_category = "diagnostic",
+        device = Device(),
+        availability = Availability(),
+        availability_mode = "all",
+    };
 
     /// <summary>The picture sliders and whether this camera reports each (null = absent).</summary>
     private (string Key, string Label, int? Cur)[] PictureSliders() => new[]
@@ -1584,6 +1665,12 @@ internal sealed class CameraBridge
         _presets = extras?.PtzPresets;
         _quickReplies = extras?.QuickReplies;
         _imgCaps = extras?.Image;
+        _hasMdSens = extras?.MdSensitivity != null;
+        _aiSensTypes = extras?.AiSensitivities?.Select(a => a.Type).ToArray();
+        _hasHdr = extras?.Image?.Hdr != null;
+        _hdrMax = Math.Clamp(extras?.Image?.HdrMax ?? 1, 1, 2);
+        // One (camera-cached) update check decides whether the sensor exists at all.
+        _fwCheckable = await TryAsync(() => _control.CheckFirmwareAsync(ct)).ConfigureAwait(false) != null;
         _hasSpotlight = f.Spotlight && !f.Floodlight;
         _hasWhiteLedBrightness = f.WhiteLed;
         _isDoorbell = f.Doorbell;
@@ -1623,7 +1710,18 @@ internal sealed class CameraBridge
                     await _hub.PublishAsync(StateTopic("img_flip"), flip ? "ON" : "OFF", ct).ConfigureAwait(false);
                 if (img.Mirror is { } mirror)
                     await _hub.PublishAsync(StateTopic("img_mirror"), mirror ? "ON" : "OFF", ct).ConfigureAwait(false);
+                if (_hasHdr && img.Hdr is { } hdr)
+                    await _hub.PublishAsync(StateTopic("hdr"), HdrLabel(hdr), ct).ConfigureAwait(false);
             }
+            if (_hasMdSens && await _control.GetMdSensitivityAsync(ct).ConfigureAwait(false) is { } mdSens)
+                await _hub.PublishAsync(StateTopic("md_sensitivity"), mdSens.ToString(), ct).ConfigureAwait(false);
+            if (_aiSensTypes is { Length: > 0 }
+                && await _control.GetAiSensitivitiesAsync(ct).ConfigureAwait(false) is { } aiSens)
+                foreach (var ai in aiSens)
+                    await _hub.PublishAsync(StateTopic($"ai_sens_{ai.Type}"), ai.Sensitivity.ToString(), ct).ConfigureAwait(false);
+            // Served from the control layer's hours-long cache — no cloud chatter.
+            if (_fwCheckable && await _control.CheckFirmwareAsync(ct).ConfigureAwait(false) is { } fw)
+                await _hub.PublishAsync(StateTopic("firmware_update"), fw.UpdateAvailable ? "ON" : "OFF", ct).ConfigureAwait(false);
             if (_hasWhiteLedBrightness && await _control.GetWhiteLedAsync(ct).ConfigureAwait(false) is { } wl)
                 await _hub.PublishAsync(StateTopic("spotlight_brightness"), wl.Bright.ToString(), ct).ConfigureAwait(false);
             // Preset names can change (the panel saves new ones) — refresh the list
@@ -1904,6 +2002,23 @@ internal sealed class CameraBridge
                         entity == "img_flip" ? flipOn : null,
                         entity == "img_mirror" ? flipOn : null, ct).ConfigureAwait(false);
                     await _hub.PublishAsync(StateTopic(entity), flipOn ? "ON" : "OFF", ct).ConfigureAwait(false);
+                    break;
+                case "md_sensitivity" when int.TryParse(payload, out var mds):
+                    mds = Math.Clamp(mds, 1, 50);
+                    await _control.SetMdSensitivityAsync(mds, ct).ConfigureAwait(false);
+                    await _hub.PublishAsync(StateTopic("md_sensitivity"), mds.ToString(), ct).ConfigureAwait(false);
+                    break;
+                case var aiEntity when aiEntity.StartsWith("ai_sens_", StringComparison.Ordinal)
+                    && int.TryParse(payload, out var aiv):
+                    var aiType = aiEntity["ai_sens_".Length..];
+                    if (_aiSensTypes?.Contains(aiType) != true) break;
+                    aiv = Math.Clamp(aiv, 0, 100);
+                    await _control.SetAiSensitivityAsync(aiType, aiv, ct).ConfigureAwait(false);
+                    await _hub.PublishAsync(StateTopic(aiEntity), aiv.ToString(), ct).ConfigureAwait(false);
+                    break;
+                case "hdr" when HdrValue(payload) is { } hdrValue:
+                    await _control.SetHdrAsync(hdrValue, ct).ConfigureAwait(false);
+                    await _hub.PublishAsync(StateTopic("hdr"), payload, ct).ConfigureAwait(false);
                     break;
             }
         }

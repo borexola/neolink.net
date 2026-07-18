@@ -14,7 +14,7 @@
 
 <PageTitle>Neolink.NET — Events</PageTitle>
 
-<div class="ev-page @(_selected != null ? "has-selection" : "")">
+<div class="ev-page @((_sdMode ? _sdSelected != null : _selected != null) ? "has-selection" : "")">
     <div class="toolbar ev-toolbar">
         <a class="tool-btn" href="" title="Back to the live camera wall">@UiIcon.Render("chev-left", 16) <span class="tool-name">Live</span></a>
         <span class="tool-label">EVENTS</span>
@@ -27,27 +27,64 @@
 
         <span class="tile-spacer"></span>
 
-        <select class="event-filter" @bind="_cameraFilter" @bind:after="OnFilterChanged" title="Filter by camera">
-            <option value="">all cameras</option>
-            @foreach (var c in _cameras)
-            {
-                <option value="@c.Name">@c.Name</option>
-            }
-        </select>
-        <button class="chip @(_unreviewedOnly ? "chip-active" : "chip-off")" title="Only events awaiting review"
-                @onclick="() => _unreviewedOnly = !_unreviewedOnly">unreviewed</button>
-        <input class="event-filter event-date-input" type="date" title="Jump to a specific day"
-               max="@DateTime.Today.ToString("yyyy-MM-dd")"
-               value="@(_date?.ToString("yyyy-MM-dd") ?? "")"
-               @onchange="e => SetDateAsync((string?)e.Value)" />
-        @if (_date != null)
+        @* SOURCE: what the list shows — this server's recorded events, or footage
+           on the camera's own SD card. A labelled segmented switch: the previous
+           lone "SD card" chip read as an action, not as the page-wide mode it is. *@
+        <span class="tool-label">SOURCE</span>
+        <span class="ev-switch" role="tablist" style="margin-right:8px">
+            <button class="ev-switch-opt @(!_sdMode ? "active" : "")" role="tab" aria-selected="@(!_sdMode)"
+                    title="Events this server recorded"
+                    @onclick="() => SetSdModeAsync(false)">Server</button>
+            <button class="ev-switch-opt @(_sdMode ? "active" : "")" role="tab" aria-selected="@_sdMode"
+                    title="Recordings stored on the camera's own SD card — including footage from while this server was off"
+                    @onclick="() => SetSdModeAsync(true)">SD card <span class="beta-tag">BETA</span></button>
+        </span>
+
+        @if (!_sdMode)
         {
-            <button class="chip" title="Back to the rolling last 24 hours" @onclick="() => SetDateAsync(null)">↺ 24h</button>
+            <select class="event-filter" @bind="_cameraFilter" @bind:after="OnFilterChanged"
+                    title="Show one camera's events, or all of them">
+                <option value="">all cameras</option>
+                @foreach (var c in _cameras)
+                {
+                    <option value="@c.Name">@c.Name</option>
+                }
+            </select>
+            <button class="chip @(_unreviewedOnly ? "chip-active" : "chip-off")"
+                    title="@(_unreviewedOnly ? "Showing only events you haven't opened yet — click to show all" : "Show only events you haven't opened yet")"
+                    @onclick="() => _unreviewedOnly = !_unreviewedOnly">unreviewed only</button>
+            <span class="tool-label">DAY</span>
+            <input class="event-filter event-date-input" type="date"
+                   title="Show one day's events (blank = the rolling last 24 hours)"
+                   max="@DateTime.Today.ToString("yyyy-MM-dd")"
+                   value="@(_date?.ToString("yyyy-MM-dd") ?? "")"
+                   @onchange="e => SetDateAsync((string?)e.Value)" />
+            @if (_date != null)
+            {
+                <button class="chip" title="Back to the rolling last 24 hours" @onclick="() => SetDateAsync(null)">↺ 24h</button>
+            }
+            <button class="chip @(_selectMode ? "chip-active" : "")"
+                    title="@(_selectMode ? "Leave selection mode without deleting" : "Pick multiple events to delete at once")"
+                    @onclick="ToggleSelectModeAsync">@UiIcon.Render("trash", 13) Delete…</button>
         }
-        <button class="chip @(_selectMode ? "chip-active" : "")"
-                title="@(_selectMode ? "Leave selection mode" : "Select multiple events to delete")"
-                @onclick="ToggleSelectModeAsync">@UiIcon.Render("check", 13) Select</button>
-        <button class="icon-btn" title="Refresh" @onclick="RefreshAsync">@UiIcon.Render("refresh", 14)</button>
+        else
+        {
+            <span class="tool-label">CAMERA</span>
+            <select class="event-filter" @bind="_sdCamera" @bind:after="LoadSdAsync"
+                    title="Whose SD card to browse (one camera at a time)">
+                @foreach (var c in _cameras)
+                {
+                    <option value="@c.Name">@c.Name</option>
+                }
+            </select>
+            <span class="tool-label">DAY</span>
+            <input class="event-filter event-date-input" type="date"
+                   title="Day to list from the camera's SD card — days with footage are offered as chips in the list"
+                   max="@DateTime.Today.ToString("yyyy-MM-dd")"
+                   value="@_sdDate.ToString("yyyy-MM-dd")"
+                   @onchange="e => SetSdDateAsync((string?)e.Value)" />
+        }
+        <button class="icon-btn" title="Refresh" @onclick="RefreshCurrentAsync">@UiIcon.Render("refresh", 14)</button>
     </div>
 
     @if (_selectMode)
@@ -67,7 +104,100 @@
         </div>
     }
 
-    @if (_error != null)
+    @if (_sdMode)
+    {
+        @* Camera-SD browser: footage the CAMERA recorded onto its own card,
+           listed and streamed straight off the camera. Works even when this
+           server records nothing — it's a window into the camera's storage. *@
+        <div class="ev-body">
+            <div class="ev-list" role="list">
+                @if (_sdLoading)
+                {
+                    <div class="notice"><span class="btn-spinner"></span> Asking the camera…</div>
+                }
+                else if (_sdError != null)
+                {
+                    <div class="notice">@_sdError</div>
+                }
+                else
+                {
+                    @if (_sdDays.Count > 0)
+                    {
+                        <div class="ev-day">
+                            <div class="ev-day-head">@_sdDate.ToString("MMMM yyyy").ToUpperInvariant() — DAYS WITH RECORDINGS</div>
+                            <div class="stream-options sd-day-chips">
+                                @foreach (var d in _sdDays)
+                                {
+                                    var day = d;
+                                    <button class="chip @(day == _sdDate.Day ? "chip-active" : "")"
+                                            title="List this day" @onclick="() => SetSdDayAsync(day)">@day</button>
+                                }
+                            </div>
+                        </div>
+                    }
+                    @if (_sdRecs.Count == 0)
+                    {
+                        <div class="notice">No recordings on the camera's SD card for @DayLabel(_sdDate).ToLowerInvariant().</div>
+                    }
+                    else
+                    {
+                        <div class="ev-day">
+                            <div class="ev-day-head">@DayLabel(_sdDate) <span class="event-day-count">@_sdRecs.Count</span></div>
+                            @foreach (var r in _sdRecs)
+                            {
+                                <div class="event-row @(_sdSelected?.File == r.File ? "selected" : "")"
+                                     @key="r.File" role="listitem" title="Play this recording"
+                                     @onclick="() => SelectSdAsync(r)">
+                                    <div class="event-row-main">
+                                        <span class="event-title">@UiIcon.Render("film", 13) @r.TimeLabel</span>
+                                        <span class="event-sub">@r.DurationLabel · @r.SizeLabel · @(r.StreamType == "sub" ? "SD" : "HD")</span>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    }
+                    <div class="notice small">
+                        Recorded by the <b>camera itself</b> onto its SD card — including anything from
+                        while this server was off. Playback streams straight from the camera, so
+                        loading can be slow (especially over Wi-Fi).
+                    </div>
+                }
+            </div>
+
+            <div class="ev-detail @(_sdSelected == null ? "empty" : "")">
+                @if (_sdSelected is { } sr)
+                {
+                    <div class="event-player-head">
+                        <button class="icon-btn ev-back" title="Back to the list" @onclick="() => _sdSelected = null">@UiIcon.Render("chev-left", 16)</button>
+                        <div class="event-player-title">
+                            <span class="event-title">@_sdCamera — @sr.TimeLabel</span>
+                            <span class="event-sub">@sr.Start.ToString("ddd d MMM") · @sr.DurationLabel · @sr.SizeLabel</span>
+                        </div>
+                        <a class="chip" href="@SdUrl(sr, dl: true)" title="Save this recording as a file">
+                            @UiIcon.Render("download", 13) Download
+                        </a>
+                    </div>
+                    @* zoom-on: SD-card playback gets the same digital zoom as live views. *@
+                    <div class="event-player-media zoom-on" @key="sr.File">
+                        <video id="ev-video" controls autoplay playsinline></video>
+                        @ZoomHud
+                    </div>
+                    <div class="notice small">
+                        Streams as it loads; jumping ahead only works for the part that has
+                        already arrived. Use Download for a local copy you can scrub freely.
+                    </div>
+                }
+                else
+                {
+                    <div class="ev-detail-empty">
+                        <span class="ev-detail-empty-icon">@UiIcon.Render("camera", 30)</span>
+                        <span>Select a recording to play it</span>
+                    </div>
+                }
+            </div>
+        </div>
+    }
+    else if (_error != null)
     {
         <div class="notice error">@_error</div>
     }
@@ -313,6 +443,16 @@
     private List<CameraCount> _delCameras = new();
     private sealed record CameraCount(string Camera, int Count);
 
+    // ---- camera SD-card browser (beta) ----
+    private bool _sdMode;
+    private string _sdCamera = "";
+    private DateTime _sdDate = DateTime.Today;
+    private List<int> _sdDays = new();               // days with recordings in _sdDate's month
+    private List<ApiSdRecording> _sdRecs = new();    // the selected day's recordings
+    private ApiSdRecording? _sdSelected;
+    private bool _sdLoading;
+    private string? _sdError;
+
     /// <summary>The user's HD/SD pick: false = full main-stream clip (default at
     /// every speed — muted fast playback keeps it smooth), true = the low-res
     /// sub-stream twin, the escape hatch when storage or decoder can't keep up.
@@ -498,6 +638,97 @@
         await LoadDayAsync();
         _loading = false;
     }
+
+    // ------------------------------------------------------------ camera SD card
+
+    private Task RefreshCurrentAsync() => _sdMode ? LoadSdAsync() : RefreshAsync();
+
+    private async Task SetSdModeAsync(bool on)
+    {
+        _sdMode = on;
+        if (!on)
+        {
+            _sdSelected = null;
+            return;
+        }
+        // A camera pick is required (the search is per-camera): the active filter
+        // wins, else the first camera.
+        if (_sdCamera.Length == 0 || _cameras.All(c => c.Name != _sdCamera))
+            _sdCamera = (_cameraFilter.Length > 0 ? _cameraFilter : _cameras.FirstOrDefault()?.Name) ?? "";
+        await LoadSdAsync();
+    }
+
+    /// <summary>One camera+day load: the month's recording calendar and the day's
+    /// file list, both answered by the camera itself.</summary>
+    private async Task LoadSdAsync()
+    {
+        _sdSelected = null;
+        _sdRecs = new List<ApiSdRecording>();
+        _sdDays = new List<int>();
+        _sdError = null;
+        if (_sdCamera.Length == 0)
+        {
+            _sdError = "No cameras are configured.";
+            return;
+        }
+        _sdLoading = true;
+        StateHasChanged();
+        try
+        {
+            var cam = Uri.EscapeDataString(_sdCamera);
+            var days = await GetJsonAsync<ApiSdDays>(
+                $"/api/cameras/{cam}/sdcard/days?year={_sdDate.Year}&month={_sdDate.Month}");
+            _sdDays = days?.Days ?? new List<int>();
+            var recs = await GetJsonAsync<ApiSdRecordings>(
+                $"/api/cameras/{cam}/sdcard/recordings?date={_sdDate:yyyy-MM-dd}");
+            if (recs == null && days == null)
+            {
+                _sdError = "This camera's SD card can't be browsed — it needs a Reolink HTTP API " +
+                           "(http_address / HTTP enabled on the camera) and a mounted SD card.";
+            }
+            else if (recs == null)
+            {
+                // The calendar answered but the FILE search didn't — that is a
+                // failed query (the file search is much heavier and the camera
+                // may be busy), NOT an empty day. Saying "no recordings" here
+                // hid real failures behind an innocent-looking message.
+                _sdError = "The camera answered the calendar but not the file search — it may be " +
+                           "busy streaming. Hit refresh to retry; the server log has details.";
+            }
+            _sdRecs = recs?.Recordings ?? new List<ApiSdRecording>();
+        }
+        catch (Exception ex)
+        {
+            _sdError = $"Cannot reach {_server}: {ex.Message}";
+        }
+        finally
+        {
+            _sdLoading = false;
+        }
+    }
+
+    private async Task SetSdDateAsync(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw) || !DateTime.TryParse(raw, out var day)) return;
+        _sdDate = day.Date;
+        await LoadSdAsync();
+    }
+
+    private async Task SetSdDayAsync(int day)
+    {
+        _sdDate = new DateTime(_sdDate.Year, _sdDate.Month, Math.Min(day, DateTime.DaysInMonth(_sdDate.Year, _sdDate.Month)));
+        await LoadSdAsync();
+    }
+
+    private void SelectSdAsync(ApiSdRecording r)
+    {
+        _sdSelected = r;
+        _pendingVideoUrl = SdUrl(r); // attach after the <video> renders
+    }
+
+    private string SdUrl(ApiSdRecording r, bool dl = false) =>
+        $"{Base}/api/cameras/{Uri.EscapeDataString(_sdCamera)}/sdcard/download" +
+        $"?file={Uri.EscapeDataString(r.File)}{(dl ? "&dl=1" : "")}{TokenQuery('&')}";
 
     private void OnFilterChanged()
     {

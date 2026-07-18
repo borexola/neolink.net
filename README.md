@@ -100,9 +100,19 @@ in exchange you get an integration light enough to leave running forever.
   battery status, and — where the camera supports them — PTZ (press-and-hold pad),
   optical zoom & focus sliders, status LED / floodlight toggles with brightness and
   auto-at-night mode, PIR on/off, a latched siren (sounds until you stop it),
-  privacy mode, and reboot. Device settings **stage** and are sent only on
+  privacy mode, and reboot — plus, over the camera's HTTP API (beta): picture
+  sliders, day/night & anti-flicker, **HDR**, speaker volume, **motion and
+  per-type AI detection sensitivity**, the **on-screen display** (camera-name /
+  timestamp overlays and the Reolink watermark), PTZ presets, doorbell quick
+  replies, and a read-only **firmware-update badge** when Reolink offers a newer
+  firmware. Device settings **stage** and are sent only on
   "Apply to camera" — with an up-front warning when a change restarts the stream
   or can reboot the camera
+- **Camera SD-card playback (beta)**: the Events page's *SD card* mode lists and
+  plays the recordings a camera stored on its own SD card — footage from when the
+  server was down, and battery-camera clips that never streamed. Day calendar
+  from the camera, streaming playback and download, no server-side copy; needs
+  the camera's HTTP API and a mounted card
 - **Battery cameras** (Argus etc.) are auto-detected: charge badge in the sidebar,
   sleep-friendly by default (the camera dozes while nobody watches), `always_on`
   per camera to hold it awake — see [Battery cameras](#battery-cameras-argus-etc)
@@ -608,6 +618,19 @@ backup exposes nothing, and any in-place tampering is detected on read.
 | `permitted_users` | all users | Restrict this camera's mounts to specific `users` |
 | `record` | `true` | Initial default for this camera's "Detection events" switch (changeable in the web UI) |
 
+> **Keep camera passwords alphanumeric.** Reolink's HTTP API — the one behind
+> `http_address`, picture settings, volume, PTZ presets and scaled snapshots —
+> is far pickier about the password than the video protocol. Some special
+> characters (`@ : / % & + #` and others, varying by firmware) make the HTTP
+> login fail with `password wrong` **even though the exact same password works
+> for live video and in the camera's own web page**. The result is a camera
+> that streams and records perfectly but whose HTTP-backed features silently go
+> missing (the log warns once that the HTTP API "REJECTED the login"). If you
+> hit this, set the camera's password to letters and digits only (`a–z A–Z
+> 0–9`) in the Reolink app — this is a camera-firmware quirk, not a Neolink.NET
+> limitation, and the reference Reolink libraries recommend the same. Passwords
+> over 31 characters can fail for the same reason.
+
 ## Behind a reverse proxy (HAProxy / nginx / Caddy)
 
 The web UI works behind a TLS-terminating reverse proxy (e.g. HAProxy on
@@ -655,7 +678,48 @@ config, so a **device per camera** appears automatically — no YAML in HA.
 | `discovery` | `true` | Publish HA discovery config so entities appear automatically |
 | `discovery_prefix` | `homeassistant` | Must match HA's MQTT integration setting |
 | `keepalive` | `30` | Keep-alive interval (seconds) |
+| `max_packet_size` | `2000000` | Largest MQTT packet the broker accepts, in bytes — see *Packet sizing* below |
 | `tls` | `false` | Connect with TLS (certificates are not validated) |
+
+### Packet sizing (camera snapshots vs the broker's limit)
+
+Mosquitto 2.1+ ships a new default `max_packet_size` of **2 MB** and answers a
+bigger publish by **disconnecting the client** — it doesn't just drop the one
+packet. The only payload Neolink.NET publishes that can get near that limit is
+the per-camera **Snapshot** image (base64 JPEG), and a dual-lens or 4K camera's
+snapshot easily exceeds it: a Duo's panorama is 3+ MB even at sub-stream
+resolution.
+
+Neolink.NET handles this so the shared connection is never at risk:
+
+- The bridge asks the camera for the **smallest snapshot it can produce**
+  (extern stream, then sub stream, then the full image as a last resort).
+- Any publish still larger than `max_packet_size` is **dropped with a one-time
+  warning** naming the topic and size — that camera's HA picture goes stale,
+  everything else keeps flowing, and the broker never disconnects the bridge.
+
+If a camera's smallest snapshot is still over 2 MB and you want its picture in
+HA anyway, raise the limit **on both sides** (they must agree — the neolink
+setting only governs what it is willing to send):
+
+1. **Broker** — for the Home Assistant Mosquitto add-on, enable *customize* in
+   the add-on's configuration and drop a file in `/share/mosquitto/`
+   (e.g. `neolink.conf`) containing:
+
+   ```
+   max_packet_size 8000000
+   ```
+
+   then restart the add-on.
+2. **Neolink.NET** — in the `mqtt` section:
+
+   ```json
+   "max_packet_size": 8000000
+   ```
+
+Alternatively, skip MQTT for the picture entirely: point a Home Assistant
+**Generic Camera** integration at the full-resolution
+[HTTP snapshot endpoint](#snapshots-over-http) — no broker limits apply there.
 
 **Entities** created per camera, according to what it supports:
 
@@ -688,6 +752,10 @@ config, so a **device per camera** appears automatically — no YAML in HA.
 | Doorbell light (beta) | `switch` | The doorbell's button light |
 | Play quick reply (beta) | `select` | Video doorbells: picking a pre-recorded message plays it through the speaker |
 | Picture settings (beta) | `number`/`select`/`switch` | Image brightness/contrast/saturation/hue/sharpness, day/night mode, anti-flicker, flip and mirror — per what the camera reports (config category) |
+| Motion sensitivity (beta) | `number` | The camera's own motion-detection threshold, 1-50, higher = more sensitive (normalized across firmware dialects) |
+| Person / Vehicle / Animal / Face / Package sensitivity (beta) | `number` | Per-type AI detection sensitivity 0-100 — one entity per type this camera's firmware answers for |
+| HDR (beta) | `select` | Cameras whose ISP reports HDR: `off`/`on`, or `off`/`low`/`high` on three-step firmwares |
+| Firmware update | `binary_sensor` (`update`) | Read-only diagnostic: ON when Reolink offers newer firmware for this camera (checked by the camera itself, cached for hours). Update from the Reolink app — Neolink.NET never installs firmware |
 
 A separate **Neolink.NET Server** device carries the server's own health
 (published every `stats_interval` seconds): CPU, memory, recordings size, write
@@ -1050,6 +1118,19 @@ issue with them so the mapping can be extended.
   size: a full day of a high-bitrate camera is tens of gigabytes, and behind
   Home Assistant ingress big downloads are slower — prefer the direct port for
   those.
+- **Camera SD-card playback (beta)**: the Events page's **SD card** toggle
+  browses the recordings a camera made onto its own SD card — the footage that
+  exists even when this server was down, and the clips battery cameras record
+  locally without ever streaming. Pick a camera; the days that have recordings
+  come from the camera's own calendar (chips under the date picker), and each
+  recording plays in the same player or downloads as a file. Playback streams
+  straight off the camera — no server-side copy — so loading speed is the
+  camera's (a Wi-Fi camera mid-stream can be slow), and seeking ahead only
+  works for what has already arrived; download the file for free scrubbing.
+  Requires the camera's Reolink HTTP API (`http_address`, HTTP enabled on the
+  camera) and a mounted SD card. What the camera records onto its card
+  (continuous, events, streams) is configured in the Reolink app — this is a
+  window into it, not a control for it.
 - **Timeline studio layout (opt-in)**: the Studio button in the timeline toolbar
   flips the page into a video-editor arrangement — monitors on top, the transport
   bar and the camera tracks docked at the bottom, like Premiere or Resolve. Click
@@ -1184,6 +1265,16 @@ by channel, nonce-derived AES session keys, binary-mode switching via
   lock the account for a few minutes.
 - **"Connection closed while waiting for message ID 1"**: usually an encryption
   negotiation problem — make sure you're on the latest build (FullAes support).
+- **Video works but picture settings / volume / scaled snapshots are missing,
+  and the log says the HTTP API "REJECTED the login"**: the camera's HTTP API
+  is refusing a password the video protocol accepts. Almost always a special
+  character (or a password over 31 chars) — set the camera's password to
+  letters and digits only in the Reolink app. See *Per camera* above.
+- **"the camera's HTTP API is not answering … responds too slowly"**: the HTTP
+  port is open but the camera stalled — common for a Wi-Fi camera busy pushing
+  video. Reads resume automatically when it recovers; nothing to do unless it
+  never recovers (then check the camera's Wi-Fi signal, or set a wired
+  `http_address`).
 - Cameras limit concurrent Baichuan clients; if the Reolink app is streaming
   `mainStream`, use `stream: "subStream"` or close the app.
 - **Choppy browser video on Firefox for main streams**: that's H.265 — use the sub

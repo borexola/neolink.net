@@ -629,40 +629,54 @@
                                 <span class="talk-overlay-label">@(_talkPhase == "live" ? "TALKING" : "CONNECTING…")</span>
                             </div>
                         }
-                        @if (_maxIndex == index && PtzSupported(slot.Camera))
+                        @if (_maxIndex == index && (PtzSupported(slot.Camera) || TalkSupported(slot.Camera)))
                         {
-                            @* On-video pan/tilt: collapsed to a translucent pill in the corner;
-                               opens into a compact pad. Pointer events stop here so holding an
-                               arrow never starts the tile's digital-zoom drag underneath. *@
-                            var ptzCam = slot.Camera!;
-                            <div class="ptz-overlay @(_ptzPadOpen ? "open" : "")"
+                            @* On-video camera rail: a quiet glass pill on the right edge,
+                               directly under the zoom HUD (same look, same edge — the two
+                               read as one column of controls). PTZ opens a compact
+                               hold-to-pan pad flying out to the LEFT of the rail; the mic
+                               starts/stops two-way talk. Pointer events stop here so
+                               holding an arrow never starts the digital-zoom drag. *@
+                            var railCam = slot.Camera!;
+                            <div class="cam-rail @(_ptzPadOpen || TalkActive(railCam) ? "open" : "")"
                                  @onclick:stopPropagation="true" @ondblclick:stopPropagation="true"
                                  @onpointerdown:stopPropagation="true" @onpointerup:stopPropagation="true">
-                                @if (_ptzPadOpen)
+                                @if (_ptzPadOpen && PtzSupported(slot.Camera))
                                 {
                                     <div class="ptz-overlay-pad">
                                         <button class="ptz-ov-up" title="Pan up (hold)"
-                                                @onpointerdown='() => PtzMoveAsync(ptzCam, "up")'
-                                                @onpointerup="() => PtzHoldStopAsync(ptzCam)"
-                                                @onpointerleave="() => PtzHoldStopAsync(ptzCam)">▲</button>
+                                                @onpointerdown='() => PtzMoveAsync(railCam, "up")'
+                                                @onpointerup="() => PtzHoldStopAsync(railCam)"
+                                                @onpointerleave="() => PtzHoldStopAsync(railCam)">▲</button>
                                         <button class="ptz-ov-left" title="Pan left (hold)"
-                                                @onpointerdown='() => PtzMoveAsync(ptzCam, "left")'
-                                                @onpointerup="() => PtzHoldStopAsync(ptzCam)"
-                                                @onpointerleave="() => PtzHoldStopAsync(ptzCam)">◀</button>
+                                                @onpointerdown='() => PtzMoveAsync(railCam, "left")'
+                                                @onpointerup="() => PtzHoldStopAsync(railCam)"
+                                                @onpointerleave="() => PtzHoldStopAsync(railCam)">◀</button>
                                         <button class="ptz-ov-stop" title="Stop"
-                                                @onclick="() => PtzHoldStopAsync(ptzCam)">■</button>
+                                                @onclick="() => PtzHoldStopAsync(railCam)">■</button>
                                         <button class="ptz-ov-right" title="Pan right (hold)"
-                                                @onpointerdown='() => PtzMoveAsync(ptzCam, "right")'
-                                                @onpointerup="() => PtzHoldStopAsync(ptzCam)"
-                                                @onpointerleave="() => PtzHoldStopAsync(ptzCam)">▶</button>
+                                                @onpointerdown='() => PtzMoveAsync(railCam, "right")'
+                                                @onpointerup="() => PtzHoldStopAsync(railCam)"
+                                                @onpointerleave="() => PtzHoldStopAsync(railCam)">▶</button>
                                         <button class="ptz-ov-down" title="Pan down (hold)"
-                                                @onpointerdown='() => PtzMoveAsync(ptzCam, "down")'
-                                                @onpointerup="() => PtzHoldStopAsync(ptzCam)"
-                                                @onpointerleave="() => PtzHoldStopAsync(ptzCam)">▼</button>
+                                                @onpointerdown='() => PtzMoveAsync(railCam, "down")'
+                                                @onpointerup="() => PtzHoldStopAsync(railCam)"
+                                                @onpointerleave="() => PtzHoldStopAsync(railCam)">▼</button>
                                     </div>
                                 }
-                                <button class="ptz-overlay-toggle" title="@(_ptzPadOpen ? "Hide pan/tilt controls" : "Pan / tilt the camera")"
-                                        @onclick="() => _ptzPadOpen = !_ptzPadOpen">PTZ</button>
+                                <div class="cam-rail-pill">
+                                    @if (PtzSupported(slot.Camera))
+                                    {
+                                        <button class="cam-rail-btn cam-rail-ptz @(_ptzPadOpen ? "rail-active" : "")"
+                                                title="@(_ptzPadOpen ? "Hide pan/tilt controls" : "Pan / tilt the camera")"
+                                                @onclick="() => _ptzPadOpen = !_ptzPadOpen">PTZ</button>
+                                    }
+                                    @if (TalkSupported(slot.Camera))
+                                    {
+                                        <button class="cam-rail-btn @TalkClass(railCam)" title="@TalkTitle(railCam)"
+                                                @onclick="() => ToggleTalkAsync(railCam)">@UiIcon.Render("mic", 14)</button>
+                                    }
+                                </div>
                             </div>
                         }
                         @if (_mode == "grid" && _maxIndex != index)

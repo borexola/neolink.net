@@ -17,7 +17,8 @@ public sealed class ReolinkApiException : Exception
 /// Minimal client for the documented Reolink HTTP API (POST /api.cgi with a JSON
 /// command array). Used only for what Baichuan cannot do: stream encode settings,
 /// the white-LED/spotlight, picture/ISP adjustments, speaker volume, Wi-Fi signal,
-/// PTZ presets, quick replies, AI auto-tracking and SD-card status.
+/// PTZ presets, quick replies, AI auto-tracking, detection sensitivity, OSD,
+/// firmware-update checks and the SD card (status, search, download).
 ///
 /// Sessions are token-based: cmd=Login yields a token with a lease time that every
 /// later call carries as a query parameter. The token is cached and renewed shortly
@@ -59,11 +60,17 @@ public sealed class ReolinkHttpApi : IDisposable
         _http = new HttpClient(handler) { Timeout = RequestTimeout };
     }
 
-    public void Dispose() => _http.Dispose();
+    public void Dispose() { _http.Dispose(); _httpLong?.Dispose(); }
 
     /// <summary>The channel this client addresses — for callers composing minimal
     /// write payloads ({"channel": n, "field": value}).</summary>
     public byte ChannelId => _channelId;
+
+    /// <summary>Whether the next call can ride the cached session token. False
+    /// means it pays for a LOGIN round-trip first — which on a Wi-Fi camera busy
+    /// pushing streams (dual-lens Duos especially) can take several seconds by
+    /// itself, so callers should budget accordingly.</summary>
+    public bool HasLiveToken => _token != null && DateTime.UtcNow < _tokenExpiry;
 
     /// <summary>Reads the current encode settings (per-stream resolution/framerate/bitrate).</summary>
     public async Task<JsonObject> GetEncAsync(CancellationToken ct)
@@ -280,9 +287,185 @@ public sealed class ReolinkHttpApi : IDisposable
         return value?["HddInfo"] as JsonArray ?? new JsonArray();
     }
 
+    /// <summary>Reads the motion-detection config. Newer firmwares answer GetMdAlarm
+    /// (sensitivity in newSens.sensDef, 0-50, higher = more sensitive); older ones
+    /// only know GetAlarm type "md" (per-slot sens list where the wire value is
+    /// INVERTED: 51 - sensitivity). <paramref name="isMdAlarm"/> tells the caller
+    /// which dialect came back so the write goes out the same way.</summary>
+    public async Task<(JsonObject Cfg, bool IsMdAlarm)> GetMdConfigAsync(CancellationToken ct)
+    {
+        try
+        {
+            var value = await ExecAsync("GetMdAlarm", new JsonObject { ["channel"] = _channelId }, ct).ConfigureAwait(false);
+            if (value?["MdAlarm"] is JsonObject md) return (md, true);
+        }
+        catch (ReolinkApiException)
+        {
+            // Old firmware: "not support"/"not exist" — fall through to GetAlarm.
+        }
+        var alarm = await ExecAsync("GetAlarm",
+            new JsonObject { ["Alarm"] = new JsonObject { ["channel"] = _channelId, ["type"] = "md" } },
+            ct).ConfigureAwait(false);
+        return (alarm?["Alarm"] as JsonObject
+            ?? throw new ReolinkApiException("GetAlarm reply carries no Alarm settings"), false);
+    }
+
+    /// <summary>Writes the motion-detection config; pass the (modified) object and
+    /// dialect flag from <see cref="GetMdConfigAsync"/>.</summary>
+    public Task SetMdConfigAsync(JsonObject cfg, bool isMdAlarm, CancellationToken ct) =>
+        isMdAlarm
+            ? ExecAsync("SetMdAlarm", new JsonObject { ["MdAlarm"] = cfg.DeepClone() }, ct)
+            : ExecAsync("SetAlarm", new JsonObject { ["Alarm"] = cfg.DeepClone() }, ct);
+
+    /// <summary>Reads one AI detection type's alarm config (sensitivity 0-100,
+    /// stay_time, target sizes). Types the firmware knows: "people", "vehicle",
+    /// "dog_cat", "face", "package" — unsupported ones are rejected (throws).</summary>
+    public async Task<JsonObject> GetAiAlarmAsync(string aiType, CancellationToken ct)
+    {
+        var value = await ExecAsync("GetAiAlarm",
+            new JsonObject { ["channel"] = _channelId, ["ai_type"] = aiType }, ct).ConfigureAwait(false);
+        return value?["AiAlarm"] as JsonObject
+            ?? throw new ReolinkApiException($"GetAiAlarm({aiType}) reply carries no AiAlarm settings");
+    }
+
+    /// <summary>Writes an AI alarm config; pass a (modified) object from <see cref="GetAiAlarmAsync"/>.</summary>
+    public Task SetAiAlarmAsync(JsonObject aiAlarm, CancellationToken ct) =>
+        ExecAsync("SetAiAlarm", new JsonObject { ["AiAlarm"] = aiAlarm.DeepClone() }, ct);
+
+    /// <summary>Reads the ISP config together with its RANGE table (action 1): the
+    /// range says which optional fields (hdr, binningMode, ...) this firmware
+    /// actually has and what values they accept.</summary>
+    public async Task<(JsonObject Isp, JsonObject? Range)> GetIspWithRangeAsync(CancellationToken ct)
+    {
+        var (value, range) = await ExecRangeAsync("GetIsp", new JsonObject { ["channel"] = _channelId }, ct).ConfigureAwait(false);
+        return (value?["Isp"] as JsonObject
+            ?? throw new ReolinkApiException("GetIsp reply carries no Isp settings"),
+            range?["Isp"] as JsonObject);
+    }
+
+    /// <summary>Reads the on-screen-display config (camera-name / timestamp overlay
+    /// visibility + position, watermark) with its range (position option lists).</summary>
+    public async Task<(JsonObject Osd, JsonObject? Range)> GetOsdAsync(CancellationToken ct)
+    {
+        var (value, range) = await ExecRangeAsync("GetOsd", new JsonObject { ["channel"] = _channelId }, ct).ConfigureAwait(false);
+        return (value?["Osd"] as JsonObject
+            ?? throw new ReolinkApiException("GetOsd reply carries no Osd settings"),
+            range?["Osd"] as JsonObject);
+    }
+
+    /// <summary>Writes the OSD config; pass a (modified) object from <see cref="GetOsdAsync"/>.</summary>
+    public Task SetOsdAsync(JsonObject osd, CancellationToken ct) =>
+        ExecAsync("SetOsd", new JsonObject { ["Osd"] = osd.DeepClone() }, ct);
+
+    /// <summary>Asks the camera whether newer firmware is available online (read-only;
+    /// never installs anything). The reply is firmware-shaped: 0/"" = up to date,
+    /// 1 = update available, or an info object naming the new version.</summary>
+    public async Task<JsonNode?> CheckFirmwareAsync(CancellationToken ct)
+    {
+        var value = await ExecAsync("CheckFirmware", new JsonObject(), ct).ConfigureAwait(false);
+        return value?["newFirmware"];
+    }
+
+    // ------------------------------------------------------------------ SD-card recordings
+
+    /// <summary>Searches the camera's SD card. With <paramref name="onlyStatus"/> the
+    /// reply is a per-month calendar (Status[].table, one digit per day); without it,
+    /// the File[] list for the window (max ~2000 entries per call — keep windows to
+    /// a day). Times are camera-local. The FILE search walks the card's file table —
+    /// on a busy day that alone can take longer than the 10s command cap, so it runs
+    /// on the uncapped client and only the caller's token bounds it.</summary>
+    public async Task<JsonObject> SearchAsync(string streamType, DateTime start, DateTime end,
+        bool onlyStatus, CancellationToken ct)
+    {
+        var value = (await ExecCoreAsync("Search", new JsonObject
+        {
+            ["Search"] = new JsonObject
+            {
+                ["channel"] = _channelId,
+                ["onlyStatus"] = onlyStatus ? 1 : 0,
+                ["streamType"] = streamType,
+                ["StartTime"] = TimeObject(start),
+                ["EndTime"] = TimeObject(end),
+            },
+        }, action: 0, ct, longRunning: !onlyStatus).ConfigureAwait(false)).Value;
+        return value?["SearchResult"] as JsonObject
+            ?? throw new ReolinkApiException("Search reply carries no SearchResult");
+    }
+
+    private static JsonObject TimeObject(DateTime t) => new()
+    {
+        ["year"] = t.Year, ["mon"] = t.Month, ["day"] = t.Day,
+        ["hour"] = t.Hour, ["min"] = t.Minute, ["sec"] = t.Second,
+    };
+
+    /// <summary>An open download of one SD-card recording; dispose to drop the connection.</summary>
+    public sealed class SdDownload : IDisposable
+    {
+        private readonly HttpResponseMessage _response;
+        internal SdDownload(HttpResponseMessage response, Stream stream)
+        { _response = response; Stream = stream; }
+        public Stream Stream { get; }
+        public long? Length => _response.Content.Headers.ContentLength;
+        public void Dispose() { Stream.Dispose(); _response.Dispose(); }
+    }
+
+    /// <summary>Streams one recording file off the SD card (cmd=Download). The name
+    /// comes from <see cref="SearchAsync"/> File entries. Runs on a connection with
+    /// no overall timeout — a full clip takes minutes over Wi-Fi — so the caller's
+    /// token governs its lifetime; only the token handshake holds the command gate.</summary>
+    public async Task<SdDownload> DownloadAsync(string fileName, CancellationToken ct)
+    {
+        // Ensure a live token under the gate, then stream outside it: holding the
+        // gate for a minutes-long transfer would freeze every other API call.
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            if (_token == null || DateTime.UtcNow >= _tokenExpiry)
+                await LoginAsync(ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        var url = $"{_apiUrl}?cmd=Download&source={Uri.EscapeDataString(fileName)}" +
+                  $"&output={Uri.EscapeDataString(fileName)}&token={Uri.EscapeDataString(_token!)}";
+        var res = await LongHttp().GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+        try
+        {
+            if (!res.IsSuccessStatusCode)
+                throw new ReolinkApiException($"camera HTTP API returned HTTP {(int)res.StatusCode} for Download");
+            // Errors (bad name, stale token) come back as a small JSON body.
+            var mediaType = res.Content.Headers.ContentType?.MediaType ?? "";
+            if (mediaType.Contains("json", StringComparison.OrdinalIgnoreCase))
+            {
+                var text = await res.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                throw new ReolinkApiException($"camera refused the download: {Truncate(text, 200)}");
+            }
+            var stream = await res.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+            return new SdDownload(res, stream);
+        }
+        catch
+        {
+            res.Dispose();
+            throw;
+        }
+    }
+
+    private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max] + "…";
+
     // ------------------------------------------------------------------ plumbing
 
-    private async Task<JsonNode?> ExecAsync(string cmd, JsonObject param, CancellationToken ct)
+    private async Task<JsonNode?> ExecAsync(string cmd, JsonObject param, CancellationToken ct) =>
+        (await ExecCoreAsync(cmd, param, action: 0, ct).ConfigureAwait(false)).Value;
+
+    /// <summary>As <see cref="ExecAsync"/> with action 1: the camera includes its
+    /// RANGE table (valid values / min-max per field) alongside the current value.</summary>
+    private Task<(JsonNode? Value, JsonNode? Range)> ExecRangeAsync(string cmd, JsonObject param, CancellationToken ct) =>
+        ExecCoreAsync(cmd, param, action: 1, ct);
+
+    private async Task<(JsonNode? Value, JsonNode? Range)> ExecCoreAsync(string cmd, JsonObject param, int action,
+        CancellationToken ct, bool longRunning = false)
     {
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
@@ -293,9 +476,9 @@ public sealed class ReolinkHttpApi : IDisposable
                     await LoginAsync(ct).ConfigureAwait(false);
 
                 var reply = await PostAsync($"{_apiUrl}?cmd={cmd}&token={Uri.EscapeDataString(_token!)}",
-                    cmd, param.DeepClone(), ct).ConfigureAwait(false);
+                    cmd, param.DeepClone(), ct, action, longRunning).ConfigureAwait(false);
                 if (reply.Code == 0)
-                    return reply.Value;
+                    return (reply.Value, reply.Range);
 
                 // -6: token invalid/expired despite the lease (camera rebooted, session
                 // table flushed) — log in again and retry the command once.
@@ -312,6 +495,19 @@ public sealed class ReolinkHttpApi : IDisposable
         {
             _gate.Release();
         }
+    }
+
+    private HttpClient? _httpLong;
+
+    /// <summary>Lazy second client sharing nothing with the 10-second command client:
+    /// SD-card downloads run for minutes and are paced by the caller's token.</summary>
+    private HttpClient LongHttp()
+    {
+        if (_httpLong != null) return _httpLong;
+        var handler = new HttpClientHandler();
+        if (_apiUrl.StartsWith("https:", StringComparison.OrdinalIgnoreCase))
+            handler.ServerCertificateCustomValidationCallback = (_, _, _, _) => true;
+        return _httpLong = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
     }
 
     private async Task LoginAsync(CancellationToken ct)
@@ -346,7 +542,7 @@ public sealed class ReolinkHttpApi : IDisposable
         return PostAsync($"{_apiUrl}?cmd=Login", "Login", new JsonObject { ["User"] = user }, ct);
     }
 
-    private sealed record Reply(int Code, int RspCode, string? Detail, JsonNode? Value);
+    private sealed record Reply(int Code, int RspCode, string? Detail, JsonNode? Value, JsonNode? Range);
 
     /// <summary>Wire serialization for the camera. The default encoder escapes
     /// HTML-sensitive characters — dayNight "Black&amp;White" would go out with a
@@ -357,12 +553,13 @@ public sealed class ReolinkHttpApi : IDisposable
         Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
 
-    private async Task<Reply> PostAsync(string url, string cmd, JsonNode param, CancellationToken ct)
+    private async Task<Reply> PostAsync(string url, string cmd, JsonNode param, CancellationToken ct,
+        int action = 0, bool longRunning = false)
     {
         var body = new JsonArray(new JsonObject
         {
             ["cmd"] = cmd,
-            ["action"] = 0,
+            ["action"] = action,
             ["param"] = param,
         });
         using var content = new StringContent(body.ToJsonString(WireJson), Encoding.UTF8, "application/json");
@@ -370,7 +567,9 @@ public sealed class ReolinkHttpApi : IDisposable
         HttpResponseMessage res;
         try
         {
-            res = await _http.PostAsync(url, content, ct).ConfigureAwait(false);
+            // Long-running commands (SD file searches) escape the 10s command
+            // cap; the caller's cancellation token is their only bound.
+            res = await (longRunning ? LongHttp() : _http).PostAsync(url, content, ct).ConfigureAwait(false);
         }
         catch (HttpRequestException ex)
         {
@@ -407,7 +606,8 @@ public sealed class ReolinkHttpApi : IDisposable
                 Code: (int?)obj["code"] ?? -1,
                 RspCode: (int?)error?["rspCode"] ?? 0,
                 Detail: (string?)error?["detail"],
-                Value: obj["value"]);
+                Value: obj["value"],
+                Range: obj["range"]);
         }
     }
 }

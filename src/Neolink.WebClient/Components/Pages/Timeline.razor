@@ -405,7 +405,11 @@
             @foreach (var cam in Included)
             {
                 bool focused = FocusActive && IsFocus(cam.Name);
-                <div class="tl-tile @(focused ? "tl-tile-focus" : "") @(FocusActive && !focused ? "tl-tile-rail" : "")"
+                @* zoom-on: every visible monitor gets the same digital zoom as the
+                   live views — wheel at the cursor, drag to pan while zoomed, and
+                   the side HUD (its clicks stop propagation, so zooming never
+                   toggles the studio focus; a pan-drag swallows its click too). *@
+                <div class="tl-tile zoom-on @(focused ? "tl-tile-focus" : "") @(FocusActive && !focused ? "tl-tile-rail" : "")"
                      style="@TileStyle(cam.Name)"
                      title="@(_studio ? (focused ? "Click to show all monitors again" : "Click to focus this monitor") : null)"
                      @onclick="() => ToggleFocus(cam.Name)" @key="cam.Name">
@@ -419,6 +423,7 @@
                             @onclick="() => SnapshotAsync(cam.Name)" @onclick:stopPropagation="true">
                         @UiIcon.Render("camera", 14)
                     </button>
+                    @ZoomHud
                 </div>
             }
             @if (FocusActive && Included.Count() > 1)
@@ -657,10 +662,22 @@
     /// <summary>Only explicitly selected cameras load footage — scrubbing all cams at once is expensive.</summary>
     private IEnumerable<ApiCamera> Included => _cameras.Where(c => _included.Contains(c.Name));
 
+    // Digital-zoom HUD, identical to the live view's: JS (neolink.zoomInit) owns
+    // the clicks and the badge — Blazor only renders the shell once per monitor.
+    private RenderFragment ZoomHud => @<div class="zoom-hud" @onclick:stopPropagation="true" @ondblclick:stopPropagation="true">
+        <button type="button" class="icon-btn zoom-btn" data-zoom="in" title="Zoom in (or mouse-wheel up on the video)">＋</button>
+        <span class="zoom-badge" data-zoom-badge>100%</span>
+        <button type="button" class="icon-btn zoom-btn" data-zoom="out" title="Zoom out (or mouse-wheel down)">−</button>
+        <button type="button" class="icon-btn zoom-btn zoom-reset" data-zoom="reset" title="Restore 1:1 (or double-click the video)">1:1</button>
+    </div>;
+
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
         {
+            // The zoom engine is page-global and idempotent; a direct /timeline
+            // load must arm it itself (the live view isn't necessarily visited first).
+            try { await JS.InvokeVoidAsync("neolink.zoomInit"); } catch { }
             // Server + credentials are shared with the live view's persisted settings.
             try
             {

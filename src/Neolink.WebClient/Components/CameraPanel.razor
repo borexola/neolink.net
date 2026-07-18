@@ -76,6 +76,13 @@
                     <span class="devbar-item"><span class="devbar-k">SD card</span>@SdLabel(card)</span>
                 }
             }
+            @if (_firmware is { UpdateAvailable: true } fw)
+            {
+                <span class="devbar-item devbar-model"
+                      title="Reolink offers a newer firmware for this camera. Update it from the Reolink app or the camera's own web page — Neolink.NET never installs firmware.">
+                    <span class="devbar-k">Update</span>@(fw.NewVersion ?? "available")
+                </span>
+            }
         </div>
         }
 
@@ -434,6 +441,28 @@
                         </select>
                     </div>
                 }
+                @if (img.Hdr is { } hdrCur)
+                {
+                    <div class="control-row">
+                        <span>HDR <span class="beta-tag">BETA</span> @PendingMark(_pendingHdr?.ToString())</span>
+                        <select class="@(_pendingHdr != null ? "input-pending" : "")"
+                                value="@(_pendingHdr ?? hdrCur)"
+                                disabled="@_applying" @onchange="e => StageHdr(int.Parse((string)e.Value!))">
+                            <option value="0">off</option>
+                            @* The camera's range table says whether HDR is a plain
+                               on/off or the newer off/low/high three-step. *@
+                            @if ((img.HdrMax ?? 1) >= 2)
+                            {
+                                <option value="1">low</option>
+                                <option value="2">high</option>
+                            }
+                            else
+                            {
+                                <option value="1">on</option>
+                            }
+                        </select>
+                    </div>
+                }
                 @if (img.Flip is { } flipCur)
                 {
                     var shownFlip = _pendingFlip ?? flipCur;
@@ -487,6 +516,103 @@
                         @((_pendingAutoTrack ?? track) ? "on" : "off")
                     </button>
                 </div>
+            </div>
+        }
+
+        @if (_http?.MdSensitivity != null || _http?.AiSensitivities is { Count: > 0 })
+        {
+            <div class="campanel-section">
+                <div class="campanel-section-title">@UiIcon.Render("bolt", 13) DETECTION SENSITIVITY <span class="beta-tag">BETA</span></div>
+                @if (_http?.MdSensitivity is { } mdSens)
+                {
+                    <div class="control-row">
+                        <span>Motion @PendingMark(_pendingMdSens?.ToString())</span>
+                        <input class="zf-slider @(_pendingMdSens != null ? "input-pending" : "")"
+                               type="range" min="1" max="50" step="1"
+                               disabled="@_applying" value="@(_pendingMdSens ?? mdSens)"
+                               @oninput="e => StageMdSens(long.Parse((string)e.Value!))" />
+                        <span class="zf-pos">@(_pendingMdSens ?? mdSens)/50</span>
+                    </div>
+                }
+                @foreach (var ai in _http?.AiSensitivities ?? new List<ApiAiSensitivity>())
+                {
+                    var type = ai.Type;
+                    long? aiPending = _pendingAiSens.TryGetValue(type, out var pv) ? pv : null;
+                    <div class="control-row">
+                        <span>@ai.Label @PendingMark(aiPending?.ToString())</span>
+                        <input class="zf-slider @(aiPending != null ? "input-pending" : "")"
+                               type="range" min="0" max="100" step="1"
+                               disabled="@_applying" value="@(aiPending ?? ai.Sensitivity)"
+                               @oninput="e => StageAiSens(type, long.Parse((string)e.Value!))" />
+                        <span class="zf-pos">@(aiPending ?? ai.Sensitivity)/100</span>
+                    </div>
+                }
+                <div class="notice small">
+                    Higher = more sensitive (more alerts). These tune the <b>camera's own</b>
+                    detection thresholds — they affect its app notifications and this server's
+                    event recording alike.
+                </div>
+            </div>
+        }
+
+        @if (_http?.Osd is { } osd)
+        {
+            var posOptions = osd.PosOptions ?? new List<string>();
+            <div class="campanel-section">
+                <div class="campanel-section-title">@UiIcon.Render("logs", 13) ON-SCREEN DISPLAY <span class="beta-tag">BETA</span></div>
+                <div class="control-row">
+                    <span>Camera name overlay @PendingMark(_pendingOsdName?.ToString())</span>
+                    <button class="chip @((_pendingOsdName ?? osd.ShowName) ? "" : "chip-off") @(_pendingOsdName != null ? "chip-pending" : "")"
+                            disabled="@_applying" @onclick="StageOsdNameToggle">
+                        @((_pendingOsdName ?? osd.ShowName) ? "on" : "off")
+                    </button>
+                </div>
+                @if ((_pendingOsdName ?? osd.ShowName) && posOptions.Count > 0)
+                {
+                    <div class="control-row">
+                        <span>Name position @PendingMark(_pendingOsdNamePos)</span>
+                        <select class="@(_pendingOsdNamePos != null ? "input-pending" : "")"
+                                value="@(_pendingOsdNamePos ?? osd.NamePos ?? posOptions[0])"
+                                disabled="@_applying" @onchange='e => StageOsdNamePos((string?)e.Value)'>
+                            @foreach (var pos in PosChoices(posOptions, osd.NamePos))
+                            {
+                                <option value="@pos">@pos.ToLowerInvariant()</option>
+                            }
+                        </select>
+                    </div>
+                }
+                <div class="control-row">
+                    <span>Timestamp overlay @PendingMark(_pendingOsdTime?.ToString())</span>
+                    <button class="chip @((_pendingOsdTime ?? osd.ShowTime) ? "" : "chip-off") @(_pendingOsdTime != null ? "chip-pending" : "")"
+                            disabled="@_applying" @onclick="StageOsdTimeToggle">
+                        @((_pendingOsdTime ?? osd.ShowTime) ? "on" : "off")
+                    </button>
+                </div>
+                @if ((_pendingOsdTime ?? osd.ShowTime) && posOptions.Count > 0)
+                {
+                    <div class="control-row">
+                        <span>Timestamp position @PendingMark(_pendingOsdTimePos)</span>
+                        <select class="@(_pendingOsdTimePos != null ? "input-pending" : "")"
+                                value="@(_pendingOsdTimePos ?? osd.TimePos ?? posOptions[0])"
+                                disabled="@_applying" @onchange='e => StageOsdTimePos((string?)e.Value)'>
+                            @foreach (var pos in PosChoices(posOptions, osd.TimePos))
+                            {
+                                <option value="@pos">@pos.ToLowerInvariant()</option>
+                            }
+                        </select>
+                    </div>
+                }
+                @if (osd.Watermark is { } wmCur)
+                {
+                    <div class="control-row">
+                        <span>Reolink watermark @PendingMark(_pendingOsdWatermark?.ToString())</span>
+                        <button class="chip @((_pendingOsdWatermark ?? wmCur) ? "" : "chip-off") @(_pendingOsdWatermark != null ? "chip-pending" : "")"
+                                disabled="@_applying" @onclick="StageOsdWatermarkToggle">
+                            @((_pendingOsdWatermark ?? wmCur) ? "on" : "off")
+                        </button>
+                    </div>
+                }
+                <div class="notice small">Burned into the video by the camera itself — it shows in live view and every recording, here and elsewhere.</div>
             </div>
         }
 
@@ -922,6 +1048,8 @@
     private ApiFloodlight? _floodlight;
     private ApiWhiteLed? _whiteLed;
     private ApiHttpFeatures? _http;
+    /// <summary>Read-only firmware-update verdict; null = not checkable.</summary>
+    private ApiFirmware? _firmware;
     /// <summary>The camera API's black-and-white day/night value ("Black&amp;White").</summary>
     private const string DayNightBw = "Black&White";
     /// <summary>Panel tab: "controls" (device) or "recording" (server-side).</summary>
@@ -995,6 +1123,12 @@
     private bool? _pendingAutoTrack;
     private long? _pendingIrBright;      // LedState IRLedBrightness (0-100)
     private string? _pendingDoorbellLed; // LedState doorbellLightState
+    private int? _pendingHdr;            // ISP hdr (0 = off, up to hdrMax)
+    private long? _pendingMdSens;        // motion sensitivity (1-50)
+    /// <summary>Per-AI-type staged sensitivities; a key present = staged.</summary>
+    private readonly Dictionary<string, long> _pendingAiSens = new(StringComparer.Ordinal);
+    private bool? _pendingOsdName, _pendingOsdTime, _pendingOsdWatermark;
+    private string? _pendingOsdNamePos, _pendingOsdTimePos;
     private string _newPresetName = "";
     private bool _presetBusy;
     private int _quickReplyId;
@@ -1012,7 +1146,12 @@
         + (_pendingDayNight != null ? 1 : 0) + (_pendingAntiFlicker != null ? 1 : 0)
         + (_pendingFlip != null ? 1 : 0) + (_pendingMirror != null ? 1 : 0)
         + (_pendingVolume != null ? 1 : 0) + (_pendingAutoTrack != null ? 1 : 0)
-        + (_pendingIrBright != null ? 1 : 0) + (_pendingDoorbellLed != null ? 1 : 0);
+        + (_pendingIrBright != null ? 1 : 0) + (_pendingDoorbellLed != null ? 1 : 0)
+        + (_pendingHdr != null ? 1 : 0) + (_pendingMdSens != null ? 1 : 0)
+        + _pendingAiSens.Count
+        + (_pendingOsdName != null ? 1 : 0) + (_pendingOsdTime != null ? 1 : 0)
+        + (_pendingOsdWatermark != null ? 1 : 0)
+        + (_pendingOsdNamePos != null ? 1 : 0) + (_pendingOsdTimePos != null ? 1 : 0);
 
     /// <summary>Any staged change that interrupts the device when applied.
     /// Flip/mirror make the camera restart its video pipeline, like a profile write.</summary>
@@ -1169,6 +1308,49 @@
 
     private void StageIrBright(long v) => _pendingIrBright = v == Num(_led, "IRLedBrightness") ? null : v;
 
+    private void StageHdr(int v) => _pendingHdr = v == _http?.Image?.Hdr ? null : v;
+
+    private void StageMdSens(long v) => _pendingMdSens = v == _http?.MdSensitivity ? null : v;
+
+    private void StageAiSens(string type, long v)
+    {
+        var cur = _http?.AiSensitivities?.FirstOrDefault(a => a.Type == type)?.Sensitivity;
+        if (v == cur) _pendingAiSens.Remove(type);
+        else _pendingAiSens[type] = v;
+    }
+
+    private void StageOsdNameToggle()
+    {
+        var cur = _http?.Osd?.ShowName ?? false;
+        var target = !(_pendingOsdName ?? cur);
+        _pendingOsdName = target == cur ? null : target;
+    }
+
+    private void StageOsdTimeToggle()
+    {
+        var cur = _http?.Osd?.ShowTime ?? false;
+        var target = !(_pendingOsdTime ?? cur);
+        _pendingOsdTime = target == cur ? null : target;
+    }
+
+    private void StageOsdWatermarkToggle()
+    {
+        var cur = _http?.Osd?.Watermark ?? false;
+        var target = !(_pendingOsdWatermark ?? cur);
+        _pendingOsdWatermark = target == cur ? null : target;
+    }
+
+    private void StageOsdNamePos(string? v) =>
+        _pendingOsdNamePos = v == null || v == _http?.Osd?.NamePos ? null : v;
+
+    private void StageOsdTimePos(string? v) =>
+        _pendingOsdTimePos = v == null || v == _http?.Osd?.TimePos ? null : v;
+
+    /// <summary>The firmware's position list, with the camera's current value kept
+    /// selectable even when the range table didn't include it.</summary>
+    private static IEnumerable<string> PosChoices(List<string> options, string? current) =>
+        current == null || options.Contains(current) ? options : options.Append(current);
+
     private void StageDoorbellLedToggle()
     {
         var cur = Str(_led, "doorbellLightState");
@@ -1216,6 +1398,11 @@
         _pendingAutoTrack = null;
         _pendingIrBright = null;
         _pendingDoorbellLed = null;
+        _pendingHdr = null;
+        _pendingMdSens = null;
+        _pendingAiSens.Clear();
+        _pendingOsdName = _pendingOsdTime = _pendingOsdWatermark = null;
+        _pendingOsdNamePos = _pendingOsdTimePos = null;
     }
 
     /// <summary>Sends the staged changes one at a time (the camera answers control
@@ -1291,6 +1478,38 @@
                 _pendingFlip = _pendingMirror = null;
                 applied.Add("picture");
             }
+            if (_pendingHdr is { } hdr && await PostAsync("hdr", new { value = hdr }))
+            {
+                _pendingHdr = null;
+                applied.Add("HDR");
+            }
+            if (_pendingMdSens is { } mds && await PostAsync("mdsensitivity", new { sensitivity = mds }))
+            {
+                _pendingMdSens = null;
+                applied.Add("motion sensitivity");
+            }
+            foreach (var (aiType, aiVal) in _pendingAiSens.ToList())
+            {
+                if (!await PostAsync("aisensitivity", new { type = aiType, sensitivity = aiVal }))
+                    break; // whatever failed stays staged for retry
+                _pendingAiSens.Remove(aiType);
+                applied.Add($"{aiType} sensitivity");
+            }
+            if ((_pendingOsdName != null || _pendingOsdTime != null || _pendingOsdWatermark != null
+                 || _pendingOsdNamePos != null || _pendingOsdTimePos != null)
+                && await PostAsync("osd", new
+                {
+                    showName = _pendingOsdName,
+                    namePos = _pendingOsdNamePos,
+                    showTime = _pendingOsdTime,
+                    timePos = _pendingOsdTimePos,
+                    watermark = _pendingOsdWatermark,
+                }))
+            {
+                _pendingOsdName = _pendingOsdTime = _pendingOsdWatermark = null;
+                _pendingOsdNamePos = _pendingOsdTimePos = null;
+                applied.Add("on-screen display");
+            }
             if (_pendingVolume is { } pv && await PostAsync("volume", new { volume = pv }))
             {
                 _pendingVolume = null;
@@ -1333,13 +1552,32 @@
             if (_caps?.Features?.Floodlight == true) _floodlight = await GetAsync<ApiFloodlight?>("floodlight");
             if (_caps?.Features?.WhiteLed == true) _whiteLed = await GetAsync<ApiWhiteLed?>("whiteled");
             if (_caps?.Features?.StreamSettings == true) _encCurrent = await GetAsync<List<ApiStreamEnc>?>("settings/stream");
-            if (_http != null) _http = await GetAsync<ApiHttpFeatures?>("httpfeatures") ?? _http;
+            if (_http != null && await GetAsync<ApiHttpFeatures?>("httpfeatures") is { } freshHttp)
+                _http = MergeHttp(freshHttp, _http);
         }
         finally
         {
             _applying = false;
         }
     }
+
+    /// <summary>Post-apply refresh guard: a camera busy applying a write (an OSD
+    /// change re-renders the burned-in overlays; flip/mirror restarts the video
+    /// pipeline) can time out parts of the combined httpfeatures re-read, which
+    /// then reports those features as ABSENT — and their panel sections vanish
+    /// right after a successful apply, looking like the feature broke. Any member
+    /// the fresh read couldn't get keeps its previous reading instead.</summary>
+    private static ApiHttpFeatures MergeHttp(ApiHttpFeatures fresh, ApiHttpFeatures old) => new(
+        fresh.Image ?? old.Image,
+        fresh.Volume ?? old.Volume,
+        fresh.WifiSignal ?? old.WifiSignal,
+        fresh.PtzPresets ?? old.PtzPresets,
+        fresh.QuickReplies ?? old.QuickReplies,
+        fresh.AutoTrack ?? old.AutoTrack,
+        fresh.SdCards ?? old.SdCards,
+        fresh.MdSensitivity ?? old.MdSensitivity,
+        fresh.AiSensitivities ?? old.AiSensitivities,
+        fresh.Osd ?? old.Osd);
 
     protected override async Task OnParametersSetAsync()
     {
@@ -1361,6 +1599,7 @@
         _floodlight = null;
         _whiteLed = null;
         _http = null;
+        _firmware = null;
         _encCurrent = null;
         _zoomShown = _focusShown = null;
         _sirenOn = _privacyOn = null;
@@ -1420,6 +1659,8 @@
             {
                 _http = await GetAsync<ApiHttpFeatures?>("httpfeatures");
                 _quickReplyId = _http?.QuickReplies?.FirstOrDefault()?.Id ?? 0;
+                // The (server-cached) firmware-update check — display-only.
+                _firmware = await GetAsync<ApiFirmware?>("firmware");
             }
         }
         _loading = false;
@@ -1784,7 +2025,8 @@
             {
                 _newPresetName = "";
                 ShowToast($"Saved this position as \"{name}\".");
-                _http = await GetAsync<ApiHttpFeatures?>("httpfeatures") ?? _http;
+                if (_http != null && await GetAsync<ApiHttpFeatures?>("httpfeatures") is { } freshHttp)
+                    _http = MergeHttp(freshHttp, _http);
             }
         }
         finally

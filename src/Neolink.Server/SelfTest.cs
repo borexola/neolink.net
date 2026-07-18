@@ -1750,6 +1750,108 @@ public static class SelfTest
                 "antiFlicker Off parses through untouched");
         });
 
+        Test("HTTP extras: detection sensitivity, HDR, OSD, firmware, SD search parsing", () =>
+        {
+            static System.Text.Json.Nodes.JsonObject Obj(string json) =>
+                (System.Text.Json.Nodes.JsonObject)System.Text.Json.Nodes.JsonNode.Parse(json)!;
+            static System.Text.Json.Nodes.JsonNode Val(string json) =>
+                System.Text.Json.Nodes.JsonNode.Parse(json)!;
+
+            // Motion sensitivity, new dialect (MdAlarm + useNewSens): sensDef is the
+            // user-facing value, 0-50, higher = more sensitive.
+            var mdNew = Obj("""
+                {"channel":0,"useNewSens":1,"newSens":{"sensDef":34,"sens":[
+                    {"beginHour":0,"endHour":23,"sensitivity":34}]}}
+                """);
+            AssertEq(Streaming.CameraControl.MdSensitivityValue(mdNew, isMdAlarm: true), 34);
+            // Old dialect (GetAlarm sens tables): the WIRE value is inverted —
+            // 1 = most sensitive — so user 30 is wire 21 and back.
+            var mdOld = Obj("""{"channel":0,"type":"md","sens":[{"id":0,"sensitivity":21}]}""");
+            AssertEq(Streaming.CameraControl.MdSensitivityValue(mdOld, isMdAlarm: false), 30);
+            Assert(Streaming.CameraControl.MdSensitivityValue(Obj("""{"channel":0}"""), false) == null,
+                "no sens table -> feature absent");
+
+            // Writes flow back in the same dialect, all time slots following along.
+            Assert(Streaming.CameraControl.ApplyMdSensitivity(mdNew, true, 40), "new-dialect write accepted");
+            AssertEq((int?)mdNew["newSens"]?["sensDef"], 40);
+            AssertEq((int?)((System.Text.Json.Nodes.JsonArray)mdNew["newSens"]!["sens"]!)[0]!["sensitivity"], 40);
+            Assert(Streaming.CameraControl.ApplyMdSensitivity(mdOld, false, 40), "old-dialect write accepted");
+            AssertEq((int?)((System.Text.Json.Nodes.JsonArray)mdOld["sens"]!)[0]!["sensitivity"], 11); // 51 - 40
+            Assert(!Streaming.CameraControl.ApplyMdSensitivity(Obj("""{"channel":0}"""), false, 25),
+                "no table -> write refused");
+
+            // AI sensitivity: plain field; missing sensitivity = type unsupported.
+            var ai = Streaming.CameraControl.ParseAiSensitivity("people", Obj(
+                """{"channel":0,"ai_type":"people","sensitivity":85,"stay_time":2}"""));
+            Assert(ai is { Type: "people", Sensitivity: 85, StayTime: 2 }, "AI alarm parsed");
+            Assert(Streaming.CameraControl.ParseAiSensitivity("vehicle", Obj("""{"channel":0}""")) == null,
+                "no sensitivity -> null");
+
+            // HDR range: {"min","max"} object on most firmwares, option array on some.
+            AssertEq(Streaming.CameraControl.HdrRangeMax(Obj("""{"hdr":{"min":0,"max":2}}""")), 2);
+            AssertEq(Streaming.CameraControl.HdrRangeMax(Obj("""{"hdr":[0,1]}""")), 1);
+            Assert(Streaming.CameraControl.HdrRangeMax(Obj("""{"bright":{"min":0,"max":255}}""")) == null,
+                "no hdr in range -> null");
+            var ispHdr = Obj("""{"dayNight":"Auto","hdr":2}""");
+            var imgHdr = Obj("""{"bright":128}""");
+            var withHdr = Streaming.CameraControl.ParseImageSettings(imgHdr, ispHdr,
+                Obj("""{"hdr":{"min":0,"max":2}}"""));
+            Assert(withHdr is { Hdr: 2, HdrMax: 2 }, "hdr value + range parsed");
+            Assert(Streaming.CameraControl.ParseImageSettings(imgHdr, Obj("""{"dayNight":"Auto"}""")).Hdr == null,
+                "no hdr field -> null");
+
+            // OSD: both overlays + watermark, position options from the range table.
+            var osd = Streaming.CameraControl.ParseOsd(Obj("""
+                {"channel":0,"osdChannel":{"enable":1,"name":"Porch","pos":"Lower Right"},
+                 "osdTime":{"enable":0,"pos":"Top Center"},"watermark":1}
+                """), Obj("""
+                {"osdChannel":{"pos":["Upper Left","Top Center","Lower Right"]}}
+                """));
+            Assert(osd is { ShowName: true, Name: "Porch", NamePos: "Lower Right", ShowTime: false, Watermark: true },
+                "OSD parsed");
+            Assert(osd.PosOptions.SequenceEqual(new[] { "Upper Left", "Top Center", "Lower Right" }),
+                "position options from range");
+            Assert(Streaming.CameraControl.ParseOsd(Obj("""{"channel":0,"osdTime":{"enable":1}}"""), null)
+                is { ShowName: false, Watermark: null }, "partial OSD tolerated");
+
+            // CheckFirmware: 0/1, version string, or an info object — all firmware-real.
+            Assert(Streaming.CameraControl.ParseFirmware(null) == null, "no field -> unknown");
+            AssertEq(Streaming.CameraControl.ParseFirmware(Val("0")), new Streaming.FirmwareStatus(false, null));
+            AssertEq(Streaming.CameraControl.ParseFirmware(Val("1")), new Streaming.FirmwareStatus(true, null));
+            AssertEq(Streaming.CameraControl.ParseFirmware(Val("\"v3.0.0.4348\"")),
+                new Streaming.FirmwareStatus(true, "v3.0.0.4348"));
+            AssertEq(Streaming.CameraControl.ParseFirmware(Obj("""{"firmVer":"v3.1.0.5000"}""")),
+                new Streaming.FirmwareStatus(true, "v3.1.0.5000"));
+
+            // SD search calendar: one digit per day, '1' = recordings that day.
+            var cal = Streaming.CameraControl.ParseSdCalendar(Obj("""
+                {"channel":0,"Status":[{"year":2026,"mon":7,"table":"0110000000000000010000000000000"}]}
+                """), 2026, 7);
+            Assert(cal.SequenceEqual(new[] { 2, 3, 18 }), "calendar days decoded");
+            Assert(Streaming.CameraControl.ParseSdCalendar(Obj("""{"channel":0}"""), 2026, 7).Count == 0,
+                "no Status -> empty");
+
+            // SD file list: named entries only, camera-local times, sorted by start.
+            var recs = Streaming.CameraControl.ParseSdRecordings(Obj("""
+                {"channel":0,"File":[
+                  {"StartTime":{"year":2026,"mon":7,"day":18,"hour":14,"min":30,"sec":0},
+                   "EndTime":{"year":2026,"mon":7,"day":18,"hour":14,"min":31,"sec":30},
+                   "frameRate":30,"height":1440,"width":2560,
+                   "name":"Rec_20260718_143000.mp4","size":52428800,"type":"main"},
+                  {"StartTime":{"year":2026,"mon":7,"day":18,"hour":9,"min":0,"sec":5},
+                   "EndTime":{"year":2026,"mon":7,"day":18,"hour":9,"min":1,"sec":5},
+                   "name":"Rec_20260718_090005.mp4","size":1048576,"type":"main"},
+                  {"StartTime":{"year":2026,"mon":7,"day":18,"hour":1,"min":0,"sec":0},
+                   "EndTime":{"year":2026,"mon":7,"day":18,"hour":1,"min":1,"sec":0},
+                   "name":"","size":5}]}
+                """), "main");
+            AssertEq(recs.Count, 2); // the nameless entry is undownloadable -> dropped
+            Assert(recs[0].Start < recs[1].Start, "sorted by start time");
+            Assert(recs[1] is { Name: "Rec_20260718_143000.mp4", SizeBytes: 52428800, StreamType: "main" },
+                "file entry parsed");
+            AssertEq(recs[1].End - recs[1].Start, TimeSpan.FromSeconds(90));
+        });
+
         Test("config editor: camera add/edit/delete round-trip + masking", () =>
         {
             // RTSP password masking: only the userinfo password is hidden, and

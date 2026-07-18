@@ -150,6 +150,10 @@ public static class WebApi
     private sealed record AdminCameraTestRequest(string? Name, string? Type, string? Address,
         string? Username, string? Password, int? ChannelId, string? RtspMain, string? RtspSub);
     private sealed record AutoTrackRequest(bool? On);
+    private sealed record MdSensitivityRequest(int? Sensitivity);
+    private sealed record AiSensitivityRequest(string? Type, int? Sensitivity);
+    private sealed record HdrRequest(int? Value);
+    private sealed record OsdRequest(bool? ShowName, string? NamePos, bool? ShowTime, string? TimePos, bool? Watermark);
     private sealed record SirenRequest(bool? On);
     private sealed record PrivacyRequest(bool? On);
     private sealed record SuspendRequest(bool? Suspended);
@@ -1617,6 +1621,8 @@ public static class WebApi
                         antiFlicker = f.Image.AntiFlicker,
                         flip = f.Image.Flip,
                         mirror = f.Image.Mirror,
+                        hdr = f.Image.Hdr,
+                        hdrMax = f.Image.HdrMax,
                     },
                     volume = f.Volume,
                     wifiSignal = f.WifiSignal,
@@ -1631,6 +1637,23 @@ public static class WebApi
                         formatted = s.Formatted,
                         mounted = s.Mounted,
                     }),
+                    mdSensitivity = f.MdSensitivity,
+                    aiSensitivities = f.AiSensitivities?.Select(a => new
+                    {
+                        type = a.Type,
+                        sensitivity = a.Sensitivity,
+                        stayTime = a.StayTime,
+                    }),
+                    osd = f.Osd == null ? null : new
+                    {
+                        showName = f.Osd.ShowName,
+                        name = f.Osd.Name,
+                        namePos = f.Osd.NamePos,
+                        showTime = f.Osd.ShowTime,
+                        timePos = f.Osd.TimePos,
+                        watermark = f.Osd.Watermark,
+                        posOptions = f.Osd.PosOptions,
+                    },
                 });
             }));
 
@@ -1720,6 +1743,128 @@ public static class WebApi
                 await control.SetAutoTrackAsync(req.On.Value, reqCt);
                 NudgeHa(name);
                 return Results.Json(new { ok = true, on = req.On });
+            }));
+
+        // Motion-detection sensitivity, normalized to 1-50 (higher = more
+        // sensitive) across the two firmware dialects.
+        app.MapPost("/api/cameras/{name}/mdsensitivity", (string name, MdSensitivityRequest req, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: true, async (control, reqCt) =>
+            {
+                if (req.Sensitivity is not { } sens || sens is < 1 or > 50)
+                    return Results.Json(new { error = "provide sensitivity: 1-50" }, statusCode: 400);
+                await control.SetMdSensitivityAsync(sens, reqCt);
+                NudgeHa(name);
+                return Results.Json(new { ok = true, sensitivity = sens });
+            }));
+
+        // Per-type AI detection sensitivity (0-100). Valid types are whatever
+        // httpfeatures.aiSensitivities listed for this camera.
+        app.MapPost("/api/cameras/{name}/aisensitivity", (string name, AiSensitivityRequest req, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: true, async (control, reqCt) =>
+            {
+                if (req.Type == null || !CameraControl.AiAlarmTypes.Contains(req.Type))
+                    return Results.Json(new { error = $"provide type: {string.Join(", ", CameraControl.AiAlarmTypes)}" },
+                        statusCode: 400);
+                if (req.Sensitivity is not { } sens || sens is < 0 or > 100)
+                    return Results.Json(new { error = "provide sensitivity: 0-100" }, statusCode: 400);
+                await control.SetAiSensitivityAsync(req.Type, sens, reqCt);
+                NudgeHa(name);
+                return Results.Json(new { ok = true, type = req.Type, sensitivity = sens });
+            }));
+
+        // ISP HDR: 0 = off; the top value comes from httpfeatures.image.hdrMax
+        // (1 = plain on/off, 2 = off/low/high).
+        app.MapPost("/api/cameras/{name}/hdr", (string name, HdrRequest req, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: true, async (control, reqCt) =>
+            {
+                if (req.Value is not { } value || value is < 0 or > 2)
+                    return Results.Json(new { error = "provide value: 0-2" }, statusCode: 400);
+                await control.SetHdrAsync(value, reqCt);
+                NudgeHa(name);
+                return Results.Json(new { ok = true, value });
+            }));
+
+        // On-screen display: camera-name / timestamp overlay visibility + position
+        // and the Reolink watermark. Positions from httpfeatures.osd.posOptions.
+        app.MapPost("/api/cameras/{name}/osd", (string name, OsdRequest req, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: true, async (control, reqCt) =>
+            {
+                if (req.ShowName == null && req.NamePos == null && req.ShowTime == null
+                    && req.TimePos == null && req.Watermark == null)
+                    return Results.Json(new { error = "provide at least one OSD setting" }, statusCode: 400);
+                foreach (var pos in new[] { req.NamePos, req.TimePos })
+                    if (pos != null && (pos.Length is 0 or > 32 || pos.Any(char.IsControl)))
+                        return Results.Json(new { error = "positions must be one of osd.posOptions" }, statusCode: 400);
+                await control.SetOsdSettingsAsync(req.ShowName, req.NamePos, req.ShowTime, req.TimePos,
+                    req.Watermark, reqCt);
+                return Results.Json(new { ok = true });
+            }));
+
+        // Firmware-update check (read-only — nothing is ever installed from here).
+        // The camera itself asks Reolink's servers; the verdict is cached hours.
+        app.MapGet("/api/cameras/{name}/firmware", (string name, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: false, async (control, reqCt) =>
+            {
+                var status = await control.CheckFirmwareAsync(reqCt);
+                if (status == null)
+                    return Results.Json(new { error = "this camera cannot check for firmware updates" }, statusCode: 404);
+                return Results.Json(new { updateAvailable = status.UpdateAvailable, newVersion = status.NewVersion });
+            }));
+
+        // ------------------------------------------------- camera SD-card recordings
+        // Footage the CAMERA recorded onto its own SD card — including anything from
+        // when neolink was down and battery-camera clips that never streamed.
+
+        // Which days of a month have recordings (the calendar of the day picker).
+        app.MapGet("/api/cameras/{name}/sdcard/days", (string name, int? year, int? month, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: false, async (control, reqCt) =>
+            {
+                if (year is not { } y || y is < 2000 or > 2100 || month is not { } m || m is < 1 or > 12)
+                    return Results.Json(new { error = "provide year and month" }, statusCode: 400);
+                var days = await control.GetSdRecordingDaysAsync(y, m, reqCt);
+                if (days == null)
+                    return Results.Json(new { error = "this camera's SD card cannot be searched" }, statusCode: 404);
+                return Results.Json(new { year = y, month = m, days });
+            }));
+
+        // The recordings of one (camera-local) day.
+        app.MapGet("/api/cameras/{name}/sdcard/recordings", (string name, string? date, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: false, async (control, reqCt) =>
+            {
+                if (!DateOnly.TryParseExact(date, "yyyy-MM-dd", out var day))
+                    return Results.Json(new { error = "provide date: yyyy-MM-dd" }, statusCode: 400);
+                var files = await control.GetSdRecordingsAsync(day, reqCt);
+                if (files == null)
+                    return Results.Json(new { error = "this camera's SD card cannot be searched" }, statusCode: 404);
+                return Results.Json(new
+                {
+                    date = day.ToString("yyyy-MM-dd"),
+                    recordings = files.Select(f => new
+                    {
+                        file = f.Name,
+                        start = f.Start,
+                        end = f.End,
+                        sizeBytes = f.SizeBytes,
+                        streamType = f.StreamType,
+                    }),
+                });
+            }));
+
+        // Streams one recording straight off the camera (no server-side copy).
+        // Inline for the <video> player; ?dl=1 turns it into a download. The
+        // camera serves the file sequentially, so there is no seeking/ranges.
+        app.MapGet("/api/cameras/{name}/sdcard/download", (string name, string? file, bool? dl, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: false, async (control, reqCt) =>
+            {
+                var fileName = (file ?? "").Trim();
+                if (fileName.Length is 0 or > 255 || fileName.Any(char.IsControl))
+                    return Results.Json(new { error = "provide file: a name from /sdcard/recordings" }, statusCode: 400);
+                var download = await control.OpenSdRecordingAsync(fileName, reqCt);
+                ctx.Response.RegisterForDispose(download);
+                string contentType = fileName.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase)
+                    ? "video/mp4" : "application/octet-stream";
+                return Results.Stream(download.Stream, contentType,
+                    fileDownloadName: dl == true ? Path.GetFileName(fileName) : null);
             }));
 
         // On-demand clip capture: start records ONE clip capped at

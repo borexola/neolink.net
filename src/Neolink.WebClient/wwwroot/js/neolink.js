@@ -744,7 +744,7 @@
             const zoomedBoxes = new Set(); // containers currently zoomed in (class
                                            // alone won't do: Blazor re-renders clobber it)
             const boxOf = (t) => (t instanceof Element ? t : null)
-                ?.closest?.('.tile, .quick-view-media, .event-player-media');
+                ?.closest?.('.tile, .quick-view-media, .event-player-media, .tl-tile');
             const eligible = (box) => !!box && !!box.querySelector('video') &&
                 (box.classList.contains('zoom-on') || box === document.fullscreenElement);
             const stOf = (box) => {
@@ -769,13 +769,20 @@
                     v.style.transformOrigin = '0 0';
                     v.style.transform = `translate(${st.tx}px, ${st.ty}px) scale(${st.z})`;
                 }
-                // A PAUSED video can go black on the first zoom: the transform
-                // promotes it to a composited layer, and with no new frames
-                // arriving the stale frame never lands in it — until something
-                // (a mouse drag) forces a repaint. Re-presenting the current
-                // frame via a zero seek repaints it immediately. Once per
+                // A video can go black on the first zoom: the transform promotes
+                // it to its own composited layer, and the frame already on screen
+                // doesn't reliably land in the new layer. A paused video then has
+                // nothing repainting it at all — and even a PLAYING clip can sit
+                // black when no fresh frame happens to be due (a stalled buffer,
+                // a long GOP, the end of the clip, seen on the event pop-up).
+                // Re-presenting the current frame via a zero seek repaints it.
+                // File-backed players (the event pop-up and the /events page)
+                // always get the nudge; the live MSE tiles only when paused — a
+                // zero seek there jolts the live pipeline, and a playing live
+                // tile repaints on the next arriving frame anyway. Once per
                 // zoom-in only, so panning stays smooth.
-                if (!wasZoomed && st.z > 1 && v.paused && v.readyState >= 2) {
+                const filePlayer = box.classList.contains('event-player-media');
+                if (!wasZoomed && st.z > 1 && v.readyState >= 2 && (v.paused || filePlayer)) {
                     try { v.currentTime = v.currentTime; } catch { /* detached */ }
                 }
                 box.classList.toggle('zoomed', st.z > 1);
@@ -1844,6 +1851,76 @@
             } catch { return false; }
         },
     };
+
+    // Camera-settings dialog: draggable by its header, resizable by the native
+    // corner grip (CSS resize) — so staged changes (OSD, picture) can be watched
+    // applying on the video BENEATH the modal. Still a modal: only ✕ dismisses.
+    // Geometry lives as INLINE styles on the panel element, which Blazor throws
+    // away with the element on close — a reopened dialog is always back to the
+    // centered default. Delegated document-level handlers: no per-open init,
+    // and desktop-only (phones keep the fixed sheet).
+    (() => {
+        const desktop = () => matchMedia('(min-width: 701px)').matches;
+        const MARGIN = 8; // the usable area: never closer than this to any edge
+        const clampVal = (v, lo, hi) => Math.min(Math.max(v, lo), Math.max(lo, hi));
+
+        // Pull a MOVED panel back inside the viewport (a centered, untouched
+        // dialog can't be out of bounds and keeps its CSS centering).
+        const clampInto = (panel) => {
+            if (!panel.style.left) return;
+            const r = panel.getBoundingClientRect();
+            panel.style.left = clampVal(parseFloat(panel.style.left), MARGIN, innerWidth - r.width - MARGIN) + 'px';
+            panel.style.top = clampVal(parseFloat(panel.style.top), MARGIN, innerHeight - r.height - MARGIN) + 'px';
+        };
+
+        const drag = { panel: null, dx: 0, dy: 0 };
+        document.addEventListener('pointerdown', (e) => {
+            if (!desktop() || e.button !== 0) return;
+            const head = e.target instanceof Element ? e.target.closest('.campanel-head') : null;
+            const panel = head?.closest('.campanel');
+            if (!panel || getComputedStyle(panel).position !== 'fixed') return;
+            if (e.target.closest('button, select, input, a')) return; // the ✕ stays a click
+            const r = panel.getBoundingClientRect();
+            // First grab converts the CSS centering into explicit geometry.
+            panel.style.left = r.left + 'px';
+            panel.style.top = r.top + 'px';
+            panel.style.transform = 'none';
+            panel.style.margin = '0';
+            drag.panel = panel;
+            drag.dx = e.clientX - r.left;
+            drag.dy = e.clientY - r.top;
+            drag.observe?.(panel); // from now on, resizes re-clamp this panel
+            try { head.setPointerCapture(e.pointerId); } catch { /* synthetic events */ }
+            e.preventDefault(); // no text selection while dragging
+        });
+        document.addEventListener('pointermove', (e) => {
+            if (!drag.panel) return;
+            const r = drag.panel.getBoundingClientRect();
+            drag.panel.style.left = clampVal(e.clientX - drag.dx, MARGIN, innerWidth - r.width - MARGIN) + 'px';
+            drag.panel.style.top = clampVal(e.clientY - drag.dy, MARGIN, innerHeight - r.height - MARGIN) + 'px';
+        });
+        for (const evt of ['pointerup', 'pointercancel'])
+            document.addEventListener(evt, () => {
+                drag.panel = null;
+                // A native corner-grip resize ends in a pointerup too — re-clamp
+                // every moved panel here so growing it can't push it off-screen
+                // (the ResizeObserver below covers non-pointer size changes).
+                document.querySelectorAll('.campanel').forEach(clampInto);
+            });
+
+        // Growing the panel with the corner grip (or shrinking the window) can
+        // strand a MOVED panel outside the usable area — pull it back in. The
+        // observer attaches on the first drag (see pointerdown): until then the
+        // panel is centered and the CSS max-width/height caps keep it in view,
+        // and watching for panels via DOM mutations is unreliable (Blazor's
+        // insertion order). Detached panels (dialog closed) drop themselves.
+        const ro = new ResizeObserver(es => es.forEach(en => {
+            if (!en.target.isConnected) { ro.unobserve(en.target); return; }
+            clampInto(en.target);
+        }));
+        drag.observe = (panel) => ro.observe(panel); // idempotent per target
+        window.addEventListener('resize', () => document.querySelectorAll('.campanel').forEach(clampInto));
+    })();
 
     // PWA service worker (see sw.js — install support + offline screen, no
     // caching). Registered only when the app is served from the origin root:

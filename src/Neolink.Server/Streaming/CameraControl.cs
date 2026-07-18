@@ -31,9 +31,11 @@ public sealed record StreamEncSetting(string Stream, uint Width, uint Height, ui
 /// <summary>Picture settings read over the HTTP API. The five adjustments are
 /// 0-255 (128 = neutral); a null field means the camera doesn't report it.
 /// DayNight is "Auto"|"Color"|"Black&amp;White", AntiFlicker one of
-/// <see cref="ImageSettings.AntiFlickerValues"/>.</summary>
+/// <see cref="ImageSettings.AntiFlickerValues"/>. Hdr is the ISP hdr value on
+/// firmwares that have one (0 = off; HdrMax says whether it's 2-state or 3-state).</summary>
 public sealed record ImageSettings(int? Bright, int? Contrast, int? Saturation, int? Hue, int? Sharpen,
-    string? DayNight, string? AntiFlicker, bool? Flip, bool? Mirror)
+    string? DayNight, string? AntiFlicker, bool? Flip, bool? Mirror,
+    int? Hdr = null, int? HdrMax = null)
 {
     /// <summary>Every antiFlicker value seen across firmwares. Indoor models
     /// (E1 line) report and accept "Off"; outdoor models omit it.</summary>
@@ -53,11 +55,31 @@ public sealed record AutoReplyState(int FileId, int TimeoutSeconds);
 /// <summary>One SD-card slot of the camera (HTTP API); sizes are megabytes.</summary>
 public sealed record SdCardInfo(int Id, long TotalMb, long FreeMb, bool Formatted, bool Mounted);
 
+/// <summary>One AI detection type's alarm tuning (HTTP API). Sensitivity is 0-100
+/// (higher = more sensitive); StayTime — seconds a target must linger before the
+/// alarm fires — is null when the firmware doesn't report one for the type.</summary>
+public sealed record AiSensitivity(string Type, int Sensitivity, int? StayTime);
+
+/// <summary>The on-screen-display overlay config (HTTP API): camera-name and
+/// timestamp visibility + position and the Reolink watermark. PosOptions is the
+/// firmware's own list of valid positions (empty when it didn't provide one).</summary>
+public sealed record OsdSettings(bool ShowName, string? Name, string? NamePos,
+    bool ShowTime, string? TimePos, bool? Watermark, IReadOnlyList<string> PosOptions);
+
+/// <summary>A firmware-update check verdict (read-only — nothing is ever installed).</summary>
+public sealed record FirmwareStatus(bool UpdateAvailable, string? NewVersion);
+
+/// <summary>One recording stored on the camera's own SD card, as listed by the HTTP
+/// API's Search. Times are camera-local; Name is the handle Download expects.</summary>
+public sealed record SdRecording(string Name, DateTime Start, DateTime End, long SizeBytes, string StreamType);
+
 /// <summary>Everything readable over the camera's HTTP API in one round: a null
 /// member means that feature is absent (or the camera rejected the query).</summary>
 public sealed record HttpFeatures(ImageSettings? Image, int? Volume, int? WifiSignal,
     IReadOnlyList<PtzPresetInfo>? PtzPresets, IReadOnlyList<QuickReplyFile>? QuickReplies,
-    bool? AutoTrack, IReadOnlyList<SdCardInfo>? SdCards);
+    bool? AutoTrack, IReadOnlyList<SdCardInfo>? SdCards,
+    int? MdSensitivity = null, IReadOnlyList<AiSensitivity>? AiSensitivities = null,
+    OsdSettings? Osd = null);
 
 /// <summary>Discovered camera capabilities: identity, advertised support flags, probed features.</summary>
 public sealed record CameraCapabilities(VersionInfoXml? Version, XElement? Support, CameraFeatures Features);
@@ -193,6 +215,54 @@ public interface ICameraControl
 
     /// <summary>The camera's SD-card slots, or null when unsupported.</summary>
     Task<IReadOnlyList<SdCardInfo>?> GetSdCardsAsync(CancellationToken ct);
+
+    // The members below default to "not available" so control surfaces without a
+    // Reolink HTTP API (generic RTSP cameras, test doubles) need no boilerplate.
+
+    /// <summary>Motion-detection sensitivity normalized to 1-50 (higher = more
+    /// sensitive) across firmware dialects, or null when unsupported.</summary>
+    Task<int?> GetMdSensitivityAsync(CancellationToken ct) => Task.FromResult<int?>(null);
+
+    /// <summary>Sets the motion-detection sensitivity (1-50, higher = more sensitive).</summary>
+    Task SetMdSensitivityAsync(int sensitivity, CancellationToken ct) =>
+        throw new NotSupportedException("motion sensitivity is not available for this camera");
+
+    /// <summary>Per-type AI detection sensitivities, or null when the camera has none.</summary>
+    Task<IReadOnlyList<AiSensitivity>?> GetAiSensitivitiesAsync(CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<AiSensitivity>?>(null);
+
+    /// <summary>Sets one AI type's sensitivity (0-100, higher = more sensitive).</summary>
+    Task SetAiSensitivityAsync(string aiType, int sensitivity, CancellationToken ct) =>
+        throw new NotSupportedException("AI sensitivity is not available for this camera");
+
+    /// <summary>Sets the ISP HDR value (0 = off; the camera's range caps it).</summary>
+    Task SetHdrAsync(int value, CancellationToken ct) =>
+        throw new NotSupportedException("HDR is not available for this camera");
+
+    /// <summary>The OSD overlay config, or null when unsupported.</summary>
+    Task<OsdSettings?> GetOsdSettingsAsync(CancellationToken ct) => Task.FromResult<OsdSettings?>(null);
+
+    /// <summary>Read-modify-write of the OSD overlay: null fields stay untouched.</summary>
+    Task SetOsdSettingsAsync(bool? showName, string? namePos, bool? showTime, string? timePos,
+        bool? watermark, CancellationToken ct) =>
+        throw new NotSupportedException("OSD settings are not available for this camera");
+
+    /// <summary>Asks the camera (which asks Reolink's servers) whether newer firmware
+    /// exists. Read-only and cached; null when unsupported/offline.</summary>
+    Task<FirmwareStatus?> CheckFirmwareAsync(CancellationToken ct) => Task.FromResult<FirmwareStatus?>(null);
+
+    /// <summary>Days of the given month with recordings on the camera's SD card,
+    /// or null when the camera can't be searched.</summary>
+    Task<IReadOnlyList<int>?> GetSdRecordingDaysAsync(int year, int month, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<int>?>(null);
+
+    /// <summary>The SD-card recordings of one (camera-local) day, or null.</summary>
+    Task<IReadOnlyList<SdRecording>?> GetSdRecordingsAsync(DateOnly day, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<SdRecording>?>(null);
+
+    /// <summary>Opens a streaming download of one SD-card recording by its Search name.</summary>
+    Task<ReolinkHttpApi.SdDownload> OpenSdRecordingAsync(string fileName, CancellationToken ct) =>
+        throw new NotSupportedException("SD-card playback is not available for this camera");
 
     /// <summary>
     /// Two-way talk: streams 16-bit LE mono PCM chunks at <paramref name="sampleRate"/>
@@ -615,7 +685,13 @@ public sealed class CameraControl : ICameraControl
     {
         if (_httpApi == null || DateTime.UtcNow < _httpRetryAt) return default;
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(timeout ?? HttpCallTimeout);
+        // A call without a live session token pays for a LOGIN round-trip before
+        // the command — on a Wi-Fi camera under streaming load (dual-lens Duos)
+        // that alone can eat most of the 6s config budget, so every first read
+        // timed out, armed the backoff, and HTTP features "vanished" while the
+        // camera's API was actually fine. Give login-bearing calls the roomy
+        // snapshot budget; token-riding calls keep the tight one.
+        cts.CancelAfter(timeout ?? (_httpApi.HasLiveToken ? HttpCallTimeout : HttpSnapTimeout));
         try
         {
             var result = await op(cts.Token).ConfigureAwait(false);
@@ -703,7 +779,10 @@ public sealed class CameraControl : ICameraControl
         var replies = await GetQuickRepliesAsync(ct).ConfigureAwait(false);
         var autoTrack = await GetAutoTrackAsync(ct).ConfigureAwait(false);
         var sdCards = await GetSdCardsAsync(ct).ConfigureAwait(false);
-        return new HttpFeatures(image, volume, wifi, presets, replies, autoTrack, sdCards);
+        var mdSens = await GetMdSensitivityAsync(ct).ConfigureAwait(false);
+        var aiSens = await GetAiSensitivitiesAsync(ct).ConfigureAwait(false);
+        var osd = await GetOsdSettingsAsync(ct).ConfigureAwait(false);
+        return new HttpFeatures(image, volume, wifi, presets, replies, autoTrack, sdCards, mdSens, aiSens, osd);
     }
 
     public async Task<ImageSettings?> GetImageSettingsAsync(CancellationToken ct)
@@ -715,16 +794,47 @@ public sealed class CameraControl : ICameraControl
         // are still worth showing if a firmware rejects GetIsp.
         var isp = await HttpTryAsync<JsonObject?>(async c => await _httpApi!.GetIspAsync(c).ConfigureAwait(false), ct)
             .ConfigureAwait(false);
-        return ParseImageSettings(img, isp);
+        // Only firmwares whose ISP carries an hdr value get the (one-time, cached)
+        // range read that decides whether HDR is a 2-state or 3-state control.
+        JsonObject? ispRange = isp?["hdr"] != null
+            ? await HttpTryAsync<JsonObject?>(async c => await IspRangeAsync(c).ConfigureAwait(false), ct).ConfigureAwait(false)
+            : null;
+        return ParseImageSettings(img, isp, ispRange);
     }
 
-    internal static ImageSettings ParseImageSettings(JsonObject img, JsonObject? isp) => new(
+    /// <summary>The GetIsp RANGE table, fetched once per camera lifetime (it's static
+    /// per model): which optional ISP fields exist and the values they accept.</summary>
+    private JsonObject? _ispRange;
+    private bool _ispRangeLoaded;
+
+    private async Task<JsonObject?> IspRangeAsync(CancellationToken ct)
+    {
+        if (_ispRangeLoaded) return _ispRange;
+        var (_, range) = await _httpApi!.GetIspWithRangeAsync(ct).ConfigureAwait(false);
+        _ispRange = range;
+        _ispRangeLoaded = true;
+        return range;
+    }
+
+    internal static ImageSettings ParseImageSettings(JsonObject img, JsonObject? isp, JsonObject? ispRange = null) => new(
         Bright: (int?)img["bright"], Contrast: (int?)img["contrast"],
         Saturation: (int?)img["saturation"], Hue: (int?)img["hue"], Sharpen: (int?)img["sharpen"],
         DayNight: (string?)isp?["dayNight"],
         AntiFlicker: (string?)isp?["antiFlicker"],
         Flip: isp?["rotation"] is { } rot ? (int?)rot != 0 : null,
-        Mirror: isp?["mirroring"] is { } mir ? (int?)mir != 0 : null);
+        Mirror: isp?["mirroring"] is { } mir ? (int?)mir != 0 : null,
+        Hdr: (int?)isp?["hdr"],
+        HdrMax: HdrRangeMax(ispRange));
+
+    /// <summary>The hdr field's maximum from an ISP range table: {"min":0,"max":N}
+    /// on most firmwares, a bare option array on some. Null = range didn't say
+    /// (callers treat the control as a plain on/off).</summary>
+    internal static int? HdrRangeMax(JsonObject? ispRange) => ispRange?["hdr"] switch
+    {
+        JsonObject r => (int?)r["max"],
+        JsonArray a => a.Count > 0 ? a.OfType<JsonValue>().Max(v => (int?)v ?? 0) : null,
+        _ => null,
+    };
 
     // MINIMAL write payloads ({"channel": n} + only the changed fields), matching
     // what Reolink's own clients send. Round-tripping the full Get object breaks:
@@ -922,6 +1032,316 @@ public sealed class CameraControl : ICameraControl
                 Formatted: ((int?)s["format"] ?? 0) != 0,
                 Mounted: ((int?)s["mount"] ?? 0) != 0))
             .ToList();
+
+    // ------------------------------------------- detection sensitivity (HTTP, beta)
+
+    public Task<int?> GetMdSensitivityAsync(CancellationToken ct) =>
+        HttpTryAsync<int?>(async c =>
+        {
+            var (cfg, isMdAlarm) = await _httpApi!.GetMdConfigAsync(c).ConfigureAwait(false);
+            return MdSensitivityValue(cfg, isMdAlarm);
+        }, ct);
+
+    /// <summary>Normalizes the two firmware dialects to 1-50, higher = more sensitive.
+    /// MdAlarm/newSens carries the user-facing value; the old sens tables carry the
+    /// INVERSE (wire 1 = most sensitive), hence the 51 - x.</summary>
+    internal static int? MdSensitivityValue(JsonObject cfg, bool isMdAlarm)
+    {
+        if (isMdAlarm && ((int?)cfg["useNewSens"] ?? 0) != 0 && cfg["newSens"] is JsonObject ns)
+            return (int?)ns["sensDef"] is { } def ? Math.Clamp(def, 1, 50) : null;
+        var first = (cfg["sens"] as JsonArray)?.OfType<JsonObject>().FirstOrDefault();
+        return (int?)first?["sensitivity"] is { } inv ? Math.Clamp(51 - inv, 1, 50) : null;
+    }
+
+    public async Task SetMdSensitivityAsync(int sensitivity, CancellationToken ct)
+    {
+        if (_httpApi == null)
+            throw new NotSupportedException($"motion sensitivity needs the camera's HTTP API ('{CameraName}' has none)");
+        int v = Math.Clamp(sensitivity, 1, 50);
+        // Read-modify-write in whichever dialect the camera speaks; every time-slot
+        // entry follows the new value, matching what the Reolink app does.
+        var (cfg, isMdAlarm) = await _httpApi.GetMdConfigAsync(ct).ConfigureAwait(false);
+        if (!ApplyMdSensitivity(cfg, isMdAlarm, v))
+            throw new NotSupportedException($"{CameraName} reports no motion-sensitivity table");
+        await _httpApi.SetMdConfigAsync(cfg, isMdAlarm, ct).ConfigureAwait(false);
+        Log.Info($"{CameraName}: motion sensitivity set to {v}/50");
+    }
+
+    internal static bool ApplyMdSensitivity(JsonObject cfg, bool isMdAlarm, int value)
+    {
+        if (isMdAlarm && ((int?)cfg["useNewSens"] ?? 0) != 0 && cfg["newSens"] is JsonObject ns)
+        {
+            ns["sensDef"] = value;
+            if (ns["sens"] is JsonArray slots)
+                foreach (var s in slots.OfType<JsonObject>()) s["sensitivity"] = value;
+            return true;
+        }
+        if (cfg["sens"] is JsonArray old && old.OfType<JsonObject>().Any())
+        {
+            foreach (var s in old.OfType<JsonObject>()) s["sensitivity"] = 51 - value;
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>Every ai_type any firmware is known to answer GetAiAlarm for.</summary>
+    internal static readonly string[] AiAlarmTypes = { "people", "vehicle", "dog_cat", "face", "package" };
+
+    /// <summary>Types THIS camera answered for, discovered on the first full sweep —
+    /// later reads skip the rejected ones instead of re-asking every panel open.</summary>
+    private IReadOnlyList<string>? _aiAlarmTypes;
+
+    public async Task<IReadOnlyList<AiSensitivity>?> GetAiSensitivitiesAsync(CancellationToken ct)
+    {
+        if (_httpApi == null) return null;
+        var list = new List<AiSensitivity>();
+        foreach (var type in _aiAlarmTypes ?? AiAlarmTypes)
+        {
+            var one = await HttpTryAsync<AiSensitivity?>(async c =>
+                ParseAiSensitivity(type, await _httpApi!.GetAiAlarmAsync(type, c).ConfigureAwait(false)), ct)
+                .ConfigureAwait(false);
+            if (one != null) list.Add(one);
+            // Transport backoff armed mid-sweep — the rest would no-op anyway.
+            if (DateTime.UtcNow < _httpRetryAt) return list.Count > 0 ? list : null;
+        }
+        if (_aiAlarmTypes == null && list.Count > 0)
+            _aiAlarmTypes = list.Select(a => a.Type).ToList();
+        return list.Count > 0 ? list : null;
+    }
+
+    internal static AiSensitivity? ParseAiSensitivity(string type, JsonObject cfg) =>
+        (int?)cfg["sensitivity"] is { } sens
+            ? new AiSensitivity(type, Math.Clamp(sens, 0, 100), (int?)cfg["stay_time"])
+            : null;
+
+    public async Task SetAiSensitivityAsync(string aiType, int sensitivity, CancellationToken ct)
+    {
+        if (_httpApi == null)
+            throw new NotSupportedException($"AI sensitivity needs the camera's HTTP API ('{CameraName}' has none)");
+        if (!AiAlarmTypes.Contains(aiType))
+            throw new ArgumentException($"unknown AI type '{aiType}'");
+        // Read-modify-write of the full AiAlarm object: it carries channel/ai_type
+        // and the target-size bounds the firmware expects to see again.
+        var cfg = await _httpApi.GetAiAlarmAsync(aiType, ct).ConfigureAwait(false);
+        cfg["sensitivity"] = Math.Clamp(sensitivity, 0, 100);
+        await _httpApi.SetAiAlarmAsync(cfg, ct).ConfigureAwait(false);
+        Log.Info($"{CameraName}: {aiType} detection sensitivity set to {Math.Clamp(sensitivity, 0, 100)}/100");
+    }
+
+    // ------------------------------------------------------- HDR + OSD (HTTP, beta)
+
+    public async Task SetHdrAsync(int value, CancellationToken ct)
+    {
+        if (_httpApi == null)
+            throw new NotSupportedException($"HDR needs the camera's HTTP API ('{CameraName}' has none)");
+        // Minimal payload like the other ISP writes; the camera rejects out-of-range.
+        var isp = new JsonObject { ["channel"] = _httpApi.ChannelId, ["hdr"] = Math.Max(0, value) };
+        await _httpApi.SetIspAsync(isp, ct).ConfigureAwait(false);
+        Log.Info($"{CameraName}: HDR set to {value}");
+    }
+
+    public Task<OsdSettings?> GetOsdSettingsAsync(CancellationToken ct) =>
+        HttpTryAsync<OsdSettings?>(async c =>
+        {
+            var (osd, range) = await _httpApi!.GetOsdAsync(c).ConfigureAwait(false);
+            return ParseOsd(osd, range);
+        }, ct);
+
+    internal static OsdSettings ParseOsd(JsonObject osd, JsonObject? range)
+    {
+        var name = osd["osdChannel"] as JsonObject;
+        var time = osd["osdTime"] as JsonObject;
+        var options = (range?["osdChannel"]?["pos"] as JsonArray ?? range?["osdTime"]?["pos"] as JsonArray)
+            ?.Select(v => (string?)v).Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s!).ToList()
+            ?? new List<string>();
+        return new OsdSettings(
+            ShowName: ((int?)name?["enable"] ?? 0) != 0,
+            Name: (string?)name?["name"],
+            NamePos: (string?)name?["pos"],
+            ShowTime: ((int?)time?["enable"] ?? 0) != 0,
+            TimePos: (string?)time?["pos"],
+            Watermark: osd["watermark"] is { } wm ? (int?)wm != 0 : null,
+            PosOptions: options);
+    }
+
+    public async Task SetOsdSettingsAsync(bool? showName, string? namePos, bool? showTime, string? timePos,
+        bool? watermark, CancellationToken ct)
+    {
+        if (_httpApi == null)
+            throw new NotSupportedException($"OSD settings need the camera's HTTP API ('{CameraName}' has none)");
+        // Read-modify-write of the whole Osd object — SetOsd expects the complete
+        // structure (both overlay blocks) back, unlike the flat Image/Isp writes.
+        var (osd, _) = await _httpApi.GetOsdAsync(ct).ConfigureAwait(false);
+        if (showName != null || namePos != null)
+        {
+            if (osd["osdChannel"] is not JsonObject name)
+                throw new NotSupportedException($"{CameraName} reports no name overlay");
+            if (showName is { } sn) name["enable"] = sn ? 1 : 0;
+            if (namePos != null) name["pos"] = namePos;
+        }
+        if (showTime != null || timePos != null)
+        {
+            if (osd["osdTime"] is not JsonObject time)
+                throw new NotSupportedException($"{CameraName} reports no timestamp overlay");
+            if (showTime is { } st) time["enable"] = st ? 1 : 0;
+            if (timePos != null) time["pos"] = timePos;
+        }
+        if (watermark is { } w)
+        {
+            if (osd["watermark"] == null)
+                throw new NotSupportedException($"{CameraName} reports no watermark setting");
+            osd["watermark"] = w ? 1 : 0;
+        }
+        await _httpApi.SetOsdAsync(osd, ct).ConfigureAwait(false);
+        Log.Info($"{CameraName}: OSD changed (name={showName}/{namePos}, time={showTime}/{timePos}, watermark={watermark})");
+    }
+
+    // ------------------------------------------------- firmware check (HTTP, beta)
+
+    /// <summary>CheckFirmware makes the CAMERA call Reolink's servers — cache the
+    /// verdict so panel opens don't turn into cloud traffic.</summary>
+    private FirmwareStatus? _fwStatus;
+    private DateTime _fwCheckedAt;
+    private static readonly TimeSpan FirmwareCacheFor = TimeSpan.FromHours(6);
+
+    public async Task<FirmwareStatus?> CheckFirmwareAsync(CancellationToken ct)
+    {
+        if (_httpApi == null) return null;
+        if (_fwStatus != null && DateTime.UtcNow - _fwCheckedAt < FirmwareCacheFor) return _fwStatus;
+        var status = await HttpTryAsync<FirmwareStatus?>(async c =>
+            ParseFirmware(await _httpApi!.CheckFirmwareAsync(c).ConfigureAwait(false)), ct).ConfigureAwait(false);
+        if (status != null)
+        {
+            if (status.UpdateAvailable && _fwStatus?.UpdateAvailable != true)
+                Log.Info($"{CameraName}: a newer camera firmware is available" +
+                         $"{(status.NewVersion != null ? $" ({status.NewVersion})" : "")} — " +
+                         "update it from the Reolink app/web page when convenient");
+            _fwStatus = status;
+            _fwCheckedAt = DateTime.UtcNow;
+        }
+        return status ?? _fwStatus;
+    }
+
+    /// <summary>newFirmware comes back as 0/1, a version string, or an info object
+    /// depending on firmware generation; null = the camera didn't say.</summary>
+    internal static FirmwareStatus? ParseFirmware(JsonNode? newFirmware)
+    {
+        switch (newFirmware)
+        {
+            case null:
+                return null;
+            case JsonObject info:
+                return new FirmwareStatus(true,
+                    (string?)info["firmVer"] ?? (string?)info["newFirmVer"] ?? (string?)info["version"]);
+            case JsonValue v when v.TryGetValue<int>(out var flag):
+                return new FirmwareStatus(flag != 0, null);
+            case JsonValue v when v.TryGetValue<string>(out var s):
+                return string.IsNullOrEmpty(s) || s == "0"
+                    ? new FirmwareStatus(false, null)
+                    : new FirmwareStatus(true, s == "1" ? null : s);
+            default:
+                return null;
+        }
+    }
+
+    // -------------------------------------------- SD-card recordings (HTTP, beta)
+
+    /// <summary>SD searches walk the card's file table — give them the roomy
+    /// snapshot budget, not the 6s config-read cap.</summary>
+    public Task<IReadOnlyList<int>?> GetSdRecordingDaysAsync(int year, int month, CancellationToken ct) =>
+        HttpTryAsync<IReadOnlyList<int>?>(async c =>
+        {
+            var start = new DateTime(year, month, 1);
+            var result = await _httpApi!.SearchAsync("main", start, start.AddMonths(1).AddSeconds(-1),
+                onlyStatus: true, c).ConfigureAwait(false);
+            return ParseSdCalendar(result, year, month);
+        }, ct, HttpSnapTimeout);
+
+    /// <summary>Status[].table is one digit per day of the month ('1' = recordings).</summary>
+    internal static IReadOnlyList<int> ParseSdCalendar(JsonObject searchResult, int year, int month)
+    {
+        var days = new List<int>();
+        foreach (var status in (searchResult["Status"] as JsonArray ?? new JsonArray()).OfType<JsonObject>())
+        {
+            if ((int?)status["year"] != year || (int?)status["mon"] != month) continue;
+            var table = (string?)status["table"] ?? "";
+            for (int i = 0; i < table.Length; i++)
+                if (table[i] != '0')
+                    days.Add(i + 1);
+        }
+        return days;
+    }
+
+    /// <summary>Budget for the SD FILE search: the camera walks its card's file
+    /// table, which on an event-heavy day takes far longer than a config read
+    /// (observed well past the snapshot budget on doorbells).</summary>
+    private static readonly TimeSpan SdSearchTimeout = TimeSpan.FromSeconds(45);
+
+    public Task<IReadOnlyList<SdRecording>?> GetSdRecordingsAsync(DateOnly day, CancellationToken ct) =>
+        HttpTryAsync<IReadOnlyList<SdRecording>?>(async c =>
+        {
+            var start = day.ToDateTime(TimeOnly.MinValue);
+            var end = day.ToDateTime(new TimeOnly(23, 59, 59));
+            // The camera records whichever stream its own settings say — usually
+            // main; older/battery firmwares list sub. Ask main first, sub when
+            // main has nothing — and a stream the firmware REJECTS searching
+            // must not abort the other one.
+            foreach (var streamType in new[] { "main", "sub" })
+            {
+                JsonObject result;
+                try
+                {
+                    result = await _httpApi!.SearchAsync(streamType, start, end, onlyStatus: false, c)
+                        .ConfigureAwait(false);
+                }
+                catch (ReolinkApiException ex)
+                {
+                    Log.Debug($"{CameraName}: SD file search ({streamType}, {day:yyyy-MM-dd}) rejected: {ex.Message}");
+                    continue;
+                }
+                var files = ParseSdRecordings(result, streamType);
+                if (files.Count > 0) return files;
+                // Zero usable files answers the "the app shows footage but neolink
+                // doesn't" question ONLY if we can see what the camera actually
+                // said — log the raw shape (dropped entries mean an unmapped
+                // firmware dialect; an absent File[] means a genuinely empty day).
+                int raw = (result["File"] as JsonArray)?.Count ?? -1;
+                Log.Info($"{CameraName}: SD file search ({streamType}, {day:yyyy-MM-dd}) returned " +
+                         (raw <= 0 ? $"no File list (keys: {string.Join(",", result.Select(k => k.Key))})"
+                                   : $"{raw} entries but none usable — first entry: " +
+                                     Truncate(((JsonArray)result["File"]!)[0]?.ToJsonString() ?? "?", 400)));
+            }
+            return new List<SdRecording>();
+        }, ct, SdSearchTimeout);
+
+    private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max] + "…";
+
+    internal static IReadOnlyList<SdRecording> ParseSdRecordings(JsonObject searchResult, string streamType) =>
+        (searchResult["File"] as JsonArray ?? new JsonArray()).OfType<JsonObject>()
+            .Select(f => new SdRecording(
+                Name: (string?)f["name"] ?? "",
+                Start: SearchTime(f["StartTime"] as JsonObject),
+                End: SearchTime(f["EndTime"] as JsonObject),
+                SizeBytes: (long?)f["size"] ?? 0,
+                StreamType: (string?)f["type"] ?? streamType))
+            .Where(f => f.Name.Length > 0)
+            .OrderBy(f => f.Start)
+            .ToList();
+
+    private static DateTime SearchTime(JsonObject? t) => t == null
+        ? default
+        : new DateTime((int?)t["year"] ?? 1, (int?)t["mon"] ?? 1, (int?)t["day"] ?? 1,
+            (int?)t["hour"] ?? 0, (int?)t["min"] ?? 0, (int?)t["sec"] ?? 0);
+
+    public async Task<ReolinkHttpApi.SdDownload> OpenSdRecordingAsync(string fileName, CancellationToken ct)
+    {
+        if (_httpApi == null)
+            throw new NotSupportedException($"SD-card playback needs the camera's HTTP API ('{CameraName}' has none)");
+        var download = await _httpApi.DownloadAsync(fileName, ct).ConfigureAwait(false);
+        Log.Info($"{CameraName}: streaming SD-card recording '{fileName}'" +
+                 $"{(download.Length is { } len ? $" ({len / 1024 / 1024} MB)" : "")}");
+        return download;
+    }
 
     public Task RebootAsync(CancellationToken ct) =>
         WithCameraAsync<object?>(async camera =>

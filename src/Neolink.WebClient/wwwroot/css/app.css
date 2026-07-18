@@ -1193,45 +1193,76 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     background: color-mix(in srgb, var(--err) 45%, rgba(0, 0, 0, 0.55));
 }
 
-/* On-video PTZ pad (maximized tile of a PTZ camera). Deliberately quiet: a
-   translucent "PTZ" pill in the bottom-right corner that opens into a compact
-   hold-to-pan pad. Ghosted until hovered/open so it never fights the video;
-   bottom-right is the one tile corner no other overlay claims (toolbar top,
-   clip chip top-left, talk pill left, zoom HUD right-center). */
-.ptz-overlay {
+/* On-video camera rail (maximized tile): PTZ and two-way talk in one quiet
+   glass pill on the RIGHT edge, directly below the zoom HUD — visually one
+   column of controls in the zoom HUD's own language (same glass, same radius,
+   same edge offset). Ghosted until hovered / opened / talking so it never
+   fights the video, and clear of every other overlay (toolbar top, clip chip
+   top-left, talk indicator left, camera name & grip bottom corners). */
+.cam-rail {
     position: absolute;
-    right: 12px;
-    bottom: 12px;
+    right: 10px;
+    top: calc(50% + 88px); /* the zoom HUD is centered; this starts just below it */
     z-index: 6;
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
+    display: flex; /* pad first in markup = flies out LEFT; pill hugs the edge */
+    align-items: center;
     gap: 8px;
     opacity: 0.5;
     transition: opacity 0.15s ease;
 }
 
-.ptz-overlay:hover, .ptz-overlay:focus-within, .ptz-overlay.open { opacity: 1; }
+.cam-rail:hover, .cam-rail:focus-within, .cam-rail.open { opacity: 1; }
 
-.ptz-overlay-toggle {
-    padding: 4px 12px;
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--bg) 74%, transparent);
-    backdrop-filter: blur(6px);
+.cam-rail-pill {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 5px;
+    background: color-mix(in srgb, var(--panel) 82%, transparent);
     border: 1px solid var(--line);
-    color: var(--muted);
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 1px;
-    cursor: pointer;
-    user-select: none;
+    border-radius: 999px;
+    backdrop-filter: blur(6px);
 }
 
-.ptz-overlay-toggle:hover { color: var(--fg); border-color: color-mix(in srgb, var(--fg) 35%, transparent); }
+.cam-rail-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border: none;
+    border-radius: 50%;
+    background: none;
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+}
 
-.ptz-overlay.open .ptz-overlay-toggle {
-    color: var(--accent);
-    border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+.cam-rail-btn:hover { color: var(--fg); background: color-mix(in srgb, var(--fg) 10%, transparent); }
+
+.cam-rail-btn.rail-active { color: var(--accent); background: var(--accent-soft); }
+
+/* The rail mic mirrors the toolbar mic's talk states (red pulse while live). */
+.cam-rail-btn.talk-live {
+    color: #fff;
+    background: var(--err);
+    animation: talk-pulse 1.6s ease-in-out infinite;
+}
+
+.cam-rail-btn.talk-connecting { color: var(--accent); background: var(--accent-soft); opacity: 0.75; }
+
+/* The pan pad flies out to the LEFT of the rail, vertically centered on the
+   pill — absolute, so opening it never shifts the pill it came from. */
+.cam-rail .ptz-overlay-pad {
+    position: absolute;
+    right: calc(100% + 8px);
+    top: 50%;
+    transform: translateY(-50%);
 }
 
 .ptz-overlay-pad {
@@ -1273,9 +1304,9 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     color: var(--accent);
 }
 
-/* No hover on touch: keep the pill readable instead of ghosted. */
+/* No hover on touch: keep the rail readable instead of ghosted. */
 @media (hover: none) {
-    .ptz-overlay { opacity: 0.9; }
+    .cam-rail { opacity: 0.9; }
 }
 
 /* Flat inline icons: behave in text flow AND as flex items */
@@ -1429,6 +1460,8 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
         opacity: 0.8;
     }
     .zoom-hud.hud-idle { opacity: 0; }
+    /* The camera rail tracks the zoom HUD's tighter phone edge — one column. */
+    .cam-rail { right: 6px; }
 
     /* Two fingers on the PICTURE must pinch, never scroll/browser-zoom.
        Scoped to the video element only: putting touch-action:none on the whole
@@ -1522,6 +1555,23 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     overflow: hidden;
 }
 .campanel-wide .campanel-head { position: static; top: auto; }
+
+/* Draggable + resizable (desktop): the header drags, the native corner grip
+   resizes — so staged OSD/picture changes can be watched applying on the
+   video beneath the modal. JS (delegated, neolink.js) owns the geometry as
+   inline styles that die with the element, so a reopened dialog is always
+   back to this centered default. Phones keep the fixed sheet untouched. */
+@media (min-width: 701px) {
+    .campanel-wide {
+        resize: both;
+        min-width: 440px;
+        min-height: 340px;
+        max-width: calc(100vw - 16px);
+        max-height: calc(100vh - 16px);
+    }
+    .campanel-head { cursor: move; user-select: none; }
+    .campanel-head button { cursor: pointer; }
+}
 .campanel-wide .campanel-body {
     flex: 1 1 auto;
     min-height: 0;
@@ -2681,6 +2731,16 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     text-decoration: none;
     cursor: pointer;
 }
+
+/* The options render as <span>/<a> (page links) or <button> (mode switch) —
+   the button form sheds the UA chrome. `.ev-switch-opt.active` outranks this,
+   so the accent fill still applies. */
+button.ev-switch-opt {
+    border: none;
+    background: none;
+    font-family: inherit;
+    line-height: inherit;
+}
 .ev-switch-opt.active { background: var(--accent); color: #fff; }
 .ev-switch-opt:not(.active):hover { color: var(--fg); }
 
@@ -3736,6 +3796,7 @@ body.tl-colresizing, body.tl-colresizing * { cursor: col-resize !important; user
     .tl-snap { opacity: 0.7; }
 }
 .tl-tile-rail .tl-snap { display: none; } /* thumbnails: too small, focus first */
+.tl-tile-rail .zoom-hud { display: none !important; } /* same: zoom the focused monitor instead */
 
 .event-player-foot {
     display: flex;

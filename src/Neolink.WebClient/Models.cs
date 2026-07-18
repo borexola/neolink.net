@@ -49,11 +49,58 @@ public sealed record ApiWhiteLed(int Bright, bool On, int Mode);
 /// Null members = that feature is absent on this camera.</summary>
 public sealed record ApiHttpFeatures(ApiImageSettings? Image, int? Volume, int? WifiSignal,
     List<ApiPtzPreset>? PtzPresets, List<ApiQuickReply>? QuickReplies, bool? AutoTrack,
-    List<ApiSdCard>? SdCards);
+    List<ApiSdCard>? SdCards, int? MdSensitivity = null,
+    List<ApiAiSensitivity>? AiSensitivities = null, ApiOsd? Osd = null);
 
-/// <summary>Picture adjustments (0-255, 128 neutral) + ISP config; null = not reported.</summary>
+/// <summary>Picture adjustments (0-255, 128 neutral) + ISP config; null = not reported.
+/// Hdr: 0 = off, up to HdrMax (1 = on/off, 2 = off/low/high).</summary>
 public sealed record ApiImageSettings(int? Bright, int? Contrast, int? Saturation, int? Hue, int? Sharpen,
-    string? DayNight, string? AntiFlicker, bool? Flip, bool? Mirror);
+    string? DayNight, string? AntiFlicker, bool? Flip, bool? Mirror,
+    int? Hdr = null, int? HdrMax = null);
+
+/// <summary>One AI detection type's sensitivity (0-100, higher = more sensitive).</summary>
+public sealed record ApiAiSensitivity(string Type, int Sensitivity, int? StayTime)
+{
+    public string Label => Type switch
+    {
+        "people" => "Person",
+        "vehicle" => "Vehicle",
+        "dog_cat" => "Animal",
+        "face" => "Face",
+        "package" => "Package",
+        _ => Type,
+    };
+}
+
+/// <summary>The camera's on-screen-display overlay (name/timestamp/watermark).</summary>
+public sealed record ApiOsd(bool ShowName, string? Name, string? NamePos,
+    bool ShowTime, string? TimePos, bool? Watermark, List<string>? PosOptions);
+
+/// <summary>GET /api/cameras/{name}/firmware — the read-only update check.</summary>
+public sealed record ApiFirmware(bool UpdateAvailable, string? NewVersion);
+
+/// <summary>GET /api/cameras/{name}/sdcard/days — calendar of a month on the camera's SD card.</summary>
+public sealed record ApiSdDays(int Year, int Month, List<int> Days);
+
+/// <summary>GET /api/cameras/{name}/sdcard/recordings — one recording on the camera's SD card.</summary>
+public sealed record ApiSdRecording(string File, DateTime Start, DateTime End, long SizeBytes, string StreamType)
+{
+    public string TimeLabel => Start.ToString("HH:mm:ss");
+    public string DurationLabel
+    {
+        get
+        {
+            var d = End > Start ? End - Start : TimeSpan.Zero;
+            return d.TotalHours >= 1 ? d.ToString(@"h\h\ m\m") : d.TotalMinutes >= 1 ? d.ToString(@"m\m\ s\s") : $"{d.Seconds}s";
+        }
+    }
+    public string SizeLabel => SizeBytes >= 1024 * 1024
+        ? $"{SizeBytes / (1024.0 * 1024):0} MB"
+        : $"{SizeBytes / 1024.0:0} KB";
+}
+
+/// <summary>GET /api/cameras/{name}/sdcard/recordings reply.</summary>
+public sealed record ApiSdRecordings(string Date, List<ApiSdRecording> Recordings);
 
 /// <summary>One PTZ preset slot; disabled slots are free for saving.</summary>
 public sealed record ApiPtzPreset(int Id, string Name, bool Enabled);
