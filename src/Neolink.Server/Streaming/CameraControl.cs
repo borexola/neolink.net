@@ -794,9 +794,12 @@ public sealed class CameraControl : ICameraControl
         // are still worth showing if a firmware rejects GetIsp.
         var isp = await HttpTryAsync<JsonObject?>(async c => await _httpApi!.GetIspAsync(c).ConfigureAwait(false), ct)
             .ConfigureAwait(false);
-        // Only firmwares whose ISP carries an hdr value get the (one-time, cached)
-        // range read that decides whether HDR is a 2-state or 3-state control.
-        JsonObject? ispRange = isp?["hdr"] != null
+        // The (one-time, cached) range read is the camera's own capability list
+        // for ISP fields: it decides whether HDR is 2- or 3-state, and whether
+        // flip/mirror exist at all — firmwares echo rotation/mirroring VALUES in
+        // the config even on models that don't support them (Elite WiFi), so key
+        // presence alone shows dead toggles.
+        JsonObject? ispRange = isp != null
             ? await HttpTryAsync<JsonObject?>(async c => await IspRangeAsync(c).ConfigureAwait(false), ct).ConfigureAwait(false)
             : null;
         return ParseImageSettings(img, isp, ispRange);
@@ -821,10 +824,18 @@ public sealed class CameraControl : ICameraControl
         Saturation: (int?)img["saturation"], Hue: (int?)img["hue"], Sharpen: (int?)img["sharpen"],
         DayNight: (string?)isp?["dayNight"],
         AntiFlicker: (string?)isp?["antiFlicker"],
-        Flip: isp?["rotation"] is { } rot ? (int?)rot != 0 : null,
-        Mirror: isp?["mirroring"] is { } mir ? (int?)mir != 0 : null,
+        Flip: IspFlag(isp, ispRange, "rotation"),
+        Mirror: IspFlag(isp, ispRange, "mirroring"),
         Hdr: (int?)isp?["hdr"],
         HdrMax: HdrRangeMax(ispRange));
+
+    /// <summary>An optional on/off ISP field, gated by capability: when the range
+    /// table was read, the field must appear IN it — firmwares echo rotation and
+    /// mirroring values in the config on models that can't actually flip, and a
+    /// toggle that silently no-ops is worse than none. Without a range table
+    /// (older firmware, range read failed) value presence decides, as before.</summary>
+    internal static bool? IspFlag(JsonObject? isp, JsonObject? ispRange, string key) =>
+        isp?[key] is { } v && (ispRange == null || ispRange[key] != null) ? (int?)v != 0 : null;
 
     /// <summary>The hdr field's maximum from an ISP range table: {"min":0,"max":N}
     /// on most firmwares, a bare option array on some. Null = range didn't say

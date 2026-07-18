@@ -1766,6 +1766,19 @@ public static class SelfTest
             Assert(s2 is { Bright: 128, DayNight: null, Flip: null, Mirror: null },
                 "missing ISP half -> null extras");
 
+            // Capability gate: when the range table was read, flip/mirror must
+            // appear IN it — firmwares echo rotation/mirroring values in the
+            // config on models that can't actually flip (Elite WiFi), and a
+            // toggle that silently no-ops is worse than none.
+            var rangeWithout = Obj("""{"hdr":{"min":0,"max":1}}""");
+            var s3 = Streaming.CameraControl.ParseImageSettings(img, isp, rangeWithout);
+            Assert(s3 is { Flip: null, Mirror: null },
+                "range without rotation/mirroring hides the toggles");
+            var rangeWith = Obj("""{"rotation":[0,1],"mirroring":{"min":0,"max":1}}""");
+            var s4 = Streaming.CameraControl.ParseImageSettings(img, isp, rangeWith);
+            Assert(s4 is { Flip: false, Mirror: true },
+                "range offering them keeps the values");
+
             // Indoor firmwares (E1 line) report antiFlicker "Off"; the canonical
             // value list must carry it or HA rejects every state publish
             // ("Invalid option for select...anti_flicker: 'Off'").

@@ -8,6 +8,16 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Fixed
 
+- **Flip/mirror toggles only show when the camera can actually flip**: the
+  panel offered them whenever the camera's ISP config carried rotation and
+  mirroring values — but firmwares echo those fields even on models that
+  don't support flipping (the Elite WiFi line), leaving toggles that silently
+  did nothing. The gate is now the camera's own ISP range table (the same
+  capability list the HDR control reads): a field the range doesn't offer is
+  a field the camera doesn't do. Cameras whose firmware has no range table
+  keep the old behavior. The Home Assistant flip/mirror switches follow the
+  same gate automatically.
+
 - **SD-card browsing works on busy cameras**: the file search asked the camera
   to walk its ENTIRE day in one query — an event-heavy doorbell that is also
   encoding streams can't finish that inside any budget, so the calendar
