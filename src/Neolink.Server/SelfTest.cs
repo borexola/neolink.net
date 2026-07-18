@@ -1655,6 +1655,32 @@ public static class SelfTest
                 "overshoot clamps to full");
         });
 
+        Test("event-type chips: only disproven types are hidden", () =>
+        {
+            static bool Vis(string t, IReadOnlyList<Neolink.WebClient.ApiAiSensitivity>? ai, bool? bell) =>
+                Neolink.WebClient.Components.CameraPanel.EventTypeSupported(t, ai, bell);
+            var peopleOnly = new List<Neolink.WebClient.ApiAiSensitivity>
+                { new("people", 50, null) };
+            // The AI sweep answered, and only for people: person shows, the other
+            // AI types are disproven and hide.
+            Assert(Vis("person", peopleOnly, null), "answered type shows");
+            Assert(!Vis("vehicle", peopleOnly, null), "unanswered AI type hides");
+            Assert(!Vis("animal", peopleOnly, null), "dog_cat maps to animal");
+            Assert(!Vis("package", peopleOnly, null), "unanswered package hides");
+            // No sweep result (offline, no HTTP API): nothing is disproven.
+            Assert(Vis("vehicle", null, null), "unprobed camera shows everything");
+            Assert(Vis("package", new List<Neolink.WebClient.ApiAiSensitivity>(), null),
+                "empty sweep result proves nothing");
+            // Doorbell chip needs a doorbell; unknown shows.
+            Assert(!Vis("doorbell", null, false), "non-doorbell hides the doorbell type");
+            Assert(Vis("doorbell", null, true), "doorbell shows it");
+            Assert(Vis("doorbell", null, null), "unprobed shows it");
+            // No reliable negative signal exists for these: always show.
+            Assert(Vis("crying", peopleOnly, false), "crying always shows");
+            Assert(Vis("line-crossing", peopleOnly, false), "perimeter types always show");
+            Assert(Vis("motion", peopleOnly, false), "motion always shows");
+        });
+
         Test("HTTP-API extras: preset/quick-reply/SD/auto-track/image parsing", () =>
         {
             static System.Text.Json.Nodes.JsonArray Arr(string json) =>

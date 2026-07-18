@@ -8,6 +8,16 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### New
 
+- **Event-type chips only list what the camera can emit**: the recording tab's
+  event types used to offer every known detection on every camera. The list is
+  now capability-filtered where a definitive signal exists — the per-type
+  AI-alarm probe proves which AI detections (person, vehicle, animal, package)
+  the firmware actually answers for, and the doorbell type needs a doorbell.
+  Types with no reliable capability signal (crying, the perimeter trio,
+  motion) always show, as does everything while the camera is offline or has
+  no HTTP API — only the disproven is hidden, never the unknown. A note says
+  when types were hidden.
+
 - **Cameras with nothing to record idle at near-zero CPU**: a wired camera
   with nothing consuming its frames used to stream and process video around
   the clock even with nobody watching. Such cameras now hold a control-only

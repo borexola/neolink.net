@@ -773,7 +773,12 @@
                     <div class="control-row rec-types-row">
                         <span>Event types</span>
                         <div class="stream-options">
-                            @foreach (var t in _recording.KnownTypes ?? new List<string>())
+                            @* Only types this camera can emit: the AI-alarm sweep proves which
+                               AI detections the firmware answers for, and the doorbell chip
+                               needs a doorbell. Types with no reliable capability signal
+                               (crying, perimeter, motion) always show, as does everything
+                               while the camera hasn't been probed yet (offline, no HTTP API). *@
+                            @foreach (var t in (_recording.KnownTypes ?? new List<string>()).Where(TypeChipVisible))
                             {
                                 <button class="chip @(_recording.TypeEnabled(t) ? "" : "chip-off")"
                                         title="@(_recording.TypeEnabled(t) ? "Recording" : "Discarded")"
@@ -787,6 +792,10 @@
                         ⚠ Person/vehicle/animal labels only arrive when the matching Smart Detection is
                         enabled <b>in the Reolink app</b> (camera → Settings → Detection) — the camera does
                         the detecting. The chips filter what this server keeps; disabled types are discarded.
+                        @if ((_recording.KnownTypes ?? new List<string>()).Any(t => !TypeChipVisible(t)))
+                        {
+                            <text> Detection types this camera doesn't support are hidden.</text>
+                        }
                     </div>
                     <div class="control-row">
                         <span>Scheduled capture</span>
@@ -1821,6 +1830,30 @@
         "motion" => "👁",
         _ => "•",
     };
+
+    private bool TypeChipVisible(string t) =>
+        EventTypeSupported(t, _http?.AiSensitivities, _caps?.Features?.Doorbell);
+
+    /// <summary>
+    /// Whether an event-type chip should be offered for this camera. Hide only
+    /// what is DISPROVEN: the AI-alarm sweep answers per type (a camera without
+    /// e.g. package detection rejects that query), and the doorbell type needs a
+    /// doorbell. Types with no reliable capability signal (crying, the perimeter
+    /// trio, motion) always show — hiding on a guess would strand a camera that
+    /// genuinely emits them. Null inputs mean "not probed yet": show everything.
+    /// </summary>
+    public static bool EventTypeSupported(string type, IReadOnlyList<ApiAiSensitivity>? aiTypes, bool? doorbell) => type switch
+    {
+        "person" => AiAnswered(aiTypes, "people"),
+        "vehicle" => AiAnswered(aiTypes, "vehicle"),
+        "animal" => AiAnswered(aiTypes, "dog_cat"),
+        "package" => AiAnswered(aiTypes, "package"),
+        "doorbell" => doorbell ?? true,
+        _ => true,
+    };
+
+    private static bool AiAnswered(IReadOnlyList<ApiAiSensitivity>? ai, string type) =>
+        ai is not { Count: > 0 } || ai.Any(a => a.Type == type);
 
     private async Task SetRecordingAsync(bool? events = null, bool? continuous = null, List<string>? eventTypes = null,
         int? eventRetentionDays = null, int? continuousRetentionDays = null, string? recordStream = null,
