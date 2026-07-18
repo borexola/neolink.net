@@ -767,22 +767,65 @@ public sealed class CameraControl : ICameraControl
         }
     }
 
+    /// <summary>The last sweep's non-empty result. Panels used to load "limited"
+    /// at random: one slow answer mid-sweep armed the 60s transport backoff,
+    /// blanking every remaining section AND the whole next open. Cached values
+    /// fill whatever a sweep couldn't read, so a hiccup costs freshness (of
+    /// near-static config), not whole panel sections.</summary>
+    private HttpFeatures? _httpFeaturesCache;
+
     public async Task<HttpFeatures?> GetHttpFeaturesAsync(CancellationToken ct)
     {
         if (_httpApi == null) return null;
-        // Sequential on purpose: the HTTP client serializes requests anyway, and the
-        // first transport failure arms the backoff so the rest return immediately.
-        var image = await GetImageSettingsAsync(ct).ConfigureAwait(false);
-        var volume = await GetVolumeAsync(ct).ConfigureAwait(false);
-        var wifi = await GetWifiSignalAsync(ct).ConfigureAwait(false);
-        var presets = await GetPtzPresetsAsync(ct).ConfigureAwait(false);
-        var replies = await GetQuickRepliesAsync(ct).ConfigureAwait(false);
-        var autoTrack = await GetAutoTrackAsync(ct).ConfigureAwait(false);
-        var sdCards = await GetSdCardsAsync(ct).ConfigureAwait(false);
-        var mdSens = await GetMdSensitivityAsync(ct).ConfigureAwait(false);
-        var aiSens = await GetAiSensitivitiesAsync(ct).ConfigureAwait(false);
-        var osd = await GetOsdSettingsAsync(ct).ConfigureAwait(false);
-        return new HttpFeatures(image, volume, wifi, presets, replies, autoTrack, sdCards, mdSens, aiSens, osd);
+        // Sequential on purpose (the HTTP client serializes requests anyway) —
+        // but ONE slow answer must not blank the rest of the panel. A mid-sweep
+        // transport failure arms the 60s backoff to protect unrelated callers;
+        // within THIS sweep the first two failures are forgiven (the pre-step
+        // backoff is restored so the remaining sections still get their try).
+        // The third strike leaves it armed and the rest no-op — a dead camera
+        // costs two timeouts, not ten.
+        int forgiven = 0;
+        async Task<T?> Step<T>(Func<CancellationToken, Task<T?>> read)
+        {
+            var before = _httpRetryAt;
+            var v = await read(ct).ConfigureAwait(false);
+            if (_httpRetryAt > before && forgiven < 2)
+            {
+                forgiven++;
+                _httpRetryAt = before;
+            }
+            return v;
+        }
+        var image = await Step<ImageSettings>(GetImageSettingsAsync).ConfigureAwait(false);
+        var volume = await Step<int?>(GetVolumeAsync).ConfigureAwait(false);
+        var wifi = await Step<int?>(GetWifiSignalAsync).ConfigureAwait(false);
+        var presets = await Step<IReadOnlyList<PtzPresetInfo>>(GetPtzPresetsAsync).ConfigureAwait(false);
+        var replies = await Step<IReadOnlyList<QuickReplyFile>>(GetQuickRepliesAsync).ConfigureAwait(false);
+        var autoTrack = await Step<bool?>(GetAutoTrackAsync).ConfigureAwait(false);
+        var sdCards = await Step<IReadOnlyList<SdCardInfo>>(GetSdCardsAsync).ConfigureAwait(false);
+        var mdSens = await Step<int?>(GetMdSensitivityAsync).ConfigureAwait(false);
+        var aiSens = await Step<IReadOnlyList<AiSensitivity>>(GetAiSensitivitiesAsync).ConfigureAwait(false);
+        var osd = await Step<OsdSettings>(GetOsdSettingsAsync).ConfigureAwait(false);
+        var fresh = new HttpFeatures(image, volume, wifi, presets, replies, autoTrack, sdCards, mdSens, aiSens, osd);
+
+        // Fill the holes from the last good sweep — live values always win; the
+        // cache only stands in for sections this sweep couldn't read (including
+        // ALL of them, when the backoff was already armed by an earlier failure
+        // and every read no-opped: the panel then shows the last-known state
+        // instead of going limited for no visible reason).
+        var c = _httpFeaturesCache;
+        var merged = c == null ? fresh : new HttpFeatures(
+            fresh.Image ?? c.Image, fresh.Volume ?? c.Volume, fresh.WifiSignal ?? c.WifiSignal,
+            fresh.PtzPresets ?? c.PtzPresets, fresh.QuickReplies ?? c.QuickReplies,
+            fresh.AutoTrack ?? c.AutoTrack, fresh.SdCards ?? c.SdCards,
+            fresh.MdSensitivity ?? c.MdSensitivity, fresh.AiSensitivities ?? c.AiSensitivities,
+            fresh.Osd ?? c.Osd);
+        bool hasContent = merged.Image != null || merged.Volume != null || merged.WifiSignal != null
+            || merged.PtzPresets != null || merged.QuickReplies != null || merged.AutoTrack != null
+            || merged.SdCards != null || merged.MdSensitivity != null || merged.AiSensitivities != null
+            || merged.Osd != null;
+        if (hasContent) _httpFeaturesCache = merged;
+        return merged;
     }
 
     public async Task<ImageSettings?> GetImageSettingsAsync(CancellationToken ct)

@@ -8,6 +8,16 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Fixed
 
+- **Camera settings no longer randomly load "limited"**: the panel's HTTP
+  feature sweep (picture, OSD, quick replies, volume, presets, sensitivity…)
+  stopped at the first slow answer — one mid-sweep timeout armed the general
+  60-second HTTP backoff, blanking every remaining section AND the entire next
+  panel open. The sweep now forgives its first two failures (the remaining
+  sections still get their try; a dead camera costs two timeouts, not ten),
+  and the last good sweep is cached per camera: whatever a sweep can't read is
+  filled from the cache, so a busy camera costs freshness of near-static
+  config, not whole panel sections.
+
 - **Flip/mirror toggles only show when the camera can actually flip**: the
   panel offered them whenever the camera's ISP config carried rotation and
   mirroring values — but firmwares echo those fields even on models that
