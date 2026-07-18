@@ -108,7 +108,13 @@ public sealed class ReolinkHttpApi : IDisposable
     /// snapshot easily exceeds broker packet limits. Firmwares that ignore the
     /// scaling parameters return the full-size image; callers still guard the
     /// size. Returns null when the camera answers with anything but a JPEG.</summary>
-    public async Task<byte[]?> SnapAsync(int width, int height, CancellationToken ct)
+    public async Task<byte[]?> SnapAsync(int width, int height, CancellationToken ct) =>
+        await SnapAsync("sub", width, height, ct).ConfigureAwait(false);
+
+    /// <summary>As above with an explicit stream tier: "main", "sub" or "ext" (the
+    /// extern stream — the smallest tier, present on dual-lens and newer models).
+    /// Firmwares without the requested tier answer with an error JSON → null.</summary>
+    public async Task<byte[]?> SnapAsync(string snapType, int width, int height, CancellationToken ct)
     {
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
@@ -123,7 +129,7 @@ public sealed class ReolinkHttpApi : IDisposable
                 // but do respect snapType); firmwares that know neither ignore
                 // unknown query parameters and send the full-size image.
                 var url = $"{_apiUrl}?cmd=Snap&channel={_channelId}&rs={Guid.NewGuid():N}" +
-                          $"&snapType=sub&width={width}&height={height}&token={Uri.EscapeDataString(_token!)}";
+                          $"&snapType={snapType}&width={width}&height={height}&token={Uri.EscapeDataString(_token!)}";
                 using var res = await _http.GetAsync(url, ct).ConfigureAwait(false);
                 var bytes = await res.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
                 if (bytes.Length > 100 && bytes[0] == 0xFF && bytes[1] == 0xD8)

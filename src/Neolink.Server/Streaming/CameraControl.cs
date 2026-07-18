@@ -428,14 +428,21 @@ public sealed class CameraControl : ICameraControl
     /// JPEG. The HTTP API's Snap honors explicit scaling, so prefer it here.</summary>
     public async Task<byte[]?> SnapshotSmallAsync(CancellationToken ct)
     {
-        if (_httpApi != null
-            && await HttpTryAsync<byte[]?>(async c =>
-                   await _httpApi!.SnapAsync(640, 360, c).ConfigureAwait(false), ct, HttpSnapTimeout)
-                   .ConfigureAwait(false)
-               is { } small)
+        // Smallest stream tier first: on a dual-lens camera even the SUB snapshot
+        // is a multi-megabyte panorama, but the extern ("ext") tier is genuinely
+        // small. Firmwares without the tier answer with an error → next rung.
+        if (_httpApi != null)
         {
-            Log.Debug($"{CameraName}: small snapshot via HTTP Snap ({small.Length / 1024} KB)");
-            return small;
+            foreach (var tier in new[] { "ext", "sub" })
+            {
+                if (await HttpTryAsync<byte[]?>(async c =>
+                        await _httpApi!.SnapAsync(tier, 640, 360, c).ConfigureAwait(false), ct, HttpSnapTimeout)
+                        .ConfigureAwait(false) is { } jpeg)
+                {
+                    Log.Debug($"{CameraName}: small snapshot via HTTP Snap {tier} ({jpeg.Length / 1024} KB)");
+                    return jpeg;
+                }
+            }
         }
         Log.Debug($"{CameraName}: HTTP small snapshot unavailable — using the Baichuan snap");
         return await SnapshotAsync(ct).ConfigureAwait(false);
@@ -599,6 +606,10 @@ public sealed class CameraControl : ICameraControl
     /// stream starts at once) is routine, not an outage.</summary>
     private int _httpFailStreak;
 
+    /// <summary>A marginal HTTP server (Wi-Fi camera under load) flaps between
+    /// working and stalled; without a cooldown every flap would re-warn.</summary>
+    private DateTime _httpWarnCooldownUntil;
+
     private async Task<T?> HttpTryAsync<T>(Func<CancellationToken, Task<T?>> op, CancellationToken ct,
         TimeSpan? timeout = null)
     {
@@ -640,21 +651,29 @@ public sealed class CameraControl : ICameraControl
         {
             _httpRetryAt = DateTime.UtcNow + TimeSpan.FromSeconds(60);
             _httpFailStreak++;
+            // A slow/stalling server and a closed port are different stories and
+            // deserve different advice — telling someone with HTTP enabled to
+            // enable HTTP just gaslights them.
+            bool slow = ex is OperationCanceledException or TimeoutException;
             var reason = ex is OperationCanceledException
                 ? $"did not answer within {(timeout ?? HttpCallTimeout).TotalSeconds:0}s"
                 : Log.Flatten(ex);
-            if (_httpFailStreak >= 3 && !_httpUnreachableWarned)
+            if (_httpFailStreak >= 3 && !_httpUnreachableWarned && DateTime.UtcNow >= _httpWarnCooldownUntil)
             {
                 _httpUnreachableWarned = true;
-                Log.Warn($"{CameraName}: the camera's HTTP API is unreachable ({reason}). " +
+                _httpWarnCooldownUntil = DateTime.UtcNow + TimeSpan.FromMinutes(30);
+                Log.Warn($"{CameraName}: the camera's HTTP API is not answering ({reason}). " +
                          "Picture settings, volume, Wi-Fi signal, PTZ presets and scaled snapshots are " +
-                         "unavailable until it answers. Many cameras ship with HTTP disabled — enable it in " +
-                         "the Reolink app (Settings > Network > Advanced > Port Settings), or set " +
-                         "'http_address' if the API lives on another host/port.");
+                         "unavailable until it does. " + (slow
+                             ? "The port is open but the camera responds too slowly — typical for a Wi-Fi " +
+                               "camera under streaming load; reads resume automatically when it recovers."
+                             : "Many cameras ship with HTTP disabled — enable it in the Reolink app " +
+                               "(Settings > Network > Advanced > Port Settings), or set 'http_address' " +
+                               "if the API lives on another host/port."));
             }
             else
             {
-                Log.Debug($"{CameraName}: HTTP API unreachable ({reason}) — skipping HTTP reads for 60s");
+                Log.Debug($"{CameraName}: HTTP API not answering ({reason}) — skipping HTTP reads for 60s");
             }
             return default;
         }
