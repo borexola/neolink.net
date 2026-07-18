@@ -6,6 +6,18 @@ in the README). Paste the matching section below into the GitHub release.
 
 ## 0.9.4 — unreleased
 
+### Fixed
+
+- **SD-card browsing works on busy cameras**: the file search asked the camera
+  to walk its ENTIRE day in one query — an event-heavy doorbell that is also
+  encoding streams can't finish that inside any budget, so the calendar
+  answered and the file list never did. Worse, the timeout armed the general
+  HTTP backoff, making the "hit refresh to retry" advice silently do nothing
+  for a minute. The search is now paged into four 6-hour windows (short walks;
+  a failed window costs a gap, not the day, and a partial day still shows),
+  failures log at Info so "the server log has details" is actually true, and a
+  failed search no longer poisons the backoff — refresh really retries.
+
 ### Changed
 
 - **On-video controls get out of the way like a video player's**: on the

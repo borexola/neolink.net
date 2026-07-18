@@ -1272,46 +1272,94 @@ public sealed class CameraControl : ICameraControl
         return days;
     }
 
-    /// <summary>Budget for the SD FILE search: the camera walks its card's file
-    /// table, which on an event-heavy day takes far longer than a config read
-    /// (observed well past the snapshot budget on doorbells).</summary>
-    private static readonly TimeSpan SdSearchTimeout = TimeSpan.FromSeconds(45);
+    /// <summary>Overall budget for one SD FILE search (all windows, both streams).</summary>
+    private static readonly TimeSpan SdSearchTimeout = TimeSpan.FromSeconds(100);
+
+    /// <summary>Budget for ONE search window. The camera walks its card's file
+    /// table per query; an event-heavy doorbell that is also encoding streams
+    /// can't walk a whole day inside any sane budget (field report: calendar
+    /// answered, file search never did), so the day is paged into short walks.</summary>
+    private static readonly TimeSpan SdWindowTimeout = TimeSpan.FromSeconds(20);
 
     public Task<IReadOnlyList<SdRecording>?> GetSdRecordingsAsync(DateOnly day, CancellationToken ct) =>
         HttpTryAsync<IReadOnlyList<SdRecording>?>(async c =>
         {
-            var start = day.ToDateTime(TimeOnly.MinValue);
-            var end = day.ToDateTime(new TimeOnly(23, 59, 59));
             // The camera records whichever stream its own settings say — usually
             // main; older/battery firmwares list sub. Ask main first, sub when
             // main has nothing — and a stream the firmware REJECTS searching
             // must not abort the other one.
+            bool anyWindowFailed = false, anyWindowWorked = false;
             foreach (var streamType in new[] { "main", "sub" })
             {
-                JsonObject result;
-                try
+                var files = new List<SdRecording>();
+                var seen = new HashSet<string>(StringComparer.Ordinal);
+                bool rejected = false;
+                int consecutiveFails = 0, rawTotal = 0;
+                JsonObject? lastResult = null;
+                // Four 6-hour windows instead of one whole-day query: each walk
+                // stays short (Reolink's own clients page the search too), and a
+                // window that fails costs a gap, not the day.
+                for (int h = 0; h < 24; h += 6)
                 {
-                    result = await _httpApi!.SearchAsync(streamType, start, end, onlyStatus: false, c)
-                        .ConfigureAwait(false);
+                    var start = day.ToDateTime(new TimeOnly(h, 0, 0));
+                    var end = h + 6 >= 24 ? day.ToDateTime(new TimeOnly(23, 59, 59))
+                                          : day.ToDateTime(new TimeOnly(h + 5, 59, 59));
+                    using var wcts = CancellationTokenSource.CreateLinkedTokenSource(c);
+                    wcts.CancelAfter(SdWindowTimeout);
+                    try
+                    {
+                        var result = await _httpApi!.SearchAsync(streamType, start, end, onlyStatus: false, wcts.Token)
+                            .ConfigureAwait(false);
+                        lastResult = result;
+                        rawTotal += (result["File"] as JsonArray)?.Count ?? 0;
+                        foreach (var f in ParseSdRecordings(result, streamType))
+                            if (seen.Add(f.Name)) // a boundary-spanning file lists in both windows
+                                files.Add(f);
+                        consecutiveFails = 0;
+                        anyWindowWorked = true;
+                    }
+                    catch (ReolinkApiException ex)
+                    {
+                        // The firmware doesn't do this stream's search — next stream.
+                        Log.Debug($"{CameraName}: SD file search ({streamType}, {day:yyyy-MM-dd}) rejected: {ex.Message}");
+                        rejected = true;
+                        break;
+                    }
+                    catch (Exception ex) when (!c.IsCancellationRequested)
+                    {
+                        // A slow or dropped window (camera busy streaming): keep what
+                        // we have, try the rest, give up on this stream after two
+                        // misses in a row. Info, not Debug — the UI's error banner
+                        // sends people to this log expecting details.
+                        anyWindowFailed = true;
+                        Log.Info($"{CameraName}: SD file search ({streamType}, {day:yyyy-MM-dd} " +
+                                 $"{h:00}:00-{Math.Min(h + 6, 24):00}:00) failed: {Log.Flatten(ex)}");
+                        if (++consecutiveFails >= 2) break;
+                    }
                 }
-                catch (ReolinkApiException ex)
+                if (files.Count > 0)
                 {
-                    Log.Debug($"{CameraName}: SD file search ({streamType}, {day:yyyy-MM-dd}) rejected: {ex.Message}");
-                    continue;
+                    if (anyWindowFailed)
+                        Log.Info($"{CameraName}: SD file search ({streamType}, {day:yyyy-MM-dd}) shows a PARTIAL " +
+                                 $"day ({files.Count} recordings) — some windows failed; refresh fills the gaps");
+                    return files;
                 }
-                var files = ParseSdRecordings(result, streamType);
-                if (files.Count > 0) return files;
+                if (rejected || lastResult == null) continue;
                 // Zero usable files answers the "the app shows footage but neolink
                 // doesn't" question ONLY if we can see what the camera actually
                 // said — log the raw shape (dropped entries mean an unmapped
                 // firmware dialect; an absent File[] means a genuinely empty day).
-                int raw = (result["File"] as JsonArray)?.Count ?? -1;
                 Log.Info($"{CameraName}: SD file search ({streamType}, {day:yyyy-MM-dd}) returned " +
-                         (raw <= 0 ? $"no File list (keys: {string.Join(",", result.Select(k => k.Key))})"
-                                   : $"{raw} entries but none usable — first entry: " +
-                                     Truncate(((JsonArray)result["File"]!)[0]?.ToJsonString() ?? "?", 400)));
+                         (rawTotal <= 0 ? $"no File list (keys: {string.Join(",", lastResult.Select(k => k.Key))})"
+                                        : $"{rawTotal} entries but none usable — first entry: " +
+                                          Truncate((lastResult["File"] as JsonArray)?[0]?.ToJsonString() ?? "?", 400)));
             }
-            return new List<SdRecording>();
+            // Nothing usable. An empty day the camera confirmed is an empty list;
+            // any failed window with zero results is null — the UI's error banner —
+            // returned WITHOUT arming the transport backoff, so the refresh the
+            // banner suggests actually reaches the camera instead of no-opping
+            // for 60 s.
+            return anyWindowFailed ? null : new List<SdRecording>();
         }, ct, SdSearchTimeout);
 
     private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max] + "…";
