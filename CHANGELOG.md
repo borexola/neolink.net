@@ -30,6 +30,12 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Changed
 
+- **The camera rail gains a settings button**: the on-video rail on the
+  maximized tile (below the zoom pill) now ends in a gear that opens that
+  camera's settings dialog — no trip back to the sidebar. Because settings
+  apply to every camera, the rail now shows on every maximized tile, not just
+  PTZ/talk-capable ones.
+
 - **On-video controls get out of the way like a video player's**: on the
   maximized (or browser-fullscreen) tile, a still mouse now fades ALL the
   on-video chrome after a moment — the toolbar, the camera rail (PTZ + mic),

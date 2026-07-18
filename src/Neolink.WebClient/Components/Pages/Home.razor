@@ -629,13 +629,15 @@
                                 <span class="talk-overlay-label">@(_talkPhase == "live" ? "TALKING" : "CONNECTING…")</span>
                             </div>
                         }
-                        @if (_maxIndex == index && (PtzSupported(slot.Camera) || TalkSupported(slot.Camera)))
+                        @if (_maxIndex == index && slot.Camera != null)
                         {
                             @* On-video camera rail: a quiet glass pill on the right edge,
                                directly under the zoom HUD (same look, same edge — the two
                                read as one column of controls). PTZ opens a compact
                                hold-to-pan pad flying out to the LEFT of the rail; the mic
-                               starts/stops two-way talk. Pointer events stop here so
+                               starts/stops two-way talk; the gear opens the camera's
+                               settings dialog (every camera has one, so the rail always
+                               renders on the maximized tile). Pointer events stop here so
                                holding an arrow never starts the digital-zoom drag. *@
                             var railCam = slot.Camera!;
                             <div class="cam-rail @(_ptzPadOpen || TalkActive(railCam) ? "open" : "")"
@@ -676,6 +678,8 @@
                                         <button class="cam-rail-btn @TalkClass(railCam)" title="@TalkTitle(railCam)"
                                                 @onclick="() => ToggleTalkAsync(railCam)">@UiIcon.Render("mic", 14)</button>
                                     }
+                                    <button class="cam-rail-btn" title="Camera settings & controls"
+                                            @onclick="() => _panelCamera = railCam">@UiIcon.Render("gear", 14)</button>
                                 </div>
                             </div>
                         }
