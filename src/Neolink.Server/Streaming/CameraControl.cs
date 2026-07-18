@@ -744,8 +744,12 @@ public sealed class CameraControl : ICameraControl
                 Log.Warn($"{CameraName}: the camera's HTTP API is not answering ({reason}). " +
                          "Picture settings, volume, Wi-Fi signal, PTZ presets and scaled snapshots are " +
                          "unavailable until it does. " + (slow
-                             ? "The port is open but the camera responds too slowly — typical for a Wi-Fi " +
-                               "camera under streaming load; reads resume automatically when it recovers."
+                             // A no-reply timeout can't tell a slow camera from silently
+                             // dropped packets — don't claim "the port is open".
+                             ? "Either the camera is overloaded (Wi-Fi camera under streaming load), or " +
+                               "something between Neolink and the camera is dropping HTTP traffic " +
+                               "(firewall/VLAN rules, Docker networking). Reads resume automatically " +
+                               "when it recovers."
                              : "Many cameras ship with HTTP disabled — enable it in the Reolink app " +
                                "(Settings > Network > Advanced > Port Settings), or set 'http_address' " +
                                "if the API lives on another host/port."));

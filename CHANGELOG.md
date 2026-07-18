@@ -8,6 +8,19 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Fixed
 
+- **HTTP features no longer vanish on Wi-Fi cameras that are actually fine**:
+  Wi-Fi cameras drop idle keep-alive connections silently (power save, AP
+  roam) — no TCP reset, so a pooled connection can be a corpse. Requests
+  written into one waited out the whole 10s command cap for a reply that
+  never came, reading as "camera HTTP API did not reply" streaks against a
+  camera that answers a fresh connection in milliseconds. Idle camera
+  connections are now retired after 30 seconds (a sweep after a quiet period
+  starts on fresh TCP — about 1ms on a LAN), and connects get their own 5s
+  bound so a dropped SYN fails fast. The "HTTP API is not answering" warning
+  also stops claiming "the port is open" — a no-reply timeout can't tell a
+  slow camera from dropped packets, and the advice now mentions
+  firewall/VLAN/Docker networking as suspects.
+
 - **Camera settings no longer randomly load "limited"**: the panel's HTTP
   feature sweep (picture, OSD, quick replies, volume, presets, sensitivity…)
   stopped at the first slow answer — one mid-sweep timeout armed the general

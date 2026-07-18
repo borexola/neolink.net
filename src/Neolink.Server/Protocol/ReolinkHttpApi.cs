@@ -50,14 +50,36 @@ public sealed class ReolinkHttpApi : IDisposable
         _username = username;
         _password = password ?? "";
         _channelId = channelId;
+        _http = new HttpClient(NewHandler()) { Timeout = RequestTimeout };
+    }
 
-        var handler = new HttpClientHandler();
-        if (baseUrl.StartsWith("https:", StringComparison.OrdinalIgnoreCase))
+    /// <summary>Connection hygiene for camera HTTP. A Wi-Fi camera drops idle
+    /// keep-alive connections SILENTLY (power save, AP roam, embedded-server
+    /// amnesia) — no RST, so a pooled connection can be a corpse: requests
+    /// written into one wait out the whole command cap for a reply that never
+    /// comes, reading as "did not reply" streaks against a perfectly healthy
+    /// camera (field report: 10s stalls while curl from the same network
+    /// namespace answered in 69ms on a fresh connection). Idle connections are
+    /// therefore retired after 30s — a sweep after a quiet period starts on
+    /// fresh TCP, which costs ~1ms on a LAN — and connects get their own 5s
+    /// bound so a dropped SYN fails fast instead of masquerading as a slow
+    /// reply for the full cap.</summary>
+    private HttpMessageHandler NewHandler()
+    {
+        var handler = new SocketsHttpHandler
+        {
+            PooledConnectionIdleTimeout = TimeSpan.FromSeconds(30),
+            ConnectTimeout = TimeSpan.FromSeconds(5),
+        };
+        if (_apiUrl.StartsWith("https:", StringComparison.OrdinalIgnoreCase))
         {
             // Cameras serve their HTTPS API with a self-signed certificate.
-            handler.ServerCertificateCustomValidationCallback = (_, _, _, _) => true;
+            handler.SslOptions = new System.Net.Security.SslClientAuthenticationOptions
+            {
+                RemoteCertificateValidationCallback = (_, _, _, _) => true,
+            };
         }
-        _http = new HttpClient(handler) { Timeout = RequestTimeout };
+        return handler;
     }
 
     public void Dispose() { _http.Dispose(); _httpLong?.Dispose(); }
@@ -504,10 +526,7 @@ public sealed class ReolinkHttpApi : IDisposable
     private HttpClient LongHttp()
     {
         if (_httpLong != null) return _httpLong;
-        var handler = new HttpClientHandler();
-        if (_apiUrl.StartsWith("https:", StringComparison.OrdinalIgnoreCase))
-            handler.ServerCertificateCustomValidationCallback = (_, _, _, _) => true;
-        return _httpLong = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+        return _httpLong = new HttpClient(NewHandler()) { Timeout = Timeout.InfiniteTimeSpan };
     }
 
     private async Task LoginAsync(CancellationToken ct)
