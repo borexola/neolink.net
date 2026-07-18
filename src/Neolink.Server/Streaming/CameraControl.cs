@@ -681,9 +681,12 @@ public sealed class CameraControl : ICameraControl
     private DateTime _httpWarnCooldownUntil;
 
     private async Task<T?> HttpTryAsync<T>(Func<CancellationToken, Task<T?>> op, CancellationToken ct,
-        TimeSpan? timeout = null)
+        TimeSpan? timeout = null, bool force = false)
     {
-        if (_httpApi == null || DateTime.UtcNow < _httpRetryAt) return default;
+        // force = an explicit user action (SD-card browse): it gets its try even
+        // while the transport backoff is armed — the user pressed refresh NOW,
+        // and a no-op that quietly returns "nothing" reads as data loss.
+        if (_httpApi == null || (!force && DateTime.UtcNow < _httpRetryAt)) return default;
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         // A call without a live session token pays for a LOGIN round-trip before
         // the command — on a Wi-Fi camera under streaming load (dual-lens Duos)
@@ -782,19 +785,34 @@ public sealed class CameraControl : ICameraControl
         // transport failure arms the 60s backoff to protect unrelated callers;
         // within THIS sweep the first two failures are forgiven (the pre-step
         // backoff is restored so the remaining sections still get their try).
-        // The third strike leaves it armed and the rest no-op — a dead camera
-        // costs two timeouts, not ten.
+        // The third strike leaves it armed and the rest no-op — and forgiveness
+        // needs a PROVEN API (a login has succeeded): on a camera with no HTTP
+        // at all, retrying just stacks login timeouts until the panel's own
+        // request gives up.
+        //
+        // The whole sweep also lives inside one overall budget: the panel waits
+        // 30s at most, and a sweep that answers late answers nobody. Steps the
+        // budget cuts off read as null and fill from the cache below.
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        budget.CancelAfter(TimeSpan.FromSeconds(25));
         int forgiven = 0;
         async Task<T?> Step<T>(Func<CancellationToken, Task<T?>> read)
         {
             var before = _httpRetryAt;
-            var v = await read(ct).ConfigureAwait(false);
-            if (_httpRetryAt > before && forgiven < 2)
+            try
             {
-                forgiven++;
-                _httpRetryAt = before;
+                var v = await read(budget.Token).ConfigureAwait(false);
+                if (_httpRetryAt > before && forgiven < 2 && _httpApi!.HasLiveToken)
+                {
+                    forgiven++;
+                    _httpRetryAt = before;
+                }
+                return v;
             }
-            return v;
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                return default; // sweep budget spent — the cache stands in
+            }
         }
         var image = await Step<ImageSettings>(GetImageSettingsAsync).ConfigureAwait(false);
         var volume = await Step<int?>(GetVolumeAsync).ConfigureAwait(false);
@@ -845,7 +863,16 @@ public sealed class CameraControl : ICameraControl
         JsonObject? ispRange = isp != null
             ? await HttpTryAsync<JsonObject?>(async c => await IspRangeAsync(c).ConfigureAwait(false), ct).ConfigureAwait(false)
             : null;
-        return ParseImageSettings(img, isp, ispRange);
+        // The ability table outranks the range heuristic for flip/mirror: some
+        // firmwares list rotation/mirroring in the RANGE too on models that can't
+        // do either (field report: dead toggles on a camera the range gate was
+        // built to fix), but their GetAbility carries ispFlip/ispMirror ver 0.
+        JsonObject? ability = isp != null
+            ? await HttpTryAsync<JsonObject?>(async c => await AbilityAsync(c).ConfigureAwait(false), ct).ConfigureAwait(false)
+            : null;
+        int channel = _httpApi!.ChannelId;
+        return ParseImageSettings(img, isp, ispRange,
+            AbilityFlag(ability, channel, "ispFlip"), AbilityFlag(ability, channel, "ispMirror"));
     }
 
     /// <summary>The GetIsp RANGE table, fetched once per camera lifetime (it's static
@@ -862,23 +889,28 @@ public sealed class CameraControl : ICameraControl
         return range;
     }
 
-    internal static ImageSettings ParseImageSettings(JsonObject img, JsonObject? isp, JsonObject? ispRange = null) => new(
+    internal static ImageSettings ParseImageSettings(JsonObject img, JsonObject? isp, JsonObject? ispRange = null,
+        bool? flipAbility = null, bool? mirrorAbility = null) => new(
         Bright: (int?)img["bright"], Contrast: (int?)img["contrast"],
         Saturation: (int?)img["saturation"], Hue: (int?)img["hue"], Sharpen: (int?)img["sharpen"],
         DayNight: (string?)isp?["dayNight"],
         AntiFlicker: (string?)isp?["antiFlicker"],
-        Flip: IspFlag(isp, ispRange, "rotation"),
-        Mirror: IspFlag(isp, ispRange, "mirroring"),
+        Flip: IspFlag(isp, ispRange, "rotation", flipAbility),
+        Mirror: IspFlag(isp, ispRange, "mirroring", mirrorAbility),
         Hdr: (int?)isp?["hdr"],
         HdrMax: HdrRangeMax(ispRange));
 
-    /// <summary>An optional on/off ISP field, gated by capability: when the range
-    /// table was read, the field must appear IN it — firmwares echo rotation and
-    /// mirroring values in the config on models that can't actually flip, and a
-    /// toggle that silently no-ops is worse than none. Without a range table
-    /// (older firmware, range read failed) value presence decides, as before.</summary>
-    internal static bool? IspFlag(JsonObject? isp, JsonObject? ispRange, string key) =>
-        isp?[key] is { } v && (ispRange == null || ispRange[key] != null) ? (int?)v != 0 : null;
+    /// <summary>An optional on/off ISP field, gated by capability. The ability
+    /// table's verdict (ispFlip/ispMirror) is final when it answered — false hides
+    /// the toggle no matter what the config echoes, true shows it. Without an
+    /// ability verdict, the range table decides: when it was read, the field must
+    /// appear IN it — firmwares echo rotation and mirroring values in the config
+    /// on models that can't actually flip, and a toggle that silently no-ops is
+    /// worse than none. Without either (older firmware, reads failed) value
+    /// presence decides, as before.</summary>
+    internal static bool? IspFlag(JsonObject? isp, JsonObject? ispRange, string key, bool? ability = null) =>
+        ability == false ? null
+        : isp?[key] is { } v && (ability == true || ispRange == null || ispRange[key] != null) ? (int?)v != 0 : null;
 
     /// <summary>The hdr field's maximum from an ISP range table: {"min":0,"max":N}
     /// on most firmwares, a bare option array on some. Null = range didn't say
@@ -919,6 +951,22 @@ public sealed class CameraControl : ICameraControl
             if (mirror is { } mi) isp["mirroring"] = mi ? 1 : 0;
             await _httpApi.SetIspAsync(isp, ct).ConfigureAwait(false);
         }
+        // The write is CONFIRMED — fold it into the cache: flip/mirror restart
+        // the camera's video pipeline, and a re-read racing that restart can
+        // still echo the OLD value; the cache must not resurrect pre-write state
+        // when the next sweep's fresh read fails.
+        if (_httpFeaturesCache?.Image is { } ci)
+            _httpFeaturesCache = _httpFeaturesCache with
+            {
+                Image = ci with
+                {
+                    Bright = bright ?? ci.Bright, Contrast = contrast ?? ci.Contrast,
+                    Saturation = saturation ?? ci.Saturation, Hue = hue ?? ci.Hue,
+                    Sharpen = sharpen ?? ci.Sharpen,
+                    DayNight = dayNight ?? ci.DayNight, AntiFlicker = antiFlicker ?? ci.AntiFlicker,
+                    Flip = flip ?? ci.Flip, Mirror = mirror ?? ci.Mirror,
+                },
+            };
         Log.Info($"{CameraName}: picture settings changed" +
                  $"{(flip != null || mirror != null ? " (flip/mirror restarts the video stream)" : "")}");
     }
@@ -1015,30 +1063,50 @@ public sealed class CameraControl : ICameraControl
         Log.Info($"{CameraName}: auto-reply set (fileId={fileId}, timeout={timeoutSeconds}s)");
     }
 
-    /// <summary>Cached GetAbility verdict for auto-tracking — the ability table is
-    /// static per device, so one HTTP read decides it for this camera's lifetime.</summary>
-    private bool? _aiTrackSupported;
-
-    /// <summary>The authoritative gate: GetAbility's supportAITrack version. Config
-    /// reads are NOT trusted for this — firmwares include an aiTrack field on models
+    /// <summary>The camera's GetAbility table, fetched once per camera lifetime —
+    /// it is static per device+account, and it is the authoritative "does this
+    /// model actually have the feature" source. Config reads are NOT trusted for
+    /// capability: firmwares echo fields (aiTrack, rotation, mirroring) on models
     /// without the feature (observed on the Elite WiFi line).</summary>
+    private JsonObject? _ability;
+    private bool _abilityLoaded;
+
+    private async Task<JsonObject?> AbilityAsync(CancellationToken ct)
+    {
+        if (_abilityLoaded) return _ability;
+        var ability = await _httpApi!.GetAbilityAsync(ct).ConfigureAwait(false);
+        _ability = ability;
+        _abilityLoaded = true;
+        return ability;
+    }
+
     private async Task<bool> AiTrackSupportedAsync(CancellationToken ct)
     {
-        if (_aiTrackSupported is { } known) return known;
-        var ability = await _httpApi!.GetAbilityAsync(ct).ConfigureAwait(false);
-        bool supported = SupportsAiTrack(ability, _httpApi.ChannelId);
-        _aiTrackSupported = supported;
-        return supported;
+        var ability = await AbilityAsync(ct).ConfigureAwait(false);
+        return ability != null && SupportsAiTrack(ability, _httpApi!.ChannelId);
     }
 
     /// <summary>supportAITrack ver &gt; 0 in the channel's ability block (falling back
     /// to the first block — standalone cameras have exactly one).</summary>
     internal static bool SupportsAiTrack(JsonObject ability, int channel)
     {
-        var chn = ability["abilityChn"] as JsonArray;
-        var entry = (chn?.ElementAtOrDefault(channel) ?? chn?.OfType<JsonObject>().FirstOrDefault()) as JsonObject;
-        return (int?)entry?["supportAITrack"]?["ver"] is > 0;
+        return (int?)AbilityChannel(ability, channel)?["supportAITrack"]?["ver"] is > 0;
     }
+
+    private static JsonObject? AbilityChannel(JsonObject ability, int channel)
+    {
+        var chn = ability["abilityChn"] as JsonArray;
+        return (chn?.ElementAtOrDefault(channel) ?? chn?.OfType<JsonObject>().FirstOrDefault()) as JsonObject;
+    }
+
+    /// <summary>A tri-state feature verdict from the ability table: true/false when
+    /// the channel's block answered (a missing key means "not this model" — the
+    /// table lists every feature the firmware knows), null when there is no table
+    /// to ask (ability read failed) and the caller must fall back to heuristics.</summary>
+    internal static bool? AbilityFlag(JsonObject? ability, int channel, string key) =>
+        ability == null ? null
+        : AbilityChannel(ability, channel) is { } entry ? (int?)entry[key]?["ver"] is > 0
+        : null;
 
     public Task<bool?> GetAutoTrackAsync(CancellationToken ct) =>
         HttpTryAsync<bool?>(async c =>
@@ -1309,7 +1377,7 @@ public sealed class CameraControl : ICameraControl
             var result = await _httpApi!.SearchAsync("main", start, start.AddMonths(1).AddSeconds(-1),
                 onlyStatus: true, c).ConfigureAwait(false);
             return ParseSdCalendar(result, year, month);
-        }, ct, HttpSnapTimeout);
+        }, ct, HttpSnapTimeout, force: true);
 
     /// <summary>Status[].table is one digit per day of the month ('1' = recordings).</summary>
     internal static IReadOnlyList<int> ParseSdCalendar(JsonObject searchResult, int year, int month)
@@ -1326,8 +1394,10 @@ public sealed class CameraControl : ICameraControl
         return days;
     }
 
-    /// <summary>Overall budget for one SD FILE search (all windows, both streams).</summary>
-    private static readonly TimeSpan SdSearchTimeout = TimeSpan.FromSeconds(100);
+    /// <summary>Overall budget for one SD FILE search (all windows, both streams) —
+    /// kept UNDER the UI's own 95s wait so a slow day answers (partial or the
+    /// error banner) instead of the client cancelling first.</summary>
+    private static readonly TimeSpan SdSearchTimeout = TimeSpan.FromSeconds(90);
 
     /// <summary>Budget for ONE search window. The camera walks its card's file
     /// table per query; an event-heavy doorbell that is also encoding streams
@@ -1388,6 +1458,11 @@ public sealed class CameraControl : ICameraControl
                         anyWindowFailed = true;
                         Log.Info($"{CameraName}: SD file search ({streamType}, {day:yyyy-MM-dd} " +
                                  $"{h:00}:00-{Math.Min(h + 6, 24):00}:00) failed: {Log.Flatten(ex)}");
+                        // No session token and nothing answered yet: there is no
+                        // working HTTP API here (some models simply have none) —
+                        // one failed login says it all, and walking the remaining
+                        // windows would stack more of the same timeout.
+                        if (!_httpApi!.HasLiveToken && !anyWindowWorked) return null;
                         if (++consecutiveFails >= 2) break;
                     }
                 }
@@ -1414,7 +1489,7 @@ public sealed class CameraControl : ICameraControl
             // banner suggests actually reaches the camera instead of no-opping
             // for 60 s.
             return anyWindowFailed ? null : new List<SdRecording>();
-        }, ct, SdSearchTimeout);
+        }, ct, SdSearchTimeout, force: true);
 
     private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max] + "…";
 

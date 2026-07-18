@@ -247,10 +247,12 @@ public static class WebApi
             builder.WebHost.UseStaticWebAssets();
             builder.Services.AddRazorComponents().AddInteractiveServerComponents();
             // The UI's camera-list fetches run server-side (Blazor Server circuits).
-            // 15s, not snappier: first-open capability discovery probes the camera
-            // for optional features and silent probes legitimately take seconds —
-            // a shorter client timeout aborts the request mid-probe.
-            builder.Services.AddSingleton(_ => new HttpClient { Timeout = TimeSpan.FromSeconds(15) });
+            // 100s is a CAP, not the working budget: call sites bound themselves
+            // with per-request tokens (settings 30s, SD-card file search 95s).
+            // The old blanket 15s sat BELOW legitimate handler times — an SD file
+            // search or a slow feature sweep got cancelled client-side and the UI
+            // showed "Cannot reach http://127.0.0.1:8655" for its own server.
+            builder.Services.AddSingleton(_ => new HttpClient { Timeout = TimeSpan.FromSeconds(100) });
             // Circuits must talk to THIS server via loopback, never back out through
             // a reverse proxy's public URL (TLS/hairpin failures behind HAProxy etc.).
             builder.Services.AddSingleton(new Neolink.WebClient.LocalApiInfo(LoopbackBase(bindAddr, port)));

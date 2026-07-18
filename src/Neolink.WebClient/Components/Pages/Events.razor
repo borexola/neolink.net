@@ -570,9 +570,14 @@
         return r;
     }
 
-    private async Task<T?> GetJsonAsync<T>(string path)
+    /// <summary>The shared client's timeout is only a cap — each call brings its
+    /// own budget. Server-state reads are fast (20s is generous); the SD-card
+    /// FILE search is answered by the camera walking its card and legitimately
+    /// runs long, so its caller passes a budget above the server's own 90s.</summary>
+    private async Task<T?> GetJsonAsync<T>(string path, int timeoutSeconds = 20)
     {
-        using var res = await Http.SendAsync(Req(HttpMethod.Get, path));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
+        using var res = await Http.SendAsync(Req(HttpMethod.Get, path), cts.Token);
         if (res.StatusCode == System.Net.HttpStatusCode.Unauthorized)
         {
             _error = "Sign in on the live view first, then reopen Events.";
@@ -677,10 +682,12 @@
         {
             var cam = Uri.EscapeDataString(_sdCamera);
             var days = await GetJsonAsync<ApiSdDays>(
-                $"/api/cameras/{cam}/sdcard/days?year={_sdDate.Year}&month={_sdDate.Month}");
+                $"/api/cameras/{cam}/sdcard/days?year={_sdDate.Year}&month={_sdDate.Month}",
+                timeoutSeconds: 30);
             _sdDays = days?.Days ?? new List<int>();
             var recs = await GetJsonAsync<ApiSdRecordings>(
-                $"/api/cameras/{cam}/sdcard/recordings?date={_sdDate:yyyy-MM-dd}");
+                $"/api/cameras/{cam}/sdcard/recordings?date={_sdDate:yyyy-MM-dd}",
+                timeoutSeconds: 95);
             if (recs == null && days == null)
             {
                 _sdError = "This camera's SD card can't be browsed — it needs a Reolink HTTP API " +
@@ -696,6 +703,11 @@
                            "busy streaming. Hit refresh to retry; the server log has details.";
             }
             _sdRecs = recs?.Recordings ?? new List<ApiSdRecording>();
+        }
+        catch (OperationCanceledException)
+        {
+            _sdError = "The camera is taking too long to answer the SD-card search — it is likely " +
+                       "busy recording or streaming. Hit refresh to retry.";
         }
         catch (Exception ex)
         {

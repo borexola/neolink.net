@@ -1807,6 +1807,26 @@ public static class SelfTest
             Assert(s4 is { Flip: false, Mirror: true },
                 "range offering them keeps the values");
 
+            // The GetAbility verdict outranks the range heuristic: some firmwares
+            // list rotation/mirroring in the RANGE too on models that can't do
+            // either (field report: dead toggles survived the range gate), but
+            // their ability table carries ispFlip/ispMirror ver 0.
+            var abilityNo = Obj("""{"abilityChn":[{"ispFlip":{"permit":6,"ver":0},"ispMirror":{"permit":6,"ver":0}}]}""");
+            var abilityYes = Obj("""{"abilityChn":[{"ispFlip":{"permit":6,"ver":1},"ispMirror":{"permit":6,"ver":1}}]}""");
+            Assert(Streaming.CameraControl.AbilityFlag(abilityNo, 0, "ispFlip") == false, "ability ver 0 = unsupported");
+            Assert(Streaming.CameraControl.AbilityFlag(abilityYes, 0, "ispMirror") == true, "ability ver 1 = supported");
+            Assert(Streaming.CameraControl.AbilityFlag(abilityYes, 0, "nosuch") == false,
+                "channel block answered, key absent = unsupported");
+            Assert(Streaming.CameraControl.AbilityFlag(null, 0, "ispFlip") == null, "no table = no verdict");
+            Assert(Streaming.CameraControl.AbilityFlag(Obj("""{}"""), 0, "ispFlip") == null,
+                "table without channel blocks = no verdict");
+            var s5 = Streaming.CameraControl.ParseImageSettings(img, isp, rangeWith, flipAbility: false, mirrorAbility: false);
+            Assert(s5 is { Flip: null, Mirror: null },
+                "ability false hides the toggles even when the range lists them");
+            var s6 = Streaming.CameraControl.ParseImageSettings(img, isp, rangeWithout, flipAbility: true, mirrorAbility: true);
+            Assert(s6 is { Flip: false, Mirror: true },
+                "ability true keeps them even when the range omits them");
+
             // Indoor firmwares (E1 line) report antiFlicker "Off"; the canonical
             // value list must carry it or HA rejects every state publish
             // ("Invalid option for select...anti_flicker: 'Off'").

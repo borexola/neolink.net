@@ -1421,6 +1421,7 @@
         if (_applying) return;
         _applying = true;
         var applied = new List<string>();
+        bool? appliedFlip = null, appliedMirror = null;
         try
         {
             if (_pendingIr is { } ir && await PostAsync("led", new { state = ir }))
@@ -1484,6 +1485,7 @@
             {
                 _pendingBright = _pendingContrast = _pendingSaturation = _pendingHue = _pendingSharpen = null;
                 _pendingDayNight = _pendingAntiFlicker = null;
+                (appliedFlip, appliedMirror) = (_pendingFlip, _pendingMirror);
                 _pendingFlip = _pendingMirror = null;
                 applied.Add("picture");
             }
@@ -1563,6 +1565,15 @@
             if (_caps?.Features?.StreamSettings == true) _encCurrent = await GetAsync<List<ApiStreamEnc>?>("settings/stream");
             if (_http != null && await GetAsync<ApiHttpFeatures?>("httpfeatures") is { } freshHttp)
                 _http = MergeHttp(freshHttp, _http);
+            // A CONFIRMED flip/mirror write outranks the camera's echo for this
+            // refresh: the camera applies these by restarting its video pipeline
+            // and can still report the pre-write value while it does — the panel
+            // then looked like the toggle didn't take.
+            if ((appliedFlip != null || appliedMirror != null) && _http?.Image is { } img)
+                _http = _http with
+                {
+                    Image = img with { Flip = appliedFlip ?? img.Flip, Mirror = appliedMirror ?? img.Mirror },
+                };
         }
         finally
         {
@@ -2115,9 +2126,20 @@
     {
         try
         {
-            using var res = await Http.SendAsync(NewRequest(HttpMethod.Get, path));
+            // The shared client's timeout is only a cap; panel reads get 30s —
+            // room for a slow camera sweep (the server bounds those tighter),
+            // while a genuinely stuck server still fails within the panel's
+            // attention span.
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            using var res = await Http.SendAsync(NewRequest(HttpMethod.Get, path), cts.Token);
             if (!res.IsSuccessStatusCode) return default;
-            return await res.Content.ReadFromJsonAsync<T>();
+            return await res.Content.ReadFromJsonAsync<T>(cancellationToken: cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            _error = "The camera is taking too long to answer — it may be busy or slow to respond. " +
+                     "Close and reopen this panel to retry.";
+            return default;
         }
         catch (Exception ex)
         {
@@ -2133,7 +2155,9 @@
         {
             var req = NewRequest(HttpMethod.Post, path);
             req.Content = JsonContent.Create(body);
-            using var res = await Http.SendAsync(req, ct);
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(30));
+            using var res = await Http.SendAsync(req, cts.Token);
             if (res.IsSuccessStatusCode)
             {
                 _error = null;
@@ -2144,7 +2168,7 @@
                 : await ReadErrorAsync(res) ?? $"Request failed ({(int)res.StatusCode})", error: true);
             return false;
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        catch (OperationCanceledException)
         {
             ShowToast("Timed out waiting for the camera to confirm — it may be slow or offline. Check its state and try again.", error: true);
             return false;

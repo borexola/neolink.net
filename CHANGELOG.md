@@ -16,17 +16,37 @@ in the README). Paste the matching section below into the GitHub release.
   sections still get their try; a dead camera costs two timeouts, not ten),
   and the last good sweep is cached per camera: whatever a sweep can't read is
   filled from the cache, so a busy camera costs freshness of near-static
-  config, not whole panel sections.
+  config, not whole panel sections. The whole sweep also answers within 25
+  seconds no matter what (late steps fill from the cache), and failures are
+  only forgiven once a login has succeeded — a camera with no HTTP API at all
+  fails fast instead of stacking login timeouts.
+
+- **No more "Cannot reach http://127.0.0.1:8655 … 15 seconds elapsing"**: the
+  web UI gave every request to its own server a blanket 15-second budget —
+  below what a legitimate SD-card file search or a slow settings sweep takes,
+  so the UI cancelled its own server mid-work and blamed the connection.
+  Each call now brings a budget matched to its work (settings 30s, SD file
+  search 95s — always above the server's own internal budget), and a genuine
+  timeout reads like one: "the camera is taking too long to answer", not a
+  loopback URL.
+
+- **Flip/mirror changes show in the panel reliably**: the camera applies
+  flip/mirror by restarting its video pipeline, and the panel's re-read could
+  race that restart — the camera echoed the pre-write value and the toggle
+  looked like it hadn't taken. A confirmed write now outranks the camera's
+  echo, in the panel and in the server's feature cache.
 
 - **Flip/mirror toggles only show when the camera can actually flip**: the
   panel offered them whenever the camera's ISP config carried rotation and
   mirroring values — but firmwares echo those fields even on models that
   don't support flipping (the Elite WiFi line), leaving toggles that silently
-  did nothing. The gate is now the camera's own ISP range table (the same
-  capability list the HDR control reads): a field the range doesn't offer is
-  a field the camera doesn't do. Cameras whose firmware has no range table
-  keep the old behavior. The Home Assistant flip/mirror switches follow the
-  same gate automatically.
+  did nothing. The gate is now the camera's GetAbility table (ispFlip /
+  ispMirror — the authoritative "does this model actually have it" source,
+  the same one the auto-track control trusts); some firmwares list the fields
+  even in their ISP range table, so the range alone wasn't enough. Cameras
+  whose ability table can't be read fall back to the range check, then to the
+  old behavior. The Home Assistant flip/mirror switches follow the same gate
+  automatically.
 
 - **SD-card browsing works on busy cameras**: the file search asked the camera
   to walk its ENTIRE day in one query — an event-heavy doorbell that is also
@@ -36,7 +56,11 @@ in the README). Paste the matching section below into the GitHub release.
   for a minute. The search is now paged into four 6-hour windows (short walks;
   a failed window costs a gap, not the day, and a partial day still shows),
   failures log at Info so "the server log has details" is actually true, and a
-  failed search no longer poisons the backoff — refresh really retries.
+  failed search no longer poisons the backoff — refresh really retries. SD
+  browsing is an explicit user action, so it now also runs even while the
+  general HTTP backoff is armed, and a camera with no working HTTP API at all
+  (some models simply have none) answers with the "can't be browsed" banner
+  immediately instead of walking every search window into a timeout.
 
 ### Changed
 
