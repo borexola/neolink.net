@@ -6,6 +6,16 @@ in the README). Paste the matching section below into the GitHub release.
 
 ## 0.9.4 — unreleased
 
+### New
+
+- **On-video PTZ pad**: maximizing a PTZ camera (clicking it in the sidebar)
+  now shows a small translucent **PTZ** pill in the bottom-right corner of the
+  video. Clicking it opens a compact pan/tilt pad — hold an arrow to move,
+  release to stop, square to force-stop — without opening the camera's
+  settings dialog. The pad is deliberately non-intrusive: ghosted until
+  hovered or opened, collapsed back to the pill per camera, and it claims the
+  one tile corner no other overlay uses. Cameras without PTZ never show it.
+
 ### Changed
 
 - **Media decryption is dramatically cheaper on FullAes cameras**: firmwares

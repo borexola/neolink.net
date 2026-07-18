@@ -1193,6 +1193,91 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     background: color-mix(in srgb, var(--err) 45%, rgba(0, 0, 0, 0.55));
 }
 
+/* On-video PTZ pad (maximized tile of a PTZ camera). Deliberately quiet: a
+   translucent "PTZ" pill in the bottom-right corner that opens into a compact
+   hold-to-pan pad. Ghosted until hovered/open so it never fights the video;
+   bottom-right is the one tile corner no other overlay claims (toolbar top,
+   clip chip top-left, talk pill left, zoom HUD right-center). */
+.ptz-overlay {
+    position: absolute;
+    right: 12px;
+    bottom: 12px;
+    z-index: 6;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 8px;
+    opacity: 0.5;
+    transition: opacity 0.15s ease;
+}
+
+.ptz-overlay:hover, .ptz-overlay:focus-within, .ptz-overlay.open { opacity: 1; }
+
+.ptz-overlay-toggle {
+    padding: 4px 12px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--bg) 74%, transparent);
+    backdrop-filter: blur(6px);
+    border: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.ptz-overlay-toggle:hover { color: var(--fg); border-color: color-mix(in srgb, var(--fg) 35%, transparent); }
+
+.ptz-overlay.open .ptz-overlay-toggle {
+    color: var(--accent);
+    border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.ptz-overlay-pad {
+    display: grid;
+    grid-template-areas: ". up ." "left stop right" ". down .";
+    gap: 4px;
+    padding: 6px;
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--bg) 74%, transparent);
+    backdrop-filter: blur(6px);
+    border: 1px solid var(--line);
+    animation: talk-overlay-in 0.18s ease;
+}
+
+.ptz-ov-up { grid-area: up; }
+.ptz-ov-left { grid-area: left; }
+.ptz-ov-stop { grid-area: stop; }
+.ptz-ov-right { grid-area: right; }
+.ptz-ov-down { grid-area: down; }
+
+.ptz-overlay-pad button {
+    width: 40px;
+    height: 40px;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    background: color-mix(in srgb, var(--panel) 55%, transparent);
+    color: var(--fg);
+    font-size: 13px;
+    line-height: 1;
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: none; /* press-and-hold must not turn into a scroll */
+}
+
+.ptz-overlay-pad button:active {
+    background: color-mix(in srgb, var(--accent) 30%, transparent);
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+/* No hover on touch: keep the pill readable instead of ghosted. */
+@media (hover: none) {
+    .ptz-overlay { opacity: 0.9; }
+}
+
 /* Flat inline icons: behave in text flow AND as flex items */
 .nl-icon {
     display: inline-block;

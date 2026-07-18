@@ -629,6 +629,42 @@
                                 <span class="talk-overlay-label">@(_talkPhase == "live" ? "TALKING" : "CONNECTING…")</span>
                             </div>
                         }
+                        @if (_maxIndex == index && PtzSupported(slot.Camera))
+                        {
+                            @* On-video pan/tilt: collapsed to a translucent pill in the corner;
+                               opens into a compact pad. Pointer events stop here so holding an
+                               arrow never starts the tile's digital-zoom drag underneath. *@
+                            var ptzCam = slot.Camera!;
+                            <div class="ptz-overlay @(_ptzPadOpen ? "open" : "")"
+                                 @onclick:stopPropagation="true" @ondblclick:stopPropagation="true"
+                                 @onpointerdown:stopPropagation="true" @onpointerup:stopPropagation="true">
+                                @if (_ptzPadOpen)
+                                {
+                                    <div class="ptz-overlay-pad">
+                                        <button class="ptz-ov-up" title="Pan up (hold)"
+                                                @onpointerdown='() => PtzMoveAsync(ptzCam, "up")'
+                                                @onpointerup="() => PtzHoldStopAsync(ptzCam)"
+                                                @onpointerleave="() => PtzHoldStopAsync(ptzCam)">▲</button>
+                                        <button class="ptz-ov-left" title="Pan left (hold)"
+                                                @onpointerdown='() => PtzMoveAsync(ptzCam, "left")'
+                                                @onpointerup="() => PtzHoldStopAsync(ptzCam)"
+                                                @onpointerleave="() => PtzHoldStopAsync(ptzCam)">◀</button>
+                                        <button class="ptz-ov-stop" title="Stop"
+                                                @onclick="() => PtzHoldStopAsync(ptzCam)">■</button>
+                                        <button class="ptz-ov-right" title="Pan right (hold)"
+                                                @onpointerdown='() => PtzMoveAsync(ptzCam, "right")'
+                                                @onpointerup="() => PtzHoldStopAsync(ptzCam)"
+                                                @onpointerleave="() => PtzHoldStopAsync(ptzCam)">▶</button>
+                                        <button class="ptz-ov-down" title="Pan down (hold)"
+                                                @onpointerdown='() => PtzMoveAsync(ptzCam, "down")'
+                                                @onpointerup="() => PtzHoldStopAsync(ptzCam)"
+                                                @onpointerleave="() => PtzHoldStopAsync(ptzCam)">▼</button>
+                                    </div>
+                                }
+                                <button class="ptz-overlay-toggle" title="@(_ptzPadOpen ? "Hide pan/tilt controls" : "Pan / tilt the camera")"
+                                        @onclick="() => _ptzPadOpen = !_ptzPadOpen">PTZ</button>
+                            </div>
+                        }
                         @if (_mode == "grid" && _maxIndex != index)
                         {
                             @* Corner grip: drag to grow/shrink the tile in grid-cell steps
@@ -3983,7 +4019,7 @@
             return;
         }
         _missingCamera = null;
-        _ = EnsureTalkCapAsync(cam.Name); // decides whether the mic button shows
+        _ = EnsureSurfaceCapsAsync(cam.Name); // decides whether the mic button and PTZ pad show
 
         // An explicit /main|/sub|/ext segment pins the stream; without one the
         // maximize auto-main logic decides (and restores) as usual.
@@ -4015,6 +4051,7 @@
         {
             RevertAutoMainSwitch(); // the outgoing card gets its stream back first
             _maxIndex = index;
+            _ptzPadOpen = false; // each camera's pad starts collapsed
             changed = true;
         }
         var target = _slots[index];
@@ -4116,6 +4153,7 @@
     {
         RevertAutoMainSwitch();
         _maxIndex = null;
+        _ptzPadOpen = false;
         _ = SaveAsync();
     }
 
@@ -4141,7 +4179,7 @@
         if (s == null) return;
         _quickView = new ViewSlot { Camera = cam.Name, Kind = s.Kind, Path = s.Path };
         _sidebarOpen = false;
-        _ = EnsureTalkCapAsync(cam.Name); // decides whether the mic button shows
+        _ = EnsureSurfaceCapsAsync(cam.Name); // decides whether the mic button and PTZ pad show
     }
 
     private void CloseQuickView()
@@ -4173,6 +4211,33 @@
     private bool TalkSupported(string? cam) =>
         cam != null && _talkCaps.TryGetValue(cam, out var t) && t;
 
+    // ------------------------------------------------------------ on-video PTZ pad
+    // A PTZ camera's maximized tile gets a small translucent pad (collapsed to a
+    // "PTZ" pill until opened) so panning doesn't require the settings dialog.
+    // Same press-and-hold semantics as the panel: pointer down starts the move,
+    // pointer up/leave stops it. Probed by EnsureSurfaceCapsAsync.
+    private readonly Dictionary<string, bool> _ptzCaps = new(StringComparer.OrdinalIgnoreCase);
+    private bool _ptzPadOpen;
+
+    private bool PtzSupported(string? cam) =>
+        cam != null && _ptzCaps.TryGetValue(cam, out var p) && p;
+
+    private async Task PtzMoveAsync(string cam, string command)
+    {
+        try
+        {
+            var req = ApiRequest(HttpMethod.Post, $"/api/cameras/{Uri.EscapeDataString(cam)}/ptz");
+            req.Content = JsonContent.Create(new { command, speed = 32f });
+            using var _ = await Http.SendAsync(req);
+        }
+        catch
+        {
+            // Transient failure: the camera keeps its last state; the pad stays usable.
+        }
+    }
+
+    private Task PtzHoldStopAsync(string cam) => PtzMoveAsync(cam, "stop");
+
     private bool TalkActive(string cam) =>
         _talkCamera != null && string.Equals(_talkCamera, cam, StringComparison.OrdinalIgnoreCase);
 
@@ -4183,10 +4248,11 @@
         TalkActive(cam) ? "Stop talking" : "Talk through the camera's speaker";
 
     /// <summary>
-    /// Looks up (once per camera) whether it supports two-way talk. Offline
-    /// cameras are re-probed on the next surface open instead of being cached.
+    /// Looks up (once per camera) the capabilities the single-camera surfaces
+    /// care about: two-way talk (mic button) and PTZ (on-video pan/tilt pad).
+    /// Offline cameras are re-probed on the next surface open instead of cached.
     /// </summary>
-    private async Task EnsureTalkCapAsync(string? cam)
+    private async Task EnsureSurfaceCapsAsync(string? cam)
     {
         if (cam == null || Locked || _talkCaps.ContainsKey(cam)) return;
         _talkCaps[cam] = false; // placeholder: one probe in flight per camera
@@ -4205,11 +4271,14 @@
                 _talkCaps.Remove(cam);
                 return;
             }
-            if (json.TryGetProperty("features", out var f)
-                && f.TryGetProperty("talk", out var t) && t.ValueKind == JsonValueKind.True)
+            if (json.TryGetProperty("features", out var f))
             {
-                _talkCaps[cam] = true;
-                await InvokeAsync(StateHasChanged);
+                bool talk = f.TryGetProperty("talk", out var t) && t.ValueKind == JsonValueKind.True;
+                bool ptz = f.TryGetProperty("ptz", out var p) && p.ValueKind == JsonValueKind.True;
+                _talkCaps[cam] = talk;
+                _ptzCaps[cam] = ptz;
+                if (talk || ptz)
+                    await InvokeAsync(StateHasChanged);
             }
         }
         catch
