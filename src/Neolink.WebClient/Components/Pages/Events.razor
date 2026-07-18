@@ -156,8 +156,11 @@
 
                     @if (sel.HasClip)
                     {
-                        <div class="event-player-media" @key="sel.Id">
+                        @* zoom-on: the recorded clip gets the same digital zoom as live
+                           views — wheel/pinch to zoom, drag to pan, HUD buttons at the side. *@
+                        <div class="event-player-media zoom-on" @key="sel.Id">
                             <video id="ev-video" controls autoplay playsinline></video>
+                            @ZoomHud
                         </div>
                         <div class="player-speed">
                             <span class="tool-label">SPEED</span>
@@ -318,10 +321,22 @@
 
     private string? _pendingVideoUrl; // set when a clip needs (re)attaching after render
 
+    // Digital-zoom HUD, identical to the live view's: JS (neolink.zoomInit) owns
+    // the clicks and the badge — Blazor only renders the shell once per surface.
+    private RenderFragment ZoomHud => @<div class="zoom-hud" @onclick:stopPropagation="true" @ondblclick:stopPropagation="true">
+        <button type="button" class="icon-btn zoom-btn" data-zoom="in" title="Zoom in (or mouse-wheel up on the video)">＋</button>
+        <span class="zoom-badge" data-zoom-badge>100%</span>
+        <button type="button" class="icon-btn zoom-btn" data-zoom="out" title="Zoom out (or mouse-wheel down)">−</button>
+        <button type="button" class="icon-btn zoom-btn zoom-reset" data-zoom="reset" title="Restore 1:1 (or double-click the video)">1:1</button>
+    </div>;
+
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
         {
+            // The zoom engine is page-global and idempotent; a direct /events load
+            // must arm it itself (the live view isn't necessarily visited first).
+            try { await JS.InvokeVoidAsync("neolink.zoomInit"); } catch { }
             // Server + credentials come from the live view's persisted settings.
             try
             {

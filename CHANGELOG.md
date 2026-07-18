@@ -8,6 +8,12 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### New
 
+- **Digital zoom on the Events page**: the clip player on the dedicated
+  `/events` page now has the same digital zoom as the live views and the event
+  pop-up — mouse-wheel or pinch to zoom around the cursor, drag to pan while
+  zoomed, double-click for 1:1, with the familiar side HUD (+ / − / 1:1 and a
+  percentage badge; hover-revealed on desktop, always available on touch).
+
 - **On-video PTZ pad**: maximizing a PTZ camera (clicking it in the sidebar)
   now shows a small translucent **PTZ** pill in the bottom-right corner of the
   video. Clicking it opens a compact pan/tilt pad — hold an arrow to move,
