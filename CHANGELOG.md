@@ -4,9 +4,22 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
-## 0.9.1 — unreleased
+## 0.9.2 — unreleased
 
 ### Fixed
+
+- **MQTT no longer degenerates into a clockwork disconnect loop**: if an MQTT
+  send was interrupted after part of the packet was already on the wire — for
+  example a publish cancelled by its caller mid-write — the client kept the
+  connection open and kept writing. Every subsequent packet then landed at a
+  wrong frame boundary, and the broker, after absorbing the garbage for a while,
+  killed the session with `oversize packet` — observed against the Home
+  Assistant Mosquitto add-on as a disconnect every ~2 minutes, reliably, with
+  a clean reconnect each time (state republish on reconnect masked it, so the
+  main symptom was log churn and brief entity gaps). An interrupted send now
+  closes the socket immediately — the frame boundary is unknowable, so the only
+  safe move is a clean reconnect — and a self-test covers the exact scenario
+  against a stub broker socket.
 
 - **Home Assistant no longer rejects the anti-flicker state on indoor cameras**:
   indoor firmwares (the E1 line among them) report a fourth anti-flicker value,

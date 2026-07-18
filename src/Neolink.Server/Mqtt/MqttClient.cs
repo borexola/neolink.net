@@ -44,6 +44,11 @@ public sealed class MqttClient
     /// <summary>Raised (on the read-loop thread) for every PUBLISH the broker delivers.</summary>
     public event Action<string, byte[]>? MessageReceived;
 
+    /// <summary>Test hook: wraps the raw connection stream. The selftest injects a
+    /// stallable stream to exercise write-failure handling deterministically —
+    /// kernel send buffering makes a real stalled socket write unreproducible.</summary>
+    internal Func<Stream, Stream>? StreamWrapper { get; set; }
+
     /// <summary>Raised after each successful CONNACK — the owner (re)announces and subscribes here.</summary>
     public event Func<Task>? Connected;
 
@@ -95,6 +100,7 @@ public sealed class MqttClient
             }
         }
         Stream stream = tcp.GetStream();
+        if (StreamWrapper != null) stream = StreamWrapper(stream);
         if (_opt.Tls)
         {
             var ssl = new SslStream(stream, leaveInnerStreamOpen: false,
@@ -158,6 +164,7 @@ public sealed class MqttClient
 
     private async Task<bool> SendAsync(Stream stream, byte[] packet, CancellationToken ct)
     {
+        // Cancellation while waiting for the gate is harmless: nothing was written.
         await _writeGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
@@ -165,9 +172,20 @@ public sealed class MqttClient
             await stream.FlushAsync(ct).ConfigureAwait(false);
             return true;
         }
-        catch (Exception ex) when (ex is IOException or ObjectDisposedException or SocketException)
+        catch (Exception ex)
         {
-            _stream = null; // triggers a reconnect in RunAsync
+            // A write that failed or was cancelled may have put PART of the packet
+            // on the wire, so the frame boundary is unknowable — every later packet
+            // would land mid-frame and the broker eventually kills the client with
+            // "oversize packet" once the garbage parses as an absurd length. The
+            // only safe move is to close the socket and reconnect cleanly.
+            _stream = null;
+            try { stream.Close(); } catch { }
+            if (ex is OperationCanceledException)
+            {
+                Log.Debug($"MQTT: a {packet.Length}-byte send was cancelled mid-frame — closing the connection to keep framing intact");
+                throw;
+            }
             return false;
         }
         finally

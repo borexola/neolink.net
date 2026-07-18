@@ -1463,6 +1463,9 @@ public static class SelfTest
             AssertEq(rl[1], (byte)0x02);
         });
 
+        Test("mqtt client: cancelled mid-write closes the socket (framing integrity)", () =>
+            RunMqttCancelledWrite().GetAwaiter().GetResult());
+
         Test("server health sensors for Home Assistant", () =>
         {
             var sample = new Web.SystemSample(
@@ -3667,6 +3670,91 @@ public static class SelfTest
         catch (EndOfStreamException)
         {
             return frames;
+        }
+    }
+
+    /// <summary>Wraps the client's connection stream so the test can stall a write:
+    /// while <see cref="Stall"/> is set, WriteAsync parks on the caller's token —
+    /// exactly what a backpressured socket write looks like — so cancelling the
+    /// publish cancels it mid-frame. Real kernels buffer too much to reproduce
+    /// this with sockets alone (a 1 GB loopback send "completes" unread).</summary>
+    private sealed class StallableStream(Stream inner) : Stream
+    {
+        public volatile bool Stall;
+        public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken ct = default)
+        {
+            if (Stall) await Task.Delay(Timeout.Infinite, ct);
+            await inner.WriteAsync(buffer, ct);
+        }
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default) =>
+            inner.ReadAsync(buffer, ct);
+        public override Task FlushAsync(CancellationToken ct) => inner.FlushAsync(ct);
+        protected override void Dispose(bool disposing) { if (disposing) inner.Dispose(); }
+        public override bool CanRead => true;
+        public override bool CanWrite => true;
+        public override bool CanSeek => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() => inner.Flush();
+        public override int Read(byte[] buffer, int offset, int count) => inner.Read(buffer, offset, count);
+        public override void Write(byte[] buffer, int offset, int count) => inner.Write(buffer, offset, count);
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+    }
+
+    /// <summary>A publish cancelled while its bytes may be partially on the wire must
+    /// close the connection: the frame boundary is unknowable afterwards, and
+    /// continuing to write (pings, later publishes) desyncs the broker's parser
+    /// until it kicks the client with "oversize packet" (observed in the field
+    /// against the HA Mosquitto add-on, as a clockwork ~2-minute disconnect loop).
+    /// The proof of closure is the stub broker seeing EOF — the buggy behavior
+    /// left the socket open and kept writing into it.</summary>
+    private static async Task RunMqttCancelledWrite()
+    {
+        var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        listener.Start();
+        int port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+        using var runCts = new CancellationTokenSource();
+        StallableStream? wrapped = null;
+        var client = new Mqtt.MqttClient(new Mqtt.MqttClientOptions
+        {
+            Host = "127.0.0.1",
+            Port = port,
+            ClientId = "selftest",
+        })
+        { StreamWrapper = s => wrapped = new StallableStream(s) };
+        var run = Task.Run(() => client.RunAsync(runCts.Token));
+        try
+        {
+            using var server = await listener.AcceptTcpClientAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            var ns = server.GetStream();
+            // Drain the CONNECT (no need to parse it) and answer with a CONNACK.
+            var buf = new byte[512];
+            await ns.ReadAsync(buf).AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+            await ns.WriteAsync(new byte[] { 0x20, 0x02, 0x00, 0x00 });
+            for (int i = 0; i < 250 && !client.IsConnected; i++) await Task.Delay(20);
+            Assert(client.IsConnected, "client connected to the stub broker");
+
+            // Stall the stream and publish: the write parks like a backpressured
+            // socket, and the timeout cancels it mid-frame.
+            wrapped!.Stall = true;
+            using var pubCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+            bool cancelled = false;
+            try { await client.PublishAsync("t", "x", retain: false, pubCts.Token); }
+            catch (OperationCanceledException) { cancelled = true; }
+            Assert(cancelled, "stalled publish was cancelled mid-write");
+            for (int i = 0; i < 250 && client.IsConnected; i++) await Task.Delay(20);
+            Assert(!client.IsConnected, "connection reads as down after a mid-frame cancellation");
+            // The socket must actually close (broker sees EOF) — not linger half-open
+            // collecting desynced pings until the broker kicks it as "oversize packet".
+            int n = await ns.ReadAsync(buf).AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+            AssertEq(n, 0);
+        }
+        finally
+        {
+            runCts.Cancel();
+            listener.Stop();
+            try { await run.WaitAsync(TimeSpan.FromSeconds(5)); } catch { }
         }
     }
 
