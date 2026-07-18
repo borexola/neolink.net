@@ -310,16 +310,14 @@ public sealed class ReolinkHttpApi : IDisposable
 
     private async Task LoginAsync(CancellationToken ct)
     {
-        var param = new JsonObject
-        {
-            ["User"] = new JsonObject
-            {
-                ["Version"] = "0",
-                ["userName"] = _username,
-                ["password"] = _password,
-            },
-        };
-        var reply = await PostAsync($"{_apiUrl}?cmd=Login", "Login", param, ct).ConfigureAwait(false);
+        // The documented login carries User.Version "0", and most firmwares accept
+        // it — but some (observed on the dual-lens Duo line) reject that shape as
+        // "password wrong" while accepting the bare User object that reolink_aio
+        // (Home Assistant's Reolink integration) sends. Try documented first so
+        // known-good cameras are untouched, bare second on rejection only.
+        var reply = await PostLoginAsync(withVersion: true, ct).ConfigureAwait(false);
+        if (reply.Code != 0)
+            reply = await PostLoginAsync(withVersion: false, ct).ConfigureAwait(false);
         if (reply.Code != 0)
             throw new ReolinkApiException(
                 $"camera HTTP API login failed: {reply.Detail ?? "unknown error"} (rspCode {reply.RspCode})");
@@ -331,6 +329,15 @@ public sealed class ReolinkHttpApi : IDisposable
         var lifetime = TimeSpan.FromSeconds(lease) - LeaseMargin;
         if (lifetime <= TimeSpan.Zero) lifetime = TimeSpan.FromSeconds(lease / 2.0);
         _tokenExpiry = DateTime.UtcNow + lifetime;
+    }
+
+    private Task<Reply> PostLoginAsync(bool withVersion, CancellationToken ct)
+    {
+        var user = new JsonObject();
+        if (withVersion) user["Version"] = "0";
+        user["userName"] = _username;
+        user["password"] = _password;
+        return PostAsync($"{_apiUrl}?cmd=Login", "Login", new JsonObject { ["User"] = user }, ct);
     }
 
     private sealed record Reply(int Code, int RspCode, string? Detail, JsonNode? Value);

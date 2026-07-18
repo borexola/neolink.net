@@ -580,6 +580,15 @@ public sealed class CameraControl : ICameraControl
     /// time — a camera with port 80 closed shouldn't be re-probed on every panel open.</summary>
     private DateTime _httpRetryAt;
 
+    /// <summary>Whether the one-time "HTTP API unreachable" warning fired for the
+    /// current outage. Reset on the first successful call, so a later outage warns
+    /// again — users otherwise never learn WHY HTTP-backed features are missing
+    /// (a Duo shipped with its HTTP port disabled cost hours of MQTT debugging).</summary>
+    private bool _httpUnreachableWarned;
+
+    /// <summary>Same idea for a login the camera answered but rejected.</summary>
+    private bool _httpLoginWarned;
+
     private async Task<T?> HttpTryAsync<T>(Func<CancellationToken, Task<T?>> op, CancellationToken ct)
     {
         if (_httpApi == null || DateTime.UtcNow < _httpRetryAt) return default;
@@ -588,21 +597,62 @@ public sealed class CameraControl : ICameraControl
         try
         {
             var result = await op(cts.Token).ConfigureAwait(false);
-            _httpRetryAt = default;
+            NoteHttpReachable();
             return result;
         }
-        catch (ReolinkApiException)
+        catch (ReolinkApiException ex)
         {
+            if (ex.Message.Contains("login", StringComparison.OrdinalIgnoreCase))
+            {
+                // A REJECTED login must back way off: Reolink temporarily locks the
+                // account after a handful of failures, so the usual retry cadence
+                // would feed the lockout counter forever.
+                _httpRetryAt = DateTime.UtcNow + TimeSpan.FromMinutes(15);
+                if (!_httpLoginWarned)
+                {
+                    _httpLoginWarned = true;
+                    Log.Warn($"{CameraName}: the camera answered on HTTP but REJECTED the login ({ex.Message}). " +
+                             "HTTP-backed features stay unavailable. Verify the credentials work in the camera's " +
+                             "own web page; Reolink locks the account temporarily after repeated failures, so " +
+                             "retries are paused for 15 minutes.");
+                }
+                return default;
+            }
             // The API is reachable, this camera just doesn't do the command.
-            _httpRetryAt = default;
+            NoteHttpReachable();
+            Log.Debug($"{CameraName}: HTTP API call failed: {ex.Message}");
             return default;
         }
         catch (Exception ex) when (!ct.IsCancellationRequested
-            && ex is IOException or TimeoutException or OperationCanceledException)
+            && ex is IOException or TimeoutException or OperationCanceledException
+                  or System.Net.Http.HttpRequestException or System.Net.Sockets.SocketException)
         {
             _httpRetryAt = DateTime.UtcNow + TimeSpan.FromSeconds(60);
-            Log.Debug($"{CameraName}: HTTP API unreachable ({ex.Message}) — skipping HTTP reads for 60s");
+            if (!_httpUnreachableWarned)
+            {
+                _httpUnreachableWarned = true;
+                Log.Warn($"{CameraName}: the camera's HTTP API is unreachable ({Log.Flatten(ex)}). " +
+                         "Picture settings, volume, Wi-Fi signal, PTZ presets and scaled snapshots are " +
+                         "unavailable until it answers. Many cameras ship with HTTP disabled — enable it in " +
+                         "the Reolink app (Settings > Network > Advanced > Port Settings), or set " +
+                         "'http_address' if the API lives on another host/port.");
+            }
+            else
+            {
+                Log.Debug($"{CameraName}: HTTP API still unreachable ({ex.Message}) — skipping HTTP reads for 60s");
+            }
             return default;
+        }
+    }
+
+    private void NoteHttpReachable()
+    {
+        _httpRetryAt = default;
+        _httpLoginWarned = false;
+        if (_httpUnreachableWarned)
+        {
+            _httpUnreachableWarned = false;
+            Log.Info($"{CameraName}: the camera's HTTP API is reachable again — HTTP-backed features restored");
         }
     }
 

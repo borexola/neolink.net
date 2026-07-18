@@ -43,6 +43,19 @@ in the README). Paste the matching section below into the GitHub release.
   the full-resolution HTTP snapshot endpoint is unaffected. To push large
   images over MQTT anyway, raise `max_packet_size` both on the broker (a
   Mosquitto customize file) and in the neolink `mqtt` config.
+- **An unreachable camera HTTP API is now called out, once, with the remedy**:
+  when a camera's HTTP port doesn't answer (many models ship with HTTP
+  disabled), the features that ride it — picture settings, volume, Wi-Fi
+  signal, PTZ presets, scaled snapshots — used to just silently not appear.
+  The server now logs one clear warning per outage naming the camera, the
+  missing features and the fix (enable HTTP in the Reolink app under
+  Settings > Network > Advanced > Port Settings, or set `http_address`), and
+  an info line when the API becomes reachable again. Connection-refused
+  errors are also now properly treated as "unreachable" for the retry
+  backoff instead of surfacing as raw errors. A REJECTED login gets its own
+  one-time warning carrying the camera's error text — and pauses retries for
+  15 minutes, because Reolink locks the account after a handful of failed
+  logins and the old silent 2-minute retry cadence fed that counter forever.
 - **Beta builds now self-report `X.Y.Z-beta.<build>`**: each beta push gets a
   unique, identifiable version without consuming stable patch numbers, so
   stable releases increment by exactly one from the previous release.
