@@ -154,7 +154,25 @@ public sealed class BcCamera : IBcCamera
             var kind = negotiated == 0x02 ? EncryptionKind.Aes : EncryptionKind.FullAes;
             _conn.Encryption.Set(kind, Md5Utils.MakeAesKey(nonce, password ?? ""));
         }
+        // The level decides how much CPU the connection costs (FullAes = every
+        // media byte is AES), so make it readable without debug logging when perf
+        // questions come up — but only the FIRST login of each connection tag gets
+        // Info; reconnects repeat it at Debug so a flaky camera doesn't spam.
+        var encDesc = negotiated switch
+        {
+            0x00 => "none (0x00)",
+            0x01 => "BCEncrypt (0x01, XOR)",
+            0x02 => "AES (0x02, control XML only - media unencrypted)",
+            _ => $"FullAes (0x{negotiated:x2}, media stream encrypted)",
+        };
+        if (LoggedEncryption.TryAdd($"{_logTag}|{negotiated:x2}", 0))
+            Log.Info($"BC {_logTag}: encryption negotiated: {encDesc}");
+        else
+            Log.Debug($"BC {_logTag}: encryption negotiated: {encDesc}");
     }
+
+    /// <summary>Connection tags whose negotiated encryption level was already announced at Info.</summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> LoggedEncryption = new();
 
     /// <summary>
     /// Requests the video stream and pumps the raw binary sub-stream chunks into
