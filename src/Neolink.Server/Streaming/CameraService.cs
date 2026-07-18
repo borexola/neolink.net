@@ -128,25 +128,39 @@ public sealed class CameraService : ILiveCameraSource
     private bool AllowSleep => _demandHub != null && !(_config.AlwaysOn ?? !_batteryPowered);
 
     /// <summary>
-    /// Set at wiring when NO recorder consumes this camera's frames. With nothing
-    /// recording, frames have no consumer unless a viewer is attached — so the
-    /// session holds a control-only connection (sensors, detections and controls
-    /// stay live) and subscribes video only while someone watches. See
-    /// <see cref="MediaOnDemandPolicy"/> for who opts in.
+    /// Set at wiring for cameras that MAY idle without a video subscription. While
+    /// no recorder wants frames (<see cref="RecorderWantsFrames"/>, live from the
+    /// per-camera recording switches) and nobody watches, the session holds a
+    /// control-only connection (sensors, detections and controls stay live) and
+    /// subscribes video only on demand. See <see cref="MediaOnDemandPolicy"/>.
     /// </summary>
     public bool MediaOnDemand { get; set; }
+
+    /// <summary>
+    /// Whether any recorder wants this camera's frames RIGHT NOW — evaluated live
+    /// so the runtime switches count: detection events on, 24/7 on, or an
+    /// on-demand clip capture running. Null when no recorder is wired at all.
+    /// Flipping a switch on wakes the video within a moment; flipping the last
+    /// one off lets the camera go idle after the usual grace.
+    /// </summary>
+    public Func<bool>? RecorderWantsFrames { get; set; }
 
     // Wired cameras with default power settings only: an explicit always_on
     // keeps the old always-streaming behavior, and sleep-friendly battery
     // cameras have stronger medicine (the full park above).
     private bool MediaOnDemandActive =>
-        _demandHub != null && MediaOnDemand && MediaOnDemandPolicy(false, _config.AlwaysOn, _batteryPowered);
+        _demandHub != null && MediaOnDemand && MediaOnDemandPolicy(_config.AlwaysOn, _batteryPowered);
 
-    /// <summary>On-demand video applies iff nothing records the camera, always_on
-    /// is unset (an explicit choice either way wins), and it isn't battery powered
-    /// (those park the whole connection instead).</summary>
-    internal static bool MediaOnDemandPolicy(bool recorderWired, bool? alwaysOn, bool batteryPowered) =>
-        !recorderWired && alwaysOn == null && !batteryPowered;
+    // Someone wants frames: a viewer (or a recent stream-open attempt), or a
+    // recorder whose switch is on.
+    private bool MediaWanted => DemandNow || (RecorderWantsFrames?.Invoke() ?? false);
+
+    /// <summary>On-demand video applies iff always_on is unset (an explicit choice
+    /// either way wins) and the camera isn't battery powered (those park the whole
+    /// connection instead). What "idle" means is then decided live: no viewers AND
+    /// no recorder switch on.</summary>
+    internal static bool MediaOnDemandPolicy(bool? alwaysOn, bool batteryPowered) =>
+        alwaysOn == null && !batteryPowered;
 
     // Demand = someone is watching, or recently tried to start watching (viewers
     // only subscribe once video is ready, so the DESCRIBE attempt is the wake call).
@@ -525,13 +539,13 @@ public sealed class CameraService : ILiveCameraSource
             // cost. A viewer's DESCRIBE/init is the wake signal (same one the battery
             // park uses) — but this session is already logged in, so video starts
             // sub-second instead of after a full reconnect.
-            if (MediaOnDemandActive && !DemandNow)
+            if (MediaOnDemandActive && !MediaWanted)
             {
                 Log.Info($"{Tag}: idle — nothing recording and nobody watching; holding a control-only " +
                          "connection (sensors and controls stay live, video starts when someone watches)");
-                while (!DemandNow)
+                while (!MediaWanted)
                     await Task.Delay(250, linked.Token).ConfigureAwait(false);
-                Log.Info($"{Tag}: viewer asked — starting the video stream");
+                Log.Info($"{Tag}: {(DemandNow ? "viewer asked" : "recording switched on")} — starting the video stream");
             }
 
             var binary = Channel.CreateUnbounded<byte[]>(new UnboundedChannelOptions
@@ -613,15 +627,15 @@ public sealed class CameraService : ILiveCameraSource
                         }
                     }
                 }
-                // On-demand video (nothing records this camera): once the last
-                // viewer has been gone a while, drop the whole session and let the
-                // reconnect settle into the control-only hold above. A reconnect —
-                // not just cancelling the subscription — because the camera keeps
-                // pushing video until told otherwise, and a fresh login is the one
-                // way every firmware provably stops.
+                // On-demand video (nothing recording right now): once the last
+                // consumer has been gone a while, drop the whole session and let
+                // the reconnect settle into the control-only hold above. A
+                // reconnect — not just cancelling the subscription — because the
+                // camera keeps pushing video until told otherwise, and a fresh
+                // login is the one way every firmware provably stops.
                 else if (MediaOnDemandActive)
                 {
-                    if (DemandNow)
+                    if (MediaWanted)
                     {
                         idleSince = null;
                     }
@@ -630,7 +644,7 @@ public sealed class CameraService : ILiveCameraSource
                         idleSince ??= DateTime.UtcNow;
                         if (DateTime.UtcNow - idleSince > IdleGrace)
                         {
-                            Log.Info($"{Tag}: no viewers for {IdleGrace.TotalSeconds:0}s — " +
+                            Log.Info($"{Tag}: nothing consumed the video for {IdleGrace.TotalSeconds:0}s — " +
                                      "dropping the video stream (staying connected for sensors and controls)");
                             return true;
                         }

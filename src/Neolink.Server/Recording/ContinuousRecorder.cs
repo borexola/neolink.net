@@ -71,6 +71,10 @@ public sealed class ContinuousRecorder
         _onWriteError = onWriteError;
     }
 
+    /// <summary>Whether the camera's 24/7 switch is on right now (live from settings)
+    /// — the on-demand video hold asks this to know if frames have a consumer.</summary>
+    public bool ContinuousEnabled => _settings.Get(_camera).Continuous;
+
     /// <summary>The stream taped right now: the user's per-camera choice when set (and served).</summary>
     private IStreamHub RecordHub()
     {

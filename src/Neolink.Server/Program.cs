@@ -442,14 +442,27 @@ foreach (var cam in config.Cameras)
         }
     }
 
-    // No recorder consumes this camera's frames (no recording configured, or its
-    // stream isn't served): the stream services may hold control-only connections
-    // and subscribe video only while someone watches. Sensors, detections and
-    // controls ride the control channel and stay live throughout; whether a given
-    // service actually opts in is decided by CameraService.MediaOnDemandPolicy
-    // (wired cameras with default power settings only).
-    bool mediaOnDemand = eventRecorder == null && continuousRecorder == null;
-    foreach (var s in camServices) s.MediaOnDemand = mediaOnDemand;
+    // On-demand video: while nothing consumes this camera's frames the stream
+    // services hold control-only connections and subscribe video only on demand.
+    // "Consumes" is evaluated LIVE — the per-camera recording switches count, so
+    // a camera whose events/24-7 toggles are off idles even though a recorder
+    // object is wired, and flipping a switch on wakes the video within a moment.
+    // Sensors, detections and controls ride the control channel and stay live
+    // throughout; whether a service opts in at all is decided by
+    // CameraService.MediaOnDemandPolicy (wired cameras, default power settings).
+    {
+        var er = eventRecorder;
+        var cr = continuousRecorder;
+        Func<bool>? recorderWants = er == null && cr == null
+            ? null
+            : () => (er != null && (er.EventsEnabled || er.OnDemand != null))
+                 || (cr != null && cr.ContinuousEnabled);
+        foreach (var s in camServices)
+        {
+            s.MediaOnDemand = true;
+            s.RecorderWantsFrames = recorderWants;
+        }
+    }
 
     // Registered after the recorders so the web API can report live REC state.
     // Battery/siren/privacy readings scan every stream service (primary first —
