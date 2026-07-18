@@ -127,6 +127,27 @@ public sealed class CameraService : ILiveCameraSource
     // everything else streams around the clock (the pre-battery behavior).
     private bool AllowSleep => _demandHub != null && !(_config.AlwaysOn ?? !_batteryPowered);
 
+    /// <summary>
+    /// Set at wiring when NO recorder consumes this camera's frames. With nothing
+    /// recording, frames have no consumer unless a viewer is attached — so the
+    /// session holds a control-only connection (sensors, detections and controls
+    /// stay live) and subscribes video only while someone watches. See
+    /// <see cref="MediaOnDemandPolicy"/> for who opts in.
+    /// </summary>
+    public bool MediaOnDemand { get; set; }
+
+    // Wired cameras with default power settings only: an explicit always_on
+    // keeps the old always-streaming behavior, and sleep-friendly battery
+    // cameras have stronger medicine (the full park above).
+    private bool MediaOnDemandActive =>
+        _demandHub != null && MediaOnDemand && MediaOnDemandPolicy(false, _config.AlwaysOn, _batteryPowered);
+
+    /// <summary>On-demand video applies iff nothing records the camera, always_on
+    /// is unset (an explicit choice either way wins), and it isn't battery powered
+    /// (those park the whole connection instead).</summary>
+    internal static bool MediaOnDemandPolicy(bool recorderWired, bool? alwaysOn, bool batteryPowered) =>
+        !recorderWired && alwaysOn == null && !batteryPowered;
+
     // Demand = someone is watching, or recently tried to start watching (viewers
     // only subscribe once video is ready, so the DESCRIBE attempt is the wake call).
     private bool DemandNow => _demandHub == null
@@ -458,24 +479,15 @@ public sealed class CameraService : ILiveCameraSource
 
         await ProbeBatteryAsync(camera, ct).ConfigureAwait(false);
 
-        var binary = Channel.CreateUnbounded<byte[]>(new UnboundedChannelOptions
-        {
-            SingleReader = true,
-            SingleWriter = true,
-        });
-
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _activeStream = linked; // let SetSuspended interrupt this session at once
         if (_suspended) linked.Cancel(); // a suspend that raced the assignment above
-        // Privacy mode (E1 Pro etc.) makes the camera go dark: no video is expected,
-        // and losing the connection over it would make the camera — and the privacy
-        // switch itself — Unavailable in Home Assistant. Hold the connection instead.
-        var videoTask = Task.Run(() => camera.StartVideoAsync(_kind, binary.Writer,
-            StallTolerable, linked.Token), CancellationToken.None);
 
-        var reader = new MediaFrameReader(binary.Reader);
-        long frames = 0;
+        // Controls and sinks are live from HERE — they ride the control channel and
+        // need no video subscription. That's what makes the on-demand hold below
+        // free: sensors, detections and the settings panel all keep working.
         _live = camera;
+        Task? videoTask = null;
         Task? motionTask = MotionSink is { } sink
             ? Task.Run(() => WatchMotionGuardedAsync(camera, sink, linked.Token), CancellationToken.None)
             : null;
@@ -498,13 +510,43 @@ public sealed class CameraService : ILiveCameraSource
         // an idle session gets recycled after ~1-2 min even with every msg-234
         // keepalive answered (field logs: D2C_DISC at 45-105 s). Ping like the
         // reference client does; the request itself is the activity signal, so a
-        // firmware that never answers pings is tolerated.
-        Task? pingTask = _config.Udp
+        // firmware that never answers pings is tolerated. On-demand sessions ping
+        // too: a control-only hold would otherwise send nothing for hours, and the
+        // ping doubles as its keep-alive/activity signal.
+        Task? pingTask = _config.Udp || MediaOnDemandActive
             ? Task.Run(() => PingLoopAsync(camera, linked.Token), CancellationToken.None)
             : null;
         DateTime? idleSince = null;
         try
         {
+            // On-demand hold: nothing records this camera and nobody is watching —
+            // stay connected WITHOUT subscribing video until a viewer shows up. The
+            // camera sends only occasional status pushes, so both ends idle at ~zero
+            // cost. A viewer's DESCRIBE/init is the wake signal (same one the battery
+            // park uses) — but this session is already logged in, so video starts
+            // sub-second instead of after a full reconnect.
+            if (MediaOnDemandActive && !DemandNow)
+            {
+                Log.Info($"{Tag}: idle — nothing recording and nobody watching; holding a control-only " +
+                         "connection (sensors and controls stay live, video starts when someone watches)");
+                while (!DemandNow)
+                    await Task.Delay(250, linked.Token).ConfigureAwait(false);
+                Log.Info($"{Tag}: viewer asked — starting the video stream");
+            }
+
+            var binary = Channel.CreateUnbounded<byte[]>(new UnboundedChannelOptions
+            {
+                SingleReader = true,
+                SingleWriter = true,
+            });
+            // Privacy mode (E1 Pro etc.) makes the camera go dark: no video is expected,
+            // and losing the connection over it would make the camera — and the privacy
+            // switch itself — Unavailable in Home Assistant. Hold the connection instead.
+            videoTask = Task.Run(() => camera.StartVideoAsync(_kind, binary.Writer,
+                StallTolerable, linked.Token), CancellationToken.None);
+            var reader = new MediaFrameReader(binary.Reader);
+            long frames = 0;
+
             while (!ct.IsCancellationRequested)
             {
                 MediaFrame frame;
@@ -515,7 +557,7 @@ public sealed class CameraService : ILiveCameraSource
                 catch (EndOfStreamException)
                 {
                     // Binary channel completed -> the video task holds the underlying error
-                    await videoTask.ConfigureAwait(false);
+                    await videoTask!.ConfigureAwait(false);
                     throw new IOException("video stream ended");
                 }
 
@@ -571,6 +613,29 @@ public sealed class CameraService : ILiveCameraSource
                         }
                     }
                 }
+                // On-demand video (nothing records this camera): once the last
+                // viewer has been gone a while, drop the whole session and let the
+                // reconnect settle into the control-only hold above. A reconnect —
+                // not just cancelling the subscription — because the camera keeps
+                // pushing video until told otherwise, and a fresh login is the one
+                // way every firmware provably stops.
+                else if (MediaOnDemandActive)
+                {
+                    if (DemandNow)
+                    {
+                        idleSince = null;
+                    }
+                    else
+                    {
+                        idleSince ??= DateTime.UtcNow;
+                        if (DateTime.UtcNow - idleSince > IdleGrace)
+                        {
+                            Log.Info($"{Tag}: no viewers for {IdleGrace.TotalSeconds:0}s — " +
+                                     "dropping the video stream (staying connected for sensors and controls)");
+                            return true;
+                        }
+                    }
+                }
             }
             return false;
         }
@@ -579,7 +644,10 @@ public sealed class CameraService : ILiveCameraSource
             _live = null;
             _activeStream = null;
             linked.Cancel();
-            try { await videoTask.ConfigureAwait(false); } catch { }
+            if (videoTask != null)
+            {
+                try { await videoTask.ConfigureAwait(false); } catch { }
+            }
             if (motionTask != null)
             {
                 try { await motionTask.ConfigureAwait(false); } catch { }

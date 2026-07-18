@@ -89,6 +89,27 @@ public static class SelfTest
             AssertSeq(XmlCrypto.AesCfbDecrypt(XmlCrypto.AesCfb(probe, key2, encrypting: true), state), probe);
         });
 
+        Test("media-on-demand policy: who holds control-only connections", () =>
+        {
+            // On-demand video (connected for sensors/controls, video only while
+            // watched) applies exactly to: no recorder wired, always_on unset,
+            // not battery powered. Everything else keeps its existing behavior —
+            // recorders need frames, explicit always_on is an explicit choice,
+            // and battery cameras park the whole connection instead.
+            Assert(Streaming.CameraService.MediaOnDemandPolicy(false, null, false),
+                "wired camera, nothing recording -> on-demand video");
+            Assert(!Streaming.CameraService.MediaOnDemandPolicy(true, null, false),
+                "a recorder needs the frames -> always stream");
+            Assert(!Streaming.CameraService.MediaOnDemandPolicy(false, true, false),
+                "explicit always_on -> always stream");
+            Assert(!Streaming.CameraService.MediaOnDemandPolicy(false, false, false),
+                "explicit always_on:false -> the park mode governs, not on-demand");
+            Assert(!Streaming.CameraService.MediaOnDemandPolicy(false, null, true),
+                "battery camera -> full park governs, not on-demand");
+            Assert(!Streaming.CameraService.MediaOnDemandPolicy(true, true, false),
+                "recorder + always_on -> always stream");
+        });
+
         Test("xml serialize/parse roundtrip", () =>
         {
             var body = new Bc.Xml.BcXmlBody

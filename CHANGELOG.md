@@ -8,6 +8,18 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### New
 
+- **Cameras with nothing to record idle at near-zero CPU**: a wired camera with
+  no recording configured used to stream and process video around the clock
+  even with nobody watching — frames nobody consumed. Such cameras now hold a
+  control-only connection: every sensor, detection push, control and the
+  settings panel stay fully live, and the video stream starts the moment
+  someone actually watches (sub-second — measured 330 ms from RTSP request to
+  playing, since the session is already logged in) and drops again 60 s after
+  the last viewer leaves. Anything that consumes frames — detection events,
+  24/7 recording, a viewer — keeps today's always-streaming behavior
+  automatically, as does an explicit `always_on` and every battery camera
+  (their full park is stronger medicine). No configuration needed.
+
 - **Digital zoom on the Events page**: the clip player on the dedicated
   `/events` page now has the same digital zoom as the live views and the event
   pop-up — mouse-wheel or pinch to zoom around the cursor, drag to pan while
