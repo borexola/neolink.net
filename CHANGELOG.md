@@ -34,7 +34,9 @@ in the README). Paste the matching section below into the GitHub release.
   maximized tile (below the zoom pill) now ends in a gear that opens that
   camera's settings dialog — no trip back to the sidebar. Because settings
   apply to every camera, the rail now shows on every maximized tile, not just
-  PTZ/talk-capable ones.
+  PTZ/talk-capable ones. On touch the rail also fades after a moment of
+  stillness exactly like the zoom pill (any tap on the video brings both
+  back) — a rail in use, pad open or talking, never fades away.
 
 - **On-video controls get out of the way like a video player's**: on the
   maximized (or browser-fullscreen) tile, a still mouse now fades ALL the

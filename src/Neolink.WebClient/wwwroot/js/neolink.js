@@ -807,24 +807,29 @@
             };
             const reset = (box) => { const st = stOf(box); st.z = 1; st.tx = 0; st.ty = 0; apply(box); };
 
-            // On touch screens the HUD pill sits ON the video and blocks the
-            // picture — fade it out after a moment of stillness; any tap on the
-            // surface (or any zoom activity) brings it back. Desktop keeps the
-            // hover behavior and never fades.
+            // On touch screens the on-video pills sit ON the picture and block it —
+            // fade them out after a moment of stillness; any tap on the surface
+            // (or any zoom activity) brings them back. Covers the zoom HUD and the
+            // camera rail (PTZ/mic/settings) alike; a rail with its pad open or a
+            // talk session running (.open) never fades — a control in active use
+            // must not vanish under a resting finger. Desktop keeps the hover
+            // behavior plus the ui-idle cursor fade below and never uses this.
             const coarse = () => matchMedia('(pointer: coarse)').matches;
-            const hudSeen = new WeakMap(); // hud element -> last activity (ms)
+            const hudSeen = new WeakMap(); // pill element -> last activity (ms)
+            const hudPills = (root) => [...root.querySelectorAll('.zoom-hud, .cam-rail')];
             const hudWake = (box) => {
                 if (!coarse() || !box) return;
-                const hud = box.querySelector('.zoom-hud');
-                if (!hud) return;
-                hud.classList.remove('hud-idle');
-                hudSeen.set(hud, performance.now());
+                for (const pill of hudPills(box)) {
+                    pill.classList.remove('hud-idle');
+                    hudSeen.set(pill, performance.now());
+                }
             };
             setInterval(() => {
                 if (!coarse()) return;
-                for (const hud of document.querySelectorAll('.zoom-hud:not(.hud-idle)')) {
-                    const seen = hudSeen.get(hud) ?? (hudSeen.set(hud, performance.now()), performance.now());
-                    if (performance.now() - seen > 2400) hud.classList.add('hud-idle');
+                for (const pill of document.querySelectorAll(
+                    '.zoom-hud:not(.hud-idle), .cam-rail:not(.hud-idle):not(.open)')) {
+                    const seen = hudSeen.get(pill) ?? (hudSeen.set(pill, performance.now()), performance.now());
+                    if (performance.now() - seen > 2400) pill.classList.add('hud-idle');
                 }
             }, 800);
 

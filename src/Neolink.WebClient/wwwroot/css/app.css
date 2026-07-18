@@ -2914,8 +2914,16 @@ button.ev-switch-opt {
     .zoom-hud:hover, .zoom-hud:focus-within { opacity: 1; }
 }
 
-/* Touch: JS fades the pill after a moment of stillness so it stops covering
-   the picture — any tap on the video (or a pinch) brings it back. */
+/* Touch: JS fades the on-video pills after a moment of stillness so they stop
+   covering the picture — any tap on the video (or a pinch) brings them back.
+   The camera rail joins the zoom HUD here; a rail in use (.open: pad out or
+   talking) is exempted by the JS sweep. */
+.cam-rail.hud-idle {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.35s ease;
+}
+
 .zoom-hud.hud-idle {
     opacity: 0;
     pointer-events: none;
