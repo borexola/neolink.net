@@ -2904,6 +2904,16 @@ button.ev-switch-opt {
     transition: opacity 0.35s ease;
 }
 
+/* Desktop: while the pill is shown it sits GHOSTED on the video — full
+   strength only when the mouse is actually on it. One rule for every zoom
+   surface (live tiles, quick view, event pop-up, Events page, timeline
+   monitors). Scoped to hover-capable devices: touch keeps its own opacity
+   (the tap-revealed 0.8 below) and the hud-idle fade. */
+@media (hover: hover) {
+    .zoom-hud { opacity: 0.55; }
+    .zoom-hud:hover, .zoom-hud:focus-within { opacity: 1; }
+}
+
 /* Touch: JS fades the pill after a moment of stillness so it stops covering
    the picture — any tap on the video (or a pinch) brings it back. */
 .zoom-hud.hud-idle {
@@ -2916,6 +2926,45 @@ button.ev-switch-opt {
 .tile:fullscreen:hover .zoom-hud,
 .tile:fullscreen.zoomed .zoom-hud {
     display: flex;
+}
+
+/* Video-player chrome: on the maximized/fullscreen tile a STILL cursor means
+   "watching, not operating" — JS marks the tile ui-idle after a moment of no
+   mouse movement, and every on-video control fades until the mouse moves
+   (hover alone can't do this: a cursor parked on the video keeps :hover true
+   forever). The extra :hover/.open/.zoomed variants out-rank the rules that
+   would otherwise keep each control shown. Touch never gets ui-idle (no
+   cursor); its chrome is governed by the tap-revealed rules above. */
+.tile.ui-idle .tile-bar,
+.tile.ui-idle:hover .tile-bar,
+.tile.ui-idle .cam-rail,
+.tile.ui-idle .cam-rail:hover,
+.tile.ui-idle .cam-rail:focus-within,
+.tile.ui-idle .cam-rail.open {
+    opacity: 0;
+    pointer-events: none;
+}
+
+.tile.ui-idle.zoom-on:hover .zoom-hud,
+.tile.ui-idle.zoom-on.zoomed .zoom-hud,
+.tile.ui-idle:fullscreen:hover .zoom-hud,
+.tile.ui-idle:fullscreen.zoomed .zoom-hud {
+    display: none;
+}
+
+.tile.ui-idle,
+.tile.ui-idle video {
+    cursor: none; /* the player look: idle hides the pointer too */
+}
+
+/* The camera rail (PTZ + mic) is hover-revealed on desktop like the rest of
+   the on-video chrome (it used to sit ghosted on the video permanently).
+   Touch keeps it always visible — there is no hover to reveal it with. */
+@media (hover: hover) {
+    .tile:not(:hover):not(:fullscreen) .cam-rail {
+        opacity: 0;
+        pointer-events: none;
+    }
 }
 
 /* Zoomable surfaces keep their video on its own compositor layer from the

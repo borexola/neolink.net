@@ -827,6 +827,29 @@
                     if (performance.now() - seen > 2400) hud.classList.add('hud-idle');
                 }
             }, 800);
+
+            // Desktop video-player chrome: a still cursor on the maximized (or
+            // browser-fullscreen) tile fades ALL its on-video controls — the
+            // toolbar with the mic, the PTZ overlay, the zoom HUD (CSS keys on
+            // .ui-idle) — and any mouse movement brings them straight back.
+            // Hover can't express this: a cursor parked on the video keeps
+            // :hover true forever. Touch is excluded — no cursor to go still.
+            let uiIdleTimer = null;
+            const uiSurface = () =>
+                (document.fullscreenElement instanceof Element && document.fullscreenElement.classList.contains('tile'))
+                    ? document.fullscreenElement
+                    : document.querySelector('.tile.maxed');
+            document.addEventListener('pointermove', () => {
+                if (coarse()) return;
+                const s = uiSurface();
+                if (!s) return;
+                s.classList.remove('ui-idle');
+                clearTimeout(uiIdleTimer);
+                uiIdleTimer = setTimeout(() => {
+                    const cur = uiSurface();
+                    if (cur) cur.classList.add('ui-idle');
+                }, 2600);
+            }, { passive: true });
             // Layout changed under us (unmaximized, left fullscreen): back to 1:1.
             this._zoomSweep = () => [...zoomedBoxes]
                 .forEach(b => { if (!b.isConnected || !eligible(b)) reset(b); });

@@ -6,6 +6,19 @@ in the README). Paste the matching section below into the GitHub release.
 
 ## 0.9.4 — unreleased
 
+### Changed
+
+- **On-video controls get out of the way like a video player's**: on the
+  maximized (or browser-fullscreen) tile, a still mouse now fades ALL the
+  on-video chrome after a moment — the toolbar, the camera rail (PTZ + mic),
+  the zoom pill, and the cursor itself — and any mouse movement brings it
+  straight back. The camera rail is also hover-revealed like the rest of the
+  chrome instead of sitting ghosted on the video permanently, and the zoom
+  pill now shows GHOSTED on every zoom surface (live tiles, quick view, the
+  event pop-up, the Events page, timeline monitors) reaching full strength
+  only while the mouse is actually on it. Touch keeps its tap-revealed
+  behavior everywhere — there is no cursor to go still.
+
 ### New
 
 - **Event-type chips only list what the camera can emit**: the recording tab's
