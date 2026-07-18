@@ -50,9 +50,15 @@ in the README). Paste the matching section below into the GitHub release.
   The server now logs one clear warning per outage naming the camera, the
   missing features and the fix (enable HTTP in the Reolink app under
   Settings > Network > Advanced > Port Settings, or set `http_address`), and
-  an info line when the API becomes reachable again. Connection-refused
-  errors are also now properly treated as "unreachable" for the retry
-  backoff instead of surfacing as raw errors. A REJECTED login gets its own
+  an info line when the API becomes reachable again. The warning waits for
+  three consecutive failures — a single timeout during startup, when every
+  camera is juggling logins and stream starts at once, is routine — and
+  connection-refused errors are now properly treated as "unreachable" for
+  the retry backoff instead of surfacing as raw errors. The snapshot fetch
+  also gets a roomier timeout (20 s instead of the 6 s meant for small JSON
+  reads): it pays for a login plus an image download over the camera's
+  Wi-Fi, and the tight cap was cancelling perfectly healthy cameras into
+  the full-size fallback. A REJECTED login gets its own
   one-time warning carrying the camera's error text — and pauses retries for
   15 minutes, because Reolink locks the account after a handful of failed
   logins and the old silent 2-minute retry cadence fed that counter forever.

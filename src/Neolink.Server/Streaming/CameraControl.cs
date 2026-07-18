@@ -430,7 +430,8 @@ public sealed class CameraControl : ICameraControl
     {
         if (_httpApi != null
             && await HttpTryAsync<byte[]?>(async c =>
-                   await _httpApi!.SnapAsync(640, 360, c).ConfigureAwait(false), ct).ConfigureAwait(false)
+                   await _httpApi!.SnapAsync(640, 360, c).ConfigureAwait(false), ct, HttpSnapTimeout)
+                   .ConfigureAwait(false)
                is { } small)
         {
             Log.Debug($"{CameraName}: small snapshot via HTTP Snap ({small.Length / 1024} KB)");
@@ -576,6 +577,10 @@ public sealed class CameraControl : ICameraControl
     /// combined feature read for the client's whole HTTP timeout.</summary>
     private static readonly TimeSpan HttpCallTimeout = TimeSpan.FromSeconds(6);
 
+    /// <summary>Roomier cap for the snapshot fetch: it pays for a login AND an image
+    /// download over the camera's Wi-Fi — 6s cancels perfectly healthy cameras.</summary>
+    private static readonly TimeSpan HttpSnapTimeout = TimeSpan.FromSeconds(20);
+
     /// <summary>After a transport-level failure, HTTP reads are skipped until this
     /// time — a camera with port 80 closed shouldn't be re-probed on every panel open.</summary>
     private DateTime _httpRetryAt;
@@ -589,11 +594,17 @@ public sealed class CameraControl : ICameraControl
     /// <summary>Same idea for a login the camera answered but rejected.</summary>
     private bool _httpLoginWarned;
 
-    private async Task<T?> HttpTryAsync<T>(Func<CancellationToken, Task<T?>> op, CancellationToken ct)
+    /// <summary>Consecutive transport failures. The unreachable warning waits for a
+    /// streak: a single timeout during startup (every camera juggling logins and
+    /// stream starts at once) is routine, not an outage.</summary>
+    private int _httpFailStreak;
+
+    private async Task<T?> HttpTryAsync<T>(Func<CancellationToken, Task<T?>> op, CancellationToken ct,
+        TimeSpan? timeout = null)
     {
         if (_httpApi == null || DateTime.UtcNow < _httpRetryAt) return default;
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(HttpCallTimeout);
+        cts.CancelAfter(timeout ?? HttpCallTimeout);
         try
         {
             var result = await op(cts.Token).ConfigureAwait(false);
@@ -628,10 +639,14 @@ public sealed class CameraControl : ICameraControl
                   or System.Net.Http.HttpRequestException or System.Net.Sockets.SocketException)
         {
             _httpRetryAt = DateTime.UtcNow + TimeSpan.FromSeconds(60);
-            if (!_httpUnreachableWarned)
+            _httpFailStreak++;
+            var reason = ex is OperationCanceledException
+                ? $"did not answer within {(timeout ?? HttpCallTimeout).TotalSeconds:0}s"
+                : Log.Flatten(ex);
+            if (_httpFailStreak >= 3 && !_httpUnreachableWarned)
             {
                 _httpUnreachableWarned = true;
-                Log.Warn($"{CameraName}: the camera's HTTP API is unreachable ({Log.Flatten(ex)}). " +
+                Log.Warn($"{CameraName}: the camera's HTTP API is unreachable ({reason}). " +
                          "Picture settings, volume, Wi-Fi signal, PTZ presets and scaled snapshots are " +
                          "unavailable until it answers. Many cameras ship with HTTP disabled — enable it in " +
                          "the Reolink app (Settings > Network > Advanced > Port Settings), or set " +
@@ -639,7 +654,7 @@ public sealed class CameraControl : ICameraControl
             }
             else
             {
-                Log.Debug($"{CameraName}: HTTP API still unreachable ({ex.Message}) — skipping HTTP reads for 60s");
+                Log.Debug($"{CameraName}: HTTP API unreachable ({reason}) — skipping HTTP reads for 60s");
             }
             return default;
         }
@@ -649,6 +664,7 @@ public sealed class CameraControl : ICameraControl
     {
         _httpRetryAt = default;
         _httpLoginWarned = false;
+        _httpFailStreak = 0;
         if (_httpUnreachableWarned)
         {
             _httpUnreachableWarned = false;
