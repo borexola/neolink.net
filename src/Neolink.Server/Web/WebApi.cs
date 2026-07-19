@@ -24,6 +24,7 @@ public sealed record WebStreamInfo(string Kind, string Path, IStreamHub Hub);
 /// <param name="ContinuousActive">Probe: is 24/7 footage being written right now? Null when the camera has no continuous recorder.</param>
 /// <param name="SupportsEvents">False for generic RTSP cameras: no detection pushes, so event recording can't trigger.</param>
 /// <param name="Battery">Latest battery reading, or null (mains-powered / generic RTSP / unknown yet).</param>
+/// <param name="WifiSignal">Latest Wi-Fi RSSI pushed over Baichuan (dBm), or null — the only Wi-Fi source on cameras without the HTTP API.</param>
 /// <param name="Asleep">Probe: is the camera intentionally disconnected so it can sleep (battery doze)?</param>
 /// <param name="SirenOn">Latest siren state the camera pushed, or null (no push yet / unsupported).</param>
 /// <param name="PrivacyOn">Latest privacy-mode state the camera pushed, or null (no push yet / unsupported).</param>
@@ -34,7 +35,7 @@ public sealed record WebStreamInfo(string Kind, string Path, IStreamHub Hub);
 /// <param name="SetContinuousEnabled">Turns 24/7 recording on/off at runtime and persists it (same setting as the web UI toggle); null when unsupported.</param>
 public sealed record WebCameraInfo(string Name, List<WebStreamInfo> Streams, ICameraControl Control,
     HashSet<string>? PermittedUsers, Func<bool>? ContinuousActive = null, bool SupportsEvents = true,
-    Func<BatteryPush?>? Battery = null, Func<bool>? Asleep = null,
+    Func<BatteryPush?>? Battery = null, Func<int?>? WifiSignal = null, Func<bool>? Asleep = null,
     Func<bool?>? SirenOn = null, Func<bool?>? PrivacyOn = null,
     Func<bool>? Suspended = null, Action<bool>? SetSuspended = null,
     Func<(string Date, string File, double Seconds)?>? ActiveSegment = null,
@@ -1049,6 +1050,11 @@ public static class WebApi
                 // viewed or recorded here. Distinct from offline-because-unreachable.
                 suspended = c.Suspended?.Invoke() ?? false,
                 canSuspend = c.SetSuspended != null,
+                // Wi-Fi signal: the Baichuan NetInfo push (dBm) when the camera sends
+                // one — the only source on HTTP-less models (Lumus, battery doorbells)
+                // — else the HTTP API's cached value, kept fresh by the throttled warm
+                // below. Null on wired cameras or before the first reading.
+                wifiSignal = c.WifiSignal?.Invoke() ?? c.Control.CachedWifiSignal,
                 battery = c.Battery?.Invoke() is { } b
                     ? new { percent = b.Percent, charging = b.Charging }
                     : null,
@@ -1074,6 +1080,10 @@ public static class WebApi
                     rtspPort,
                 }),
             });
+            // Kick a throttled, non-blocking Wi-Fi refresh per camera so the cached
+            // values the list just read stay current without the poll ever doing I/O.
+            foreach (var c in cameras)
+                _ = c.Control.WarmWifiSignalAsync(CancellationToken.None);
             return Results.Json(payload);
         });
 

@@ -27,6 +27,17 @@ in the README). Paste the matching section below into the GitHub release.
   (the same sustained-high-CPU and recent-write-error signals the email alerts
   use).
 
+- **Wi-Fi signal icons in the sidebar and on the camera page.** Every
+  Wi-Fi-connected camera now shows the classic arc glyph next to its name, lit
+  to the current signal level (red when weak); the exact reading (dBm or bars)
+  is in the tooltip and spelled out in the camera page's device bar. Readings
+  come from the camera's HTTP API where available — tolerant of every known
+  reply dialect, including firmwares that quote the number as a string — and
+  from the Baichuan protocol's own Wi-Fi query everywhere else, so HTTP-less
+  models (Lumus, battery doorbells) get the icon too. Sleeping battery cameras
+  are never woken for a reading; their last value is kept. Wired-ethernet
+  cameras correctly show nothing.
+
 ### Changed
 
 - **Live view starts much faster, especially with several tiles at once.** Each
@@ -40,8 +51,33 @@ in the README). Paste the matching section below into the GitHub release.
   primed inside ~220 ms), so playback begins almost at once. Live tiles also show
   the camera's snapshot as a poster the instant the page loads, so the grid paints
   real frames while the streams spin up instead of sitting on "connecting…".
+  The buffer is session-scoped: it is discarded the moment the camera's
+  connection ends, so opening a camera that has since gone offline (or dozed
+  off) no longer replays a second of stale footage and freezes.
 
 ### Fixed
+
+- **Clicking the zoom buttons quickly no longer resets the view.** Two fast
+  clicks on the +/− pill fired the browser's double-click event, and the
+  video's double-click-to-1:1 gesture caught it — snapping a freshly zoomed
+  image straight back to 100%. Double-clicks on any on-video control are now
+  ignored by that gesture; only double-clicking the picture itself restores
+  1:1. Applies everywhere the zoom pill exists: live tiles, the quick-view
+  pop-up, event players and the timeline monitor.
+
+- **An offline camera's tile says so.** Opening a camera that is actually
+  unreachable used to sit on the player's eternal "connecting…". The tile (and
+  the quick-view pop-up) now shows an *offline* overlay instead — like the
+  suspended and privacy states — and the live view returns by itself once the
+  camera answers again. Sleeping battery cameras still show "connecting…",
+  because opening their stream genuinely wakes them.
+
+- **The battery level icon shows even while charging.** A camera that reported
+  "charging" swapped the battery glyph for a lightning bolt, so cameras that
+  charge continuously (doorbells on wired power) never showed their level at a
+  glance. The glyph with its fill bar now always renders, with a small bolt
+  beside it while charging — and the camera page's device bar gained a Battery
+  item alongside the new Wi-Fi one.
 
 - **Battery cameras: wake-capture no longer misses events on models whose
   low-power wake chip answers discovery** (reported with the battery Video

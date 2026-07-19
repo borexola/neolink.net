@@ -22,7 +22,8 @@ public sealed record ApiStream(string Kind, string Path, bool Ready, string? Cod
 /// <param name="OnDemand">On-demand clip capture state; null when the camera can't record events.</param>
 public sealed record ApiCamera(string Name, bool Online, List<ApiStream> Streams, bool Recording = false,
     bool Asleep = false, ApiBattery? Battery = null, ApiOnDemand? OnDemand = null, bool Privacy = false,
-    bool Suspended = false, bool CanSuspend = false, string? Address = null, bool Udp = false);
+    bool Suspended = false, bool CanSuspend = false, string? Address = null, bool Udp = false,
+    int? WifiSignal = null);
 
 /// <summary>On-demand clip capture (the tile record button / HA Record switch):
 /// one clip, stopped automatically at MaxSeconds.</summary>
@@ -352,6 +353,7 @@ public static class UiIcon
             "chev-down" => "<polyline points=\"6 9 12 15 18 9\"/>",
             "calendar" => "<rect x=\"3\" y=\"4\" width=\"18\" height=\"18\" rx=\"2\"/><line x1=\"16\" y1=\"2\" x2=\"16\" y2=\"6\"/><line x1=\"8\" y1=\"2\" x2=\"8\" y2=\"6\"/><line x1=\"3\" y1=\"10\" x2=\"21\" y2=\"10\"/>",
             "camera" => "<path d=\"M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z\"/><circle cx=\"12\" cy=\"13\" r=\"4\"/>",
+            "video-off" => "<path d=\"M16 16v1a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2m5.66 0H14a2 2 0 0 1 2 2v3.34l1 1L23 7v10\"/><line x1=\"1\" y1=\"1\" x2=\"23\" y2=\"23\"/>",
             "download" => "<path d=\"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\"/><polyline points=\"7 10 12 15 17 10\"/><line x1=\"12\" y1=\"15\" x2=\"12\" y2=\"3\"/>",
             "check" => "<polyline points=\"20 6 9 17 4 12\"/>",
             "trash" => "<polyline points=\"3 6 5 6 21 6\"/><path d=\"M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\"/><line x1=\"10\" y1=\"11\" x2=\"10\" y2=\"17\"/><line x1=\"14\" y1=\"11\" x2=\"14\" y2=\"17\"/>",
@@ -391,6 +393,42 @@ public static class UiIcon
             "stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" " +
             "aria-hidden=\"true\"><rect x=\"1\" y=\"6\" width=\"18\" height=\"12\" rx=\"2\"/>" +
             $"<line x1=\"23\" y1=\"11\" x2=\"23\" y2=\"13\"/>{fill}</svg>");
+    }
+
+    /// <summary>Wi-Fi strength as a 0-4 level. Firmwares report either dBm (negative)
+    /// or bars (0-4); a few report a 0-100 percentage. Maps all three to bars.</summary>
+    public static int WifiBars(int signal) => signal switch
+    {
+        < 0 => signal >= -55 ? 4 : signal >= -65 ? 3 : signal >= -72 ? 2 : signal >= -80 ? 1 : 0, // dBm
+        <= 4 => signal,                                                                            // already bars
+        _ => signal >= 80 ? 4 : signal >= 60 ? 3 : signal >= 40 ? 2 : signal >= 20 ? 1 : 0,        // percent
+    };
+
+    /// <summary>The raw Wi-Fi reading formatted for a tooltip — dBm, bars or percent
+    /// depending on what the firmware reports (matches how the panel labels it).</summary>
+    public static string WifiLabel(int signal) =>
+        signal < 0 ? $"{signal} dBm" : signal <= 4 ? $"{signal} / 4 bars" : $"{signal}%";
+
+    /// <summary>The classic Wi-Fi glyph — a dot with three arcs fanning out above
+    /// it. Elements light up to the signal level (dot first, widest arc last), the
+    /// rest stay dimmed — so the icon reads signal quality at a glance.</summary>
+    public static MarkupString RenderWifi(int signal, int size = 15)
+    {
+        int level = Math.Clamp(WifiBars(signal), 0, 4);
+        string[] elements =
+        {
+            "<line x1=\"12\" y1=\"20\" x2=\"12.01\" y2=\"20\"",  // the dot (round cap)
+            "<path d=\"M8.53 16.11a6 6 0 0 1 6.95 0\"",          // inner arc
+            "<path d=\"M5 12.55a11 11 0 0 1 14.08 0\"",          // middle arc
+            "<path d=\"M1.42 9a16 16 0 0 1 21.16 0\"",           // outer arc
+        };
+        var body = new System.Text.StringBuilder();
+        for (int i = 0; i < elements.Length; i++)
+            body.Append($"{elements[i]} opacity=\"{(i < level ? "1" : "0.35")}\"/>");
+        return new MarkupString(
+            $"<svg class=\"nl-icon\" width=\"{size}\" height=\"{size}\" viewBox=\"0 0 24 24\" fill=\"none\" " +
+            "stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" " +
+            $"aria-hidden=\"true\">{body}</svg>");
     }
 }
 

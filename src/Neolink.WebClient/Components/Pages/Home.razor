@@ -124,10 +124,21 @@
                     }
                     @if (cam.Battery is { } bat)
                     {
-                        @* Battery-powered camera: level + charging hint. *@
+                        @* Battery-powered camera: level + charging hint. The battery
+                           glyph (with its fill bar) always shows — a camera that
+                           reports "charging" nonstop (doorbells on wired power) must
+                           not hide the level behind a bolt-only icon. *@
                         <span class="cam-battery @(bat.Percent <= 20 && !bat.Charging ? "battery-low" : "")"
                               title="Battery-powered camera: @(bat.Percent)%@(bat.Charging ? ", charging" : "")">
-                            @(bat.Charging ? UiIcon.Render("bolt", 11) : UiIcon.RenderBattery(bat.Percent, 11))@bat.Percent%
+                            @UiIcon.RenderBattery(bat.Percent, 11)@(bat.Charging ? UiIcon.Render("bolt", 9) : default)@bat.Percent%
+                        </span>
+                    }
+                    @if (cam.WifiSignal is { } wifi)
+                    {
+                        @* Wi-Fi signal (HTTP API): icon shows quality, tooltip the value. *@
+                        <span class="cam-wifi @(UiIcon.WifiBars(wifi) <= 1 ? "wifi-weak" : "")"
+                              title="Wi-Fi signal: @UiIcon.WifiLabel(wifi)">
+                            @UiIcon.RenderWifi(wifi, 14)
                         </span>
                     }
                     @if (cam.Suspended)
@@ -567,6 +578,16 @@
                                 <small>the camera is dark on purpose</small>
                             </div>
                         }
+                        else if (camera is { Online: false, Asleep: false })
+                        {
+                            @* Known-unreachable (not a battery doze): honest overlay
+                               instead of the player's eternal "connecting…". *@
+                            <div class="tile-privacy tile-offline">
+                                <span class="tile-privacy-icon">@UiIcon.Render("video-off", 22)</span>
+                                <span>offline</span>
+                                <small>camera unreachable — the view returns when it answers</small>
+                            </div>
+                        }
                         @* Phones: the camera name floats translucent over the feed's top-right
                            corner instead of sitting in the crowded bottom bar (CSS gates it). *@
                         <span class="tile-name-float">@slot.Camera</span>
@@ -759,6 +780,14 @@
                         <span class="tile-privacy-icon">🔒</span>
                         <span>privacy mode</span>
                         <small>the camera is dark on purpose — switch it back in camera settings or the Reolink app</small>
+                    </div>
+                }
+                else if (_cameras.FirstOrDefault(c => c.Name == qv.Camera) is { Online: false, Asleep: false })
+                {
+                    <div class="tile-privacy tile-offline">
+                        <span class="tile-privacy-icon">@UiIcon.Render("video-off", 22)</span>
+                        <span>offline</span>
+                        <small>camera unreachable — the view returns when it answers</small>
                     </div>
                 }
                 @ZoomHud
@@ -3878,7 +3907,7 @@
 
     // ---- sidebar reordering: drop a camera card on another to move it there ----
 
-    private const string EndDropMarker = " end"; // the after-the-last-card zone
+    private const string EndDropMarker = "\0end"; // the after-the-last-card zone
     private List<string> _camOrder = new(); // user's sidebar order (names); empty = server order
     private string? _dropTargetCam;         // card the drag hovers (draws the insertion line)
 

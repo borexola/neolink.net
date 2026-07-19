@@ -191,6 +191,14 @@ public interface ICameraControl
     /// <summary>The camera's Wi-Fi signal reading (bars 0-4 or dBm, firmware-dependent), or null.</summary>
     Task<int?> GetWifiSignalAsync(CancellationToken ct);
 
+    /// <summary>The last Wi-Fi signal read over the HTTP API, or null. A CHEAP cached
+    /// accessor for the camera-list sidebar — never does I/O.</summary>
+    int? CachedWifiSignal => null;
+
+    /// <summary>Refreshes <see cref="CachedWifiSignal"/> from the HTTP API, throttled
+    /// so it is safe to fire on every camera-list poll. No-op without an HTTP API.</summary>
+    Task WarmWifiSignalAsync(CancellationToken ct) => Task.CompletedTask;
+
     /// <summary>The camera's PTZ preset slots, or null when unsupported.</summary>
     Task<IReadOnlyList<PtzPresetInfo>?> GetPtzPresetsAsync(CancellationToken ct);
 
@@ -1131,8 +1139,68 @@ public sealed class CameraControl : ICameraControl
         Log.Info($"{CameraName}: speaker volume set to {vol}");
     }
 
-    public Task<int?> GetWifiSignalAsync(CancellationToken ct) =>
-        HttpTryAsync<int?>(async c => await _httpApi!.GetWifiSignalAsync(c).ConfigureAwait(false), ct);
+    public async Task<int?> GetWifiSignalAsync(CancellationToken ct)
+    {
+        if (_httpApi != null
+            && await HttpTryAsync<int?>(async c => await _httpApi!.GetWifiSignalAsync(c).ConfigureAwait(false), ct)
+                .ConfigureAwait(false) is { } viaHttp)
+            return viaHttp;
+        // Baichuan msg 115 <WifiSignal>: the protocol's own query — the source for
+        // cameras without the HTTP API (or whose HTTP reply shape is unknown).
+        // Rides the live connection only; a parked battery camera reads as offline
+        // and is never woken for this. Wired-ethernet cameras answer with nothing —
+        // after a few misses stop asking so the throttled warm isn't wasted chatter.
+        if (_bcWifiMisses >= BcWifiGiveUp) return null;
+        try
+        {
+            var el = await WithCameraAsync(c => c.GetWifiSignalAsync(ct: ct), ct).ConfigureAwait(false);
+            if (el != null && BcCamera.ParseNetInfo(el) is { } push)
+            {
+                _bcWifiMisses = 0;
+                return push.SignalDbm;
+            }
+            _bcWifiMisses++;
+            return null;
+        }
+        catch (CameraOfflineException)
+        {
+            return null; // parked/reconnecting — not evidence the query is unsupported
+        }
+        catch (Exception ex) when (ex is CameraCommandException or TimeoutException or IOException)
+        {
+            _bcWifiMisses++;
+            return null;
+        }
+    }
+
+    // Consecutive Baichuan Wi-Fi query misses; at BcWifiGiveUp the camera is
+    // taken as wired (or the firmware lacks msg 115) and the query retires.
+    private int _bcWifiMisses;
+    private const int BcWifiGiveUp = 3;
+
+    // Cheap Wi-Fi cache for the camera-list sidebar. The list poll must not do a
+    // per-camera HTTP round-trip, so it reads _cachedWifi (int.MinValue = unknown,
+    // else the last value) — falling back to whatever the last full HTTP-features
+    // sweep saw — and fires a throttled background refresh.
+    private volatile int _cachedWifi = int.MinValue;
+    private DateTime _wifiWarmedAt;
+    private static readonly TimeSpan WifiWarmInterval = TimeSpan.FromSeconds(30);
+
+    public int? CachedWifiSignal =>
+        _cachedWifi != int.MinValue ? _cachedWifi : _httpFeaturesCache?.WifiSignal;
+
+    public async Task WarmWifiSignalAsync(CancellationToken ct)
+    {
+        // Throttle: one read per interval regardless of how often the list is polled.
+        if (DateTime.UtcNow - _wifiWarmedAt < WifiWarmInterval) return;
+        _wifiWarmedAt = DateTime.UtcNow;
+        try
+        {
+            if (await GetWifiSignalAsync(ct).ConfigureAwait(false) is { } signal)
+                _cachedWifi = signal;
+        }
+        catch { /* best-effort UI value — a failed read just leaves the last one */ }
+    }
 
     public Task<IReadOnlyList<PtzPresetInfo>?> GetPtzPresetsAsync(CancellationToken ct) =>
         HttpTryAsync<IReadOnlyList<PtzPresetInfo>?>(

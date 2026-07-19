@@ -970,9 +970,14 @@
 
             // Double-click zoomed video: back to 1:1 (swallowed so the tile's own
             // double-click — maximize/restore — only fires from an unzoomed state).
+            // Controls are exempt: rapid +/− clicks on the HUD (or any button) fire
+            // a dblclick too, and this capture-phase listener runs before the HUD's
+            // own stopPropagation could shield it — only the video surface resets.
             document.addEventListener('dblclick', (e) => {
                 const box = boxOf(e.target);
                 if (!box || stOf(box).z <= 1) return;
+                if (e.target instanceof Element &&
+                    e.target.closest('.tile-bar, .zoom-hud, button, select')) return;
                 e.stopPropagation();
                 e.preventDefault();
                 reset(box);

@@ -59,7 +59,7 @@
            camera's own vitals (model/firmware/serial, Wi-Fi, SD) fill in once it
            answers. Generic RTSP cameras report none, so the strip is just the
            address (or nothing). *@
-        @if (_caps?.Version != null || !string.IsNullOrEmpty(Camera?.Address) || _http?.WifiSignal != null || _http?.SdCards is { Count: > 0 })
+        @if (_caps?.Version != null || !string.IsNullOrEmpty(Camera?.Address) || Camera?.Battery != null || Camera?.WifiSignal != null || _http?.WifiSignal != null || _http?.SdCards is { Count: > 0 })
         {
         <div class="campanel-devbar">
             @if (!string.IsNullOrEmpty(_caps?.Version?.Model)) { <span class="devbar-item devbar-model" title="Model">@_caps!.Version!.Model</span> }
@@ -68,7 +68,8 @@
             @if (!string.IsNullOrEmpty(_caps?.Version?.Serial)) { <span class="devbar-item"><span class="devbar-k">Serial</span>@_caps!.Version!.Serial</span> }
             @if (!string.IsNullOrEmpty(Camera?.Address)) { <span class="devbar-item" title="Configured network address"><span class="devbar-k">Address</span>@Camera!.Address</span> }
             @if (Camera?.Udp == true) { <span class="devbar-item" title="Connected over UDP (Baichuan-over-UDP) — beta support for battery-only models"><span class="devbar-k">Transport</span>UDP <span class="beta-tag">BETA</span></span> }
-            @if (_http?.WifiSignal is { } wifi) { <span class="devbar-item"><span class="devbar-k">Wi-Fi</span>@WifiLabel(wifi)</span> }
+            @if (Camera?.Battery is { } bat) { <span class="devbar-item" title="Battery-powered camera: @(bat.Percent)%@(bat.Charging ? ", charging" : "")"><span class="devbar-k">Battery</span><span class="devbar-batt">@UiIcon.RenderBattery(bat.Percent, 13)@(bat.Charging ? UiIcon.Render("bolt", 11) : default)</span>@bat.Percent%</span> }
+            @if ((_http?.WifiSignal ?? Camera?.WifiSignal) is { } wifi) { <span class="devbar-item" title="Wi-Fi signal: @WifiLabel(wifi)"><span class="devbar-k">Wi-Fi</span><span class="devbar-wifi">@UiIcon.RenderWifi(wifi, 13)</span>@WifiLabel(wifi)</span> }
             @if (_http?.SdCards is { Count: > 0 } cards)
             {
                 foreach (var card in cards)

@@ -274,6 +274,25 @@ html, body {
 }
 .cam-battery.battery-low { color: var(--err); }
 
+/* Wi-Fi signal chip in the sidebar card — mirrors the battery chip. Full text
+   color (not muted): at a dozen pixels the arc glyph disappears when dimmed. */
+.cam-wifi {
+    display: inline-flex;
+    align-items: center;
+    color: var(--text);
+    flex: 0 0 auto;
+}
+.cam-wifi.wifi-weak { color: var(--err); }
+
+/* Wi-Fi / battery glyphs inline with the value in the camera-panel device bar. */
+.campanel-devbar .devbar-wifi,
+.campanel-devbar .devbar-batt {
+    display: inline-flex;
+    align-items: center;
+    margin: 0 4px;
+    color: var(--muted);
+}
+
 /* Battery camera intentionally sleeping (as opposed to unreachable) */
 .cam-doze-badge,
 .cam-privacy-badge {
@@ -673,6 +692,10 @@ video[data-live="1"] ~ .tile-status { display: none; }
     max-width: 80%;
     text-align: center;
 }
+
+/* Offline variant: the label reads as a problem, not a setting. */
+.tile-offline span:not(.tile-privacy-icon) { color: var(--err); }
+.tile-offline .tile-privacy-icon { color: color-mix(in srgb, var(--err) 60%, var(--muted)); }
 
 .tile-bar {
     position: absolute;

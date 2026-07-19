@@ -243,6 +243,20 @@ public sealed class StreamHub : IStreamHub, IMediaSink
         }
     }
 
+    public void SourceStopped()
+    {
+        // The GOP cache is session-scoped: with no live publisher behind it, priming
+        // a joiner would play a second of stale video and freeze (seen when clicking
+        // an offline camera in the sidebar). The next session's first keyframe
+        // reopens the cache in Emit.
+        lock (_castGate)
+        {
+            _gop.Clear();
+            _gopBytes = 0;
+            _gopOpen = false;
+        }
+    }
+
     // ------------------------------------------------------------------ subscribe
 
     public (Guid id, ChannelReader<HubPacket> reader) Subscribe(bool viewer = false)

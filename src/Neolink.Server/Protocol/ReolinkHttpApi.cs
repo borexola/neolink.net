@@ -209,7 +209,29 @@ public sealed class ReolinkHttpApi : IDisposable
     public async Task<int?> GetWifiSignalAsync(CancellationToken ct)
     {
         var value = await ExecAsync("GetWifiSignal", new JsonObject { ["channel"] = _channelId }, ct).ConfigureAwait(false);
-        return (int?)value?["signal"] ?? (int?)value?["WifiSignal"]?["signal"];
+        return ParseWifiSignal(value);
+    }
+
+    /// <summary>Reads the signal out of a GetWifiSignal reply's value node. Firmwares
+    /// answer in several shapes — {"signal":N}, {"wifiSignal":N},
+    /// {"WifiSignal":{"signal":N}} — and some (Video Doorbell WiFi) quote numbers as
+    /// STRINGS, where a bare (int?) cast throws. Null when no shape matches.</summary>
+    internal static int? ParseWifiSignal(JsonNode? value)
+    {
+        if (value is not JsonObject o) return null;
+        return AsInt(o["signal"])
+            ?? AsInt(o["wifiSignal"])
+            ?? AsInt((o["WifiSignal"] as JsonObject)?["signal"])
+            ?? AsInt(o["WifiSignal"]);
+    }
+
+    /// <summary>An int from a JSON value that may be a number OR a numeric string;
+    /// null when it's neither (same tolerance as CameraControl.AsLong).</summary>
+    private static int? AsInt(JsonNode? node)
+    {
+        if (node is not JsonValue v) return null;
+        if (v.TryGetValue<int>(out var i)) return i;
+        return v.TryGetValue<string>(out var s) && int.TryParse(s, out var parsed) ? parsed : null;
     }
 
     /// <summary>The camera's saved PTZ presets (id/name/enable), or an empty array.</summary>

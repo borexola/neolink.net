@@ -13,6 +13,11 @@ public interface IMediaSink
     void PublishVideo(VideoFrame frame);
     void PublishAac(AacFrame frame);
     void PublishAdpcm(AdpcmFrame frame);
+    /// <summary>The publishing session ended (camera disconnected, parked to sleep,
+    /// or the pull dropped). Discards session-scoped state — the GOP cache — so a
+    /// viewer joining while the source is down isn't primed with stale frames that
+    /// play for a second and freeze.</summary>
+    void SourceStopped();
 }
 
 /// <summary>

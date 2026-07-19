@@ -37,6 +37,7 @@ public static class BcConstants
     public const uint MsgIdTalk = 202;
     public const uint MsgIdGetLedStatus = 208;
     public const uint MsgIdSetLedStatus = 209;
+    public const uint MsgIdWifiSignal = 115;           // GET: reply carries <WifiSignal><signal> (RSSI dBm)
     public const uint MsgIdGetPirAlarm = 212;
     public const uint MsgIdSetPirAlarm = 213;
     public const uint MsgIdUdpKeepAlive = 234;

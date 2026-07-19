@@ -102,6 +102,7 @@ public sealed class RtspCameraService
             {
                 _online = false;
                 _activePull = null;
+                _hub.SourceStopped(); // stale GOP must not prime viewers while we're down
             }
             try { await Task.Delay(backoff, ct).ConfigureAwait(false); }
             catch (OperationCanceledException) { return; }

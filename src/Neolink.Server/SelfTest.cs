@@ -169,6 +169,23 @@ public static class SelfTest
             Pub(false, 40, 6000);
             Assert(r3.TryRead(out var live) && live is Streaming.HubVideo, "live packet reaches an existing subscriber");
             hub.Unsubscribe(id1); hub.Unsubscribe(id2); hub.Unsubscribe(id3);
+
+            // Source gone: the cached GOP is stale — a joiner must get NOTHING
+            // (clicking an offline camera played a second of old video and froze).
+            hub.SourceStopped();
+            var (id4, r4) = hub.Subscribe();
+            Assert(!r4.TryRead(out _), "source stopped -> new viewer primed with nothing");
+            hub.Unsubscribe(id4);
+
+            // The next session's keyframe reopens the cache and priming resumes.
+            Pub(true, 100, 7000);
+            Pub(false, 40, 8000);
+            var (id5, r5) = hub.Subscribe();
+            var got5 = new List<Streaming.HubPacket>();
+            while (r5.TryRead(out var p)) got5.Add(p);
+            Assert(got5.Count == 2 && got5[0] is Streaming.HubVideo { Keyframe: true },
+                "reconnected source primes again from its first keyframe");
+            hub.Unsubscribe(id5);
         });
 
         Test("server overload signal: sustained high CPU, ignores brief spikes", () =>
@@ -1734,6 +1751,33 @@ public static class SelfTest
                 "empty battery has no fill bar");
             Assert(Neolink.WebClient.UiIcon.RenderBattery(150).Value.Contains("width=\"13\""),
                 "overshoot clamps to full");
+
+            // Wi-Fi bars: dBm (negative), bars (0-4) and percent (>4) all map to 0-4.
+            Assert(Neolink.WebClient.UiIcon.WifiBars(-40) == 4, "strong dBm -> 4 bars");
+            Assert(Neolink.WebClient.UiIcon.WifiBars(-68) == 2, "mid dBm -> 2 bars");
+            Assert(Neolink.WebClient.UiIcon.WifiBars(-90) == 0, "very weak dBm -> 0 bars");
+            Assert(Neolink.WebClient.UiIcon.WifiBars(3) == 3, "bars value passes through");
+            Assert(Neolink.WebClient.UiIcon.WifiBars(85) == 4, "high percent -> 4 bars");
+            Assert(Neolink.WebClient.UiIcon.WifiBars(10) == 0, "low percent -> 0 bars");
+            // The glyph reads the level: 3 bars lit at full opacity, one dimmed.
+            Assert(System.Text.RegularExpressions.Regex.Matches(
+                Neolink.WebClient.UiIcon.RenderWifi(-68).Value, "opacity=\"1\"").Count == 2,
+                "2-bar signal lights exactly two bars");
+            Assert(Neolink.WebClient.UiIcon.WifiLabel(-60) == "-60 dBm", "dBm label");
+            Assert(Neolink.WebClient.UiIcon.WifiLabel(3) == "3 / 4 bars", "bars label");
+
+            // GetWifiSignal reply dialects — firmwares disagree on the shape, and
+            // the Video Doorbell WiFi quotes numbers as strings (a bare cast threw,
+            // which read as "camera reports no Wi-Fi" and hid the icon).
+            static System.Text.Json.Nodes.JsonNode? W(string json) =>
+                System.Text.Json.Nodes.JsonNode.Parse(json);
+            Assert(Protocol.ReolinkHttpApi.ParseWifiSignal(W("""{"signal":-55}""")) == -55, "flat signal");
+            Assert(Protocol.ReolinkHttpApi.ParseWifiSignal(W("""{"wifiSignal":3}""")) == 3, "flat wifiSignal");
+            Assert(Protocol.ReolinkHttpApi.ParseWifiSignal(W("""{"WifiSignal":{"signal":2}}""")) == 2, "nested WifiSignal.signal");
+            Assert(Protocol.ReolinkHttpApi.ParseWifiSignal(W("""{"WifiSignal":4}""")) == 4, "flat Pascal WifiSignal");
+            Assert(Protocol.ReolinkHttpApi.ParseWifiSignal(W("""{"signal":"-61"}""")) == -61, "quoted string signal");
+            Assert(Protocol.ReolinkHttpApi.ParseWifiSignal(W("""{"other":1}""")) == null, "unknown shape -> null");
+            Assert(Protocol.ReolinkHttpApi.ParseWifiSignal(null) == null, "no value node -> null");
         });
 
         Test("event-type chips: only disproven types are hidden", () =>

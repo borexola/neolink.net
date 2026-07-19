@@ -46,6 +46,15 @@ public static class BcCameraCommands
         return reply?.Xml?.StreamInfoList;
     }
 
+    /// <summary>Raw &lt;WifiSignal&gt; XML (RSSI dBm in &lt;signal&gt;), or null on
+    /// wired cameras / firmwares without the query (msg 115, empty request body).</summary>
+    public static async Task<XElement?> GetWifiSignalAsync(this IBcCamera cam, TimeSpan? timeout = null, CancellationToken ct = default)
+    {
+        var reply = await cam.SendCommandAsync(BcConstants.MsgIdWifiSignal,
+            replyTimeout: timeout, ct: ct).ConfigureAwait(false);
+        return reply?.Xml?.RawElement("WifiSignal");
+    }
+
     /// <summary>Raw &lt;BatteryInfo&gt; XML (percent, charge status, ...), or null if the camera has no battery.</summary>
     public static async Task<XElement?> GetBatteryInfoAsync(this IBcCamera cam, TimeSpan? timeout = null, CancellationToken ct = default)
     {
