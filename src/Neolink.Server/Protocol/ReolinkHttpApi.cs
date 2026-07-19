@@ -452,7 +452,26 @@ public sealed class ReolinkHttpApi : IDisposable
 
         var url = $"{_apiUrl}?cmd=Download&source={Uri.EscapeDataString(fileName)}" +
                   $"&output={Uri.EscapeDataString(fileName)}&token={Uri.EscapeDataString(_token!)}";
-        var res = await LongHttp().GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+        HttpResponseMessage res;
+        try
+        {
+            res = await LongHttp().GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+        }
+        catch (HttpRequestException ex) when (!ct.IsCancellationRequested)
+        {
+            // We get here with a proven-live API (the caller just listed the SD
+            // card over it), so a transport failure on THIS request is the known
+            // firmware bug: some models advertise recDownload but their Download
+            // handler crashes at entry and the camera drops the connection —
+            // verified on the Video Doorbell WiFi (empty reply for cmd=Download
+            // even with no parameters, while Snap/Search on the same session
+            // work). Nothing the client sends changes that.
+            throw new ReolinkApiException(
+                "the camera dropped the Download request — this firmware does not actually serve " +
+                "SD recordings over HTTP (a known firmware bug on the Video Doorbell WiFi: its " +
+                "Download handler crashes even though the camera lists the recordings fine). " +
+                $"The clip can be viewed in the Reolink app instead. ({ex.Message})");
+        }
         try
         {
             if (!res.IsSuccessStatusCode)

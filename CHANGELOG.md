@@ -8,6 +8,15 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Fixed
 
+- **SD playback failures show WHY** instead of a silently black player: a fetch
+  the camera refuses now overlays "Playback failed" on the player with a pointer
+  to the server log, and the log names the reason. Notably: the Video Doorbell
+  WiFi's firmware advertises recording download but its HTTP Download handler
+  crashes (verified against the camera: it drops the connection even for a
+  parameterless Download, while Search and Snap on the same session work) — so
+  its SD list shows, but the clips themselves can only be viewed in the Reolink
+  app until Reolink fixes the firmware. Other models are unaffected.
+
 - **SD-card recordings actually play (and download)**: two independent bugs.
   Downloads failed with an empty 400 — the UI sends `?dl=1` and ASP.NET's
   boolean binding rejects `1` before the handler even runs, so nothing hit the

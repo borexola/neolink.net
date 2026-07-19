@@ -508,7 +508,21 @@
                     delete v.dataset.evFfMuted;
                 }
             };
+            // A failed fetch (camera refused the recording, server error) leaves a
+            // <video> silently black — surface it. The overlay clears whenever a
+            // new source attaches.
+            const errorBox = () => v.closest('.event-player-media') || v.parentElement;
+            v.onerror = () => {
+                const box = errorBox();
+                if (!box || box.querySelector('.video-error')) return;
+                const d = document.createElement('div');
+                d.className = 'video-error';
+                d.textContent = 'Playback failed — the server could not fetch this video. ' +
+                    'The server log has the reason.';
+                box.appendChild(d);
+            };
             if (v.dataset.evUrl !== url) {
+                errorBox()?.querySelector('.video-error')?.remove();
                 const at = (v.currentTime && isFinite(v.currentTime)) ? v.currentTime : 0;
                 v.dataset.evUrl = url;
                 v.src = url;
