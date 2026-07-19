@@ -120,9 +120,12 @@ in the README). Paste the matching section below into the GitHub release.
   Values are scaled to the same 0-255 the HTTP path uses (from the camera's own
   ONVIF ranges). The endpoint is the Baichuan host on the standard
   `/onvif/device_service` path by default, overridable with a per-camera
-  `onvif_address`. Hue, anti-flicker, flip/mirror and HDR have no ONVIF path in
-  this release and stay hidden for ONVIF-only cameras. Requires ONVIF enabled on
-  the camera with valid credentials.
+  `onvif_address`. Home Assistant gets the same entities over MQTT (brightness,
+  contrast, saturation, sharpness numbers + a day/night select) — the reads,
+  states and writes all flow through the shared imaging path, so a slider change
+  in HA routes to ONVIF automatically. Hue, anti-flicker, flip/mirror and HDR
+  have no ONVIF path in this release and stay hidden for ONVIF-only cameras.
+  Requires ONVIF enabled on the camera with valid credentials.
 
 - **Event-type chips only list what the camera can emit**: the recording tab's
   event types used to offer every known detection on every camera. The list is

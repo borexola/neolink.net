@@ -301,6 +301,12 @@ public sealed class CameraControl : ICameraControl
     private readonly OnvifClient? _onvif;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
+    /// <summary>Which transport last served picture settings: true = the Reolink HTTP
+    /// API answered, false = it didn't and ONVIF stood in, null = not read yet. A
+    /// WRITE routes the same way — the Lumus has a (dead) HTTP API derived from its
+    /// host, so "_httpApi != null" alone can't decide where a write should go.</summary>
+    private bool? _httpImagingWorks;
+
     // Capabilities are cached for the lifetime of one camera session; a reconnect
     // (new IBcCamera instance) invalidates the cache.
     private IBcCamera? _capsSession;
@@ -912,7 +918,16 @@ public sealed class CameraControl : ICameraControl
         // only picture-settings path on models like the Lumus. A healthy HTTP
         // camera never reaches this: img is non-null and ONVIF stays untouched.
         if (img == null)
-            return _onvif != null ? await GetOnvifImageSettingsAsync(ct).ConfigureAwait(false) : null;
+        {
+            if (_onvif == null) return null;
+            var onvif = await GetOnvifImageSettingsAsync(ct).ConfigureAwait(false);
+            // Remember which transport actually served imaging, so a WRITE follows
+            // the same road: the Lumus HAS an _httpApi (derived from its host) but
+            // it doesn't answer, and a write to it would just fail.
+            if (onvif != null) _httpImagingWorks = false;
+            return onvif;
+        }
+        _httpImagingWorks = true;
         // The ISP half (day/night, flip, ...) is optional — picture sliders alone
         // are still worth showing if a firmware rejects GetIsp.
         var isp = await HttpTryAsync<JsonObject?>(async c => await _httpApi!.GetIspAsync(c).ConfigureAwait(false), ct)
@@ -1031,22 +1046,25 @@ public sealed class CameraControl : ICameraControl
     public async Task SetImageSettingsAsync(int? bright, int? contrast, int? saturation, int? hue, int? sharpen,
         string? dayNight, string? antiFlicker, bool? flip, bool? mirror, CancellationToken ct)
     {
-        if (_httpApi == null)
+        // Route the write down whichever transport served the read. ONVIF when the
+        // camera has no HTTP API OR its HTTP API isn't answering imaging (the Lumus
+        // has a dead HTTP API derived from its host) — provided ONVIF is available.
+        bool useOnvif = _onvif != null && (_httpApi == null || _httpImagingWorks == false);
+        if (useOnvif)
         {
-            // No Reolink HTTP API — write over ONVIF instead, if this camera has it.
             // ONVIF covers brightness/contrast/saturation/sharpness + day/night; the
             // fields it can't do (hue, anti-flicker, flip/mirror) aren't offered in
             // the panel for an ONVIF camera, so a request for them is a real error.
-            if (_onvif == null)
-                throw new NotSupportedException($"picture settings need the camera's HTTP API ('{CameraName}' has none)");
             if (hue != null || antiFlicker != null || flip != null || mirror != null)
                 throw new NotSupportedException(
                     $"{CameraName} exposes picture settings over ONVIF, which can't set hue, anti-flicker or flip/mirror");
-            await _onvif.SetImagingAsync(bright, contrast, saturation, sharpen,
+            await _onvif!.SetImagingAsync(bright, contrast, saturation, sharpen,
                 DayNightToIrCut(dayNight), wideDynamicRange: null, ct).ConfigureAwait(false);
             Log.Info($"{CameraName}: picture settings changed over ONVIF");
             return;
         }
+        if (_httpApi == null)
+            throw new NotSupportedException($"picture settings need the camera's HTTP API ('{CameraName}' has none)");
         if (bright != null || contrast != null || saturation != null || hue != null || sharpen != null)
         {
             static int Clamp(int v) => Math.Clamp(v, 0, 255);

@@ -55,8 +55,8 @@ public sealed class OnvifClient : IDisposable
     private readonly string _tag;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
-    private bool _discovered;
-    private bool _unusable; // discovery failed for a reason that won't fix itself this run
+    private bool _ready;              // discovery succeeded; endpoints + token cached
+    private DateTime _retryAfter;     // after a failed discovery, don't re-probe until this time
     private string? _imagingUrl;
     private string? _mediaUrl;
     private string? _videoSourceToken;
@@ -145,8 +145,11 @@ public sealed class OnvifClient : IDisposable
 
     private async Task<bool> EnsureDiscoveredAsync(CancellationToken ct)
     {
-        if (_discovered) return !_unusable;
-        _discovered = true;
+        // Cached success is permanent for the run; a failure only pauses re-probing
+        // for a cooldown (a camera rebooting during the first probe must not be
+        // written off until Neolink restarts) — but not so often it stalls callers.
+        if (_ready) return true;
+        if (DateTime.UtcNow < _retryAfter) return false;
         try
         {
             // 1. Device GetCapabilities → the Media and Imaging service URLs. Some
@@ -163,7 +166,7 @@ public sealed class OnvifClient : IDisposable
             if (_videoSourceToken == null)
             {
                 Log.Debug($"{_tag}: ONVIF exposed no video source — imaging fallback unavailable");
-                _unusable = true;
+                _retryAfter = DateTime.UtcNow + RetryCooldown;
                 return false;
             }
 
@@ -174,17 +177,21 @@ public sealed class OnvifClient : IDisposable
                 $"<timg:VideoSourceToken>{Esc(_videoSourceToken)}</timg:VideoSourceToken>", ct)
                 .ConfigureAwait(false);
             _ranges = ParseRanges(options);
+            _ready = true;
             Log.Info($"{_tag}: ONVIF imaging fallback ready (video source '{_videoSourceToken}')");
             return true;
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested) { _discovered = false; throw; }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
-            Log.Debug($"{_tag}: ONVIF discovery failed ({Log.Flatten(ex)}) — imaging fallback unavailable");
-            _unusable = true;
+            Log.Debug($"{_tag}: ONVIF discovery failed ({Log.Flatten(ex)}) — imaging fallback paused for " +
+                      $"{RetryCooldown.TotalMinutes:0} min");
+            _retryAfter = DateTime.UtcNow + RetryCooldown;
             return false;
         }
     }
+
+    private static readonly TimeSpan RetryCooldown = TimeSpan.FromMinutes(5);
 
     private string Conventional(string leaf)
     {
