@@ -4,6 +4,36 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
+## 0.9.6 — unreleased
+
+### Fixed
+
+- **Battery cameras: wake-capture no longer misses events on models whose
+  low-power wake chip answers discovery** (reported with the battery Video
+  Doorbell, issue #44). Wake detection worked by probing until the camera
+  stopped answering ("asleep"), then treating the next answer as "it woke
+  itself". Some battery models answer the discovery hello even while asleep —
+  the same mechanism the Reolink app uses to wake them remotely — so the
+  detector never armed and real motion events passed unseen; worse, a single
+  probe lost to Wi-Fi power save *did* arm it, and the next answered probe
+  manufactured a false "camera woke itself", making Neolink connect and wake
+  the camera it was trying to let sleep. Arming is now debounced (two
+  consecutive unanswered probes), and every probe result plus the camera's raw
+  discovery reply is logged at Debug level so unfamiliar wake behaviors can be
+  diagnosed from the log.
+
+- **Battery cameras: each wake costs far less charge.** Three compounding
+  drains, all fixed: every served stream ran its own wake watcher and connected
+  on every wake (two probing loops, two full sessions — now exactly one, the
+  stream that records the event; other streams connect only when a viewer opens
+  them); capability discovery re-ran its whole probe fan-out on every
+  reconnect (now cached across naps for battery cameras); and after the event
+  the session lingered a flat 60 seconds before letting the camera sleep (now
+  20 seconds for battery cameras — while a detection is actively firing the
+  session stays up, so event clips still run to their natural end). Together
+  with the false-wake fix above this addresses the battery-drain reports where
+  a solar panel could no longer keep up.
+
 ## 0.9.5
 
 ### Fixed

@@ -404,11 +404,13 @@ foreach (var cam in config.Cameras)
     // when served, else the first stream). The per-camera on/off switches live in
     // RecordingSettings and are flipped from the web UI at runtime; the config's
     // "record" flag only seeds the initial events default.
+    string? recordStreamKind = null; // which served stream records (wake-probe owner)
     if (eventStore != null && recordingSettings != null)
     {
         var recordStream = config.Recording!.Stream == "auto"
             ? webStreams.FirstOrDefault(s => s.Kind == "mainStream") ?? webStreams[0]
             : webStreams.FirstOrDefault(s => s.Kind == config.Recording.Stream);
+        recordStreamKind = recordStream?.Kind;
         if (recordStream == null)
         {
             Log.Warn($"{cam.Name}: recording.stream '{config.Recording.Stream}' is not served " +
@@ -449,6 +451,25 @@ foreach (var cam in config.Cameras)
                 tasks.Add(Task.Run(() => continuous.RunAsync(shutdown.Token)));
             }
         }
+    }
+
+    // Wake-capture: exactly ONE stream service probes the sleeping camera and
+    // connects on its self-wake — the stream that records the event, falling back
+    // to the primary. Siblings park until a viewer asks. Before this, every
+    // served stream probed and connected independently: double discovery traffic
+    // at the camera and two full sessions per wake, for a battery camera that
+    // only needed the recording stream up (issue #44).
+    if (camServices.Count > 1)
+    {
+        static string SuffixOf(StreamKind k) => k switch
+        {
+            StreamKind.Main => "mainStream",
+            StreamKind.Sub => "subStream",
+            _ => "externStream",
+        };
+        var wakeOwner = camServices.FirstOrDefault(s => SuffixOf(s.Kind) == recordStreamKind)
+                        ?? camServices[0];
+        foreach (var s in camServices) s.WakeProbeOwner = ReferenceEquals(s, wakeOwner);
     }
 
     // On-demand video: while nothing consumes this camera's frames the stream

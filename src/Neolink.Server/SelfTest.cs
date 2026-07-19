@@ -106,6 +106,30 @@ public static class SelfTest
                 "battery camera -> full park governs, not on-demand");
         });
 
+        Test("wake-capture edge detector: debounced sleep, prompt wake", () =>
+        {
+            // The sleep→wake edge only counts after CONSECUTIVE unanswered probes:
+            // one lost packet (Wi-Fi power save) must not arm it, or the next
+            // answered probe reads as a false "camera woke itself" and Neolink
+            // wakes the very camera it is letting sleep (issue #44).
+            var d = new Streaming.WakeEdgeDetector();
+            Assert(!d.OnProbe(true) && !d.Armed, "answered while awake -> nothing");
+            Assert(!d.OnProbe(false) && !d.Armed, "one miss -> not armed yet (could be packet loss)");
+            Assert(!d.OnProbe(true) && !d.Armed, "answer after a single miss -> miss forgotten");
+            Assert(!d.OnProbe(false), "miss 1 of 2");
+            Assert(!d.OnProbe(false) && d.Armed, "second consecutive miss -> armed");
+            Assert(!d.OnProbe(false) && d.Armed, "still asleep -> stays armed");
+            Assert(d.OnProbe(true), "answer while armed -> the wake edge");
+
+            var flappy = new Streaming.WakeEdgeDetector();
+            for (int i = 0; i < 50; i++)
+            {
+                Assert(!flappy.OnProbe(false), $"alternating miss {i} never arms");
+                Assert(!flappy.OnProbe(true), $"alternating answer {i} never fires a wake");
+            }
+            Assert(!flappy.Armed, "alternating loss pattern -> never armed, never a false wake");
+        });
+
         Test("xml serialize/parse roundtrip", () =>
         {
             var body = new Bc.Xml.BcXmlBody

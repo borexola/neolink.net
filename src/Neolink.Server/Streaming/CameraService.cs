@@ -32,6 +32,16 @@ public sealed class CameraService : ILiveCameraSource
     private static readonly TimeSpan DemandWindow = TimeSpan.FromSeconds(20);
     /// <summary>How long a sleep-friendly stream keeps running after the last viewer leaves.</summary>
     private static readonly TimeSpan IdleGrace = TimeSpan.FromSeconds(60);
+    /// <summary>Battery cameras get a much shorter idle linger: every awake second
+    /// costs charge, and the Reolink app itself holds sessions for ~15s. Active
+    /// motion counts as demand (see <see cref="MotionDemandHold"/>), so event
+    /// clips still run to their natural end before this timer starts.</summary>
+    private static readonly TimeSpan BatteryIdleGrace = TimeSpan.FromSeconds(20);
+    /// <summary>How long after the last ACTIVE motion push the session still counts
+    /// as in-demand on a sleep-friendly camera — covers the recorder's post-roll
+    /// (post_seconds, default 8) so a wake-capture clip isn't cut short, without
+    /// letting the recorder hold a battery camera awake around the clock.</summary>
+    private static readonly TimeSpan MotionDemandHold = TimeSpan.FromSeconds(10);
     /// <summary>Wake-capture: how often to check whether a sleeping camera has woken.</summary>
     private static readonly TimeSpan WakeScanInterval = TimeSpan.FromSeconds(5);
     /// <summary>Probe-free window after parking: the camera needs quiet to doze off,
@@ -73,6 +83,10 @@ public sealed class CameraService : ILiveCameraSource
     private volatile CancellationTokenSource? _activeStream; // the live session's CTS, to interrupt on suspend
     private bool _sleepHintLogged;
     private bool _scanLogged; // "wake-capture watching" said once
+    // Ticks (UTC) of the last ACTIVE motion push seen this session — active
+    // detection counts as demand on sleep-friendly cameras so event clips finish
+    // before the idle timer starts. Written from the motion watcher task.
+    private long _lastMotionActiveTicks;
     // Discovery-probe state per camera NAME (shared across its Main/Sub services,
     // so they don't both sweep). We probe often for a short window — likely to
     // catch a briefly-woken battery camera — then stop for good.
@@ -91,7 +105,17 @@ public sealed class CameraService : ILiveCameraSource
     }
 
     public string Name => _config.Name;
+    public StreamKind Kind => _kind;
     public IBcCamera? LiveCamera => _live;
+
+    /// <summary>
+    /// Exactly ONE service per camera runs the wake-capture probe loop (set during
+    /// startup wiring to the recording stream's service, falling back to the
+    /// primary). Sibling streams park passively — a battery camera must not be
+    /// discovery-probed by two loops at once, and on a self-wake only the stream
+    /// that records the event needs to connect at all.
+    /// </summary>
+    public bool WakeProbeOwner { get; set; } = true;
 
     /// <summary>True once the camera has answered a battery query (battery model).</summary>
     public bool BatteryPowered => _batteryPowered;
@@ -168,6 +192,12 @@ public sealed class CameraService : ILiveCameraSource
         || _demandHub.ViewerCount > 0
         || DateTime.UtcNow - _demandHub.LastViewerAskUtc < DemandWindow;
 
+    // An active detection within the hold window keeps a sleep-friendly session
+    // alive so the event clip completes (bounded — this can never hold the camera
+    // awake longer than the detection itself plus the hold).
+    private bool MotionActiveRecently =>
+        DateTime.UtcNow.Ticks - Interlocked.Read(ref _lastMotionActiveTicks) < MotionDemandHold.Ticks;
+
     /// <summary>
     /// When set (on the primary stream service), alarm pushes are requested on each
     /// connection and forwarded here. Assigned once during startup wiring.
@@ -230,7 +260,7 @@ public sealed class CameraService : ILiveCameraSource
                 _parked = true;
                 try
                 {
-                    if (_config.WakeCapture)
+                    if (_config.WakeCapture && WakeProbeOwner)
                     {
                         // Wake-capture (opt-in): watch for the camera to wake ITSELF
                         // (motion) and connect the moment it does, so its events are
@@ -241,43 +271,60 @@ public sealed class CameraService : ILiveCameraSource
                         // probe" proves nothing — and probing an awake camera resets
                         // its doze timer, the very thing that must not happen. So:
                         // a probe-free settle window first (let it doze off), then
-                        // sparse probes until it is seen ASLEEP once, and only a
-                        // reachable answer AFTER that means "the camera woke itself".
+                        // sparse probes until it is seen ASLEEP, and only a reachable
+                        // answer AFTER that means "the camera woke itself".
+                        //
+                        // "Seen asleep" is DEBOUNCED (issue #44): a single unanswered
+                        // probe proves nothing — Wi-Fi power save eats unicast for
+                        // seconds at a time, and treating one lost packet as "asleep"
+                        // manufactured a false asleep→awake edge on the very next
+                        // answered probe, i.e. Neolink itself waking the camera and
+                        // burning its battery. Only consecutive misses arm the edge.
                         if (!_scanLogged)
                         {
                             _scanLogged = true;
                             Log.Info($"{Tag}: sleep-friendly (wake-capture) — letting the camera doze; " +
                                      "will connect when it wakes itself (motion) or a viewer opens the stream");
                         }
-                        bool sawAsleep = false;
+                        var edge = new WakeEdgeDetector();
                         var nextProbe = DateTime.UtcNow + WakeSettleWindow;
                         while (!DemandNow)
                         {
                             await Task.Delay(TimeSpan.FromSeconds(1), ct).ConfigureAwait(false);
                             if (DemandNow) break;
                             if (DateTime.UtcNow < nextProbe) continue;
-                            if (!await ProbeAwakeAsync(ct).ConfigureAwait(false))
-                            {
-                                if (!sawAsleep)
-                                {
-                                    sawAsleep = true;
-                                    Log.Info($"{Tag}: camera is asleep — armed to connect on its next self-wake");
-                                }
-                                nextProbe = DateTime.UtcNow + WakeScanInterval;
-                            }
-                            else if (sawAsleep)
+                            bool answered = await ProbeAwakeAsync(ct).ConfigureAwait(false);
+                            bool armedBefore = edge.Armed;
+                            if (edge.OnProbe(answered))
                             {
                                 Log.Info($"{Tag}: camera woke itself — connecting to catch the event");
                                 break;
                             }
-                            else
-                            {
-                                // Still awake since our release (a sibling stream, the
-                                // Reolink app, or a slow dozer): wait for real sleep,
-                                // probing sparsely so we never hold it awake ourselves.
-                                nextProbe = DateTime.UtcNow + AwaitSleepInterval;
-                            }
+                            Log.Debug($"{Tag}: wake probe {(answered ? "answered" : "unanswered")} " +
+                                      $"(armed={edge.Armed})");
+                            if (edge.Armed && !armedBefore)
+                                Log.Info($"{Tag}: camera is asleep ({WakeEdgeDetector.MissesToArm} probes " +
+                                         "unanswered) — armed to connect on its next self-wake");
+                            // Unanswered: recheck soon (confirm the miss, then scan for
+                            // the wake). Answered while unarmed: still awake since our
+                            // release (a sibling consumer, the Reolink app, or a wake
+                            // chip that answers discovery in its sleep) — probe
+                            // sparsely so we never hold it awake ourselves.
+                            nextProbe = DateTime.UtcNow +
+                                        (answered ? AwaitSleepInterval : WakeScanInterval);
                         }
+                    }
+                    else if (_config.WakeCapture)
+                    {
+                        // Sibling stream of a wake-capture camera: the probe-owner
+                        // stream (the one that records) watches for self-wakes and
+                        // connects alone — a second session would double the probing
+                        // and the awake time. This one connects only for a viewer.
+                        Log.Info($"{Tag}: parked — the recording stream watches for self-wakes; " +
+                                 "this stream connects when a viewer opens it");
+                        while (!DemandNow)
+                            await Task.Delay(500, ct).ConfigureAwait(false);
+                        Log.Info($"{Tag}: viewer waiting — reconnecting");
                     }
                     else
                     {
@@ -426,16 +473,17 @@ public sealed class CameraService : ILiveCameraSource
     /// <summary>
     /// Cheap liveness probe for wake-capture: is the camera answering right now?
     /// A short-timeout UDP discovery reply (udp cameras) or TCP connect (everything
-    /// else). Never throws and never logs — it runs every few seconds while the
-    /// camera sleeps, and a sleeping camera simply doesn't answer.
+    /// else). Never throws; at Debug level the UDP path logs the raw reply — some
+    /// battery models answer discovery from their low-power wake chip even while
+    /// asleep, and the reply contents are the evidence needed to tell those apart.
     /// </summary>
     private async Task<bool> ProbeAwakeAsync(CancellationToken ct)
     {
         try
         {
             if (_config.Udp)
-                return await UdpDiscovery.IsReachableAsync(_config.Host, _config.Uid!, WakeProbeTimeout, ct)
-                    .ConfigureAwait(false);
+                return await UdpDiscovery.IsReachableAsync(_config.Host, _config.Uid!, WakeProbeTimeout, ct,
+                    logTag: Tag).ConfigureAwait(false);
 
             using var tcp = new System.Net.Sockets.TcpClient(System.Net.Sockets.AddressFamily.InterNetwork);
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -609,19 +657,24 @@ public sealed class CameraService : ILiveCameraSource
                 // Sleep-friendly: once the last viewer has been gone a while,
                 // disconnect on purpose so the camera can power down. Recorders
                 // don't count — holding a battery camera awake to record 24/7
-                // needs an explicit always_on.
+                // needs an explicit always_on. ACTIVE motion does count (bounded
+                // by MotionDemandHold): during a wake-capture catch the clip must
+                // reach its post-roll before the idle timer starts. Battery
+                // cameras get the short grace — the old 60s linger multiplied
+                // every event's awake time several-fold (issue #44).
                 if (AllowSleep)
                 {
-                    if (DemandNow)
+                    if (DemandNow || MotionActiveRecently)
                     {
                         idleSince = null;
                     }
                     else
                     {
+                        var grace = _batteryPowered ? BatteryIdleGrace : IdleGrace;
                         idleSince ??= DateTime.UtcNow;
-                        if (DateTime.UtcNow - idleSince > IdleGrace)
+                        if (DateTime.UtcNow - idleSince > grace)
                         {
-                            Log.Info($"{Tag}: no viewers for {IdleGrace.TotalSeconds:0}s — " +
+                            Log.Info($"{Tag}: no viewers for {grace.TotalSeconds:0}s — " +
                                      "disconnecting so the battery camera can sleep");
                             return true;
                         }
@@ -742,6 +795,8 @@ public sealed class CameraService : ILiveCameraSource
         // its own log line even when event recording and MQTT are switched off.
         void LoggedSink(MotionPush push)
         {
+            if (push.Active)
+                Interlocked.Exchange(ref _lastMotionActiveTicks, DateTime.UtcNow.Ticks);
             if (push.Active && (push.AiTypes.Contains("visitor") || push.AiTypes.Contains("doorbell")))
                 Log.Info($"{Tag}: doorbell pressed");
             // AI tokens we don't recognize still become events (raw label), but
@@ -786,5 +841,42 @@ public sealed class CameraService : ILiveCameraSource
             // Connection died; the video loop notices and reconnects everything.
             Log.Debug($"{Tag}: status watch ended: {ex.Message}");
         }
+    }
+}
+
+/// <summary>
+/// The wake-capture sleep→wake edge, debounced. Feed it one probe result at a
+/// time: it arms only after <see cref="MissesToArm"/> CONSECUTIVE unanswered
+/// probes (a single miss is routinely just Wi-Fi power save eating a packet,
+/// and arming on it made the next answered probe read as a false "camera woke
+/// itself" — Neolink then connected and woke the camera it was trying to let
+/// sleep). Once armed, the first answered probe reports the wake edge.
+/// </summary>
+internal sealed class WakeEdgeDetector
+{
+    /// <summary>Consecutive unanswered probes required before the camera counts
+    /// as asleep. Two, 5s apart (WakeScanInterval), keeps wake detection prompt
+    /// while filtering single lost packets.</summary>
+    public const int MissesToArm = 2;
+
+    private int _misses;
+
+    /// <summary>True once the camera has been seen asleep (debounced) — the next
+    /// answered probe is a wake edge.</summary>
+    public bool Armed { get; private set; }
+
+    /// <summary>Feed one probe result. Returns true exactly when a wake edge is
+    /// detected: the camera answered after having been seen asleep.</summary>
+    public bool OnProbe(bool answered)
+    {
+        if (!answered)
+        {
+            _misses++;
+            if (_misses >= MissesToArm) Armed = true;
+            return false;
+        }
+        if (Armed) return true;
+        _misses = 0; // an answer between misses: they weren't consecutive
+        return false;
     }
 }

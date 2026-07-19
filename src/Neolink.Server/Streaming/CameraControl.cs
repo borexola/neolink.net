@@ -362,8 +362,16 @@ public sealed class CameraControl : ICameraControl
     public Task<CameraCapabilities> GetCapabilitiesAsync(CancellationToken ct) =>
         WithCameraAsync(async camera =>
         {
-            if (_caps != null && ReferenceEquals(_capsSession, camera))
+            // Fresh session, cached caps: re-discover for wired cameras (cheap, and
+            // it picks up firmware/config changes), but NOT for battery cameras —
+            // they reconnect on every wake-capture event, and re-running the probe
+            // fan-out each time held the camera awake for extra seconds per event.
+            // Hardware features don't change between naps; a restart rediscovers.
+            if (_caps != null && (ReferenceEquals(_capsSession, camera) || _caps.Features.Battery))
+            {
+                _capsSession = camera; // don't pin the previous session object
                 return _caps;
+            }
 
             var support = await TryAsync(() => camera.GetSupportAsync(ProbeTimeout, ct)).ConfigureAwait(false);
             var version = await TryAsync(() => camera.GetVersionAsync(ProbeTimeout, ct)).ConfigureAwait(false);

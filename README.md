@@ -1069,12 +1069,20 @@ stream, so a motion event while nobody is watching is missed. Set
 motion — capturing that event — then lets it sleep again. Concretely, after the
 last viewer leaves: a probe-free settle window (~90 s) lets the camera doze off
 undisturbed, then sparse liveness probes wait until it is actually asleep (the
-log says *"armed to connect on its next self-wake"*), and only a probe answered
-**after** that counts as a self-wake. Probes never reach a sleeping camera (its
-radio is off), so they cost **no battery**. This is the middle ground between
-sleep-friendly (misses events) and `always_on` (catches everything but drains the
-battery). It has no effect with `always_on` (which never sleeps) or on non-battery
-cameras. Note it may miss the first second or two of an event — Neolink connects a
+log says *"armed to connect on its next self-wake"*; asleep means **two**
+consecutive unanswered probes, so a single packet lost to Wi-Fi power save
+can't fake the edge), and only a probe answered **after** that counts as a
+self-wake. Exactly **one** stream service does this probing and connects on the
+wake — the stream that records events — and once the event's detection ends the
+session lingers only ~20 s before letting the camera sleep again. Most sleeping
+models don't answer probes at all (radio off — the probes cost no battery);
+a few battery models answer discovery from their low-power wake chip even
+while asleep, which makes the "armed" line rare and self-wakes hard to detect
+on them — if yours behaves that way, run with debug logging and open an issue
+with the *wake probe* lines. This is the middle ground between sleep-friendly
+(misses events) and `always_on` (catches everything but drains the battery). It
+has no effect with `always_on` (which never sleeps) or on non-battery cameras.
+Note it may miss the first second or two of an event — Neolink connects a
 moment after the camera wakes — and on a very busy camera it trends toward
 `always_on`-like battery use.
 

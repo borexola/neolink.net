@@ -154,9 +154,14 @@ public static class UdpDiscovery
     /// camera would keep retrying D2C_C_R for ~9 s after every poll — battery cost,
     /// and a stale session sitting there right when the real connect follows).
     /// Silent and short — it is the wake-capture poll, run every few seconds while
-    /// the camera sleeps.
+    /// the camera sleeps. With <paramref name="logTag"/> set, every discovery reply
+    /// is logged raw at Debug: some battery models (issue #44, the battery Video
+    /// Doorbell) answer C2D_C from their low-power wake chip even while asleep,
+    /// and the reply contents are the evidence needed to distinguish that from a
+    /// genuinely awake camera.
     /// </summary>
-    internal static async Task<bool> IsReachableAsync(string host, string uid, TimeSpan timeout, CancellationToken ct)
+    internal static async Task<bool> IsReachableAsync(string host, string uid, TimeSpan timeout, CancellationToken ct,
+        string? logTag = null)
     {
         IPAddress? ip = IPAddress.TryParse(host, out var lit) ? lit : null;
         if (ip == null)
@@ -208,8 +213,17 @@ public static class UdpDiscovery
                     try { r = await udp.ReceiveAsync(cts.Token).ConfigureAwait(false); }
                     catch (OperationCanceledException) { break; }
                     catch (SocketException) { continue; }
-                    if (TryParseDiscovery(r.Buffer, out _, out var reply, out _)
-                        && reply.Contains("D2C_C_R", StringComparison.Ordinal))
+                    if (!TryParseDiscovery(r.Buffer, out _, out var reply, out _))
+                    {
+                        if (logTag != null)
+                            Log.Debug($"{logTag}: [wake-probe] unparseable {r.Buffer.Length}-byte " +
+                                      $"datagram from {r.RemoteEndPoint}");
+                        continue;
+                    }
+                    if (logTag != null)
+                        Log.Debug($"{logTag}: [wake-probe] reply from {r.RemoteEndPoint}: " +
+                                  MaskUid(Snippet(reply, 400), uid));
+                    if (reply.Contains("D2C_C_R", StringComparison.Ordinal))
                     {
                         cts.Cancel();
                         try { await sender.ConfigureAwait(false); } catch { }
@@ -400,6 +414,14 @@ public static class UdpDiscovery
 
     /// <summary>UID-masked text, safe to log/paste: first four and last two
     /// characters survive, the middle is starred out.</summary>
+    /// <summary>First <paramref name="max"/> chars, newlines flattened — keeps the
+    /// wake-probe Debug lines single-line and bounded.</summary>
+    private static string Snippet(string text, int max)
+    {
+        var flat = text.Replace('\n', ' ').Replace('\r', ' ');
+        return flat.Length <= max ? flat : flat[..max] + "…";
+    }
+
     internal static string MaskUid(string text, string uid)
     {
         if (uid.Length < 7) return text.Replace(uid, "«uid»", StringComparison.OrdinalIgnoreCase);
