@@ -108,11 +108,14 @@ in exchange you get an integration light enough to leave running forever.
   firmware. Device settings **stage** and are sent only on
   "Apply to camera" — with an up-front warning when a change restarts the stream
   or can reboot the camera
-- **Camera SD-card playback (beta)**: the Events page's *SD card* mode lists and
-  plays the recordings a camera stored on its own SD card — footage from when the
-  server was down, and battery-camera clips that never streamed. Day calendar
-  from the camera, streaming playback and download, no server-side copy; needs
-  the camera's HTTP API and a mounted card
+- **Camera SD-card playback (preview)**: the Events page's *SD card* mode lists
+  and plays the recordings a camera stored on its own SD card — footage from when
+  the server was down, and battery-camera clips that never streamed. Day calendar
+  from the camera, playback with scrubbing and download; needs the camera's HTTP
+  API and a mounted card. Preview because it depends on per-model firmware: some
+  models list recordings but their firmware cannot serve the files over HTTP at
+  all (Video Doorbell WiFi — a firmware bug; those clips only play in the
+  Reolink app, and the player says so)
 - **Battery cameras** (Argus etc.) are auto-detected: charge badge in the sidebar,
   sleep-friendly by default (the camera dozes while nobody watches), `always_on`
   per camera to hold it awake — see [Battery cameras](#battery-cameras-argus-etc)
@@ -1154,19 +1157,21 @@ issue with them so the mapping can be extended.
   size: a full day of a high-bitrate camera is tens of gigabytes, and behind
   Home Assistant ingress big downloads are slower — prefer the direct port for
   those.
-- **Camera SD-card playback (beta)**: the Events page's **SD card** toggle
+- **Camera SD-card playback (preview)**: the Events page's **SD card** toggle
   browses the recordings a camera made onto its own SD card — the footage that
   exists even when this server was down, and the clips battery cameras record
   locally without ever streaming. Pick a camera; the days that have recordings
   come from the camera's own calendar (chips under the date picker), and each
-  recording plays in the same player or downloads as a file. Playback streams
-  straight off the camera — no server-side copy — so loading speed is the
-  camera's (a Wi-Fi camera mid-stream can be slow), and seeking ahead only
-  works for what has already arrived; download the file for free scrubbing.
-  Requires the camera's Reolink HTTP API (`http_address`, HTTP enabled on the
-  camera) and a mounted SD card. What the camera records onto its card
-  (continuous, events, streams) is configured in the Reolink app — this is a
-  window into it, not a control for it.
+  recording plays in the same player or downloads as a file. The recording is
+  fetched from the camera first (a few seconds; longer over Wi-Fi), then plays
+  with normal scrubbing. Requires the camera's Reolink HTTP API (`http_address`,
+  HTTP enabled on the camera) and a mounted SD card. What the camera records
+  onto its card (continuous, events, streams) is configured in the Reolink app —
+  this is a window into it, not a control for it. **Preview, not beta**, because
+  it hangs on per-model firmware behavior: the Video Doorbell WiFi lists its
+  recordings but its firmware's HTTP download handler is broken (crashes on
+  every request shape) — those clips only play in the Reolink app, and the
+  player says so instead of failing silently.
 - **Timeline studio layout (opt-in)**: the Studio button in the timeline toolbar
   flips the page into a video-editor arrangement — monitors on top, the transport
   bar and the camera tracks docked at the bottom, like Premiere or Resolve. Click

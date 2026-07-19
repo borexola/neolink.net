@@ -4634,6 +4634,18 @@ body.tl-colresizing, body.tl-colresizing * { cursor: col-resize !important; user
     vertical-align: 1px;
 }
 
+/* One notch below beta: works on some models, known not to on others. */
+.preview-tag {
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    color: #b48ce8;
+    border: 1px solid color-mix(in srgb, #b48ce8 50%, transparent);
+    border-radius: 4px;
+    padding: 1px 5px;
+    vertical-align: 1px;
+}
+
 /* A staged (not yet applied) camera-setting value: amber + dashed = provisional. */
 .chip-pending,
 .chip.chip-pending {

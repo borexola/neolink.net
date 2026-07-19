@@ -37,7 +37,7 @@
                     @onclick="() => SetSdModeAsync(false)">Server</button>
             <button class="ev-switch-opt @(_sdMode ? "active" : "")" role="tab" aria-selected="@_sdMode"
                     title="Recordings stored on the camera's own SD card — including footage from while this server was off"
-                    @onclick="() => SetSdModeAsync(true)">SD card <span class="beta-tag">BETA</span></button>
+                    @onclick="() => SetSdModeAsync(true)">SD card <span class="preview-tag">PREVIEW</span></button>
         </span>
 
         @if (!_sdMode)

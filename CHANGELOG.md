@@ -184,17 +184,19 @@ in the README). Paste the matching section below into the GitHub release.
   battery cameras keep their full park (stronger medicine). No configuration
   needed.
 
-- **Camera SD-card playback (beta)**: the Events page grew a labelled
+- **Camera SD-card playback (preview)**: the Events page grew a labelled
   **Source** switch — *Server* (this server's recorded events) or *SD card* —
   that browses the recordings a camera stored on its own SD card — the
   footage that exists even when this server was down, plus the clips battery
   cameras record locally without ever streaming. Pick a camera and a day
   (days with recordings are offered as chips, read from the camera's own
-  calendar), and play or download any recording; playback streams straight
-  off the camera with no server-side copy. Needs the camera's Reolink HTTP
-  API (`http_address` / HTTP enabled) and a mounted SD card. Behind it:
+  calendar), and play or download any recording. Needs the camera's Reolink
+  HTTP API (`http_address` / HTTP enabled) and a mounted SD card. Behind it:
   `Search` (calendar + file list) and a gate-free streaming `Download` in the
   HTTP client, and `GET /api/cameras/{name}/sdcard/{days|recordings|download}`.
+  Labelled PREVIEW (one notch below beta) deliberately: whether playback works
+  at all depends on per-model firmware — see the Video Doorbell WiFi note in
+  Fixed below.
 
 - **Detection sensitivity (beta)**: motion sensitivity (1-50, normalized
   across the two firmware dialects — newer `MdAlarm` firmwares carry it
