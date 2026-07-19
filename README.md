@@ -611,7 +611,8 @@ backup exposes nothing, and any in-place tampering is detected on read.
 |---|---|---|
 | `name` | *required* | Name used in the RTSP URL and web UI |
 | `address` | *required* | Camera IP/hostname; port defaults to `9000` |
-| `http_address` | *(none)* | The camera's HTTP(S) web interface (`host`, `host:port` or full URL). Enables changing stream profiles (resolution/fps/bitrate) from the web UI via the documented Reolink HTTP API |
+| `http_address` | *derived from `address`* | The camera's HTTP(S) web interface (`host`, `host:port` or full URL). Only needed to override the host/port — the HTTP API is otherwise reached on the `address` host, port 80. Unlocks picture settings, volume, PTZ presets, OSD, detection sensitivity, SD-card browsing and stream-profile changes |
+| `onvif_address` | *derived from `address`* | The camera's ONVIF device service (`host`, `host:port` or full URL). Only needed to override the port — ONVIF is otherwise probed on port 8000, then 80. A picture-settings fallback for models with no HTTP API (Lumus line) |
 | `username` / `password` | *required* | The camera's own login (same as the Reolink app) |
 | `stream` | `both` | `mainStream`, `subStream`, `externStream`, `both`, or `all` |
 | `channel_id` | `0` | Channel when connecting through a Reolink NVR (0-based) |
@@ -630,6 +631,41 @@ backup exposes nothing, and any in-place tampering is detected on read.
 > 0–9`) in the Reolink app — this is a camera-firmware quirk, not a Neolink.NET
 > limitation, and the reference Reolink libraries recommend the same. Passwords
 > over 31 characters can fail for the same reason.
+
+### Enable HTTP and ONVIF on the camera for the full feature set
+
+Neolink.NET streams and records over Baichuan (Reolink's own protocol, port
+9000), which needs nothing extra. But two *optional* camera interfaces unlock
+the rest of the control surface, and both are worth turning on. You usually
+don't need the `http_address` / `onvif_address` config keys — Neolink.NET finds
+these on the camera's own IP automatically. You just need them **enabled on the
+camera**, in the Reolink app or web page under **Settings → Network → Advanced
+→ Port Settings** (called **Server Settings** on some firmware).
+
+- **Enable HTTP (or HTTPS).** The Reolink HTTP API is where most settings live.
+  With it on, the web UI and Home Assistant gain: picture settings
+  (brightness/contrast/saturation/sharpness, day-night, anti-flicker,
+  flip/mirror, HDR), speaker volume, Wi-Fi signal strength, PTZ presets, the
+  on-screen-display overlay, motion and per-type AI detection sensitivity,
+  SD-card browsing and playback, stream-profile changes (resolution/fps/bitrate),
+  and right-sized snapshots. With it off, the camera still streams and records
+  perfectly — those panels are simply absent. If HTTP is on but the features are
+  still missing, check the log: Neolink.NET says exactly why (a rejected login
+  usually means a special character in the password — see the note above).
+
+- **Enable ONVIF too**, especially on models with no HTTP API (the Lumus line
+  serves only ONVIF and RTSP). ONVIF is an open, cross-vendor standard;
+  Neolink.NET uses its imaging service as a **fallback** to recover the picture
+  sliders (brightness/contrast/saturation/sharpness and day-night) for cameras
+  that can't offer them over HTTP. Reolink serves ONVIF on port 8000 — leave the
+  port at its default and Neolink.NET finds it. ONVIF only covers the imaging
+  basics, not Reolink-specific features (AI tuning, SD search, quick replies), so
+  it complements HTTP rather than replacing it; enabling both gives every camera
+  the most complete panel it can support.
+
+Neither interface weakens security on your LAN more than the Reolink app already
+does — both use the same camera login — and neither is required for core video
+or recording. They exist purely to expose more of what the camera can already do.
 
 ## Behind a reverse proxy (HAProxy / nginx / Caddy)
 
