@@ -43,6 +43,23 @@ The cameras are unmodified and no Reolink NVR is required.
 
 *All screenshots show synthetic demo footage.*
 
+> ### A note on camera coverage
+>
+> Reolink ships a large and ever-growing range of cameras, and their firmwares
+> genuinely differ — the same feature can work on one model, answer differently
+> on the next, and be broken outright on a third. Neolink.NET is developed and
+> tested against the cameras **I actually own**, which is a handful, not the
+> catalogue: cameras are expensive, and I maintain this project alone in my
+> spare time. So: everything here works on the models it was built against;
+> on models I've never touched, it *should* work, but I simply cannot promise
+> it until someone with that hardware tells me.
+>
+> **This is where you come in.** If your camera misbehaves, an issue with logs
+> is genuinely valuable — most model-specific quirks in this project were found
+> and fixed exactly that way. And if you can go one step further, **pull
+> requests are very welcome**: a fix validated on hardware I don't have is the
+> one contribution I cannot make myself.
+
 ## Lightweight by design — the camera does the heavy lifting
 
 Neolink.NET runs no object detection of its own: it never decodes, transcodes, or
@@ -1345,6 +1362,12 @@ two-way talk) are covered by the web UI and API instead of CLI subcommands.
 Neolink.NET is a personal project. I built it for my own use because the existing
 options did not fully meet my needs, and I publish it in the hope that it is useful
 to others in the same situation.
+
+It is developed and validated on the cameras I personally own — a small slice of
+Reolink's range. Firmware behavior varies meaningfully between models (see *A note
+on camera coverage* at the top), and I cannot buy every camera to test against;
+reports with logs, and especially pull requests validated on hardware I do not
+have, are the most effective way to get a model-specific problem fixed.
 
 **It is provided "as is", without warranty of any kind** — no guarantee of
 correctness, reliability, security, or fitness for a particular purpose, and no
