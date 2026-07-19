@@ -30,6 +30,27 @@ public sealed class StreamHub : IStreamHub, IMediaSink
     private int _viewerCount;
     private long _index;
 
+    // GOP cache: the ordered packets since (and including) the most recent video
+    // keyframe. A brand-new viewer is primed with this so it has a decodable
+    // keyframe IMMEDIATELY, instead of discarding frames until the camera's next
+    // keyframe arrives (2-4 s on typical Reolink settings) — the dominant cause of
+    // slow first-frame on a multi-tile refresh. Audio packets are cached inline so
+    // the replayed indices stay consecutive (the WS sender treats an index gap as a
+    // drop) and A/V start together. Guarded by _castGate, which also serializes
+    // publish so no packet can slip between a new subscriber's prime and its
+    // registration (that would open a one-packet gap right at startup).
+    private readonly object _castGate = new();
+    private readonly List<HubPacket> _gop = new();
+    private int _gopBytes;
+    private bool _gopOpen;
+    // Safety valves only: a normal 2-4 s GOP sits far below these. They bound
+    // memory if a keyframe is pathologically late or the bitrate is huge, and MUST
+    // stay under the subscriber channel capacity so priming can never trip
+    // DropOldest and evict the leading keyframe.
+    private const int GopMaxPackets = 900;
+    private const int GopMaxBytes = 6 * 1024 * 1024;
+    private const int SubscriberChannelCapacity = 2048;
+
     // --- Video track info ---
     public VideoCodec? Codec { get; private set; }
     public byte[]? Sps { get; private set; }
@@ -145,7 +166,8 @@ public sealed class StreamHub : IStreamHub, IMediaSink
         if (ready)
             _videoReady.TrySetResult();
 
-        Broadcast(new HubVideo(Interlocked.Increment(ref _index), frame.Data, frame.Keyframe, _videoRtpTs));
+        Emit(new HubVideo(Interlocked.Increment(ref _index), frame.Data, frame.Keyframe, _videoRtpTs),
+             frame.Keyframe, frame.Data.Length);
     }
 
     public void PublishAac(AacFrame frame)
@@ -157,7 +179,7 @@ public sealed class StreamHub : IStreamHub, IMediaSink
                 Audio = new AudioTrackInfo(true, au.SampleRate, au.Channels, au.AudioSpecificConfig);
                 Log.Debug($"{Name}: AAC audio detected ({au.SampleRate} Hz, {au.Channels}ch)");
             }
-            Broadcast(new HubAudioAac(Interlocked.Increment(ref _index), au.Data, _audioRtpTs));
+            Emit(new HubAudioAac(Interlocked.Increment(ref _index), au.Data, _audioRtpTs), false, au.Data.Length);
             _audioRtpTs = unchecked(_audioRtpTs + 1024); // AAC frame = 1024 samples
         }
     }
@@ -180,28 +202,68 @@ public sealed class StreamHub : IStreamHub, IMediaSink
             Audio = new AudioTrackInfo(false, 8000, 1, null);
             Log.Debug($"{Name}: ADPCM audio detected (decoding to PCM @ 8 kHz)");
         }
-        Broadcast(new HubAudioPcm(Interlocked.Increment(ref _index), pcm, _audioRtpTs));
+        Emit(new HubAudioPcm(Interlocked.Increment(ref _index), pcm, _audioRtpTs), false, pcm.Length);
         _audioRtpTs = unchecked(_audioRtpTs + (uint)(pcm.Length / 2));
     }
 
-    private void Broadcast(HubPacket packet)
+    // Caches the packet into the current GOP (video keyframe starts a fresh one)
+    // and fans it out, both under _castGate so a concurrent Subscribe can't
+    // interleave. The lock is effectively uncontended: one media loop publishes
+    // per hub, and TryWrite on a DropOldest channel never blocks.
+    private void Emit(HubPacket packet, bool videoKeyframe, int payloadBytes)
     {
-        foreach (var (_, sub) in _subscribers)
-            sub.Ch.Writer.TryWrite(packet); // bounded DropOldest: never blocks
+        lock (_castGate)
+        {
+            if (videoKeyframe)
+            {
+                _gop.Clear();
+                _gopBytes = 0;
+                _gopOpen = true;
+            }
+            if (_gopOpen)
+            {
+                if (_gop.Count >= GopMaxPackets || _gopBytes + payloadBytes > GopMaxBytes)
+                {
+                    // GOP outgrew the cache budget (late keyframe / very high bitrate):
+                    // stop caching until the next keyframe so a joiner falls back to
+                    // waiting for one rather than being primed with a partial,
+                    // undecodable GOP.
+                    _gop.Clear();
+                    _gopBytes = 0;
+                    _gopOpen = false;
+                }
+                else
+                {
+                    _gop.Add(packet);
+                    _gopBytes += payloadBytes;
+                }
+            }
+            foreach (var (_, sub) in _subscribers)
+                sub.Ch.Writer.TryWrite(packet); // bounded DropOldest: never blocks
+        }
     }
 
     // ------------------------------------------------------------------ subscribe
 
     public (Guid id, ChannelReader<HubPacket> reader) Subscribe(bool viewer = false)
     {
-        var ch = Channel.CreateBounded<HubPacket>(new BoundedChannelOptions(1024)
+        var ch = Channel.CreateBounded<HubPacket>(new BoundedChannelOptions(SubscriberChannelCapacity)
         {
             FullMode = BoundedChannelFullMode.DropOldest,
             SingleReader = true,
             SingleWriter = false,
         });
         var id = Guid.NewGuid();
-        _subscribers[id] = (ch, viewer);
+        lock (_castGate)
+        {
+            // Prime with the buffered GOP (keyframe-first) so this viewer can decode
+            // immediately. Under _castGate with registration so no live packet slips
+            // between the snapshot and the subscribe — that would show as a one-packet
+            // index gap and make the WS sender discard back to the next keyframe.
+            foreach (var p in _gop)
+                ch.Writer.TryWrite(p);
+            _subscribers[id] = (ch, viewer);
+        }
         if (viewer) Interlocked.Increment(ref _viewerCount);
         return (id, ch.Reader);
     }

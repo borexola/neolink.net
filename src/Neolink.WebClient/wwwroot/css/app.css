@@ -653,6 +653,19 @@ video[data-live="1"] ~ .tile-status { display: none; }
 
 .tile-privacy-icon { font-size: 26px; }
 
+/* A suspended overlay is a resume button: it must take clicks (the base overlay
+   is click-through) and read as interactive. */
+.tile-privacy-resume {
+    pointer-events: auto;
+    cursor: pointer;
+    transition: color 0.12s ease, background 0.12s ease;
+}
+.tile-privacy-resume:hover {
+    color: var(--text);
+    background: color-mix(in srgb, var(--accent) 12%, var(--panel-2));
+}
+.tile-privacy-resume:hover .tile-privacy-icon { color: var(--accent); }
+
 .tile-privacy small {
     font-size: 11px;
     opacity: 0.7;
@@ -2058,6 +2071,17 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     flex: 0 0 auto;
 }
 .alert-cam.has-alerts .alert-cam-count { color: var(--accent); }
+.alert-cam-actions {
+    display: flex;
+    gap: 6px;
+    flex: 0 0 auto;
+}
+/* Compact chips for the per-camera head actions (All / offline). */
+.chip-mini {
+    padding: 2px 9px;
+    font-size: 11px;
+    min-height: 0;
+}
 .alert-cam-chips {
     display: flex;
     flex-wrap: wrap;

@@ -6,6 +6,41 @@ in the README). Paste the matching section below into the GitHub release.
 
 ## 0.9.6 — unreleased
 
+### Added
+
+- **A suspended camera can be resumed with one click, right where you see it.**
+  The *suspended* badge in the sidebar and the *suspended* overlay on the tile
+  and the camera's own page are now buttons — clicking any of them resumes the
+  camera in Neolink (no more digging into its settings). The settings panel's
+  resume control still works too.
+
+- **Browser alerts gained system and per-camera-offline alerts, and an All
+  button.** The in-app alerts panel (Settings → Alerts) now mirrors the email
+  notifications: a **System alerts** section — *storage full / recovered*,
+  *server overload*, *recording write failures*, all on by default — and a
+  per-camera **offline** toggle sitting beside each camera's detection chips, so
+  you're notified in the browser when a camera drops off the network or comes
+  back. Each camera also gets an **All** button to switch every detection type on
+  at once. Offline alerts are debounced (a brief reconnect won't fire) and skip
+  battery cameras that are just dozing. To feed the two conditions the browser
+  can't see for itself, `/api/features` now reports `overload` and `writeFailure`
+  (the same sustained-high-CPU and recent-write-error signals the email alerts
+  use).
+
+### Changed
+
+- **Live view starts much faster, especially with several tiles at once.** Each
+  camera now keeps its most recent group-of-pictures (the last keyframe and the
+  frames after it) buffered on the server, and a newly opened stream is handed
+  that buffer immediately. Before, a fresh viewer had to wait for the camera's
+  *next* keyframe — 2 to 4 seconds on typical Reolink settings — before any
+  video could decode, and on a dashboard refresh every tile waited its own. With
+  the buffer, the first frame now arrives within a few milliseconds of
+  connecting (measured 7-20 ms against a live camera, and a full second of video
+  primed inside ~220 ms), so playback begins almost at once. Live tiles also show
+  the camera's snapshot as a poster the instant the page loads, so the grid paints
+  real frames while the streams spin up instead of sitting on "connecting…".
+
 ### Fixed
 
 - **Battery cameras: wake-capture no longer misses events on models whose

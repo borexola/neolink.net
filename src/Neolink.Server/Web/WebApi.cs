@@ -87,6 +87,9 @@ public sealed class WebApiOptions
     public UpdateChecker? Updates { get; init; }
     /// <summary>Process/disk resource sampler feeding the UI's monitor page.</summary>
     public SystemMonitor? Monitor { get; init; }
+    /// <summary>Recent recording write-failure tracker — surfaced in /api/features
+    /// so the dashboard's browser alerts can fire on it.</summary>
+    public Neolink.Recording.RecordingHealth? RecordingHealth { get; init; }
     /// <summary>Email-notification service (config store + test send); admin only.</summary>
     public Neolink.Notifications.Notifier? Notifier { get; init; }
     /// <summary>Captured server log lines for the UI's live log stream (admin only).</summary>
@@ -973,6 +976,12 @@ public static class WebApi
             // any tier is >= 90% used, "full" when one is out of space (recording
             // to it has halted). Rides this endpoint so the wall needs no extra poll.
             storage = ShapeStorage(o.Storage),
+            // Server-condition signals for the dashboard's browser alerts (the
+            // in-app twin of the email alerts): sustained high CPU, and recent
+            // recording write failures. The client fires a notification on the
+            // false->true edge. Same sources the email AlertMonitor uses.
+            overload = o.Monitor?.Overloaded() ?? false,
+            writeFailure = o.RecordingHealth?.CamerasWithRecentErrors(TimeSpan.FromMinutes(2)).Count > 0,
         }));
 
         // Background jobs the admin should know about (footage archiving, ...),

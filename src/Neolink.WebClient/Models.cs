@@ -151,7 +151,8 @@ public sealed record LocalApiInfo(string BaseUrl);
 /// <summary>Server capability flags (GET /api/features).</summary>
 public sealed record ApiFeaturesInfo(bool Events, bool Continuous, double TrickleSpeed = 4,
     string? Version = null, string? LatestVersion = null, string? RepoUrl = null,
-    ApiStorageState? Storage = null, bool Encrypted = false, bool ShowBackgroundTasks = true);
+    ApiStorageState? Storage = null, bool Encrypted = false, bool ShowBackgroundTasks = true,
+    bool Overload = false, bool WriteFailure = false);
 
 /// <summary>The worst storage tier's state (in /api/features); null = all healthy.</summary>
 public sealed record ApiStorageState(string Label, double UsedPercent, bool Full);

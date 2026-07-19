@@ -132,7 +132,9 @@
                     }
                     @if (cam.Suspended)
                     {
-                        <span class="cam-doze-badge" title="Suspended in Neolink.NET — not viewed or recorded here until resumed (the camera itself keeps running). Resume from its settings (⚙).">
+                        <span class="cam-doze-badge cam-doze-resume" role="button" tabindex="0"
+                              title="Suspended in Neolink.NET — click to resume (not viewed or recorded here until then; the camera itself keeps running)"
+                              @onclick="() => ResumeCameraAsync(cam.Name)" @onclick:stopPropagation="true">
                             @UiIcon.Render("eye-off", 10) suspended
                         </span>
                     }
@@ -540,18 +542,21 @@
                     }
                     else
                     {
-                        @* no autoplay: the JS player starts playback once its jitter buffer is filled *@
-                        <video id="vid-@index" muted playsinline></video>
+                        @* no autoplay: the JS player starts playback once its jitter buffer is filled.
+                           The snapshot poster paints a real frame immediately while it does. *@
+                        <video id="vid-@index" muted playsinline poster="@SnapshotPoster(slot.Camera)"></video>
                         <div class="tile-status">connecting…</div>
                         @* Privacy is its own OPAQUE overlay: the player neither shows a
                            frozen last frame under it nor overwrites it (it rewrites
                            .tile-status with its own connecting/reconnect text). *@
                         @if (camera is { Suspended: true })
                         {
-                            <div class="tile-privacy">
+                            <div class="tile-privacy tile-privacy-resume" role="button"
+                                 title="Suspended — click to resume in Neolink.NET"
+                                 @onclick="() => ResumeCameraAsync(camera.Name)" @onclick:stopPropagation="true">
                                 <span class="tile-privacy-icon">@UiIcon.Render("eye-off", 22)</span>
                                 <span>suspended</span>
-                                <small>not viewed or recorded in Neolink.NET</small>
+                                <small>not viewed or recorded — click to resume</small>
                             </div>
                         }
                         else if (camera is { Privacy: true })
@@ -736,9 +741,19 @@
                 <button class="icon-btn" title="Close" @onclick="CloseQuickView">✕</button>
             </div>
             <div class="quick-view-media zoom-on" id="quick-view-media">
-                <video id="vid-quick" muted playsinline></video>
+                <video id="vid-quick" muted playsinline poster="@SnapshotPoster(qv.Camera)"></video>
                 <div class="tile-status">connecting…</div>
-                @if (_cameras.FirstOrDefault(c => c.Name == qv.Camera) is { Privacy: true })
+                @if (_cameras.FirstOrDefault(c => c.Name == qv.Camera) is { Suspended: true })
+                {
+                    <div class="tile-privacy tile-privacy-resume" role="button"
+                         title="Suspended — click to resume in Neolink.NET"
+                         @onclick="() => ResumeCameraAsync(qv.Camera!)" @onclick:stopPropagation="true">
+                        <span class="tile-privacy-icon">@UiIcon.Render("eye-off", 22)</span>
+                        <span>suspended</span>
+                        <small>not viewed or recorded — click to resume</small>
+                    </div>
+                }
+                else if (_cameras.FirstOrDefault(c => c.Name == qv.Camera) is { Privacy: true })
                 {
                     <div class="tile-privacy">
                         <span class="tile-privacy-icon">🔒</span>
@@ -1073,20 +1088,45 @@
                                                value="@_alerts.CooldownSeconds"
                                                @onchange="SetAlertCooldownAsync" /></div>
                                     <div class="campanel-divider"></div>
-                                    <div class="campanel-subtitle">WHICH DETECTIONS ALERT — PER CAMERA</div>
+                                    <div class="campanel-subtitle">SYSTEM ALERTS</div>
                                     <div class="notice small">
-                                        Nothing selected = that camera never alerts. Labels only fire when the
-                                        matching detection reaches the server — the camera does the detecting,
-                                        and the server must be recording events for it.
+                                        Server-wide conditions — the in-app twin of the email alerts. They fire
+                                        on this device while the app is open.
+                                    </div>
+                                    <div class="control-row"><span>Storage full / recovered</span>
+                                        <button class="chip @(_alerts.SysStorage ? "" : "chip-off")"
+                                                @onclick=@(() => ToggleSysAlertAsync("storage"))>@(_alerts.SysStorage ? "on" : "off")</button></div>
+                                    <div class="control-row"><span>Server overload</span>
+                                        <button class="chip @(_alerts.SysOverload ? "" : "chip-off")"
+                                                @onclick=@(() => ToggleSysAlertAsync("overload"))>@(_alerts.SysOverload ? "on" : "off")</button></div>
+                                    <div class="control-row"><span>Recording write failures</span>
+                                        <button class="chip @(_alerts.SysWriteFailure ? "" : "chip-off")"
+                                                @onclick=@(() => ToggleSysAlertAsync("write"))>@(_alerts.SysWriteFailure ? "on" : "off")</button></div>
+
+                                    <div class="campanel-divider"></div>
+                                    <div class="campanel-subtitle">PER CAMERA — DETECTIONS &amp; OFFLINE</div>
+                                    <div class="notice small">
+                                        Pick which detections alert per camera — <b>All</b> selects every type at
+                                        once — and toggle <b>offline</b> to also alert when that camera drops off
+                                        the network or comes back. Detections only fire when the matching event
+                                        reaches the server (the camera detects; the server must be recording it).
                                     </div>
                                     <div class="alert-cams">
                                         @foreach (var cam in _cameras)
                                         {
                                             var on = AlertOnCount(cam.Name);
-                                            <div class="alert-cam @(on > 0 ? "has-alerts" : "")" @key="cam.Name">
+                                            var offlineOn = AlertOfflineOn(cam.Name);
+                                            <div class="alert-cam @(on > 0 || offlineOn ? "has-alerts" : "")" @key="cam.Name">
                                                 <div class="alert-cam-head">
                                                     <span class="alert-cam-name">@cam.Name</span>
-                                                    <span class="alert-cam-count">@(on > 0 ? $"{on} on" : "off")</span>
+                                                    <span class="alert-cam-actions">
+                                                        <button class="chip chip-mini @(AllLabelsOn(cam.Name) ? "" : "chip-off")"
+                                                                title="Turn on every detection type for this camera"
+                                                                @onclick="() => ToggleAllLabelsAsync(cam.Name)">All</button>
+                                                        <button class="chip chip-mini @(offlineOn ? "" : "chip-off")"
+                                                                title="Alert when this camera drops offline or comes back online"
+                                                                @onclick="() => ToggleAlertOfflineAsync(cam.Name)">offline</button>
+                                                    </span>
                                                 </div>
                                                 <div class="alert-cam-chips">
                                                     @foreach (var label in AlertLabels)
@@ -2989,6 +3029,7 @@
             _cameras.Clear();
             if (cams != null) _cameras.AddRange(cams);
             SyncClipStates();
+            await MaybeNotifyCamerasAsync();
             _error = null;
             _camerasFetched = true;
             return true;
@@ -3161,6 +3202,29 @@
         });
     }
 
+    /// <summary>Resume a suspended camera straight from its badge/overlay — the same
+    /// server toggle the settings panel uses. Neolink reconnects; the next poll
+    /// clears the suspended state, so we optimistically flip and then refresh.</summary>
+    private async Task ResumeCameraAsync(string cam)
+    {
+        if (_resuming.Contains(cam)) return;
+        _resuming.Add(cam);
+        try
+        {
+            var req = ApiRequest(HttpMethod.Post, $"/api/cameras/{Uri.EscapeDataString(cam)}/suspend");
+            req.Content = JsonContent.Create(new { suspended = false });
+            using var res = await Http.SendAsync(req);
+            if (res.IsSuccessStatusCode)
+                await RefreshCamerasAsync(); // pick up the cleared suspended flag
+        }
+        catch { /* transient: the next poll reflects the real state */ }
+        finally
+        {
+            _resuming.Remove(cam);
+        }
+    }
+    private readonly HashSet<string> _resuming = new(StringComparer.OrdinalIgnoreCase);
+
     private async Task ToggleClipAsync(ApiCamera cam)
     {
         bool start = !ClipActive(cam.Name);
@@ -3191,6 +3255,15 @@
 
     private string EventArtifactUrl(ApiEvent ev, string kind) =>
         $"{_server.TrimEnd('/')}/api/events/{Uri.EscapeDataString(ev.Id)}/{kind}{TokenQuery('?')}";
+
+    /// <summary>A cached snapshot still, used as a live tile's poster so the grid
+    /// paints a real frame the instant it loads while the stream spins up. Served
+    /// from the server's short snapshot cache (so several tiles/refreshes reach the
+    /// camera at most once), and best-effort — a parked or offline camera simply
+    /// yields no poster, and the endpoint never wakes a battery camera.</summary>
+    private string SnapshotPoster(string? cam) =>
+        string.IsNullOrEmpty(cam) ? "" :
+        $"{_server.TrimEnd('/')}/api/cameras/{Uri.EscapeDataString(cam)}/snapshot.jpg?maxAge=15{TokenQuery('&')}";
 
     /// <summary>
     /// A strip card takes the exact shape of its camera (the meta text overlays
@@ -3225,6 +3298,8 @@
                 _storage = features.Storage;
                 _footageEncrypted = features.Encrypted;
                 _showBgTasks = features.ShowBackgroundTasks;
+                await MaybeNotifySystemAsync(features.Storage?.Full == true,
+                    features.Overload, features.WriteFailure);
             }
         }
         catch
@@ -3271,6 +3346,16 @@
         public bool Enabled { get; set; }
         public int CooldownSeconds { get; set; } = 60;
         public Dictionary<string, List<string>> Cameras { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+        // Global server-condition alerts (the in-app twin of the email alerts). On
+        // by default — they need no per-site tuning and matter to everyone. Existing
+        // saved prefs omit these fields, so JSON deserialization keeps these
+        // initialized defaults (true) for upgraders too.
+        public bool SysStorage { get; set; } = true;
+        public bool SysOverload { get; set; } = true;
+        public bool SysWriteFailure { get; set; } = true;
+        // Cameras that alert when they drop offline / come back (per-camera, sits in
+        // the same per-camera layout as the detection labels).
+        public List<string> Offline { get; set; } = new();
     }
 
     private static readonly string[] AlertLabels =
@@ -3363,6 +3448,132 @@
         if (!l.Remove(label)) l.Add(label);
         if (l.Count == 0) _alerts.Cameras.Remove(cam);
         await SaveAlertPrefsAsync();
+    }
+
+    /// <summary>True when every detection label is on for this camera.</summary>
+    private bool AllLabelsOn(string cam) =>
+        _alerts.Cameras.TryGetValue(cam, out var l)
+        && AlertLabels.All(x => l.Contains(x, StringComparer.OrdinalIgnoreCase));
+
+    /// <summary>The per-camera "All" button: turn every detection label on, or (if
+    /// already all on) clear them.</summary>
+    private async Task ToggleAllLabelsAsync(string cam)
+    {
+        if (AllLabelsOn(cam)) _alerts.Cameras.Remove(cam);
+        else _alerts.Cameras[cam] = AlertLabels.ToList();
+        await SaveAlertPrefsAsync();
+    }
+
+    private bool AlertOfflineOn(string cam) =>
+        _alerts.Offline.Contains(cam, StringComparer.OrdinalIgnoreCase);
+
+    private async Task ToggleAlertOfflineAsync(string cam)
+    {
+        int removed = _alerts.Offline.RemoveAll(c => string.Equals(c, cam, StringComparison.OrdinalIgnoreCase));
+        if (removed == 0) _alerts.Offline.Add(cam);
+        await SaveAlertPrefsAsync();
+    }
+
+    private async Task ToggleSysAlertAsync(string which)
+    {
+        switch (which)
+        {
+            case "storage": _alerts.SysStorage = !_alerts.SysStorage; break;
+            case "overload": _alerts.SysOverload = !_alerts.SysOverload; break;
+            case "write": _alerts.SysWriteFailure = !_alerts.SysWriteFailure; break;
+        }
+        await SaveAlertPrefsAsync();
+    }
+
+    // --- Firing of the system / per-camera-offline alerts, off the 10s poll ---
+    // Seeded on first observation so a page load never fires stale alerts (mirrors
+    // the detection-alert seeding). Edge-triggered on the false->true transition,
+    // recovery on true->false.
+    private bool _sysSeeded;
+    private bool _prevStorageFull, _prevOverload, _prevWriteFailure;
+    private readonly Dictionary<string, bool> _prevCamOffline = new(StringComparer.OrdinalIgnoreCase);
+    private const int OfflinePollsToAlert = 2; // ~20s at the 10s poll: ignore reconnect blips
+
+    private bool AlertsLive => _alerts.Enabled && _notifPerm == "granted";
+
+    private async Task FireSystemNotifAsync(string tag, string title, string body)
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("neolink.notifShow", new
+            {
+                title,
+                body,
+                tag,
+                url = "/",
+                icon = "/_content/Neolink.WebClient/icons/icon-192.png",
+            });
+        }
+        catch { /* notification failures must never disturb the poll */ }
+    }
+
+    private async Task MaybeNotifySystemAsync(bool storageFull, bool overload, bool writeFailure)
+    {
+        if (!_sysSeeded)
+        {
+            _prevStorageFull = storageFull; _prevOverload = overload; _prevWriteFailure = writeFailure;
+            _sysSeeded = true;
+            return;
+        }
+        if (AlertsLive)
+        {
+            if (_alerts.SysStorage && storageFull != _prevStorageFull)
+                await FireSystemNotifAsync("sys-storage",
+                    storageFull ? "Storage full" : "Storage recovered",
+                    storageFull ? "Recording has stopped — free space or adjust retention/archive."
+                                : "Storage is no longer full.");
+            if (_alerts.SysOverload && overload != _prevOverload)
+                await FireSystemNotifAsync("sys-overload",
+                    overload ? "Server overloaded" : "Server load back to normal",
+                    overload ? "CPU has stayed near maximum for several minutes — streams or recording may lag."
+                             : "CPU usage has returned to normal.");
+            if (_alerts.SysWriteFailure && writeFailure != _prevWriteFailure)
+                await FireSystemNotifAsync("sys-write",
+                    writeFailure ? "Recording write failures" : "Recording writes recovered",
+                    writeFailure ? "The server is failing to write footage to disk — check the drive."
+                                 : "Footage is writing to disk again.");
+        }
+        _prevStorageFull = storageFull; _prevOverload = overload; _prevWriteFailure = writeFailure;
+    }
+
+    // Per-camera offline: debounced by OfflinePollsToAlert so a brief reconnect
+    // doesn't fire. Asleep battery cameras are dozing on purpose, not offline.
+    private readonly Dictionary<string, int> _offlineStreak = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _offlineFired = new(StringComparer.OrdinalIgnoreCase);
+    private bool _camSeeded;
+
+    private async Task MaybeNotifyCamerasAsync()
+    {
+        foreach (var cam in _cameras)
+        {
+            bool faulted = !cam.Online && !cam.Asleep && !cam.Suspended;
+            if (!_camSeeded)
+            {
+                // First sight: remember an already-down camera as known, so we only
+                // ever alert on a NEW drop (but still fire "back online" if it heals).
+                if (faulted) _offlineFired.Add(cam.Name);
+                continue;
+            }
+            if (!faulted)
+            {
+                _offlineStreak.Remove(cam.Name);
+                if (_offlineFired.Remove(cam.Name) && AlertsLive && AlertOfflineOn(cam.Name) && cam.Online)
+                    await FireSystemNotifAsync($"offline-{cam.Name}", $"{cam.Name} back online",
+                        "The camera has reconnected.");
+                continue;
+            }
+            int n = (_offlineStreak.TryGetValue(cam.Name, out var c) ? c : 0) + 1;
+            _offlineStreak[cam.Name] = n;
+            if (n >= OfflinePollsToAlert && _offlineFired.Add(cam.Name) && AlertsLive && AlertOfflineOn(cam.Name))
+                await FireSystemNotifAsync($"offline-{cam.Name}", $"{cam.Name} offline",
+                    "The camera stopped responding. Check its power and network.");
+        }
+        _camSeeded = true;
     }
 
     /// <summary>Firmware label dialects → the chip vocabulary (ApiEvent's names).</summary>

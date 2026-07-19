@@ -31,3 +31,6 @@ neolink-*.tar
 # editor/backup leftovers
 *.bak
 storage-trend.json
+
+# Local dev tools, not shipped
+/devtools/

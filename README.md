@@ -150,9 +150,13 @@ in exchange you get an integration light enough to leave running forever.
   can't affect anything else — see [Email notifications](#email-notifications)
 - **Browser alerts (per user)**: the settings *Alerts* tab picks which
   detections pop a system notification, camera by camera (person, vehicle,
-  doorbell, ...); clicking one opens the exact clip. Fires while the app is
+  doorbell, ...) — with an **All** button per camera — plus a per-camera
+  **offline** toggle and **system alerts** (storage full, server overload,
+  recording write failures, on by default) that mirror the email notifications.
+  Clicking a detection alert opens the exact clip. Fires while the app is
   open — tab or installed PWA, foreground or minimized — with a per-camera
-  cooldown against detection storms. Preferences persist per account and
+  cooldown against detection storms; offline alerts are debounced and ignore
+  battery cameras that are merely dozing. Preferences persist per account and
   follow you across browsers. Needs HTTPS (or localhost), like two-way talk
 - Everything persists in browser localStorage: server address, layout, tile
   assignments, window geometry

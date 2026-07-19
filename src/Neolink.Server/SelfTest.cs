@@ -130,6 +130,63 @@ public static class SelfTest
             Assert(!flappy.Armed, "alternating loss pattern -> never armed, never a false wake");
         });
 
+        Test("stream hub GOP cache: new viewer primed keyframe-first, resets per keyframe", () =>
+        {
+            // A new viewer must receive the buffered GOP (keyframe onward) at once so
+            // it can decode immediately instead of waiting for the camera's next
+            // keyframe — the main cause of slow first-frame on a multi-tile refresh.
+            var hub = new Streaming.StreamHub("t");
+            void Pub(bool key, int size, uint us) =>
+                hub.PublishVideo(new Media.VideoFrame(Media.VideoCodec.H264, key, us, null, new byte[size]));
+
+            // Before any keyframe there is nothing decodable to prime with.
+            var (id0, r0) = hub.Subscribe();
+            Assert(!r0.TryRead(out _), "no keyframe yet -> new viewer primed with nothing");
+            hub.Unsubscribe(id0);
+
+            // A GOP: keyframe then two P-frames. A viewer joining now gets all three.
+            Pub(true, 100, 1000);
+            Pub(false, 40, 2000);
+            Pub(false, 40, 3000);
+            var (id1, r1) = hub.Subscribe();
+            var got = new List<Streaming.HubPacket>();
+            while (r1.TryRead(out var p)) got.Add(p);
+            Assert(got.Count == 3, "primed with the whole current GOP");
+            Assert(got[0] is Streaming.HubVideo { Keyframe: true }, "primed GOP starts at the keyframe");
+
+            // A fresh keyframe resets the GOP — the previous frames are gone.
+            Pub(true, 100, 4000);
+            Pub(false, 40, 5000);
+            var (id2, r2) = hub.Subscribe();
+            var got2 = new List<Streaming.HubPacket>();
+            while (r2.TryRead(out var p)) got2.Add(p);
+            Assert(got2.Count == 2, "new keyframe starts a fresh GOP (old frames dropped)");
+            Assert(got2[0] is Streaming.HubVideo { Keyframe: true }, "fresh GOP starts at the new keyframe");
+
+            // An already-subscribed viewer keeps getting live packets, not a re-prime.
+            var (id3, r3) = hub.Subscribe();
+            while (r3.TryRead(out _)) { } // drain the prime
+            Pub(false, 40, 6000);
+            Assert(r3.TryRead(out var live) && live is Streaming.HubVideo, "live packet reaches an existing subscriber");
+            hub.Unsubscribe(id1); hub.Unsubscribe(id2); hub.Unsubscribe(id3);
+        });
+
+        Test("server overload signal: sustained high CPU, ignores brief spikes", () =>
+        {
+            // Drives the /api/features "overload" flag the dashboard's browser alert
+            // fires on — needs several samples averaging near max, so a momentary
+            // spike doesn't trip it.
+            static Web.SystemSample S(double cpu) => new(0, cpu, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+            Assert(!Web.SystemMonitor.OverloadedFrom(Array.Empty<Web.SystemSample>()), "no samples -> not overloaded");
+            Assert(!Web.SystemMonitor.OverloadedFrom(new[] { S(100), S(100) }), "too few samples -> not overloaded");
+            Assert(Web.SystemMonitor.OverloadedFrom(new[] { S(95), S(92), S(99), S(90), S(94) }),
+                "five samples averaging >=90% -> overloaded");
+            Assert(!Web.SystemMonitor.OverloadedFrom(new[] { S(100), S(20), S(20), S(20), S(20) }),
+                "one spike among low samples -> not overloaded");
+            Assert(!Web.SystemMonitor.OverloadedFrom(new[] { S(89), S(89), S(89), S(89), S(89) }),
+                "sustained but below threshold -> not overloaded");
+        });
+
         Test("xml serialize/parse roundtrip", () =>
         {
             var body = new Bc.Xml.BcXmlBody

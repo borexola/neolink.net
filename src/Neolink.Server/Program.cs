@@ -668,6 +668,7 @@ if (config.WebPort > 0)
         ConfigPath = Path.GetFullPath(configPath),
         Updates = updates,
         Monitor = monitor,
+        RecordingHealth = recordingHealth,
         Notifier = notifier,
         Logs = logBuffer,
         // Graceful shutdown; docker's restart policy (or systemd) starts us again.

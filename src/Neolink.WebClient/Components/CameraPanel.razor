@@ -30,7 +30,7 @@
         @* A suspended camera reads offline — but the resume control must stay
            reachable, so it gets its own mini-panel instead of the offline notice. *@
         <div class="campanel-section">
-            <div class="campanel-section-title">@UiIcon.Render("eye-off", 13) SUSPENDED <span class="beta-tag">BETA</span></div>
+            <div class="campanel-section-title">@UiIcon.Render("eye-off", 13) SUSPENDED</div>
             <div class="notice small">
                 This camera is <b>suspended in Neolink.NET</b> — no connection is held, so it
                 isn't viewed or recorded here and its Home Assistant entities are unavailable.
@@ -245,7 +245,7 @@
                 {
                     var saved = presets.Where(p => p.Enabled).ToList();
                     <div class="campanel-divider"></div>
-                    <div class="campanel-subtitle">@UiIcon.Render("move", 12) PRESETS <span class="beta-tag">BETA</span></div>
+                    <div class="campanel-subtitle">@UiIcon.Render("move", 12) PRESETS</div>
                     @if (saved.Count > 0)
                     {
                         <div class="stream-options">
@@ -405,7 +405,7 @@
         @if (_http?.Image is { } img)
         {
             <div class="campanel-section">
-                <div class="campanel-section-title">@UiIcon.Render("film", 13) PICTURE <span class="beta-tag">BETA</span></div>
+                <div class="campanel-section-title">@UiIcon.Render("film", 13) PICTURE</div>
                 @PictureSlider("Brightness", img.Bright, _pendingBright, StageBright)
                 @PictureSlider("Contrast", img.Contrast, _pendingContrast, StageContrast)
                 @PictureSlider("Saturation", img.Saturation, _pendingSaturation, StageSaturation)
@@ -492,7 +492,7 @@
         @if (_http?.Volume is { } vol)
         {
             <div class="campanel-section">
-                <div class="campanel-section-title">@UiIcon.Render("siren", 13) SPEAKER <span class="beta-tag">BETA</span></div>
+                <div class="campanel-section-title">@UiIcon.Render("siren", 13) SPEAKER</div>
                 <div class="control-row">
                     <span>Volume @PendingMark(_pendingVolume?.ToString())</span>
                     <input class="zf-slider @(_pendingVolume != null ? "input-pending" : "")"
@@ -559,7 +559,7 @@
         {
             var posOptions = osd.PosOptions ?? new List<string>();
             <div class="campanel-section">
-                <div class="campanel-section-title">@UiIcon.Render("logs", 13) ON-SCREEN DISPLAY <span class="beta-tag">BETA</span></div>
+                <div class="campanel-section-title">@UiIcon.Render("logs", 13) ON-SCREEN DISPLAY</div>
                 <div class="control-row">
                     <span>Camera name overlay @PendingMark(_pendingOsdName?.ToString())</span>
                     <button class="chip @((_pendingOsdName ?? osd.ShowName) ? "" : "chip-off") @(_pendingOsdName != null ? "chip-pending" : "")"
@@ -865,7 +865,7 @@
                 @if (_recording.ArchiveAvailable)
                 {
                     <div class="campanel-divider"></div>
-                    <div class="campanel-subtitle">@UiIcon.Render("archive", 12) ARCHIVE <span class="beta-tag">BETA</span></div>
+                    <div class="campanel-subtitle">@UiIcon.Render("archive", 12) ARCHIVE</div>
                     @* Purpose up-front — visible BEFORE anything is switched on. *@
                     <div class="event-sub lc-explain">
                         Normally footage is deleted when its retention ends. Archiving moves it
@@ -932,7 +932,7 @@
         @if (_camTab == "controls" && _caps != null && Camera?.CanSuspend == true)
         {
             <div class="campanel-section">
-                <div class="campanel-section-title">@UiIcon.Render("eye-off", 13) SUSPEND <span class="beta-tag">BETA</span></div>
+                <div class="campanel-section-title">@UiIcon.Render("eye-off", 13) SUSPEND</div>
                 <div class="notice small">
                     Stops <b>Neolink.NET</b> from connecting to this camera — it can't be viewed
                     or recorded here, and its Home Assistant entities go unavailable, until

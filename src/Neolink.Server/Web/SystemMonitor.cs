@@ -113,6 +113,20 @@ public sealed class SystemMonitor
         historyMs = (long)History.TotalMilliseconds,
     };
 
+    // Overload = sustained near-max CPU. These mirror the email AlertMonitor's
+    // thresholds so the web "server overloaded" signal and the email alert agree.
+    public const double OverloadCpuPercent = 90;
+    public static readonly TimeSpan OverloadWindow = TimeSpan.FromMinutes(5);
+
+    /// <summary>True when this process has averaged near-max CPU across the overload
+    /// window — a few samples are required so a brief spike doesn't trip it.</summary>
+    public bool Overloaded() =>
+        OverloadedFrom(Since(DateTimeOffset.UtcNow.Subtract(OverloadWindow).ToUnixTimeMilliseconds()));
+
+    /// <summary>Pure overload decision over a sample set (testable).</summary>
+    public static bool OverloadedFrom(IReadOnlyList<SystemSample> samples) =>
+        samples.Count >= 5 && samples.Average(s => s.CpuPercent) >= OverloadCpuPercent;
+
     /// <summary>
     /// Samples newer than <paramref name="afterUnixMs"/>, oldest first: minute
     /// aggregates for the deep past, full 2s detail once the fine ring covers it.
