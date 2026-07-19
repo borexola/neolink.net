@@ -8,6 +8,13 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Fixed
 
+- **SD-card browsing works on the Video Doorbell WiFi**: that firmware returns
+  each recording's `size` as a quoted string (`"16058135"`) rather than a
+  number, and the parser's numeric cast threw on the first entry — failing the
+  whole day's search and reading as "N entries but none usable" even though the
+  recordings were right there. Size (and the SD-card capacity/free fields) are
+  now read tolerantly, so a number or a numeric string both parse.
+
 - **HTTP features no longer vanish on Wi-Fi cameras that are actually fine**:
   Wi-Fi cameras drop idle keep-alive connections silently (power save, AP
   roam) — no TCP reset, so a pooled connection can be a corpse. Requests

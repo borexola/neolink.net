@@ -1287,8 +1287,10 @@ public sealed class CameraControl : ICameraControl
         slots.OfType<JsonObject>()
             .Select((s, i) => new SdCardInfo(
                 Id: (int?)s["id"] ?? i,
-                TotalMb: (long?)s["capacity"] ?? 0,
-                FreeMb: (long?)s["size"] ?? 0,
+                // Tolerant reads: the same firmwares that quote SD "size" (below) may
+                // quote these too.
+                TotalMb: AsLong(s["capacity"]),
+                FreeMb: AsLong(s["size"]),
                 Formatted: ((int?)s["format"] ?? 0) != 0,
                 Mounted: ((int?)s["mount"] ?? 0) != 0))
             .ToList();
@@ -1637,11 +1639,23 @@ public sealed class CameraControl : ICameraControl
                 Name: (string?)f["name"] ?? "",
                 Start: SearchTime(f["StartTime"] as JsonObject),
                 End: SearchTime(f["EndTime"] as JsonObject),
-                SizeBytes: (long?)f["size"] ?? 0,
+                // "size" comes back as a NUMBER on most firmwares but a quoted STRING
+                // on some (the Video Doorbell WiFi) — a bare (long?) cast throws on the
+                // string, which failed the ENTIRE day's parse and read as "none usable".
+                SizeBytes: AsLong(f["size"]),
                 StreamType: (string?)f["type"] ?? streamType))
             .Where(f => f.Name.Length > 0)
             .OrderBy(f => f.Start)
             .ToList();
+
+    /// <summary>A long from a JSON value that may be a number OR a numeric string
+    /// (firmwares differ on whether they quote "size"); 0 when it's neither.</summary>
+    internal static long AsLong(JsonNode? node)
+    {
+        if (node is not JsonValue v) return 0;
+        if (v.TryGetValue<long>(out var l)) return l;
+        return v.TryGetValue<string>(out var s) && long.TryParse(s, out var parsed) ? parsed : 0;
+    }
 
     private static DateTime SearchTime(JsonObject? t) => t == null
         ? default

@@ -2055,6 +2055,24 @@ public static class SelfTest
             Assert(recs[1] is { Name: "Rec_20260718_143000.mp4", SizeBytes: 52428800, StreamType: "main" },
                 "file entry parsed");
             AssertEq(recs[1].End - recs[1].Start, TimeSpan.FromSeconds(90));
+
+            // The Video Doorbell WiFi quotes "size" as a STRING — a bare (long) cast
+            // threw and failed the WHOLE day's parse ("N entries but none usable").
+            var quoted = Streaming.CameraControl.ParseSdRecordings(Obj("""
+                {"channel":0,"File":[
+                  {"EndTime":{"day":18,"hour":7,"min":46,"mon":7,"sec":30,"year":2026},
+                   "StartTime":{"day":18,"hour":7,"min":45,"mon":7,"sec":52,"year":2026},
+                   "frameRate":0,"height":0,"width":0,"type":"main",
+                   "name":"/mnt/sda/Mp4Record/2026-07-18/RecM0A_20260718_074552_074630.mp4",
+                   "size":"16058135"}]}
+                """), "main");
+            AssertEq(quoted.Count, 1);
+            Assert(quoted[0] is { SizeBytes: 16058135L }, "quoted string size parses");
+            // The tolerant reader itself.
+            Assert(Streaming.CameraControl.AsLong(System.Text.Json.Nodes.JsonValue.Create("42")) == 42, "string number");
+            Assert(Streaming.CameraControl.AsLong(System.Text.Json.Nodes.JsonValue.Create(42L)) == 42, "number");
+            Assert(Streaming.CameraControl.AsLong(System.Text.Json.Nodes.JsonValue.Create("x")) == 0, "non-numeric string → 0");
+            Assert(Streaming.CameraControl.AsLong(null) == 0, "null → 0");
         });
 
         Test("config editor: camera add/edit/delete round-trip + masking", () =>
