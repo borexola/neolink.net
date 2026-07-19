@@ -49,7 +49,8 @@ public sealed class OnvifClient : IDisposable
     private const string Base64Type = "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-message-security-1.0#Base64Binary";
 
     private readonly HttpClient _http;
-    private readonly string _deviceUrl;
+    private readonly string[] _candidates;   // device-service URLs to try, in order
+    private string _deviceUrl;               // the candidate currently being tried / that worked
     private readonly string _username;
     private readonly string _password;
     private readonly string _tag;
@@ -65,21 +66,15 @@ public sealed class OnvifClient : IDisposable
     private OnvifImagingRanges? _ranges;
 
     /// <param name="address">"host", "host:port", or a full "http(s)://host[:port]"
-    /// URL. The device service path (/onvif/device_service) is appended when the
-    /// address is a bare host/authority.</param>
+    /// URL. A bare host (no explicit port) is probed on Reolink's ONVIF port 8000
+    /// FIRST, then port 80 — Reolink serves ONVIF natively on 8000, and port 80
+    /// (the HTTP/CGI web port) only half-proxies it on some firmwares (the device
+    /// service answers but the media service 502s or times out). An explicit port
+    /// or full URL is taken at its word.</param>
     public OnvifClient(string address, string username, string? password, string tag)
     {
-        var a = address.Trim();
-        string baseUrl;
-        if (a.Contains("://", StringComparison.Ordinal))
-            baseUrl = a.TrimEnd('/');
-        else
-            baseUrl = $"http://{a}".TrimEnd('/');
-        // A bare authority gets the conventional device-service path; a caller that
-        // passed a full service URL (onvif_address) is taken at its word.
-        _deviceUrl = baseUrl.Contains("/onvif/", StringComparison.OrdinalIgnoreCase)
-            ? baseUrl
-            : $"{baseUrl}/onvif/device_service";
+        _candidates = BuildCandidates(address);
+        _deviceUrl = _candidates[0];
         _username = username;
         _password = password ?? "";
         _tag = tag;
@@ -89,12 +84,32 @@ public sealed class OnvifClient : IDisposable
             PooledConnectionIdleTimeout = TimeSpan.FromSeconds(30),
             ConnectTimeout = TimeSpan.FromSeconds(5),
         };
-        if (_deviceUrl.StartsWith("https:", StringComparison.OrdinalIgnoreCase))
+        if (_candidates.Any(c => c.StartsWith("https:", StringComparison.OrdinalIgnoreCase)))
             handler.SslOptions = new System.Net.Security.SslClientAuthenticationOptions
             {
                 RemoteCertificateValidationCallback = (_, _, _, _) => true,
             };
         _http = new HttpClient(handler) { Timeout = RequestTimeout };
+    }
+
+    /// <summary>The device-service URL(s) to try, in order. A full URL or an
+    /// explicit host:port yields exactly one; a bare host yields :8000 then :80.</summary>
+    internal static string[] BuildCandidates(string address)
+    {
+        var a = address.Trim();
+        if (a.Contains("://", StringComparison.Ordinal))
+        {
+            var baseUrl = a.TrimEnd('/');
+            return new[] { baseUrl.Contains("/onvif/", StringComparison.OrdinalIgnoreCase)
+                ? baseUrl : $"{baseUrl}/onvif/device_service" };
+        }
+        // Bare authority. An explicit ":port" is honoured as-is; a bare host tries
+        // Reolink's ONVIF port 8000 first, then falls back to port 80.
+        var colon = a.LastIndexOf(':');
+        bool explicitPort = colon > 0 && int.TryParse(a.AsSpan(colon + 1), out _);
+        if (explicitPort)
+            return new[] { $"http://{a}/onvif/device_service" };
+        return new[] { $"http://{a}:8000/onvif/device_service", $"http://{a}/onvif/device_service" };
     }
 
     public void Dispose() => _http.Dispose();
@@ -155,37 +170,54 @@ public sealed class OnvifClient : IDisposable
         _lastError = null;
         try
         {
-            // 1. Device GetCapabilities → the Media and Imaging service URLs. Some
-            //    firmwares return absolute XAddrs on a different host/port; others
-            //    return the conventional paths. Fall back to conventions on a miss.
-            var caps = await CallAsync(_deviceUrl, NsDevice, "GetCapabilities",
-                "<tds:Category>All</tds:Category>", ct).ConfigureAwait(false);
-            _mediaUrl = ServiceXAddr(caps, "Media") ?? Conventional("media_service");
-            _imagingUrl = ServiceXAddr(caps, "Imaging") ?? Conventional("imaging");
-
-            // 2. Media GetVideoSources → the token the imaging service is keyed on.
-            var sources = await CallAsync(_mediaUrl, NsMedia, "GetVideoSources", "", ct).ConfigureAwait(false);
-            _videoSourceToken = VideoSourceToken(sources);
-            if (_videoSourceToken == null)
-                return Fail(_lastError ?? "the camera exposed no ONVIF video source");
-
-            // 3. Imaging GetOptions → accepted ranges, so 0-255 UI values scale to the
-            //    camera's native units (and back). Optional: without it we pass values
-            //    through unscaled.
-            var options = await CallAsync(_imagingUrl, NsImaging, "GetOptions",
-                $"<timg:VideoSourceToken>{Esc(_videoSourceToken)}</timg:VideoSourceToken>", ct)
-                .ConfigureAwait(false);
-            _ranges = ParseRanges(options);
-            _ready = true;
-            _failLogged = false; // a future outage warns again
-            Log.Info($"{_tag}: ONVIF imaging fallback ready (video source '{_videoSourceToken}')");
-            return true;
+            // Try each candidate endpoint (Reolink ONVIF port 8000, then 80) until
+            // one yields a working imaging service.
+            foreach (var candidate in _candidates)
+            {
+                _deviceUrl = candidate;
+                if (await TryDiscoverAsync(ct).ConfigureAwait(false))
+                {
+                    _ready = true;
+                    _failLogged = false; // a future outage warns again
+                    Log.Info($"{_tag}: ONVIF imaging fallback ready (video source '{_videoSourceToken}'" +
+                             $"{(_candidates.Length > 1 ? $" via {new Uri(candidate).Authority}" : "")})");
+                    return true;
+                }
+            }
+            return Fail(_lastError ?? "the camera exposed no ONVIF video source");
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
             return Fail(Log.Flatten(ex));
         }
+    }
+
+    /// <summary>One candidate endpoint's discovery: GetCapabilities → GetVideoSources
+    /// → GetOptions. Returns true only when a video-source token was obtained.</summary>
+    private async Task<bool> TryDiscoverAsync(CancellationToken ct)
+    {
+        // 1. Device GetCapabilities → the Media and Imaging service URLs. Some
+        //    firmwares return absolute XAddrs on a different host/port; others
+        //    return the conventional paths. Fall back to conventions on a miss.
+        var caps = await CallAsync(_deviceUrl, NsDevice, "GetCapabilities",
+            "<tds:Category>All</tds:Category>", ct).ConfigureAwait(false);
+        _mediaUrl = NormalizeXAddr(ServiceXAddr(caps, "Media")) ?? Conventional("media_service");
+        _imagingUrl = NormalizeXAddr(ServiceXAddr(caps, "Imaging")) ?? Conventional("imaging");
+
+        // 2. Media GetVideoSources → the token the imaging service is keyed on.
+        var sources = await CallAsync(_mediaUrl, NsMedia, "GetVideoSources", "", ct).ConfigureAwait(false);
+        _videoSourceToken = VideoSourceToken(sources);
+        if (_videoSourceToken == null) return false;
+
+        // 3. Imaging GetOptions → accepted ranges, so 0-255 UI values scale to the
+        //    camera's native units (and back). Optional: without it we pass values
+        //    through unscaled.
+        var options = await CallAsync(_imagingUrl, NsImaging, "GetOptions",
+            $"<timg:VideoSourceToken>{Esc(_videoSourceToken)}</timg:VideoSourceToken>", ct)
+            .ConfigureAwait(false);
+        _ranges = ParseRanges(options);
+        return true;
     }
 
     /// <summary>Records a discovery failure: pauses re-probing for a cooldown and
@@ -214,6 +246,21 @@ public sealed class OnvifClient : IDisposable
         var uri = new Uri(_deviceUrl);
         return $"{uri.Scheme}://{uri.Authority}/onvif/{leaf}";
     }
+
+    /// <summary>A camera-reported service XAddr, forced onto the host we actually
+    /// reached the camera at: some firmwares report XAddrs with an internal host
+    /// (127.0.0.1 or a LAN name that doesn't resolve from here) but the right
+    /// port/path. Null passes through; an unparseable value is used verbatim.</summary>
+    internal static string? NormalizeXAddr(string? xaddr, string deviceUrl)
+    {
+        if (string.IsNullOrEmpty(xaddr)) return null;
+        if (!Uri.TryCreate(xaddr, UriKind.Absolute, out var u)) return xaddr;
+        var host = new Uri(deviceUrl).Host;
+        if (string.Equals(u.Host, host, StringComparison.OrdinalIgnoreCase)) return xaddr;
+        return new UriBuilder(u) { Host = host }.Uri.ToString();
+    }
+
+    private string? NormalizeXAddr(string? xaddr) => NormalizeXAddr(xaddr, _deviceUrl);
 
     // ------------------------------------------------------------ SOAP transport
 

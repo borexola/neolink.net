@@ -118,9 +118,10 @@ in the README). Paste the matching section below into the GitHub release.
   ONVIF instead, the standards-based imaging service the camera already speaks.
   Strictly a fallback: a healthy HTTP camera never touches the ONVIF path.
   Values are scaled to the same 0-255 the HTTP path uses (from the camera's own
-  ONVIF ranges). The endpoint is the Baichuan host on the standard
-  `/onvif/device_service` path by default, overridable with a per-camera
-  `onvif_address`. Home Assistant gets the same entities over MQTT (brightness,
+  ONVIF ranges). The endpoint is the Baichuan host — probed on Reolink's ONVIF
+  port 8000 first, then port 80 — overridable with a per-camera `onvif_address`
+  (port 80 only half-proxies ONVIF on many Reolink firmwares: the device service
+  answers but the media service 502s or times out, so 8000 is tried first). Home Assistant gets the same entities over MQTT (brightness,
   contrast, saturation, sharpness numbers + a day/night select) — the reads,
   states and writes all flow through the shared imaging path, so a slider change
   in HA routes to ONVIF automatically. Hue, anti-flicker, flip/mirror and HDR

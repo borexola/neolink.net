@@ -1934,6 +1934,25 @@ public static class SelfTest
             Assert(Streaming.CameraControl.DayNightToIrCut("Color") == "ON"
                    && Streaming.CameraControl.DayNightToIrCut("Black&White") == "OFF"
                    && Streaming.CameraControl.DayNightToIrCut("Auto") == "AUTO", "day/night → IR-cut");
+
+            // Endpoint candidates: a bare host tries Reolink's ONVIF port 8000 first,
+            // then 80; an explicit port or full URL is taken verbatim.
+            var bare = Protocol.OnvifClient.BuildCandidates("10.1.1.29");
+            Assert(bare.Length == 2 && bare[0] == "http://10.1.1.29:8000/onvif/device_service"
+                   && bare[1] == "http://10.1.1.29/onvif/device_service", "bare host → :8000 then :80");
+            var withPort = Protocol.OnvifClient.BuildCandidates("10.1.1.29:8899");
+            Assert(withPort.Length == 1 && withPort[0] == "http://10.1.1.29:8899/onvif/device_service",
+                "explicit port honoured");
+            var full = Protocol.OnvifClient.BuildCandidates("http://cam/onvif/device_service");
+            Assert(full.Length == 1 && full[0] == "http://cam/onvif/device_service", "full URL verbatim");
+
+            // XAddr host normalization: a camera reporting an internal host is reached
+            // at the address we actually used, keeping its port and path.
+            Assert(Protocol.OnvifClient.NormalizeXAddr("http://127.0.0.1:8000/onvif/media", "http://10.1.1.29:8000/onvif/device_service")
+                   == "http://10.1.1.29:8000/onvif/media", "internal XAddr host rewritten");
+            Assert(Protocol.OnvifClient.NormalizeXAddr("http://10.1.1.29:8000/onvif/media", "http://10.1.1.29:8000/onvif/device_service")
+                   == "http://10.1.1.29:8000/onvif/media", "matching host untouched");
+            Assert(Protocol.OnvifClient.NormalizeXAddr(null, "http://10.1.1.29/onvif/device_service") == null, "null passes through");
         });
 
         Test("HTTP extras: detection sensitivity, HDR, OSD, firmware, SD search parsing", () =>
