@@ -57,6 +57,8 @@ public sealed class OnvifClient : IDisposable
 
     private bool _ready;              // discovery succeeded; endpoints + token cached
     private DateTime _retryAfter;     // after a failed discovery, don't re-probe until this time
+    private bool _failLogged;         // the "unavailable" reason was logged for this outage
+    private string? _lastError;       // the most recent SOAP/transport failure reason
     private string? _imagingUrl;
     private string? _mediaUrl;
     private string? _videoSourceToken;
@@ -150,6 +152,7 @@ public sealed class OnvifClient : IDisposable
         // written off until Neolink restarts) — but not so often it stalls callers.
         if (_ready) return true;
         if (DateTime.UtcNow < _retryAfter) return false;
+        _lastError = null;
         try
         {
             // 1. Device GetCapabilities → the Media and Imaging service URLs. Some
@@ -164,11 +167,7 @@ public sealed class OnvifClient : IDisposable
             var sources = await CallAsync(_mediaUrl, NsMedia, "GetVideoSources", "", ct).ConfigureAwait(false);
             _videoSourceToken = VideoSourceToken(sources);
             if (_videoSourceToken == null)
-            {
-                Log.Debug($"{_tag}: ONVIF exposed no video source — imaging fallback unavailable");
-                _retryAfter = DateTime.UtcNow + RetryCooldown;
-                return false;
-            }
+                return Fail(_lastError ?? "the camera exposed no ONVIF video source");
 
             // 3. Imaging GetOptions → accepted ranges, so 0-255 UI values scale to the
             //    camera's native units (and back). Optional: without it we pass values
@@ -178,17 +177,33 @@ public sealed class OnvifClient : IDisposable
                 .ConfigureAwait(false);
             _ranges = ParseRanges(options);
             _ready = true;
+            _failLogged = false; // a future outage warns again
             Log.Info($"{_tag}: ONVIF imaging fallback ready (video source '{_videoSourceToken}')");
             return true;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
-            Log.Debug($"{_tag}: ONVIF discovery failed ({Log.Flatten(ex)}) — imaging fallback paused for " +
-                      $"{RetryCooldown.TotalMinutes:0} min");
-            _retryAfter = DateTime.UtcNow + RetryCooldown;
-            return false;
+            return Fail(Log.Flatten(ex));
         }
+    }
+
+    /// <summary>Records a discovery failure: pauses re-probing for a cooldown and
+    /// logs the reason ONCE per outage at Info (this is the only breadcrumb a user
+    /// gets for why an HTTP-less camera shows no picture settings), with the two
+    /// things that actually fix it.</summary>
+    private bool Fail(string reason)
+    {
+        _retryAfter = DateTime.UtcNow + RetryCooldown;
+        if (!_failLogged)
+        {
+            _failLogged = true;
+            Log.Info($"{_tag}: ONVIF imaging fallback unavailable — {reason}. If this camera has no Reolink " +
+                     "HTTP API, check that ONVIF is enabled on it (Reolink app > Settings > Network > Advanced > " +
+                     "ONVIF/Port Settings), and if ONVIF is on a non-standard port set 'onvif_address' " +
+                     $"(e.g. \"{new Uri(_deviceUrl).Host}:8000\"). Retrying in {RetryCooldown.TotalMinutes:0} min.");
+        }
+        return false;
     }
 
     private static readonly TimeSpan RetryCooldown = TimeSpan.FromMinutes(5);
@@ -220,16 +235,40 @@ public sealed class OnvifClient : IDisposable
             $"</{prefix}:{op}></s:Body></s:Envelope>";
 
         using var content = new StringContent(envelope, Encoding.UTF8, "application/soap+xml");
-        using var res = await _http.PostAsync(url, content, ct).ConfigureAwait(false);
-        var text = await res.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-        if (!res.IsSuccessStatusCode)
+        HttpResponseMessage res;
+        try
         {
-            // A SOAP fault body carries the reason — surface it at Debug.
-            Log.Debug($"{_tag}: ONVIF {op} → HTTP {(int)res.StatusCode}: {Truncate(text, 300)}");
-            return null;
+            res = await _http.PostAsync(url, content, ct).ConfigureAwait(false);
         }
-        try { return XDocument.Parse(text).Root; }
-        catch (System.Xml.XmlException) { return null; }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (OperationCanceledException) { _lastError = $"{op}: no reply within {RequestTimeout.TotalSeconds:0}s ({url})"; return null; }
+        catch (Exception ex) { _lastError = $"{op}: {ex.Message} ({url})"; return null; }
+        using (res)
+        {
+            var text = await res.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            if (!res.IsSuccessStatusCode)
+            {
+                // A SOAP fault body carries the reason (often an auth message).
+                _lastError = $"{op} → HTTP {(int)res.StatusCode}: {SoapFaultReason(text) ?? Truncate(text, 200)}";
+                return null;
+            }
+            try { return XDocument.Parse(text).Root; }
+            catch (System.Xml.XmlException) { _lastError = $"{op}: malformed reply"; return null; }
+        }
+    }
+
+    /// <summary>The human reason from a SOAP fault body ("Sender not authorized"…),
+    /// or null when the body isn't a recognisable fault.</summary>
+    private static string? SoapFaultReason(string body)
+    {
+        try
+        {
+            var root = XDocument.Parse(body).Root;
+            var text = root?.Descendants().FirstOrDefault(e => e.Name.LocalName == "Text")?.Value?.Trim();
+            var code = root?.Descendants().FirstOrDefault(e => e.Name.LocalName is "Value" or "faultstring")?.Value?.Trim();
+            return text ?? code;
+        }
+        catch { return null; }
     }
 
     // ------------------------------------------------------------ WS-Security

@@ -905,7 +905,11 @@ public sealed class CameraControl : ICameraControl
                      "The camera streams fine over Baichuan, so this is the HTTP API specifically: it may be " +
                      "disabled on the camera (enable it in the Reolink app, or set 'http_address'), or " +
                      "something between Neolink and the camera is dropping HTTP traffic " +
-                     "(firewall/VLAN rules, Docker networking). Reads resume automatically when it recovers.");
+                     "(firewall/VLAN rules, Docker networking). Reads resume automatically when it recovers." +
+                     (_onvif != null
+                         ? " (A separate ONVIF imaging fallback was also tried for the picture settings — " +
+                           "see this camera's ONVIF log line for whether that route is available.)"
+                         : ""));
         }
         return merged;
     }
