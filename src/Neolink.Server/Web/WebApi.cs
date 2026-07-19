@@ -1870,18 +1870,39 @@ public static class WebApi
         // Streams one recording straight off the camera (no server-side copy).
         // Inline for the <video> player; ?dl=1 turns it into a download. The
         // camera serves the file sequentially, so there is no seeking/ranges.
-        app.MapGet("/api/cameras/{name}/sdcard/download", (string name, string? file, bool? dl, HttpContext ctx) =>
+        // "dl" binds as a STRING on purpose: the UI sends ?dl=1, and ASP.NET's
+        // bool binding rejects "1" with an empty 400 BEFORE the handler runs —
+        // invisible in our logs (field report: every SD download failed 400).
+        app.MapGet("/api/cameras/{name}/sdcard/download", (string name, string? file, string? dl, HttpContext ctx) =>
             ExecAsync(name, ctx, mutating: false, async (control, reqCt) =>
             {
                 var fileName = (file ?? "").Trim();
                 if (fileName.Length is 0 or > 255 || fileName.Any(char.IsControl))
                     return Results.Json(new { error = "provide file: a name from /sdcard/recordings" }, statusCode: 400);
-                var download = await control.OpenSdRecordingAsync(fileName, reqCt);
-                ctx.Response.RegisterForDispose(download);
+                bool asDownload = dl is "1" or "true" or "yes";
                 string contentType = fileName.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase)
                     ? "video/mp4" : "application/octet-stream";
-                return Results.Stream(download.Stream, contentType,
-                    fileDownloadName: dl == true ? Path.GetFileName(fileName) : null);
+                var downloadName = asDownload ? Path.GetFileName(fileName) : null;
+
+                // Normal-size recordings spool to a server temp file and serve with
+                // RANGE support: the camera only streams sequentially and its MP4s
+                // keep the moov index at the END, so direct pass-through never
+                // played in a browser (see SdSpool). The browser's range probes all
+                // hit the same spooled file — one camera fetch per recording.
+                if (await SdSpool.TryGetAsync(name, fileName, reqCt) is { } cached)
+                    return Results.File(cached, contentType, fileDownloadName: downloadName,
+                        enableRangeProcessing: true);
+                var download = await control.OpenSdRecordingAsync(fileName, reqCt);
+                if (download.Length is { } len && len <= SdSpool.MaxBytes)
+                {
+                    var spooled = await SdSpool.SpoolAsync(name, fileName, download, reqCt);
+                    return Results.File(spooled, contentType, fileDownloadName: downloadName,
+                        enableRangeProcessing: true);
+                }
+                // Oversized (long continuous segments) or unknown length: stream
+                // straight through like before — playable only after download.
+                ctx.Response.RegisterForDispose(download);
+                return Results.Stream(download.Stream, contentType, fileDownloadName: downloadName);
             }));
 
         // On-demand clip capture: start records ONE clip capped at

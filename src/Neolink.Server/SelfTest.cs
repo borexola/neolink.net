@@ -3613,6 +3613,14 @@ public static class SelfTest
                 // A camera without snapshot support (SnapshotAsync = null) is a 404,
                 // and so is a camera that does not exist.
                 AssertEq((int)http.GetAsync("/api/cameras/apicam/snapshot.jpg").Result.StatusCode, 404);
+
+                // SD download contract: the UI sends ?dl=1 — that must reach the
+                // handler (the stub camera answers 404 "not supported"), never die
+                // in ASP.NET's bool binding as an empty 400 (field report: every
+                // SD download failed 400 with nothing in the logs).
+                AssertEq((int)http.GetAsync("/api/cameras/apicam/sdcard/download?file=a.mp4&dl=1").Result.StatusCode, 404);
+                AssertEq((int)http.GetAsync("/api/cameras/apicam/sdcard/download?file=a.mp4&dl=true").Result.StatusCode, 404);
+                AssertEq((int)http.GetAsync("/api/cameras/apicam/sdcard/download?dl=1").Result.StatusCode, 400); // no file: the handler's OWN 400
                 AssertEq((int)http.GetAsync("/api/cameras/nope/snapshot.jpg").Result.StatusCode, 404);
 
                 // Background-process feed (no-auth server: open, like other admin

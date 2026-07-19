@@ -8,6 +8,18 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Fixed
 
+- **SD-card recordings actually play (and download)**: two independent bugs.
+  Downloads failed with an empty 400 — the UI sends `?dl=1` and ASP.NET's
+  boolean binding rejects `1` before the handler even runs, so nothing hit the
+  logs. And playback never started at all: the camera serves a recording
+  strictly sequentially (no byte ranges) while its MP4s keep the index (moov)
+  at the END of the file — a browser streaming from the front never finds the
+  index and waits forever. Normal-size recordings now spool to a server temp
+  file first and are served with full range support: playback starts after a
+  short fetch, scrubbing works, and the browser's range probes hit the same
+  spooled copy instead of re-downloading from the camera (kept 10 minutes,
+  cleaned automatically; very large files stream directly as before).
+
 - **SD-card browsing works on the Video Doorbell WiFi**: that firmware returns
   each recording's `size` as a quoted string (`"16058135"`) rather than a
   number, and the parser's numeric cast threw on the first entry — failing the
