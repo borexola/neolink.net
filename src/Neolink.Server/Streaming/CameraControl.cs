@@ -101,6 +101,11 @@ public interface ICameraControl
     /// <summary>Whether stream encode settings can be written (the camera's HTTP API is configured).</summary>
     bool CanSetStreamSettings { get; }
 
+    /// <summary>Whether picture settings can be read/written over ONVIF as a fallback
+    /// (for models with no Reolink HTTP CGI API). Defaults false for control surfaces
+    /// that have no ONVIF path (generic RTSP cameras, test doubles).</summary>
+    bool HasImagingFallback => false;
+
     /// <summary>
     /// The CURRENT encode selection of each stream (what the Reolink app shows),
     /// read via the camera's HTTP API — null when no http_address is configured.
@@ -293,6 +298,7 @@ public sealed class CameraControl : ICameraControl
     private readonly ILiveCameraSource _source;
     private readonly IReadOnlyList<ILiveCameraSource> _sources;
     private readonly ReolinkHttpApi? _httpApi;
+    private readonly OnvifClient? _onvif;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     // Capabilities are cached for the lifetime of one camera session; a reconnect
@@ -307,12 +313,18 @@ public sealed class CameraControl : ICameraControl
     /// (and HA unavailable) while its video plays. Commands still prefer
     /// <paramref name="source"/> (the primary) when it is connected.</param>
     public CameraControl(ILiveCameraSource source, ReolinkHttpApi? httpApi = null,
-        IReadOnlyList<ILiveCameraSource>? allSources = null)
+        IReadOnlyList<ILiveCameraSource>? allSources = null, OnvifClient? onvif = null)
     {
         _source = source;
         _sources = allSources is { Count: > 0 } ? allSources : new[] { source };
         _httpApi = httpApi;
+        _onvif = onvif;
     }
+
+    /// <summary>Whether picture settings can be read/written over ONVIF when the
+    /// Reolink HTTP CGI API isn't there (Lumus and other HTTP-less models). Only a
+    /// fallback: an HTTP camera never routes through it.</summary>
+    public bool HasImagingFallback => _onvif != null;
 
     public string CameraName => _source.Name;
     public bool Online => _sources.Any(s => s.LiveCamera != null);
@@ -783,7 +795,16 @@ public sealed class CameraControl : ICameraControl
 
     public async Task<HttpFeatures?> GetHttpFeaturesAsync(CancellationToken ct)
     {
-        if (_httpApi == null) return null;
+        if (_httpApi == null)
+        {
+            // No Reolink HTTP API. If this camera has an ONVIF imaging fallback
+            // (Lumus and other HTTP-less models), surface just the picture settings
+            // it can provide; everything else stays null. Otherwise nothing.
+            if (_onvif == null) return null;
+            var onvifImage = await GetOnvifImageSettingsAsync(ct).ConfigureAwait(false);
+            return onvifImage == null ? null
+                : new HttpFeatures(onvifImage, null, null, null, null, null, null);
+        }
         // Sequential on purpose (the HTTP client serializes requests anyway) —
         // but ONE slow answer must not blank the rest of the panel. A mid-sweep
         // transport failure arms the 60s backoff to protect unrelated callers;
@@ -887,7 +908,11 @@ public sealed class CameraControl : ICameraControl
     {
         var img = await HttpTryAsync<JsonObject?>(async c => await _httpApi!.GetImageAsync(c).ConfigureAwait(false), ct)
             .ConfigureAwait(false);
-        if (img == null) return null;
+        // HTTP had nothing (no CGI API, or it failed) — fall back to ONVIF, the
+        // only picture-settings path on models like the Lumus. A healthy HTTP
+        // camera never reaches this: img is non-null and ONVIF stays untouched.
+        if (img == null)
+            return _onvif != null ? await GetOnvifImageSettingsAsync(ct).ConfigureAwait(false) : null;
         // The ISP half (day/night, flip, ...) is optional — picture sliders alone
         // are still worth showing if a firmware rejects GetIsp.
         var isp = await HttpTryAsync<JsonObject?>(async c => await _httpApi!.GetIspAsync(c).ConfigureAwait(false), ct)
@@ -911,6 +936,46 @@ public sealed class CameraControl : ICameraControl
         return ParseImageSettings(img, isp, ispRange,
             AbilityFlag(ability, channel, "ispFlip"), AbilityFlag(ability, channel, "ispMirror"));
     }
+
+    /// <summary>Picture settings from ONVIF, mapped into the same shape the HTTP path
+    /// produces. ONVIF's imaging service covers brightness/contrast/saturation/
+    /// sharpness, the IR-cut (day/night) filter and wide-dynamic-range; it has no hue,
+    /// anti-flicker or flip/mirror, so those stay null (the panel hides absent
+    /// fields). Never throws — null just means ONVIF had nothing.</summary>
+    private async Task<ImageSettings?> GetOnvifImageSettingsAsync(CancellationToken ct)
+    {
+        var o = await _onvif!.TryGetImagingAsync(ct).ConfigureAwait(false);
+        if (o == null) return null;
+        // HDR (WDR) is deliberately left null: its WRITE rides a separate endpoint
+        // (SetHdrAsync) that has no ONVIF path yet, so surfacing it would show a
+        // toggle that can't save. Brightness/contrast/saturation/sharpness and
+        // day/night all round-trip through SetImageSettingsAsync → ONVIF.
+        return new ImageSettings(
+            Bright: o.Brightness, Contrast: o.Contrast, Saturation: o.Saturation,
+            Hue: null, Sharpen: o.Sharpness,
+            DayNight: IrCutToDayNight(o.IrCutFilter),
+            AntiFlicker: null, Flip: null, Mirror: null,
+            Hdr: null, HdrMax: null);
+    }
+
+    /// <summary>ONVIF IR-cut-filter enum → this app's day/night vocabulary. The filter
+    /// engaged (ON) blocks IR for daytime colour; OFF lets IR through for night.</summary>
+    internal static string? IrCutToDayNight(string? irCutFilter) => irCutFilter?.ToUpperInvariant() switch
+    {
+        "AUTO" => "Auto",
+        "ON" => "Color",
+        "OFF" => "Black&White",
+        _ => null,
+    };
+
+    /// <summary>The reverse mapping, for an ONVIF write.</summary>
+    internal static string? DayNightToIrCut(string? dayNight) => dayNight switch
+    {
+        "Auto" => "AUTO",
+        "Color" => "ON",
+        "Black&White" => "OFF",
+        _ => null,
+    };
 
     /// <summary>The GetIsp RANGE table, fetched once per camera lifetime (it's static
     /// per model): which optional ISP fields exist and the values they accept.</summary>
@@ -967,7 +1032,21 @@ public sealed class CameraControl : ICameraControl
         string? dayNight, string? antiFlicker, bool? flip, bool? mirror, CancellationToken ct)
     {
         if (_httpApi == null)
-            throw new NotSupportedException($"picture settings need the camera's HTTP API ('{CameraName}' has none)");
+        {
+            // No Reolink HTTP API — write over ONVIF instead, if this camera has it.
+            // ONVIF covers brightness/contrast/saturation/sharpness + day/night; the
+            // fields it can't do (hue, anti-flicker, flip/mirror) aren't offered in
+            // the panel for an ONVIF camera, so a request for them is a real error.
+            if (_onvif == null)
+                throw new NotSupportedException($"picture settings need the camera's HTTP API ('{CameraName}' has none)");
+            if (hue != null || antiFlicker != null || flip != null || mirror != null)
+                throw new NotSupportedException(
+                    $"{CameraName} exposes picture settings over ONVIF, which can't set hue, anti-flicker or flip/mirror");
+            await _onvif.SetImagingAsync(bright, contrast, saturation, sharpen,
+                DayNightToIrCut(dayNight), wideDynamicRange: null, ct).ConfigureAwait(false);
+            Log.Info($"{CameraName}: picture settings changed over ONVIF");
+            return;
+        }
         if (bright != null || contrast != null || saturation != null || hue != null || sharpen != null)
         {
             static int Clamp(int v) => Math.Clamp(v, 0, 255);

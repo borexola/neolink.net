@@ -39,7 +39,7 @@ public sealed record ApiVersion(string? Name, string? Model, string? Serial, str
 public sealed record ApiFeatures(bool Ptz, bool Led, bool Pir, bool Battery,
     bool StreamSettings = false, bool Reboot = true,
     bool Zoom = false, bool Siren = false, bool Floodlight = false, bool Privacy = false,
-    bool WhiteLed = false, bool Spotlight = false, bool Doorbell = false);
+    bool WhiteLed = false, bool Spotlight = false, bool Doorbell = false, bool Imaging = false);
 
 /// <summary>GET/POST /api/cameras/{name}/whiteled — spotlight brightness (0-100),
 /// on/off and auto mode, over the camera's HTTP API.</summary>

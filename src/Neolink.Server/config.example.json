@@ -114,6 +114,13 @@
       // most non-battery Reolink cameras serve it on port 80/443.
       // "http_address": "192.168.1.187",
 
+      // Optional: the camera's ONVIF device service ("host", "host:port" or full URL).
+      // A picture-settings FALLBACK for models with no Reolink HTTP API (Lumus line):
+      // brightness/contrast/saturation/sharpness + day-night over ONVIF. Defaults to
+      // the address host on the standard /onvif/device_service path; set this only to
+      // override the port/path. Requires ONVIF enabled on the camera.
+      // "onvif_address": "192.168.1.187:8000",
+
       // Which streams to serve: "mainStream", "subStream", "externStream", "both", or "all".
       // "both" serves /driveway (+ /driveway/mainStream) and /driveway/subStream.
       "stream": "both",

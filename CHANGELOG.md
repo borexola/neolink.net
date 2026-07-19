@@ -110,6 +110,20 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### New
 
+- **Picture settings over ONVIF for cameras without the Reolink HTTP API**
+  (beta): models like the Lumus line expose no Reolink HTTP CGI, so the picture
+  sliders (which ride that API) were simply absent. When a camera has no HTTP
+  API — or its HTTP API can't be reached — brightness, contrast, saturation,
+  sharpness and the day/night (IR-cut) filter are now read and written over
+  ONVIF instead, the standards-based imaging service the camera already speaks.
+  Strictly a fallback: a healthy HTTP camera never touches the ONVIF path.
+  Values are scaled to the same 0-255 the HTTP path uses (from the camera's own
+  ONVIF ranges). The endpoint is the Baichuan host on the standard
+  `/onvif/device_service` path by default, overridable with a per-camera
+  `onvif_address`. Hue, anti-flicker, flip/mirror and HDR have no ONVIF path in
+  this release and stay hidden for ONVIF-only cameras. Requires ONVIF enabled on
+  the camera with valid credentials.
+
 - **Event-type chips only list what the camera can emit**: the recording tab's
   event types used to offer every known detection on every camera. The list is
   now capability-filtered where a definitive signal exists — the per-type

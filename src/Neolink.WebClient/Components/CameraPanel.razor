@@ -1675,7 +1675,9 @@
             if (_caps.Features?.Siren == true) _sirenOn = (await GetAsync<JsonElement?>("siren"))?.TryGetProperty("on", out var so) == true && so.ValueKind != JsonValueKind.Null ? so.GetBoolean() : null;
             if (_caps.Features?.Privacy == true) _privacyOn = (await GetAsync<JsonElement?>("privacy"))?.TryGetProperty("on", out var po) == true && po.ValueKind != JsonValueKind.Null ? po.GetBoolean() : null;
             // The HTTP-API extras (beta): one combined read; 404/null just hides them.
-            if (_caps.Features?.StreamSettings == true)
+            // Also fetched for ONVIF-only cameras (no http_address) — the sweep then
+            // returns just the picture settings ONVIF can provide.
+            if (_caps.Features?.StreamSettings == true || _caps.Features?.Imaging == true)
             {
                 _http = await GetAsync<ApiHttpFeatures?>("httpfeatures");
                 _quickReplyId = _http?.QuickReplies?.FirstOrDefault()?.Id ?? 0;

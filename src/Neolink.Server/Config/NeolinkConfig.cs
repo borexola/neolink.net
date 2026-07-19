@@ -135,6 +135,7 @@ public sealed class NeolinkConfig
     private static CameraConfig ParseJsonCamera(JsonElement el)
     {
         string? name = null, username = null, password = null, address = null, uid = null, httpAddress = null;
+        string? onvifAddress = null;
         string? rtspMain = null, rtspSub = null;
         string stream = "both";
         byte channelId = 0;
@@ -154,6 +155,7 @@ public sealed class NeolinkConfig
                 case "password": password = prop.Value.GetString(); break;
                 case "address": address = prop.Value.GetString(); break;
                 case "httpaddress": httpAddress = prop.Value.GetString(); break;
+                case "onvifaddress": onvifAddress = prop.Value.GetString(); break;
                 case "uid": uid = prop.Value.GetString(); break;
                 case "stream": stream = prop.Value.GetString() ?? "both"; break;
                 case "channelid": channelId = prop.Value.GetByte(); break;
@@ -178,7 +180,7 @@ public sealed class NeolinkConfig
         }
 
         return BuildCamera(name, username, password, address, uid, stream, channelId, permitted, httpAddress,
-            record, rtspMain, rtspSub, alwaysOn, udpProbe, udp, wakeCapture);
+            record, rtspMain, rtspSub, alwaysOn, udpProbe, udp, wakeCapture, onvifAddress);
     }
 
     private static RecordingConfig ParseJsonRecording(JsonElement el)
@@ -366,7 +368,8 @@ public sealed class NeolinkConfig
                 MiniToml.GetBool(c, "always_on"),
                 MiniToml.GetBool(c, "udp_probe") ?? false,
                 MiniToml.GetBool(c, "udp") ?? false,
-                MiniToml.GetBool(c, "wake_capture") ?? false));
+                MiniToml.GetBool(c, "wake_capture") ?? false,
+                MiniToml.GetString(c, "onvif_address")));
         }
         return config;
     }
@@ -380,7 +383,8 @@ public sealed class NeolinkConfig
     private static CameraConfig BuildCamera(string? name, string? username, string? password,
         string? address, string? uid, string stream, byte channelId, List<string>? permitted,
         string? httpAddress = null, bool record = true, string? rtspMain = null, string? rtspSub = null,
-        bool? alwaysOn = null, bool udpProbe = false, bool udp = false, bool wakeCapture = false)
+        bool? alwaysOn = null, bool udpProbe = false, bool udp = false, bool wakeCapture = false,
+        string? onvifAddress = null)
     {
         if (name == null) throw new FormatException("camera entry missing \"name\"");
 
@@ -430,6 +434,7 @@ public sealed class NeolinkConfig
             ChannelId = channelId,
             PermittedUsers = permitted,
             HttpAddress = string.IsNullOrWhiteSpace(httpAddress) ? null : httpAddress.Trim(),
+            OnvifAddress = string.IsNullOrWhiteSpace(onvifAddress) ? null : onvifAddress.Trim(),
             Record = record,
             AlwaysOn = alwaysOn,
             Uid = string.IsNullOrWhiteSpace(uid) ? null : uid.Trim(),
@@ -680,6 +685,12 @@ public sealed class CameraConfig
     /// the settings Baichuan has no verified write path for (stream encode profiles).
     /// </summary>
     public string? HttpAddress { get; init; }
+
+    /// <summary>Optional override for the camera's ONVIF device-service endpoint
+    /// (host, host:port, or a full URL). Defaults to the Baichuan host on the
+    /// standard /onvif/device_service path. Only used as a picture-settings fallback
+    /// for models with no Reolink HTTP CGI API.</summary>
+    public string? OnvifAddress { get; init; }
     /// <summary>Record detection events for this camera (when recording is configured).</summary>
     public bool Record { get; init; } = true;
     /// <summary>

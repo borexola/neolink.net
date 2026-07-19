@@ -1837,6 +1837,105 @@ public static class SelfTest
                 "antiFlicker Off parses through untouched");
         });
 
+        Test("ONVIF imaging: WS-Security digest, parsing, scaling, write body", () =>
+        {
+            // WS-Security UsernameToken digest = Base64(SHA1(nonce + created + password)).
+            // The classic bug hashes the BASE64 nonce string instead of raw bytes;
+            // guard against it explicitly.
+            var nonce = new byte[] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
+            var created = new DateTime(2026, 1, 2, 3, 4, 5, 678, DateTimeKind.Utc);
+            const string createdStr = "2026-01-02T03:04:05.678Z";
+            var header = Protocol.OnvifClient.BuildSecurity("admin", "secret", nonce, created);
+            var raw = nonce.Concat(System.Text.Encoding.UTF8.GetBytes(createdStr))
+                .Concat(System.Text.Encoding.UTF8.GetBytes("secret")).ToArray();
+            var expected = Convert.ToBase64String(System.Security.Cryptography.SHA1.HashData(raw));
+            Assert(header.Contains(expected, StringComparison.Ordinal), "digest hashes raw nonce+created+password");
+            Assert(header.Contains(createdStr, StringComparison.Ordinal), "header carries the Created timestamp");
+            Assert(header.Contains(Convert.ToBase64String(nonce), StringComparison.Ordinal), "header carries the base64 nonce");
+            var b64Bytes = System.Text.Encoding.UTF8.GetBytes(Convert.ToBase64String(nonce));
+            var wrong = Convert.ToBase64String(System.Security.Cryptography.SHA1.HashData(
+                b64Bytes.Concat(System.Text.Encoding.UTF8.GetBytes(createdStr))
+                    .Concat(System.Text.Encoding.UTF8.GetBytes("secret")).ToArray()));
+            Assert(!header.Contains(wrong, StringComparison.Ordinal), "digest does NOT hash the base64 nonce string");
+
+            static System.Xml.Linq.XElement Xml(string s) => System.Xml.Linq.XDocument.Parse(s).Root!;
+
+            // GetImagingSettings reply → scaled to 0-255 with the camera's ranges.
+            var settings = Xml("""
+                <tds:GetImagingSettingsResponse xmlns:tds="http://www.onvif.org/ver20/imaging/wsdl">
+                  <tt:ImagingSettings xmlns:tt="http://www.onvif.org/ver10/schema">
+                    <tt:Brightness>50</tt:Brightness>
+                    <tt:Contrast>60</tt:Contrast>
+                    <tt:ColorSaturation>70</tt:ColorSaturation>
+                    <tt:Sharpness>40</tt:Sharpness>
+                    <tt:IrCutFilter>AUTO</tt:IrCutFilter>
+                    <tt:WideDynamicRange><tt:Mode>ON</tt:Mode></tt:WideDynamicRange>
+                  </tt:ImagingSettings>
+                </tds:GetImagingSettingsResponse>
+                """);
+            var ranges = new Protocol.OnvifImagingRanges((0, 100), (0, 100), (0, 100), (0, 100));
+            var imaging = Protocol.OnvifClient.ParseImaging(settings, ranges);
+            Assert(imaging is { Brightness: 128, Contrast: 153, Saturation: 179, Sharpness: 102 },
+                "imaging fields scaled 0-100 → 0-255");
+            Assert(imaging is { IrCutFilter: "AUTO", WideDynamicRange: true }, "IR-cut + WDR parsed");
+
+            // GetOptions ranges.
+            var options = Xml("""
+                <tds:GetOptionsResponse xmlns:tds="http://www.onvif.org/ver20/imaging/wsdl">
+                  <tt:ImagingOptions xmlns:tt="http://www.onvif.org/ver10/schema">
+                    <tt:Brightness><tt:Min>0</tt:Min><tt:Max>255</tt:Max></tt:Brightness>
+                    <tt:Contrast><tt:Min>0</tt:Min><tt:Max>100</tt:Max></tt:Contrast>
+                  </tt:ImagingOptions>
+                </tds:GetOptionsResponse>
+                """);
+            var parsedRanges = Protocol.OnvifClient.ParseRanges(options);
+            Assert(parsedRanges.Brightness == (0.0, 255.0) && parsedRanges.Contrast == (0.0, 100.0),
+                "GetOptions min/max parsed");
+            Assert(parsedRanges.Saturation == null, "an absent range is null");
+
+            // Service discovery + video-source token parsing.
+            var caps = Xml("""
+                <s:GetCapabilitiesResponse xmlns:s="http://www.onvif.org/ver10/device/wsdl">
+                  <tt:Capabilities xmlns:tt="http://www.onvif.org/ver10/schema">
+                    <tt:Media><tt:XAddr>http://cam/onvif/media</tt:XAddr></tt:Media>
+                    <tt:Imaging><tt:XAddr>http://cam/onvif/imaging</tt:XAddr></tt:Imaging>
+                  </tt:Capabilities>
+                </s:GetCapabilitiesResponse>
+                """);
+            Assert(Protocol.OnvifClient.ServiceXAddr(caps, "Media") == "http://cam/onvif/media", "Media XAddr");
+            Assert(Protocol.OnvifClient.ServiceXAddr(caps, "Imaging") == "http://cam/onvif/imaging", "Imaging XAddr");
+            var vs = Xml("""
+                <s:GetVideoSourcesResponse xmlns:s="http://www.onvif.org/ver10/media/wsdl">
+                  <tt:VideoSources xmlns:tt="http://www.onvif.org/ver10/schema" token="VS_0"/>
+                </s:GetVideoSourcesResponse>
+                """);
+            Assert(Protocol.OnvifClient.VideoSourceToken(vs) == "VS_0", "video source token from attribute");
+
+            // Scale round-trip and write-body field order (schema sequence: Brightness,
+            // ColorSaturation, Contrast, IrCutFilter, Sharpness, WideDynamicRange).
+            Assert(Protocol.OnvifClient.ScaleToByte(50, (0, 100)) == 128, "scale to byte");
+            Assert(Math.Abs(Protocol.OnvifClient.ScaleFromByte(128, (0, 100)) - 50.2) < 0.5, "scale from byte");
+            Assert(Protocol.OnvifClient.ScaleToByte(200, null) == 200, "no range = passthrough clamp");
+            var body = Protocol.OnvifClient.BuildSetImaging("VS_0", ranges,
+                brightness: 128, contrast: null, saturation: 255, sharpness: null,
+                irCutFilter: "ON", wideDynamicRange: null);
+            Assert(body.Contains("<tt:Brightness>") && body.Contains("<tt:ColorSaturation>")
+                   && body.Contains("<tt:IrCutFilter>ON</tt:IrCutFilter>"), "only-set fields emitted");
+            Assert(!body.Contains("<tt:Contrast>") && !body.Contains("<tt:Sharpness>")
+                   && !body.Contains("WideDynamicRange"), "unset fields omitted");
+            Assert(body.IndexOf("Brightness", StringComparison.Ordinal) < body.IndexOf("ColorSaturation", StringComparison.Ordinal)
+                   && body.IndexOf("ColorSaturation", StringComparison.Ordinal) < body.IndexOf("IrCutFilter", StringComparison.Ordinal),
+                   "fields in ONVIF schema order");
+
+            // Day/night vocabulary round-trip.
+            Assert(Streaming.CameraControl.IrCutToDayNight("ON") == "Color"
+                   && Streaming.CameraControl.IrCutToDayNight("OFF") == "Black&White"
+                   && Streaming.CameraControl.IrCutToDayNight("AUTO") == "Auto", "IR-cut → day/night");
+            Assert(Streaming.CameraControl.DayNightToIrCut("Color") == "ON"
+                   && Streaming.CameraControl.DayNightToIrCut("Black&White") == "OFF"
+                   && Streaming.CameraControl.DayNightToIrCut("Auto") == "AUTO", "day/night → IR-cut");
+        });
+
         Test("HTTP extras: detection sensitivity, HDR, OSD, firmware, SD search parsing", () =>
         {
             static System.Text.Json.Nodes.JsonObject Obj(string json) =>

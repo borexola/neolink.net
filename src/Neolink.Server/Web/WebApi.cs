@@ -1190,6 +1190,10 @@ public static class WebApi
                         doorbell = caps.Features.Doorbell,
                         privacy = caps.Features.Privacy,
                         streamSettings = control.CanSetStreamSettings,
+                        // Picture settings reachable over ONVIF when the camera has no
+                        // Reolink HTTP CGI API — lets the panel fetch httpfeatures even
+                        // without http_address, so the sliders show for a Lumus.
+                        imaging = control.HasImagingFallback,
                         // Baichuan-only: a generic RTSP camera can't be told to reboot
                         reboot = control is not GenericCameraControl,
                     },

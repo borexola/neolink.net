@@ -371,12 +371,21 @@ foreach (var cam in config.Cameras)
             ?? (string.IsNullOrWhiteSpace(cam.Host) ? null : cam.Host);
         var httpApi = httpAddr == null ? null
             : new ReolinkHttpApi(httpAddr, cam.Username, cam.Password, cam.ChannelId);
+        // ONVIF is a picture-settings FALLBACK for models with no Reolink HTTP CGI
+        // API (Lumus and other spotlight/battery lines): same host, the standard
+        // /onvif/device_service path, or an explicit onvif_address override. It is
+        // only ever contacted when the HTTP path yields nothing, so building it for
+        // every camera costs nothing until it is actually needed.
+        var onvifAddr = cam.OnvifAddress
+            ?? (string.IsNullOrWhiteSpace(cam.Host) ? null : cam.Host);
+        var onvif = onvifAddr == null ? null
+            : new OnvifClient(onvifAddr, cam.Username, cam.Password, cam.Name);
         var primary = primaryService
             ?? throw new InvalidOperationException($"camera '{cam.Name}' has no streams");
         // All stream services: the camera is online if ANY session is live (a
         // viewer watching only the sub stream must not read as "offline"), and
         // commands fall back to whichever session exists.
-        control = new CameraControl(primary, httpApi, camServices);
+        control = new CameraControl(primary, httpApi, camServices, onvif);
 
         // Two-way talk is opt-in (ui.talk). When on, this camera's RTSP mounts can
         // serve an ONVIF audio backchannel (go2rtc / HA WebRTC) — DESCRIBE still
