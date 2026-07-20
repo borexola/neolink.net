@@ -525,6 +525,7 @@ foreach (var cam in config.Cameras)
         SupportsEvents: !cam.IsGenericRtsp,
         Battery: battery == null ? null : () => readers.Select(s => s.Battery).FirstOrDefault(b => b != null),
         WifiSignal: battery == null ? null : () => readers.Select(s => s.WifiSignal).FirstOrDefault(v => v != null),
+        NetType: battery == null ? null : () => readers.Select(s => s.NetType).FirstOrDefault(v => v != null),
         // Asleep = every stream of the camera is parked on purpose (battery doze),
         // as opposed to offline-because-unreachable.
         Asleep: sleepers.Count == 0 ? null : () => sleepers.All(s => s.Parked),

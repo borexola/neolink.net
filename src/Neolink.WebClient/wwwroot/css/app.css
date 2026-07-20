@@ -685,6 +685,109 @@ video[data-live="1"] ~ .tile-status { display: none; }
 }
 .tile-privacy-resume:hover .tile-privacy-icon { color: var(--accent); }
 
+/* "Stats for nerds": the live stream's technical readout, opened by right-click
+   on a single-camera view. Sits over the picture like the zoom HUD, JS-owned. */
+.nerd-stats {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    z-index: 6;
+    max-width: min(420px, calc(100% - 20px));
+    max-height: calc(100% - 76px);   /* never cover the tile bar */
+    overflow-y: auto;
+    padding: 8px 10px 9px;
+    border-radius: 10px;
+    border: 1px solid color-mix(in srgb, var(--text) 14%, transparent);
+    background: color-mix(in srgb, #000 72%, transparent);
+    backdrop-filter: blur(6px);
+    color: var(--text);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11px;
+    line-height: 1.45;
+    cursor: default;
+}
+
+.nerd-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 5px;
+    padding-bottom: 5px;
+    border-bottom: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+}
+
+.nerd-title {
+    flex: 1 1 auto;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-size: 10px;
+    color: var(--muted);
+}
+
+.nerd-btn {
+    flex: 0 0 auto;
+    background: transparent;
+    border: 1px solid color-mix(in srgb, var(--text) 18%, transparent);
+    border-radius: 5px;
+    color: var(--muted);
+    font: inherit;
+    font-size: 10px;
+    padding: 1px 6px;
+    cursor: pointer;
+}
+.nerd-btn:hover { color: var(--text); border-color: var(--accent); }
+
+.nerd-row {
+    display: flex;
+    gap: 10px;
+    justify-content: space-between;
+}
+.nerd-row span { color: var(--muted); flex: 0 0 auto; }
+.nerd-row b {
+    font-weight: 600;
+    text-align: right;
+    overflow-wrap: anywhere;
+}
+.nerd-row b.warn { color: #e8b054; }
+.nerd-row b.bad { color: var(--err); }
+
+.nerd-sparkwrap { margin-top: 6px; }
+.nerd-spark {
+    display: block;
+    width: 100%;
+    height: 28px;
+    overflow: visible;
+}
+.nerd-sparkline {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 1.5;
+    vector-effect: non-scaling-stroke;
+    stroke-linejoin: round;
+}
+.nerd-sparklabel {
+    display: block;
+    color: var(--muted);
+    font-size: 10px;
+}
+
+.nerd-verdict {
+    margin-top: 6px;
+    padding-top: 5px;
+    border-top: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+    font-size: 10px;
+    line-height: 1.4;
+}
+.nerd-verdict.ok { color: var(--ok); }
+.nerd-verdict.warn { color: #e8b054; }
+.nerd-verdict.bad { color: var(--err); }
+
+/* Phones: the panel would swallow the picture — keep it readable but contained. */
+@media (max-width: 640px) {
+    .nerd-stats { font-size: 10px; max-width: calc(100% - 16px); left: 8px; top: 8px; }
+}
+
 .tile-privacy small {
     font-size: 11px;
     opacity: 0.7;
@@ -1901,6 +2004,15 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     font-size: 9px;
     margin-left: 5px;
     vertical-align: 1px;
+}
+
+/* The probe spinner rides IN the tab label, so it must not carry the standalone
+   spinner's trailing gap (the tab's own flex gap already spaces it). */
+.settings-tab .tab-spinner {
+    width: 10px;
+    height: 10px;
+    margin-right: 0;
+    vertical-align: 0;
 }
 
 /* Pending-edits badge in the settings header (hover for the full story) */

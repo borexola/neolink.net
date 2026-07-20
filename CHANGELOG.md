@@ -8,6 +8,21 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Added
 
+- **Right-click a single camera's view for "stats for nerds".** On
+  `/cameras/{name}` the right-click menu used to offer a camera picker, which
+  only contradicted the address bar; it now opens a live technical readout of
+  the stream instead (the picker stays on the camera wall, where picking a
+  camera means something). It reports the decoded resolution and codec,
+  measured framerate, decoded and dropped frames, buffer depth against the
+  adaptive jitter target, playback speed, live and average bitrate with a
+  one-minute sparkline, fragment delivery cadence, and the connection's state
+  and uptime. Crucially it keeps two failures apart: **dropped frames** mean
+  this device can't decode fast enough, while **skips** mean footage never
+  reached the browser at all (server or network) — and a plain-language verdict
+  at the bottom says which one you're looking at. A **copy** button puts the
+  whole readout, plus the browser version, on the clipboard for bug reports.
+  Right-click again, or the ✕, closes it.
+
 - **A suspended camera can be resumed with one click, right where you see it.**
   The *suspended* badge in the sidebar and the *suspended* overlay on the tile
   and the camera's own page are now buttons — clicking any of them resumes the
@@ -49,9 +64,26 @@ in the README). Paste the matching section below into the GitHub release.
   hidden while it is unreachable rather than showing hours-old signal, and
   survive a battery camera's nap (which never wakes it). A camera that doesn't
   answer the Baichuan query is left alone until its next connection instead of
-  being written off for good. Wired-ethernet cameras correctly show nothing.
+  being written off for good.
+
+  **Cameras on a cable get a network-jack icon** rather than a blank space,
+  because "wired" and "no signal" are different things and looked identical
+  before. The camera's own answer decides it — the HTTP API's active-link
+  report, or the link type it announces over Baichuan (which a wired camera
+  sends without any signal, and which used to be discarded). Once a camera is
+  known to be wired it is no longer asked for a Wi-Fi reading at all.
 
 ### Changed
+
+- **The Camera settings tab no longer waits for the camera before you can open
+  it.** Opening a camera's settings used to show a "querying the camera" banner
+  across the panel, with the Camera settings tab missing entirely until the
+  probe finished — so the tab appeared under your pointer part-way through.
+  The tab is now there from the start and is selectable immediately, carrying a
+  small spinner while the camera is being queried, and the explanation moved
+  inside it — you only read about the wait if you actually went looking for the
+  controls. The Recording tab, which needs nothing from the camera, is no longer
+  pushed down by a banner about something else.
 
 - **Live view starts much faster, especially with several tiles at once.** Each
   camera now keeps its most recent group-of-pictures (the last keyframe and the

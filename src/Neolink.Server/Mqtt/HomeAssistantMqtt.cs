@@ -1425,15 +1425,18 @@ internal sealed class CameraBridge
             switch (push)
             {
                 case WifiSignalPush wifi:
+                    // A wired camera pushes NetInfo with no signal: there is no
+                    // dBm sensor to announce or publish for it.
+                    if (wifi.SignalDbm is not { } dbm) break;
                     if (!_wifiAnnounced)
                     {
                         _wifiAnnounced = true;
                         await AnnounceEntityAsync("sensor", "wifi_signal", WifiSignalConfig(), ct).ConfigureAwait(false);
                     }
-                    if (wifi.SignalDbm != _wifiDbm)
+                    if (dbm != _wifiDbm)
                     {
-                        _wifiDbm = wifi.SignalDbm;
-                        await _hub.PublishAsync(StateTopic("wifi_signal"), wifi.SignalDbm.ToString(), ct).ConfigureAwait(false);
+                        _wifiDbm = dbm;
+                        await _hub.PublishAsync(StateTopic("wifi_signal"), dbm.ToString(), ct).ConfigureAwait(false);
                     }
                     break;
 

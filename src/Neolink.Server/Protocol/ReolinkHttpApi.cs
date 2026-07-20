@@ -204,6 +204,17 @@ public sealed class ReolinkHttpApi : IDisposable
     public Task SetAudioCfgAsync(JsonObject audioCfg, CancellationToken ct) =>
         ExecAsync("SetAudioCfg", new JsonObject { ["AudioCfg"] = audioCfg.DeepClone() }, ct);
 
+    /// <summary>Which link the camera is actually USING — "LAN" or "Wifi" in Reolink's
+    /// wording, firmware-dependent in case. Null when the camera doesn't answer.
+    /// A Wi-Fi-capable camera plugged into a cable reports LAN, which is the whole
+    /// point: it has no Wi-Fi signal to report and shouldn't be asked for one.</summary>
+    public async Task<string?> GetActiveLinkAsync(CancellationToken ct)
+    {
+        var value = await ExecAsync("GetLocalLink", new JsonObject(), ct).ConfigureAwait(false);
+        var link = value?["LocalLink"];
+        return (string?)link?["activeLink"] ?? (string?)value?["activeLink"];
+    }
+
     /// <summary>The camera's Wi-Fi signal reading, or null when it reports none.
     /// Firmwares differ: some report bars (0-4), others dBm (negative).</summary>
     public async Task<int?> GetWifiSignalAsync(CancellationToken ct)

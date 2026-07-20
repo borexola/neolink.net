@@ -741,10 +741,14 @@ public static class SelfTest
             Assert(wifi != null, "NetInfo parsed");
             AssertEq(wifi!.NetType!, "wifi");
             AssertEq(wifi.SignalDbm, -45);
-            // A wired camera pushes NetInfo without a numeric signal — no reading.
+            // A wired camera pushes NetInfo without a numeric signal. That is still
+            // worth reporting — "on a cable" is why it has no reading — but it must
+            // carry a null signal so nothing publishes a bogus dBm for it.
+            var wired = BcCamera.ParseNetInfo(System.Xml.Linq.XElement.Parse(
+                "<NetInfo version=\"1.1\"><net_type>ethernet</net_type></NetInfo>"));
+            Assert(wired is { SignalDbm: null, NetType: "ethernet" }, "wired push: link type, no reading");
             Assert(BcCamera.ParseNetInfo(System.Xml.Linq.XElement.Parse(
-                "<NetInfo version=\"1.1\"><net_type>ethernet</net_type></NetInfo>")) == null,
-                "no signal = no Wi-Fi reading");
+                "<NetInfo version=\"1.1\"/>")) == null, "an empty push says nothing at all");
 
             // msg 623 sleepStatus — battery cameras announce power-save transitions;
             // firmware uses both token and numeric status forms.
@@ -1775,6 +1779,28 @@ public static class SelfTest
             Assert(Streaming.WifiReading.FromHttp(-55).Unit == Streaming.WifiUnit.Dbm, "negative HTTP value -> dBm");
             Assert(Streaming.WifiReading.FromHttp(3).Unit == Streaming.WifiUnit.Bars, "0-4 HTTP value -> bars");
             Assert(Streaming.WifiReading.FromHttp(85).Unit == Streaming.WifiUnit.Percent, "large HTTP value -> percent");
+
+            // Link type from the camera's own wording (HTTP "LAN"/"Wifi", Baichuan
+            // "ethernet"/"wifi"): 1 = wired, 2 = Wi-Fi, 0 = it didn't say.
+            Assert(Streaming.CameraControl.LinkKindOf("LAN") == 1, "LAN -> wired");
+            Assert(Streaming.CameraControl.LinkKindOf("ethernet") == 1, "ethernet -> wired");
+            Assert(Streaming.CameraControl.LinkKindOf("Wifi") == 2, "Wifi -> wireless");
+            Assert(Streaming.CameraControl.LinkKindOf("WIFI") == 2, "case-insensitive");
+            // "wlan" CONTAINS "lan" — the Wi-Fi test has to win, or a wireless
+            // camera would be drawn with a network jack.
+            Assert(Streaming.CameraControl.LinkKindOf("wlan0") == 2, "wlan -> wireless, not wired");
+            Assert(Streaming.CameraControl.LinkKindOf("eth0") == 1, "eth0 -> wired");
+            Assert(Streaming.CameraControl.LinkKindOf(null) == 0, "silence -> unknown");
+            Assert(Streaming.CameraControl.LinkKindOf("  Wifi ") == 2, "surrounding space tolerated");
+            // Prefix-matched, not substring-matched: "something" contains "eth" and
+            // must NOT read as a wired camera.
+            Assert(Streaming.CameraControl.LinkKindOf("something else") == 0, "unrecognized -> unknown");
+            Assert(Streaming.CameraControl.LinkKindOf("unplanned") == 0, "a word containing 'lan' is not a LAN");
+
+            // The wired glyph exists and is distinct from the Wi-Fi one.
+            Assert(Neolink.WebClient.UiIcon.Render("lan").Value.Contains("<rect"), "lan icon renders");
+            Assert(Neolink.WebClient.UiIcon.Render("lan").Value != Neolink.WebClient.UiIcon.RenderWifi(4).Value,
+                "wired and Wi-Fi icons differ");
 
             // The glyph reads the level: 2 lit elements at full opacity for level 2.
             Assert(System.Text.RegularExpressions.Regex.Matches(

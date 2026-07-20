@@ -133,12 +133,14 @@
                             @UiIcon.RenderBattery(bat.Percent, 11)@(bat.Charging ? UiIcon.Render("bolt", 9) : default)@bat.Percent%
                         </span>
                     }
-                    @if (cam.WifiSignal is { } wifi)
+                    @if (cam.WifiSignal is { } link)
                     {
-                        @* Wi-Fi signal (HTTP API): icon shows quality, tooltip the value. *@
-                        <span class="cam-wifi @(wifi.Level <= 1 ? "wifi-weak" : "")"
-                              title="Wi-Fi signal: @wifi.Label">
-                            @UiIcon.RenderWifi(wifi.Level, 14)
+                        @* How the camera is attached: Wi-Fi arcs lit to the signal
+                           level, or an RJ45 jack for a camera on a cable — which is
+                           not the same thing as "no signal" and must not look like it. *@
+                        <span class="cam-wifi @(!link.IsWired && link.Level <= 1 ? "wifi-weak" : "")"
+                              title="@(link.IsWired ? "Wired network (Ethernet) — no Wi-Fi signal to report" : $"Wi-Fi signal: {link.Label}")">
+                            @(link.IsWired ? UiIcon.Render("lan", 13) : UiIcon.RenderWifi(link.Level, 14))
                         </span>
                     }
                     @if (cam.Suspended)
@@ -4004,6 +4006,15 @@
 
     private void OpenTileMenu(int index, MouseEventArgs e)
     {
+        // On a single-camera view (/cameras/{name}) the maximized tile IS the
+        // camera named in the URL — a "show camera" picker there would only
+        // contradict the address bar. Right-click gives the stream's technical
+        // readout instead; the picker stays on the wall, where it makes sense.
+        if (Camera != null && _maxIndex == index)
+        {
+            _ = JS.InvokeVoidAsync("neolink.statsToggle", $"vid-{index}");
+            return;
+        }
         _ctxIndex = index;
         _ctxX = e.ClientX;
         _ctxY = e.ClientY;

@@ -25,6 +25,7 @@ public sealed record WebStreamInfo(string Kind, string Path, IStreamHub Hub);
 /// <param name="SupportsEvents">False for generic RTSP cameras: no detection pushes, so event recording can't trigger.</param>
 /// <param name="Battery">Latest battery reading, or null (mains-powered / generic RTSP / unknown yet).</param>
 /// <param name="WifiSignal">Latest Wi-Fi RSSI pushed over Baichuan (dBm), or null — the only Wi-Fi source on cameras without the HTTP API.</param>
+/// <param name="NetType">Link type the camera last announced over Baichuan ("wifi", "ethernet"), or null.</param>
 /// <param name="Asleep">Probe: is the camera intentionally disconnected so it can sleep (battery doze)?</param>
 /// <param name="SirenOn">Latest siren state the camera pushed, or null (no push yet / unsupported).</param>
 /// <param name="PrivacyOn">Latest privacy-mode state the camera pushed, or null (no push yet / unsupported).</param>
@@ -35,7 +36,8 @@ public sealed record WebStreamInfo(string Kind, string Path, IStreamHub Hub);
 /// <param name="SetContinuousEnabled">Turns 24/7 recording on/off at runtime and persists it (same setting as the web UI toggle); null when unsupported.</param>
 public sealed record WebCameraInfo(string Name, List<WebStreamInfo> Streams, ICameraControl Control,
     HashSet<string>? PermittedUsers, Func<bool>? ContinuousActive = null, bool SupportsEvents = true,
-    Func<BatteryPush?>? Battery = null, Func<int?>? WifiSignal = null, Func<bool>? Asleep = null,
+    Func<BatteryPush?>? Battery = null, Func<int?>? WifiSignal = null, Func<string?>? NetType = null,
+    Func<bool>? Asleep = null,
     Func<bool?>? SirenOn = null, Func<bool?>? PrivacyOn = null,
     Func<bool>? Suspended = null, Action<bool>? SetSuspended = null,
     Func<(string Date, string File, double Seconds)?>? ActiveSegment = null,
@@ -1029,14 +1031,19 @@ public static class WebApi
 
         app.MapGet("/api/cameras", () =>
         {
-            // One normalized Wi-Fi reading per camera: the actively refreshed value
-            // (HTTP API, else the Baichuan query) first, the camera's unsolicited
-            // NetInfo push as the fallback — one order for every consumer, so the
-            // sidebar and the camera page can no longer disagree. Suppressed while
-            // the camera is unreachable: a reading from a camera that hasn't
-            // answered in hours is worse than showing none. A dozing battery camera
-            // still shows its last reading (it is asleep on purpose, not lost).
-            static object? WifiJson(WebCameraInfo c)
+            // How this camera is attached to the network, for the sidebar icon:
+            // { kind: "wifi", level 0-4, label } or { kind: "wired" }. Null only when
+            // the camera has said nothing either way — a blank space is honest there,
+            // but a Wi-Fi-capable camera sitting on a cable must NOT read as "no
+            // signal", which is what showing nothing implied before.
+            //
+            // The Wi-Fi reading is the actively refreshed value (HTTP API, else the
+            // Baichuan query), with the camera's unsolicited NetInfo push as fallback
+            // — one order for every consumer, so the sidebar and the camera page
+            // cannot disagree. Suppressed while the camera is unreachable: a reading
+            // from a camera that hasn't answered in hours is worse than none. A
+            // dozing battery camera keeps its last one (asleep on purpose, not lost).
+            static object? LinkJson(WebCameraInfo c)
             {
                 if (!c.Control.Online && !(c.Asleep?.Invoke() ?? false))
                 {
@@ -1045,7 +1052,13 @@ public static class WebApi
                 }
                 var w = c.Control.CachedWifiSignal
                         ?? (c.WifiSignal?.Invoke() is { } dbm ? WifiReading.FromDbm(dbm) : null);
-                return w == null ? null : new { level = w.Level, label = w.Label };
+                if (w != null) return new { kind = "wifi", level = w.Level, label = w.Label };
+                // No reading: the camera may simply be on a cable. Its own answer
+                // (GetLocalLink) wins; the Baichuan net_type push stands in for
+                // cameras without the HTTP API.
+                bool wired = c.Control.CachedWired
+                             ?? CameraControl.LinkKindOf(c.NetType?.Invoke()) == 1;
+                return wired ? new { kind = "wired", level = 0, label = "Wired (Ethernet)" } : null;
             }
 
             var payload = cameras.Select(c => new
@@ -1069,9 +1082,8 @@ public static class WebApi
                 // viewed or recorded here. Distinct from offline-because-unreachable.
                 suspended = c.Suspended?.Invoke() ?? false,
                 canSuspend = c.SetSuspended != null,
-                // Wi-Fi: { level 0-4, label } — see WifiJson above. Null on wired
-                // cameras, while unreachable, or before the first reading.
-                wifiSignal = WifiJson(c),
+                // Network link: { kind, level, label } — see LinkJson above.
+                wifiSignal = LinkJson(c),
                 battery = c.Battery?.Invoke() is { } b
                     ? new { percent = b.Percent, charging = b.Charging }
                     : null,

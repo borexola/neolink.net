@@ -69,7 +69,13 @@
             @if (!string.IsNullOrEmpty(Camera?.Address)) { <span class="devbar-item" title="Configured network address"><span class="devbar-k">Address</span>@Camera!.Address</span> }
             @if (Camera?.Udp == true) { <span class="devbar-item" title="Connected over UDP (Baichuan-over-UDP) — beta support for battery-only models"><span class="devbar-k">Transport</span>UDP <span class="beta-tag">BETA</span></span> }
             @if (Camera?.Battery is { } bat) { <span class="devbar-item" title="Battery-powered camera: @(bat.Percent)%@(bat.Charging ? ", charging" : "")"><span class="devbar-k">Battery</span><span class="devbar-batt">@UiIcon.RenderBattery(bat.Percent, 13)@(bat.Charging ? UiIcon.Render("bolt", 11) : default)</span>@bat.Percent%</span> }
-            @if ((Camera?.WifiSignal ?? _http?.WifiSignal) is { } wifi) { <span class="devbar-item" title="Wi-Fi signal: @wifi.Label"><span class="devbar-k">Wi-Fi</span><span class="devbar-wifi">@UiIcon.RenderWifi(wifi.Level, 13)</span>@wifi.Label</span> }
+            @if ((Camera?.WifiSignal ?? _http?.WifiSignal) is { } link)
+            {
+                <span class="devbar-item" title="@(link.IsWired ? "Wired network (Ethernet) — no Wi-Fi signal to report" : $"Wi-Fi signal: {link.Label}")">
+                    <span class="devbar-k">@(link.IsWired ? "Network" : "Wi-Fi")</span>
+                    <span class="devbar-wifi">@(link.IsWired ? UiIcon.Render("lan", 13) : UiIcon.RenderWifi(link.Level, 13))</span>@link.Label
+                </span>
+            }
             @if (_http?.SdCards is { Count: > 0 } cards)
             {
                 foreach (var card in cards)
@@ -87,15 +93,11 @@
         </div>
         }
 
-        @* The camera is still answering: the server-side recording settings are
-           already usable above; device info and controls slot in when it replies. *@
-        @if (_probing)
-        {
-            <div class="notice small campanel-probing">
-                <span class="btn-spinner"></span> Querying the camera — device info and controls appear in a moment.
-            </div>
-        }
-        else if (_caps is { Online: false } && _recording == null)
+        @* While the camera is still answering, the wait is shown ON the Camera
+           settings tab (a spinner in its label) rather than as a banner here —
+           the tab stays selectable throughout, and the explanatory line appears
+           inside it for whoever actually opens it. *@
+        @if (!_probing && _caps is { Online: false } && _recording == null)
         {
             <div class="notice">Camera is offline (reconnecting). Controls appear when it comes back.</div>
         }
@@ -107,15 +109,21 @@
                 <button class="settings-tab @(_camTab == "recording" ? "active" : "")" role="tab"
                         @onclick='() => _camTab = "recording"'>@UiIcon.Render("rec", 13) Recording</button>
             }
-            @* A generic RTSP camera has no device controls at all — don't offer an
-               empty tab when the recording one exists. The tab waits for the camera
-               to answer (its body reads capabilities), so it appears once online. *@
-            @if (_caps is { Online: true } && (HasDeviceControls || _recording == null))
+            @* Offered from the start — including while the camera is still being
+               queried, with a spinner in the label — so it can be opened right
+               away instead of appearing under the pointer once the probe lands.
+               Afterwards it stays only if there is something to show: a generic
+               RTSP camera has no device controls, so its tab drops away. *@
+            @if (ShowControlsTab)
             {
                 <button class="settings-tab @(_camTab == "controls" ? "active" : "")" role="tab"
                         @onclick='() => _camTab = "controls"'>
                     @UiIcon.Render("gear", 13) Camera settings
-                    @if (PendingCount > 0)
+                    @if (_probing)
+                    {
+                        <span class="btn-spinner tab-spinner" title="Querying the camera…"></span>
+                    }
+                    else if (PendingCount > 0)
                     {
                         <span class="tab-dot" title="Unsaved changes">●</span>
                     }
@@ -129,8 +137,17 @@
            Recording tab is one big card and gets the full width. *@
         <div class="campanel-body">
         <div class="campanel-cols @(_camTab == "recording" ? "one-col" : "")">
+        @* Opened before the camera answered: this is where the wait is explained,
+           for the person who actually went looking for the controls. *@
+        @if (_camTab == "controls" && _caps == null)
+        {
+            <div class="notice small campanel-probing">
+                <span class="btn-spinner"></span> Querying the camera — device info and controls appear in a moment.
+            </div>
+        }
+
         @* The controls body reads capabilities/features, so it only renders once
-           the camera has answered (_caps != null) — the probing hint covers the wait. *@
+           the camera has answered (_caps != null) — the hint above covers the wait. *@
         @if (_camTab == "controls" && _caps != null)
         {
         @if (_profiles is { Count: > 0 })
@@ -1071,6 +1088,13 @@
         _profiles is { Count: > 0 } || _http != null || Camera?.CanSuspend == true
         || _caps?.Features is { } f && (f.Battery || f.Ptz || f.Zoom || f.Led || f.Siren
             || f.Privacy || f.Pir || f.Reboot);
+
+    /// <summary>Whether to offer the Camera settings tab. It is present from the
+    /// start — including during the capability probe, when it carries a spinner and
+    /// its body explains the wait — so it can be opened immediately. Once the probe
+    /// lands it stays only if the camera really has controls.</summary>
+    private bool ShowControlsTab =>
+        _probing || (_caps is { Online: true } && (HasDeviceControls || _recording == null));
     private bool _loading;
     /// <summary>Phase 2 in flight: the camera is being queried for its capabilities
     /// and control state. The server-side recording settings already render; this
@@ -1685,6 +1709,11 @@
         }
         _loading = false;
         _probing = false;
+        // The tab was offered during the probe; if the answer is "this camera has
+        // no controls" (generic RTSP) it now disappears — don't strand the reader
+        // on a tab that no longer exists.
+        if (_camTab == "controls" && !ShowControlsTab && _recording != null)
+            _camTab = "recording";
     }
 
     private Task CloseAsync() => OnClose.InvokeAsync();

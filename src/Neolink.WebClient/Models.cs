@@ -25,11 +25,15 @@ public sealed record ApiCamera(string Name, bool Online, List<ApiStream> Streams
     bool Suspended = false, bool CanSuspend = false, string? Address = null, bool Udp = false,
     ApiWifi? WifiSignal = null);
 
-/// <summary>A Wi-Fi reading already normalized by the server: a 0-4 level for the
-/// icon plus the reading spelled out in its own unit (dBm, bars or percent). The
-/// client never re-derives the level — only the reader knows which unit the
-/// camera answered in.</summary>
-public sealed record ApiWifi(int Level, string Label);
+/// <summary>How a camera is attached to the network, normalized by the server.
+/// <c>Kind</c> is "wifi" (with a 0-4 <c>Level</c> for the icon and the reading
+/// spelled out in its own unit) or "wired" — a camera on a cable is not a camera
+/// with no signal, and the two must not look alike. The client never re-derives
+/// the level: only the reader knows which unit the camera answered in.</summary>
+public sealed record ApiWifi(int Level, string Label, string? Kind = null)
+{
+    public bool IsWired => string.Equals(Kind, "wired", StringComparison.OrdinalIgnoreCase);
+}
 
 /// <summary>On-demand clip capture (the tile record button / HA Record switch):
 /// one clip, stopped automatically at MaxSeconds.</summary>
@@ -360,6 +364,11 @@ public static class UiIcon
             "calendar" => "<rect x=\"3\" y=\"4\" width=\"18\" height=\"18\" rx=\"2\"/><line x1=\"16\" y1=\"2\" x2=\"16\" y2=\"6\"/><line x1=\"8\" y1=\"2\" x2=\"8\" y2=\"6\"/><line x1=\"3\" y1=\"10\" x2=\"21\" y2=\"10\"/>",
             "camera" => "<path d=\"M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z\"/><circle cx=\"12\" cy=\"13\" r=\"4\"/>",
             "video-off" => "<path d=\"M16 16v1a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2m5.66 0H14a2 2 0 0 1 2 2v3.34l1 1L23 7v10\"/><line x1=\"1\" y1=\"1\" x2=\"23\" y2=\"23\"/>",
+            // RJ45 jack, latch down — "this camera is on a cable".
+            "lan" => "<rect x=\"5\" y=\"5\" width=\"14\" height=\"12\" rx=\"1.5\"/>"
+                + "<path d=\"M10 17v2.5h4V17\"/>"
+                + "<line x1=\"8.2\" y1=\"5\" x2=\"8.2\" y2=\"9\"/><line x1=\"10.7\" y1=\"5\" x2=\"10.7\" y2=\"9\"/>"
+                + "<line x1=\"13.3\" y1=\"5\" x2=\"13.3\" y2=\"9\"/><line x1=\"15.8\" y1=\"5\" x2=\"15.8\" y2=\"9\"/>",
             "download" => "<path d=\"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\"/><polyline points=\"7 10 12 15 17 10\"/><line x1=\"12\" y1=\"15\" x2=\"12\" y2=\"3\"/>",
             "check" => "<polyline points=\"20 6 9 17 4 12\"/>",
             "trash" => "<polyline points=\"3 6 5 6 21 6\"/><path d=\"M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\"/><line x1=\"10\" y1=\"11\" x2=\"10\" y2=\"17\"/><line x1=\"14\" y1=\"11\" x2=\"14\" y2=\"17\"/>",

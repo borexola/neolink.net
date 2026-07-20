@@ -76,6 +76,7 @@ public sealed class CameraService : ILiveCameraSource
     private volatile bool _batteryPowered;
     private volatile BatteryPush? _battery;
     private volatile int _wifiDbm = int.MinValue; // msg 464 NetInfo pushes; MinValue = none seen
+    private volatile string? _netType;            // msg 464 <net_type>: "wifi", "ethernet", …
     private volatile int _sirenOn = -1;    // from msg 547 pushes: -1 unknown, 0 off, 1 on
     private volatile int _privacyOn = -1;  // from msg 623 pushes: -1 unknown, 0 off, 1 on
     private volatile bool _privacyLoop;    // dark + reconnecting: log it once, then quiet the churn
@@ -128,6 +129,10 @@ public sealed class CameraService : ILiveCameraSource
     /// Baichuan-side source for the sidebar Wi-Fi chip — the only one on cameras
     /// without the Reolink HTTP API (Lumus, battery doorbells).</summary>
     public int? WifiSignal => _wifiDbm == int.MinValue ? null : _wifiDbm;
+
+    /// <summary>The link type the camera last announced ("wifi", "ethernet", …), or
+    /// null. A wired camera says so even though it reports no signal.</summary>
+    public string? NetType => _netType;
 
     /// <summary>Last siren state the camera pushed (msg 547); null before the first push.</summary>
     public bool? SirenOn => _sirenOn < 0 ? null : _sirenOn == 1;
@@ -567,7 +572,10 @@ public sealed class CameraService : ILiveCameraSource
             switch (push)
             {
                 case BatteryPush b: _battery = b; break;
-                case WifiSignalPush w: _wifiDbm = w.SignalDbm; break;
+                case WifiSignalPush w:
+                    if (w.SignalDbm is { } dbm) _wifiDbm = dbm;
+                    if (!string.IsNullOrEmpty(w.NetType)) _netType = w.NetType;
+                    break;
                 case SirenStatusPush s: _sirenOn = s.On ? 1 : 0; break;
                 case SleepStatusPush sl: _privacyOn = sl.Sleeping ? 1 : 0; break;
             }

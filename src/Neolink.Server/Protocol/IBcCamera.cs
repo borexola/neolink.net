@@ -103,7 +103,10 @@ public sealed record MotionPush(string Status, IReadOnlyList<string> AiTypes, bo
 public abstract record StatusPush;
 
 /// <summary>msg 464 NetInfo: connection type and Wi-Fi signal strength (RSSI, dBm).</summary>
-public sealed record WifiSignalPush(string? NetType, int SignalDbm) : StatusPush;
+/// <summary>msg 464 NetInfo. <paramref name="SignalDbm"/> is null on a WIRED camera —
+/// it still announces its link type, which is how a camera on a cable is told apart
+/// from one whose Wi-Fi reading simply hasn't arrived yet.</summary>
+public sealed record WifiSignalPush(string? NetType, int? SignalDbm) : StatusPush;
 
 /// <summary>msg 623 sleepStatus: battery cameras report entering/leaving power-save sleep.</summary>
 public sealed record SleepStatusPush(bool Sleeping) : StatusPush;

@@ -39,9 +39,18 @@
             this.lastMsgAt = 0;
             this.msgCount = 0;
             this.onPlaying = () => { this.video.dataset.live = '1'; };
-            this.onWaiting = () => { this.diag.stall++; this.jumpGap(); };
+            this.onWaiting = () => { this.bump('stall'); this.jumpGap(); };
             video.addEventListener('playing', this.onPlaying);
             video.addEventListener('waiting', this.onWaiting);
+            // Session totals for the stats panel — the same events as `diag`, but
+            // never reset, so the readout shows the whole session rather than
+            // whatever landed inside the current 30 s console window.
+            this.totals = { resync: 0, hop: 0, stall: 0 };
+            this.bytes = 0;        // binary payload received this session
+            this.reconnects = 0;
+            this.startedAt = performance.now(); // whole viewing session (bytes span this)
+            this.openedAt = 0;     // performance.now() when the CURRENT socket opened
+            this.meta = null;      // the server's init message (codec/mime/size)
             // Playback-health counters, reported to the console every 30 s when
             // anything notable happened. Gap-hops mean footage never REACHED the
             // browser (the server or the network dropped it) — the one signal
@@ -68,10 +77,12 @@
                 return;
             }
             this.ws.binaryType = 'arraybuffer';
+            this.ws.onopen = () => { this.openedAt = performance.now(); };
             this.ws.onmessage = (e) => {
                 if (typeof e.data === 'string') {
                     this.setup(JSON.parse(e.data));
                 } else {
+                    this.bytes += e.data.byteLength;
                     // Track delivery cadence: the jitter buffer must cover the largest
                     // gap between deliveries (GOP-batching cameras pause for seconds).
                     const now = performance.now() / 1000;
@@ -95,13 +106,19 @@
 
         retry() {
             if (!this.alive) return;
+            this.reconnects++;
             delete this.video.dataset.live;
             clearTimeout(this.timer);
             this.timer = setTimeout(() => this.connect(), 3000);
         }
 
+        /// One playback-health event: counted for the 30 s console line AND for
+        /// the session totals the stats panel shows.
+        bump(kind) { this.diag[kind]++; this.totals[kind]++; }
+
         setup(meta) {
             this.teardownMse();
+            this.meta = meta;
             // iPhone Safari has NO classic MediaSource: since iOS 17.1 Apple
             // ships ManagedMediaSource instead — near drop-in, but it must be
             // detected and used explicitly or live view dies with a misleading
@@ -234,7 +251,7 @@
                     // Resyncs while WE paused the tile (hidden behind a maximized
                     // one) are just housekeeping that keeps the buffer near-live —
                     // not a health signal.
-                    if (!this.video.dataset.bgPaused) this.diag.resync++;
+                    if (!this.video.dataset.bgPaused) this.bump('resync');
                     this.video.currentTime = end - this.latencyTarget; // hard resync
                     this.video.playbackRate = 1.0;
                 } else if (ahead > this.latencyTarget + 1) {
@@ -253,7 +270,7 @@
                 const t = this.video.currentTime;
                 for (let i = 0; i < b.length; i++) {
                     if (b.start(i) > t + 0.01 && b.start(i) - t < 10) {
-                        this.diag.hop++;
+                        this.bump('hop');
                         this.video.currentTime = b.start(i) + 0.05;
                         return;
                     }
@@ -264,6 +281,49 @@
         setStatus(text) {
             const overlay = this.video.parentElement?.querySelector('.tile-status');
             if (overlay) overlay.textContent = text;
+        }
+
+        /// A raw snapshot of everything knowable about this stream right now. Rates
+        /// (fps, bitrate) are deltas, so the caller derives those from consecutive
+        /// snapshots — this only reports counters and instantaneous values.
+        stats() {
+            const v = this.video;
+            let q = null;
+            try { q = v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality() : null; } catch { }
+            let ahead = null;
+            try {
+                const b = this.sb && this.sb.buffered;
+                if (b && b.length) ahead = b.end(b.length - 1) - v.currentTime;
+            } catch { }
+            return {
+                at: performance.now(),
+                path: decodeURIComponent((this.wsUrl.split('path=')[1] || '').split('&')[0]),
+                codec: this.meta && this.meta.codec, mime: this.meta && this.meta.mime,
+                srcW: this.meta && this.meta.width, srcH: this.meta && this.meta.height,
+                hasAudio: !!(this.meta && this.meta.audio), muted: v.muted,
+                w: v.videoWidth, h: v.videoHeight,
+                elW: Math.round(v.clientWidth), elH: Math.round(v.clientHeight),
+                dpr: window.devicePixelRatio || 1,
+                // Decoded/dropped are the browser's own numbers: dropped here means
+                // THIS device couldn't keep up, which is a different failure from a
+                // gap-hop (footage that never arrived at all).
+                frames: q ? q.totalVideoFrames : null,
+                dropped: q ? q.droppedVideoFrames : null,
+                corrupted: q ? q.corruptedVideoFrames : null,
+                ahead, target: this.latencyTarget, rate: v.playbackRate,
+                readyState: v.readyState, live: v.dataset.live === '1',
+                bytes: this.bytes, fragments: this.msgCount,
+                maxGap: this.msgGaps.length ? Math.max(...this.msgGaps) : null,
+                hop: this.totals.hop, resync: this.totals.resync, stall: this.totals.stall,
+                ws: this.ws ? this.ws.readyState : 3,
+                wsQueued: this.ws ? this.ws.bufferedAmount : 0,
+                // Two different clocks, and mixing them lies: bytes accumulate over
+                // the whole session, while a reconnect restarts the link's own uptime.
+                session: (performance.now() - this.startedAt) / 1000,
+                uptime: this.openedAt ? (performance.now() - this.openedAt) / 1000 : 0,
+                reconnects: this.reconnects,
+                engine: this.mms ? 'ManagedMediaSource' : 'MediaSource',
+            };
         }
 
         teardownMse() {
@@ -292,6 +352,94 @@
     }
 
     const players = {};
+
+    // ---------- "stats for nerds": the live stream's technical readout ----------
+    // A DOM-side overlay (no Blazor circuit traffic at 1 Hz) that answers the two
+    // questions a camera stream actually raises when it looks bad: is the picture
+    // arriving, and can this device decode it? Those have different culprits, so
+    // the panel keeps them apart — dropped frames are THIS browser giving up,
+    // gap-hops are footage that never reached it at all.
+    const statsPanels = {};
+    const WS_STATE = ['connecting', 'open', 'closing', 'closed'];
+    const nerdEsc = (s) => String(s ?? '—').replace(/[&<>"]/g, c =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const nerdBytes = (n) => n >= 1e9 ? (n / 1e9).toFixed(2) + ' GB'
+        : n >= 1e6 ? (n / 1e6).toFixed(1) + ' MB'
+        : n >= 1e3 ? (n / 1e3).toFixed(0) + ' kB' : (n | 0) + ' B';
+    const nerdRate = (bps) => bps >= 1e6 ? (bps / 1e6).toFixed(2) + ' Mb/s' : Math.round(bps / 1e3) + ' kb/s';
+    const nerdDur = (s) => {
+        s = Math.max(0, Math.round(s));
+        const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
+        return h ? `${h}h ${m}m` : m ? `${m}m ${x}s` : `${x}s`;
+    };
+
+    // One 1 Hz repaint: derives the rates from consecutive snapshots, fills the
+    // rows, extends the bitrate sparkline and writes the plain-language verdict.
+    function nerdRender(st, s) {
+        const prev = st.prev;
+        st.prev = s;
+        let fps = null, bps = null;
+        if (prev) {
+            const dt = (s.at - prev.at) / 1000;
+            if (dt > 0.2) {
+                if (s.frames != null && prev.frames != null) fps = (s.frames - prev.frames) / dt;
+                bps = Math.max(0, (s.bytes - prev.bytes) * 8 / dt);
+            }
+        }
+        if (bps != null) { st.spark.push(bps); if (st.spark.length > 60) st.spark.shift(); }
+        const dropPct = s.frames ? (s.dropped / s.frames) * 100 : 0;
+        const avgBps = s.session > 0 ? s.bytes * 8 / s.session : 0;
+
+        const rows = [
+            ['stream', s.path],
+            ['source', s.srcW ? `${s.srcW}×${s.srcH}` : '—'],
+            ['decoding', s.w ? `${s.w}×${s.h} → ${s.elW}×${s.elH} css @ ${s.dpr}× dpr` : 'no frames yet'],
+            ['codec', s.codec],
+            ['fps', fps == null ? 'measuring…' : fps.toFixed(1)],
+            ['frames', s.frames == null ? 'not reported'
+                : `${s.frames.toLocaleString()} decoded · ${s.dropped.toLocaleString()} dropped (${dropPct.toFixed(2)}%)`,
+                dropPct >= 2 ? 'bad' : dropPct >= 0.5 ? 'warn' : ''],
+            ['buffer', s.ahead == null ? '—' : `${s.ahead.toFixed(2)} s ahead / ${s.target.toFixed(2)} s target`,
+                s.ahead != null && s.ahead < 0.15 ? 'warn' : ''],
+            ['speed', `${s.rate.toFixed(2)}×${s.rate > 1.001 ? ' (catching up)' : ''}`, s.rate > 1.001 ? 'warn' : ''],
+            ['bitrate', bps == null ? 'measuring…' : `${nerdRate(bps)} · avg ${nerdRate(avgBps)}`],
+            ['received', `${nerdBytes(s.bytes)} in ${nerdDur(s.session)}`],
+            ['delivery', `${s.fragments.toLocaleString()} fragments · widest gap ${s.maxGap == null ? '—' : s.maxGap.toFixed(2) + ' s'}`],
+            ['never arrived', `${s.hop} skip${s.hop === 1 ? '' : 's'}`, s.hop ? 'warn' : ''],
+            ['recovery', `${s.resync} resync${s.resync === 1 ? '' : 's'} · ${s.stall} stall${s.stall === 1 ? '' : 's'}`],
+            ['link', `${WS_STATE[s.ws]}${s.ws === 1 ? ' ' + nerdDur(s.uptime) : ''} · ${nerdBytes(s.wsQueued)} queued · `
+                + `${s.reconnects} reconnect${s.reconnects === 1 ? '' : 's'}`,
+                s.ws === 1 ? (s.reconnects ? 'warn' : '') : 'bad'],
+            ['engine', `${s.engine} · audio ${s.hasAudio ? (s.muted ? 'present (muted)' : 'playing') : 'none'}`],
+        ];
+
+        let verdict = 'healthy — picture is arriving and decoding cleanly', vcls = 'ok';
+        if (s.ws !== 1) { verdict = `link ${WS_STATE[s.ws]} — trying to reconnect`; vcls = 'bad'; }
+        else if (dropPct >= 2) { verdict = 'this device is dropping frames — try the sub stream or close other tiles'; vcls = 'bad'; }
+        else if (s.hop > 0) { verdict = 'footage went missing before it reached the browser — server or network, not this device'; vcls = 'warn'; }
+        else if (!s.live) { verdict = 'buffering — waiting for enough video to start'; vcls = 'warn'; }
+        else if (s.rate > 1.001) { verdict = 'playing slightly fast to drift back toward live'; vcls = 'warn'; }
+
+        st.el.querySelector('.nerd-rows').innerHTML = rows.map(([k, v, cls]) =>
+            `<div class="nerd-row"><span>${nerdEsc(k)}</span><b class="${cls || ''}">${nerdEsc(v)}</b></div>`).join('');
+
+        // Bitrate over the last minute — the shape says more than the number: a
+        // sawtooth is GOP batching, a cliff is the camera or the link giving up.
+        const peak = Math.max(1, ...st.spark);
+        const pts = st.spark.map((b, i) =>
+            `${(i / Math.max(1, st.spark.length - 1) * 160).toFixed(1)},${(26 - (b / peak) * 24).toFixed(1)}`).join(' ');
+        st.el.querySelector('.nerd-sparkline').setAttribute('points', pts);
+        st.el.querySelector('.nerd-sparklabel').textContent = `bitrate, last ${st.spark.length}s · peak ${nerdRate(peak)}`;
+        const vEl = st.el.querySelector('.nerd-verdict');
+        vEl.textContent = verdict;
+        vEl.className = 'nerd-verdict ' + vcls;
+
+        // Kept ready so "copy" is instant — a paste-ready report for an issue.
+        st.text = [`neolink.net — live stream stats (${new Date().toISOString()})`,
+            ...rows.map(([k, v]) => `${k.padEnd(14)}${v}`),
+            `verdict       ${verdict}`,
+            `browser       ${navigator.userAgent}`].join('\n');
+    }
 
     // Flat speaker SVGs (built once — audioSync runs on every render). Emoji
     // render inconsistently across platforms, so these are inline SVG.
@@ -1466,6 +1614,79 @@
         detach(videoId) {
             const p = players[videoId];
             if (p) { p.destroy(); delete players[videoId]; }
+            this.statsClose(videoId);
+        },
+
+        // Right-click on a single-camera view opens this instead of the tile's
+        // camera picker (on that view the tile IS the camera — nothing to pick).
+        // Toggles: a second right-click, the ✕, or leaving the view closes it.
+        statsToggle(videoId) {
+            if (statsPanels[videoId]) { this.statsClose(videoId); return false; }
+            const video = document.getElementById(videoId);
+            const host = video && video.parentElement;
+            if (!host) return false;
+            const el = document.createElement('div');
+            el.className = 'nerd-stats';
+            el.innerHTML =
+                '<div class="nerd-head">' +
+                    '<span class="nerd-title">stats for nerds</span>' +
+                    '<button type="button" class="nerd-btn" data-nerd-copy ' +
+                        'title="Copy this readout — paste it into a bug report">copy</button>' +
+                    '<button type="button" class="nerd-btn" data-nerd-close ' +
+                        'title="Close (or right-click the video again)">✕</button>' +
+                '</div>' +
+                '<div class="nerd-rows"></div>' +
+                '<div class="nerd-sparkwrap">' +
+                    '<svg class="nerd-spark" viewBox="0 0 160 28" preserveAspectRatio="none" aria-hidden="true">' +
+                        '<polyline class="nerd-sparkline" points=""/></svg>' +
+                    '<span class="nerd-sparklabel"></span>' +
+                '</div>' +
+                '<div class="nerd-verdict"></div>';
+            // The tile underneath reacts to clicks (maximize, drag, zoom) — the
+            // panel must swallow its own.
+            for (const ev of ['click', 'dblclick', 'pointerdown', 'wheel'])
+                el.addEventListener(ev, (e) => e.stopPropagation());
+            el.addEventListener('contextmenu', (e) => {
+                e.preventDefault(); e.stopPropagation(); this.statsClose(videoId);
+            });
+            el.querySelector('[data-nerd-close]').addEventListener('click', () => this.statsClose(videoId));
+            el.querySelector('[data-nerd-copy]').addEventListener('click', (e) => {
+                const st = statsPanels[videoId], btn = e.currentTarget;
+                if (!st) return;
+                const done = (word) => { btn.textContent = word; setTimeout(() => { btn.textContent = 'copy'; }, 1200); };
+                try {
+                    navigator.clipboard.writeText(st.text).then(() => done('copied'), () => done('blocked'));
+                } catch { done('blocked'); }
+            });
+            host.appendChild(el);
+            const st = { el, prev: null, spark: [], text: '' };
+            statsPanels[videoId] = st;
+            const tick = () => {
+                // A Blazor re-render can drop our node from the tile; re-attach
+                // rather than dying silently.
+                if (!st.el.isConnected) {
+                    const h = document.getElementById(videoId)?.parentElement;
+                    if (!h) { this.statsClose(videoId); return; }
+                    h.appendChild(st.el);
+                }
+                const p = players[videoId];
+                if (!p) {
+                    st.el.querySelector('.nerd-rows').innerHTML =
+                        '<div class="nerd-row"><span>stream</span><b class="warn">not playing</b></div>';
+                    return;
+                }
+                nerdRender(st, p.stats());
+            };
+            tick();
+            st.timer = setInterval(tick, 1000);
+            return true;
+        },
+        statsClose(videoId) {
+            const st = statsPanels[videoId];
+            if (!st) return;
+            clearInterval(st.timer);
+            st.el.remove();
+            delete statsPanels[videoId];
         },
         // Tells Blazor when browser fullscreen ends — Esc, the toggle button or
         // the browser's own UI all land here — so the fullscreen sub→main

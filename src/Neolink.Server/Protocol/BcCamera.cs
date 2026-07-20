@@ -526,15 +526,17 @@ public sealed class BcCamera : IBcCamera
 
     /// <summary>
     /// msg 464 NetInfo push. Captured sample: &lt;net_type&gt;wifi&lt;/net_type&gt;
-    /// &lt;signal&gt;-45&lt;/signal&gt; — signal is the Wi-Fi RSSI in dBm. Pushes
-    /// without a numeric signal (wired cameras) are ignored.
+    /// &lt;signal&gt;-45&lt;/signal&gt; — signal is the Wi-Fi RSSI in dBm. A WIRED
+    /// camera pushes net_type with no signal; that is reported too (with a null
+    /// signal), because "this camera is on a cable" is worth knowing — it is why
+    /// it will never have a Wi-Fi reading. Null only when the push says neither.
     /// </summary>
     internal static WifiSignalPush? ParseNetInfo(XElement el)
     {
-        if (Descendant(el, "signal") is not { } signal
-            || !int.TryParse(signal.Value.Trim(), out var dbm))
-            return null;
+        int? dbm = Descendant(el, "signal") is { } signal && int.TryParse(signal.Value.Trim(), out var v)
+            ? v : null;
         var netType = Descendant(el, "net_type")?.Value.Trim();
+        if (dbm == null && string.IsNullOrEmpty(netType)) return null;
         return new WifiSignalPush(string.IsNullOrEmpty(netType) ? null : netType, dbm);
     }
 

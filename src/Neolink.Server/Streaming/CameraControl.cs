@@ -254,6 +254,11 @@ public interface ICameraControl
     /// value is no longer evidence of anything).</summary>
     void ForgetWifiSignal() { }
 
+    /// <summary>True when the camera reports it is running on a CABLE, false when it
+    /// reports Wi-Fi, null when it hasn't said. A Wi-Fi-capable camera on ethernet
+    /// answers "wired" — it has no signal to report, and asking for one is pointless.</summary>
+    bool? CachedWired => null;
+
     /// <summary>The camera's PTZ preset slots, or null when unsupported.</summary>
     Task<IReadOnlyList<PtzPresetInfo>?> GetPtzPresetsAsync(CancellationToken ct);
 
@@ -1225,12 +1230,23 @@ public sealed class CameraControl : ICameraControl
         try
         {
             var el = await WithCameraAsync(c => c.GetWifiSignalAsync(ct: ct), ct).ConfigureAwait(false);
-            if (el != null && BcCamera.ParseNetInfo(el) is { } push)
+            var push = el == null ? null : BcCamera.ParseNetInfo(el);
+            if (push?.SignalDbm is { } dbm)
             {
                 _bcWifiMisses = 0;
-                var bc = WifiReading.FromDbm(push.SignalDbm);
+                var bc = WifiReading.FromDbm(dbm);
                 Log.Debug($"{CameraName}: Wi-Fi via Baichuan msg 115 — {bc.Label}, level {bc.Level}/4");
                 return bc;
+            }
+            // The camera answered, just not with a signal: if it named its link
+            // type, that settles it — a wired camera is not a Wi-Fi camera with a
+            // missing reading, and it should never be asked again.
+            var kind = LinkKindOf(push?.NetType);
+            if (kind != 0)
+            {
+                _linkKind = kind;
+                Log.Debug($"{CameraName}: link type from Baichuan msg 115 — '{push!.NetType}'");
+                return null;
             }
             _bcWifiMisses++;
             Log.Debug($"{CameraName}: Wi-Fi — Baichuan msg 115 returned no signal " +
@@ -1266,8 +1282,15 @@ public sealed class CameraControl : ICameraControl
 
     public WifiReading? CachedWifiSignal => _cachedWifi ?? _httpFeaturesCache?.WifiSignal;
 
+    // Which link the camera is on: 0 unknown, 1 wired, 2 Wi-Fi. Learned from the
+    // camera's own answer (GetLocalLink) or implied by a real Wi-Fi reading.
+    private volatile int _linkKind;
+    public bool? CachedWired => _linkKind == 0 ? null : _linkKind == 1;
+
     /// <summary>Drops the cached reading — called when the camera's session ends, so
-    /// an unreachable camera can't keep showing hours-old signal as if it were live.</summary>
+    /// an unreachable camera can't keep showing hours-old signal as if it were live.
+    /// The link TYPE survives: a camera doesn't change cable for Wi-Fi while offline,
+    /// and re-learning it costs a round-trip.</summary>
     public void ForgetWifiSignal()
     {
         _cachedWifi = null;
@@ -1281,10 +1304,43 @@ public sealed class CameraControl : ICameraControl
         _wifiWarmedAt = DateTime.UtcNow;
         try
         {
+            // Ask which link is active before asking about signal strength: a camera
+            // on a cable has no Wi-Fi reading to give, so the UI shows it as wired
+            // instead of blank, and we stop pestering it for a signal.
+            if (_linkKind == 0 && _httpApi != null
+                && await HttpTryAsync<string?>(c => _httpApi!.GetActiveLinkAsync(c), ct).ConfigureAwait(false)
+                    is { Length: > 0 } active)
+            {
+                _linkKind = LinkKindOf(active);
+                Log.Debug($"{CameraName}: active network link reported as '{active}'");
+            }
+            if (_linkKind == 1) { _cachedWifi = null; return; }
+
             if (await GetWifiSignalAsync(ct).ConfigureAwait(false) is { } signal)
+            {
                 _cachedWifi = signal;
+                _linkKind = 2; // it answered with a signal: it is on Wi-Fi
+            }
         }
         catch { /* best-effort UI value — a failed read just leaves the last one */ }
+    }
+
+    /// <summary>Maps a camera's link wording to 1 (wired) or 2 (Wi-Fi); 0 when it is
+    /// neither recognisable form. Reolink says "LAN"/"Wifi" over HTTP and
+    /// "ethernet"/"wifi" in Baichuan NetInfo pushes, with firmware-dependent case.</summary>
+    internal static int LinkKindOf(string? s)
+    {
+        // Matched as PREFIXES of the whole value, not substrings: these fields are
+        // enum-like ("LAN", "Wifi", "eth0", "wlan0"), and a loose contains-match
+        // reads "eth" out of ordinary words and would label a camera wired on the
+        // strength of a coincidence. Wi-Fi is tested first — "wlan" contains "lan".
+        var v = s?.Trim();
+        if (string.IsNullOrEmpty(v)) return 0;
+        bool Starts(params string[] prefixes) =>
+            prefixes.Any(p => v.StartsWith(p, StringComparison.OrdinalIgnoreCase));
+        if (Starts("wifi", "wi-fi", "wlan", "wireless")) return 2;
+        if (Starts("lan", "eth", "wired", "cable")) return 1;
+        return 0;
     }
 
     public Task<IReadOnlyList<PtzPresetInfo>?> GetPtzPresetsAsync(CancellationToken ct) =>
