@@ -136,9 +136,9 @@
                     @if (cam.WifiSignal is { } wifi)
                     {
                         @* Wi-Fi signal (HTTP API): icon shows quality, tooltip the value. *@
-                        <span class="cam-wifi @(UiIcon.WifiBars(wifi) <= 1 ? "wifi-weak" : "")"
-                              title="Wi-Fi signal: @UiIcon.WifiLabel(wifi)">
-                            @UiIcon.RenderWifi(wifi, 14)
+                        <span class="cam-wifi @(wifi.Level <= 1 ? "wifi-weak" : "")"
+                              title="Wi-Fi signal: @wifi.Label">
+                            @UiIcon.RenderWifi(wifi.Level, 14)
                         </span>
                     }
                     @if (cam.Suspended)

@@ -1029,6 +1029,25 @@ public static class WebApi
 
         app.MapGet("/api/cameras", () =>
         {
+            // One normalized Wi-Fi reading per camera: the actively refreshed value
+            // (HTTP API, else the Baichuan query) first, the camera's unsolicited
+            // NetInfo push as the fallback — one order for every consumer, so the
+            // sidebar and the camera page can no longer disagree. Suppressed while
+            // the camera is unreachable: a reading from a camera that hasn't
+            // answered in hours is worse than showing none. A dozing battery camera
+            // still shows its last reading (it is asleep on purpose, not lost).
+            static object? WifiJson(WebCameraInfo c)
+            {
+                if (!c.Control.Online && !(c.Asleep?.Invoke() ?? false))
+                {
+                    c.Control.ForgetWifiSignal();
+                    return null;
+                }
+                var w = c.Control.CachedWifiSignal
+                        ?? (c.WifiSignal?.Invoke() is { } dbm ? WifiReading.FromDbm(dbm) : null);
+                return w == null ? null : new { level = w.Level, label = w.Label };
+            }
+
             var payload = cameras.Select(c => new
             {
                 name = c.Name,
@@ -1050,11 +1069,9 @@ public static class WebApi
                 // viewed or recorded here. Distinct from offline-because-unreachable.
                 suspended = c.Suspended?.Invoke() ?? false,
                 canSuspend = c.SetSuspended != null,
-                // Wi-Fi signal: the Baichuan NetInfo push (dBm) when the camera sends
-                // one — the only source on HTTP-less models (Lumus, battery doorbells)
-                // — else the HTTP API's cached value, kept fresh by the throttled warm
-                // below. Null on wired cameras or before the first reading.
-                wifiSignal = c.WifiSignal?.Invoke() ?? c.Control.CachedWifiSignal,
+                // Wi-Fi: { level 0-4, label } — see WifiJson above. Null on wired
+                // cameras, while unreachable, or before the first reading.
+                wifiSignal = WifiJson(c),
                 battery = c.Battery?.Invoke() is { } b
                     ? new { percent = b.Percent, charging = b.Charging }
                     : null,
@@ -1661,7 +1678,8 @@ public static class WebApi
                         hdrMax = f.Image.HdrMax,
                     },
                     volume = f.Volume,
-                    wifiSignal = f.WifiSignal,
+                    // Same { level, label } shape the camera list uses.
+                    wifiSignal = f.WifiSignal is { } fw ? new { level = fw.Level, label = fw.Label } : null,
                     ptzPresets = f.PtzPresets?.Select(p => new { id = p.Id, name = p.Name, enabled = p.Enabled }),
                     quickReplies = f.QuickReplies?.Select(q => new { id = q.Id, name = q.Name }),
                     autoTrack = f.AutoTrack,

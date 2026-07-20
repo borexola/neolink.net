@@ -102,7 +102,7 @@ public sealed class GenericCameraControl : ICameraControl
     public Task SetVolumeAsync(int volume, CancellationToken ct) =>
         throw new NotSupportedException("the speaker volume is not available for generic RTSP cameras");
 
-    public Task<int?> GetWifiSignalAsync(CancellationToken ct) => Task.FromResult<int?>(null);
+    public Task<WifiReading?> GetWifiSignalAsync(CancellationToken ct) => Task.FromResult<WifiReading?>(null);
 
     public Task<IReadOnlyList<PtzPresetInfo>?> GetPtzPresetsAsync(CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<PtzPresetInfo>?>(null);

@@ -69,7 +69,7 @@
             @if (!string.IsNullOrEmpty(Camera?.Address)) { <span class="devbar-item" title="Configured network address"><span class="devbar-k">Address</span>@Camera!.Address</span> }
             @if (Camera?.Udp == true) { <span class="devbar-item" title="Connected over UDP (Baichuan-over-UDP) — beta support for battery-only models"><span class="devbar-k">Transport</span>UDP <span class="beta-tag">BETA</span></span> }
             @if (Camera?.Battery is { } bat) { <span class="devbar-item" title="Battery-powered camera: @(bat.Percent)%@(bat.Charging ? ", charging" : "")"><span class="devbar-k">Battery</span><span class="devbar-batt">@UiIcon.RenderBattery(bat.Percent, 13)@(bat.Charging ? UiIcon.Render("bolt", 11) : default)</span>@bat.Percent%</span> }
-            @if ((_http?.WifiSignal ?? Camera?.WifiSignal) is { } wifi) { <span class="devbar-item" title="Wi-Fi signal: @WifiLabel(wifi)"><span class="devbar-k">Wi-Fi</span><span class="devbar-wifi">@UiIcon.RenderWifi(wifi, 13)</span>@WifiLabel(wifi)</span> }
+            @if ((Camera?.WifiSignal ?? _http?.WifiSignal) is { } wifi) { <span class="devbar-item" title="Wi-Fi signal: @wifi.Label"><span class="devbar-k">Wi-Fi</span><span class="devbar-wifi">@UiIcon.RenderWifi(wifi.Level, 13)</span>@wifi.Label</span> }
             @if (_http?.SdCards is { Count: > 0 } cards)
             {
                 foreach (var card in cards)
@@ -1383,9 +1383,6 @@
             </div>
         }
     };
-
-    private static string WifiLabel(int signal) =>
-        signal < 0 ? $"{signal} dBm" : signal <= 4 ? $"{signal} / 4 bars" : signal.ToString();
 
     private static string SdLabel(ApiSdCard card) =>
         !card.Mounted ? "not mounted"

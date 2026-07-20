@@ -73,9 +73,60 @@ public sealed record FirmwareStatus(bool UpdateAvailable, string? NewVersion);
 /// API's Search. Times are camera-local; Name is the handle Download expects.</summary>
 public sealed record SdRecording(string Name, DateTime Start, DateTime End, long SizeBytes, string StreamType);
 
+/// <summary>The scale a camera reported its Wi-Fi strength in.</summary>
+public enum WifiUnit
+{
+    /// <summary>RSSI in dBm — always negative (Baichuan, and some HTTP firmwares).</summary>
+    Dbm,
+    /// <summary>Signal bars, 0-4 (what the Reolink HTTP API normally answers).</summary>
+    Bars,
+    /// <summary>A 0-100 signal-quality percentage (a few firmwares).</summary>
+    Percent,
+}
+
+/// <summary>
+/// One Wi-Fi reading, carrying the UNIT it was reported in. The unit is recorded
+/// where the value is read and never re-inferred from its range afterwards: the
+/// same integer means different things per source (a 3 is three bars from the
+/// HTTP API but 3% from a percentage firmware, and a 5 is full signal on a 0-5
+/// scale yet nearly nothing as a percentage), so range-guessing at render time
+/// produced badly wrong icons — including full signal drawn as empty.
+/// </summary>
+/// <param name="Raw">The number the camera reported, unmodified.</param>
+/// <param name="Unit">The scale <paramref name="Raw"/> is expressed in.</param>
+public sealed record WifiReading(int Raw, WifiUnit Unit)
+{
+    /// <summary>The 0-4 level the icon draws. dBm bands follow Reolink's own
+    /// wording (better than -60 excellent, -70 good, -80 fair, then poor) — the
+    /// old bands were stricter and made every camera look worse than in the app.</summary>
+    public int Level => Unit switch
+    {
+        WifiUnit.Dbm => Raw >= -60 ? 4 : Raw >= -70 ? 3 : Raw >= -80 ? 2 : Raw >= -88 ? 1 : 0,
+        WifiUnit.Bars => Math.Clamp(Raw, 0, 4),
+        _ => Raw >= 80 ? 4 : Raw >= 60 ? 3 : Raw >= 40 ? 2 : Raw >= 20 ? 1 : 0,
+    };
+
+    /// <summary>The reading spelled out for a tooltip, in its own unit.</summary>
+    public string Label => Unit switch
+    {
+        WifiUnit.Dbm => $"{Raw} dBm",
+        WifiUnit.Bars => $"{Math.Clamp(Raw, 0, 4)} / 4 bars",
+        _ => $"{Raw}%",
+    };
+
+    /// <summary>A Baichuan reading — that protocol always answers in dBm.</summary>
+    public static WifiReading FromDbm(int raw) => new(raw, WifiUnit.Dbm);
+
+    /// <summary>Classifies a reading from the Reolink HTTP API, whose firmwares
+    /// disagree: negative is RSSI, 0-4 is the documented bars scale, and anything
+    /// above that can only sensibly be a percentage.</summary>
+    public static WifiReading FromHttp(int raw) =>
+        new(raw, raw < 0 ? WifiUnit.Dbm : raw <= 4 ? WifiUnit.Bars : WifiUnit.Percent);
+}
+
 /// <summary>Everything readable over the camera's HTTP API in one round: a null
 /// member means that feature is absent (or the camera rejected the query).</summary>
-public sealed record HttpFeatures(ImageSettings? Image, int? Volume, int? WifiSignal,
+public sealed record HttpFeatures(ImageSettings? Image, int? Volume, WifiReading? WifiSignal,
     IReadOnlyList<PtzPresetInfo>? PtzPresets, IReadOnlyList<QuickReplyFile>? QuickReplies,
     bool? AutoTrack, IReadOnlyList<SdCardInfo>? SdCards,
     int? MdSensitivity = null, IReadOnlyList<AiSensitivity>? AiSensitivities = null,
@@ -188,16 +239,20 @@ public interface ICameraControl
     /// <summary>Sets the camera's speaker volume (0-100).</summary>
     Task SetVolumeAsync(int volume, CancellationToken ct);
 
-    /// <summary>The camera's Wi-Fi signal reading (bars 0-4 or dBm, firmware-dependent), or null.</summary>
-    Task<int?> GetWifiSignalAsync(CancellationToken ct);
+    /// <summary>The camera's Wi-Fi signal reading with the unit it came in, or null.</summary>
+    Task<WifiReading?> GetWifiSignalAsync(CancellationToken ct);
 
-    /// <summary>The last Wi-Fi signal read over the HTTP API, or null. A CHEAP cached
-    /// accessor for the camera-list sidebar — never does I/O.</summary>
-    int? CachedWifiSignal => null;
+    /// <summary>The last Wi-Fi signal read, or null. A CHEAP cached accessor for the
+    /// camera-list sidebar — never does I/O.</summary>
+    WifiReading? CachedWifiSignal => null;
 
-    /// <summary>Refreshes <see cref="CachedWifiSignal"/> from the HTTP API, throttled
-    /// so it is safe to fire on every camera-list poll. No-op without an HTTP API.</summary>
+    /// <summary>Refreshes <see cref="CachedWifiSignal"/>, throttled so it is safe to
+    /// fire on every camera-list poll. No-op on cameras with no Wi-Fi source.</summary>
     Task WarmWifiSignalAsync(CancellationToken ct) => Task.CompletedTask;
+
+    /// <summary>Drops the cached Wi-Fi reading (the camera is unreachable, so the
+    /// value is no longer evidence of anything).</summary>
+    void ForgetWifiSignal() { }
 
     /// <summary>The camera's PTZ preset slots, or null when unsupported.</summary>
     Task<IReadOnlyList<PtzPresetInfo>?> GetPtzPresetsAsync(CancellationToken ct);
@@ -870,7 +925,7 @@ public sealed class CameraControl : ICameraControl
         }
         var image = await Step<ImageSettings>(GetImageSettingsAsync).ConfigureAwait(false);
         var volume = await Step<int?>(GetVolumeAsync).ConfigureAwait(false);
-        var wifi = await Step<int?>(GetWifiSignalAsync).ConfigureAwait(false);
+        var wifi = await Step<WifiReading>(GetWifiSignalAsync).ConfigureAwait(false);
         var presets = await Step<IReadOnlyList<PtzPresetInfo>>(GetPtzPresetsAsync).ConfigureAwait(false);
         var replies = await Step<IReadOnlyList<QuickReplyFile>>(GetQuickRepliesAsync).ConfigureAwait(false);
         var autoTrack = await Step<bool?>(GetAutoTrackAsync).ConfigureAwait(false);
@@ -1139,17 +1194,33 @@ public sealed class CameraControl : ICameraControl
         Log.Info($"{CameraName}: speaker volume set to {vol}");
     }
 
-    public async Task<int?> GetWifiSignalAsync(CancellationToken ct)
+    public async Task<WifiReading?> GetWifiSignalAsync(CancellationToken ct)
     {
         if (_httpApi != null
             && await HttpTryAsync<int?>(async c => await _httpApi!.GetWifiSignalAsync(c).ConfigureAwait(false), ct)
                 .ConfigureAwait(false) is { } viaHttp)
-            return viaHttp;
-        // Baichuan msg 115 <WifiSignal>: the protocol's own query — the source for
-        // cameras without the HTTP API (or whose HTTP reply shape is unknown).
-        // Rides the live connection only; a parked battery camera reads as offline
-        // and is never woken for this. Wired-ethernet cameras answer with nothing —
-        // after a few misses stop asking so the throttled warm isn't wasted chatter.
+        {
+            var http = WifiReading.FromHttp(viaHttp);
+            Log.Debug($"{CameraName}: Wi-Fi via HTTP API — raw {viaHttp} read as {http.Unit} ({http.Label}), level {http.Level}/4");
+            return http;
+        }
+        // Baichuan msg 115 <WifiSignal>: the protocol's own query, always in dBm —
+        // the source for cameras without the HTTP API. Rides the live connection
+        // only; a parked battery camera reads as offline and is never woken for it.
+        // Wired-ethernet cameras answer with nothing, so the query retires after a
+        // few misses rather than asking forever.
+        //
+        // The give-up counter describes THIS session's firmware behaviour, so a new
+        // session clears it: a camera that merely happened to be reconnecting during
+        // those misses used to be written off for the life of the process.
+        if (AnyLive() is { } live)
+        {
+            if (!(_bcWifiTriedOn?.TryGetTarget(out var last) == true && ReferenceEquals(last, live)))
+            {
+                _bcWifiTriedOn = new WeakReference<IBcCamera>(live);
+                _bcWifiMisses = 0;
+            }
+        }
         if (_bcWifiMisses >= BcWifiGiveUp) return null;
         try
         {
@@ -1157,9 +1228,13 @@ public sealed class CameraControl : ICameraControl
             if (el != null && BcCamera.ParseNetInfo(el) is { } push)
             {
                 _bcWifiMisses = 0;
-                return push.SignalDbm;
+                var bc = WifiReading.FromDbm(push.SignalDbm);
+                Log.Debug($"{CameraName}: Wi-Fi via Baichuan msg 115 — {bc.Label}, level {bc.Level}/4");
+                return bc;
             }
             _bcWifiMisses++;
+            Log.Debug($"{CameraName}: Wi-Fi — Baichuan msg 115 returned no signal " +
+                      $"({_bcWifiMisses}/{BcWifiGiveUp} before this session stops asking)");
             return null;
         }
         catch (CameraOfflineException)
@@ -1169,25 +1244,35 @@ public sealed class CameraControl : ICameraControl
         catch (Exception ex) when (ex is CameraCommandException or TimeoutException or IOException)
         {
             _bcWifiMisses++;
+            Log.Debug($"{CameraName}: Wi-Fi — Baichuan msg 115 failed: {ex.Message} " +
+                      $"({_bcWifiMisses}/{BcWifiGiveUp})");
             return null;
         }
     }
 
-    // Consecutive Baichuan Wi-Fi query misses; at BcWifiGiveUp the camera is
-    // taken as wired (or the firmware lacks msg 115) and the query retires.
+    // Consecutive Baichuan Wi-Fi query misses on the CURRENT session; at
+    // BcWifiGiveUp the camera is taken as wired (or the firmware lacks msg 115)
+    // and the query stops until the next connection.
     private int _bcWifiMisses;
+    private WeakReference<IBcCamera>? _bcWifiTriedOn;
     private const int BcWifiGiveUp = 3;
 
     // Cheap Wi-Fi cache for the camera-list sidebar. The list poll must not do a
-    // per-camera HTTP round-trip, so it reads _cachedWifi (int.MinValue = unknown,
-    // else the last value) — falling back to whatever the last full HTTP-features
-    // sweep saw — and fires a throttled background refresh.
-    private volatile int _cachedWifi = int.MinValue;
+    // per-camera round-trip, so it reads _cachedWifi — falling back to whatever the
+    // last full HTTP-features sweep saw — and fires a throttled background refresh.
+    private volatile WifiReading? _cachedWifi;
     private DateTime _wifiWarmedAt;
     private static readonly TimeSpan WifiWarmInterval = TimeSpan.FromSeconds(30);
 
-    public int? CachedWifiSignal =>
-        _cachedWifi != int.MinValue ? _cachedWifi : _httpFeaturesCache?.WifiSignal;
+    public WifiReading? CachedWifiSignal => _cachedWifi ?? _httpFeaturesCache?.WifiSignal;
+
+    /// <summary>Drops the cached reading — called when the camera's session ends, so
+    /// an unreachable camera can't keep showing hours-old signal as if it were live.</summary>
+    public void ForgetWifiSignal()
+    {
+        _cachedWifi = null;
+        _wifiWarmedAt = default; // read again as soon as it is back
+    }
 
     public async Task WarmWifiSignalAsync(CancellationToken ct)
     {

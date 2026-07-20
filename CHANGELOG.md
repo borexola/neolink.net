@@ -29,14 +29,27 @@ in the README). Paste the matching section below into the GitHub release.
 
 - **Wi-Fi signal icons in the sidebar and on the camera page.** Every
   Wi-Fi-connected camera now shows the classic arc glyph next to its name, lit
-  to the current signal level (red when weak); the exact reading (dBm or bars)
-  is in the tooltip and spelled out in the camera page's device bar. Readings
-  come from the camera's HTTP API where available — tolerant of every known
-  reply dialect, including firmwares that quote the number as a string — and
-  from the Baichuan protocol's own Wi-Fi query everywhere else, so HTTP-less
-  models (Lumus, battery doorbells) get the icon too. Sleeping battery cameras
-  are never woken for a reading; their last value is kept. Wired-ethernet
-  cameras correctly show nothing.
+  to the current signal level (red when weak); the exact reading is in the
+  tooltip and spelled out in the camera page's device bar. Readings come from
+  the camera's HTTP API where available — tolerant of every known reply
+  dialect, including firmwares that quote the number as a string — and from the
+  Baichuan protocol's own Wi-Fi query everywhere else, so HTTP-less models
+  (Lumus, battery doorbells) get the icon too.
+
+  Cameras disagree about what they report: dBm, bars, or a percentage. Each
+  reading now carries the unit it arrived in and is converted to a level once,
+  where the source is known, instead of the unit being guessed from the number's
+  size when the icon is drawn — guessing meant a "3" read as three bars whether
+  it meant bars or 3%, and a full-signal 5 on a 0-5 scale was drawn as *empty*.
+  The dBm bands now follow Reolink's own wording (better than -60 excellent,
+  -70 good, -80 fair), so the icon no longer reads consistently weaker than the
+  Reolink app. Both the sidebar and the camera page take the same reading in the
+  same order, so they can't disagree, and the tooltip stops flipping between
+  units. Readings refresh every 30 seconds while the camera is connected, are
+  hidden while it is unreachable rather than showing hours-old signal, and
+  survive a battery camera's nap (which never wakes it). A camera that doesn't
+  answer the Baichuan query is left alone until its next connection instead of
+  being written off for good. Wired-ethernet cameras correctly show nothing.
 
 ### Changed
 

@@ -1752,19 +1752,37 @@ public static class SelfTest
             Assert(Neolink.WebClient.UiIcon.RenderBattery(150).Value.Contains("width=\"13\""),
                 "overshoot clamps to full");
 
-            // Wi-Fi bars: dBm (negative), bars (0-4) and percent (>4) all map to 0-4.
-            Assert(Neolink.WebClient.UiIcon.WifiBars(-40) == 4, "strong dBm -> 4 bars");
-            Assert(Neolink.WebClient.UiIcon.WifiBars(-68) == 2, "mid dBm -> 2 bars");
-            Assert(Neolink.WebClient.UiIcon.WifiBars(-90) == 0, "very weak dBm -> 0 bars");
-            Assert(Neolink.WebClient.UiIcon.WifiBars(3) == 3, "bars value passes through");
-            Assert(Neolink.WebClient.UiIcon.WifiBars(85) == 4, "high percent -> 4 bars");
-            Assert(Neolink.WebClient.UiIcon.WifiBars(10) == 0, "low percent -> 0 bars");
-            // The glyph reads the level: 3 bars lit at full opacity, one dimmed.
+            // Wi-Fi readings carry their UNIT — the level is derived from that, never
+            // guessed from the number's range (guessing drew full signal as empty).
+            static Streaming.WifiReading Dbm(int v) => Streaming.WifiReading.FromDbm(v);
+            Assert(Dbm(-45).Level == 4, "strong dBm -> 4 bars");
+            Assert(Dbm(-65).Level == 3, "good dBm -> 3 bars (Reolink calls this 'good')");
+            Assert(Dbm(-75).Level == 2, "fair dBm -> 2 bars");
+            Assert(Dbm(-85).Level == 1, "poor dBm -> 1 bar");
+            Assert(Dbm(-95).Level == 0, "very weak dBm -> 0 bars");
+            Assert(Dbm(-60).Label == "-60 dBm", "dBm label");
+
+            // The same integer means different things per unit — the bug this fixes.
+            Assert(new Streaming.WifiReading(3, Streaming.WifiUnit.Bars).Level == 3, "3 bars -> 3");
+            Assert(new Streaming.WifiReading(3, Streaming.WifiUnit.Percent).Level == 0, "3 percent -> 0, not 3 bars");
+            Assert(new Streaming.WifiReading(5, Streaming.WifiUnit.Bars).Level == 4,
+                "a 0-5 scale's full reading clamps to full, never wraps to empty");
+            Assert(new Streaming.WifiReading(4, Streaming.WifiUnit.Bars).Label == "4 / 4 bars", "bars label");
+            Assert(new Streaming.WifiReading(85, Streaming.WifiUnit.Percent).Label == "85%", "percent label");
+
+            // HTTP classification: negative is RSSI, 0-4 the documented bars scale,
+            // anything higher can only be a percentage.
+            Assert(Streaming.WifiReading.FromHttp(-55).Unit == Streaming.WifiUnit.Dbm, "negative HTTP value -> dBm");
+            Assert(Streaming.WifiReading.FromHttp(3).Unit == Streaming.WifiUnit.Bars, "0-4 HTTP value -> bars");
+            Assert(Streaming.WifiReading.FromHttp(85).Unit == Streaming.WifiUnit.Percent, "large HTTP value -> percent");
+
+            // The glyph reads the level: 2 lit elements at full opacity for level 2.
             Assert(System.Text.RegularExpressions.Regex.Matches(
-                Neolink.WebClient.UiIcon.RenderWifi(-68).Value, "opacity=\"1\"").Count == 2,
-                "2-bar signal lights exactly two bars");
-            Assert(Neolink.WebClient.UiIcon.WifiLabel(-60) == "-60 dBm", "dBm label");
-            Assert(Neolink.WebClient.UiIcon.WifiLabel(3) == "3 / 4 bars", "bars label");
+                Neolink.WebClient.UiIcon.RenderWifi(2).Value, "opacity=\"1\"").Count == 2,
+                "level 2 lights exactly two elements");
+            Assert(System.Text.RegularExpressions.Regex.Matches(
+                Neolink.WebClient.UiIcon.RenderWifi(9).Value, "opacity=\"1\"").Count == 4,
+                "out-of-range level clamps to full");
 
             // GetWifiSignal reply dialects — firmwares disagree on the shape, and
             // the Video Doorbell WiFi quotes numbers as strings (a bare cast threw,
@@ -4089,7 +4107,8 @@ public static class SelfTest
             string? dayNight, string? antiFlicker, bool? flip, bool? mirror, CancellationToken ct) => Task.CompletedTask;
         public Task<int?> GetVolumeAsync(CancellationToken ct) => Task.FromResult<int?>(null);
         public Task SetVolumeAsync(int volume, CancellationToken ct) => Task.CompletedTask;
-        public Task<int?> GetWifiSignalAsync(CancellationToken ct) => Task.FromResult<int?>(null);
+        public Task<Streaming.WifiReading?> GetWifiSignalAsync(CancellationToken ct) =>
+            Task.FromResult<Streaming.WifiReading?>(null);
         public Task<IReadOnlyList<Streaming.PtzPresetInfo>?> GetPtzPresetsAsync(CancellationToken ct) =>
             Task.FromResult<IReadOnlyList<Streaming.PtzPresetInfo>?>(null);
         public Task PtzToPresetAsync(int id, CancellationToken ct) => Task.CompletedTask;

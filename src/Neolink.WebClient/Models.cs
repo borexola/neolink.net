@@ -23,7 +23,13 @@ public sealed record ApiStream(string Kind, string Path, bool Ready, string? Cod
 public sealed record ApiCamera(string Name, bool Online, List<ApiStream> Streams, bool Recording = false,
     bool Asleep = false, ApiBattery? Battery = null, ApiOnDemand? OnDemand = null, bool Privacy = false,
     bool Suspended = false, bool CanSuspend = false, string? Address = null, bool Udp = false,
-    int? WifiSignal = null);
+    ApiWifi? WifiSignal = null);
+
+/// <summary>A Wi-Fi reading already normalized by the server: a 0-4 level for the
+/// icon plus the reading spelled out in its own unit (dBm, bars or percent). The
+/// client never re-derives the level — only the reader knows which unit the
+/// camera answered in.</summary>
+public sealed record ApiWifi(int Level, string Label);
 
 /// <summary>On-demand clip capture (the tile record button / HA Record switch):
 /// one clip, stopped automatically at MaxSeconds.</summary>
@@ -48,7 +54,7 @@ public sealed record ApiWhiteLed(int Bright, bool On, int Mode);
 
 /// <summary>GET /api/cameras/{name}/httpfeatures — the HTTP-API extras (beta).
 /// Null members = that feature is absent on this camera.</summary>
-public sealed record ApiHttpFeatures(ApiImageSettings? Image, int? Volume, int? WifiSignal,
+public sealed record ApiHttpFeatures(ApiImageSettings? Image, int? Volume, ApiWifi? WifiSignal,
     List<ApiPtzPreset>? PtzPresets, List<ApiQuickReply>? QuickReplies, bool? AutoTrack,
     List<ApiSdCard>? SdCards, int? MdSensitivity = null,
     List<ApiAiSensitivity>? AiSensitivities = null, ApiOsd? Osd = null);
@@ -395,26 +401,13 @@ public static class UiIcon
             $"<line x1=\"23\" y1=\"11\" x2=\"23\" y2=\"13\"/>{fill}</svg>");
     }
 
-    /// <summary>Wi-Fi strength as a 0-4 level. Firmwares report either dBm (negative)
-    /// or bars (0-4); a few report a 0-100 percentage. Maps all three to bars.</summary>
-    public static int WifiBars(int signal) => signal switch
-    {
-        < 0 => signal >= -55 ? 4 : signal >= -65 ? 3 : signal >= -72 ? 2 : signal >= -80 ? 1 : 0, // dBm
-        <= 4 => signal,                                                                            // already bars
-        _ => signal >= 80 ? 4 : signal >= 60 ? 3 : signal >= 40 ? 2 : signal >= 20 ? 1 : 0,        // percent
-    };
-
-    /// <summary>The raw Wi-Fi reading formatted for a tooltip — dBm, bars or percent
-    /// depending on what the firmware reports (matches how the panel labels it).</summary>
-    public static string WifiLabel(int signal) =>
-        signal < 0 ? $"{signal} dBm" : signal <= 4 ? $"{signal} / 4 bars" : $"{signal}%";
-
     /// <summary>The classic Wi-Fi glyph — a dot with three arcs fanning out above
-    /// it. Elements light up to the signal level (dot first, widest arc last), the
-    /// rest stay dimmed — so the icon reads signal quality at a glance.</summary>
-    public static MarkupString RenderWifi(int signal, int size = 15)
+    /// it. Elements light up to the signal LEVEL (0-4, already normalized by the
+    /// server, which is the only place the camera's unit is known), the rest stay
+    /// dimmed — so the icon reads signal quality at a glance.</summary>
+    public static MarkupString RenderWifi(int signalLevel, int size = 15)
     {
-        int level = Math.Clamp(WifiBars(signal), 0, 4);
+        int level = Math.Clamp(signalLevel, 0, 4);
         string[] elements =
         {
             "<line x1=\"12\" y1=\"20\" x2=\"12.01\" y2=\"20\"",  // the dot (round cap)
