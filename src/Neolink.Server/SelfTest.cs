@@ -106,6 +106,34 @@ public static class SelfTest
                 "battery camera -> full park governs, not on-demand");
         });
 
+        Test("battery detection heals when the login-time query is missed", () =>
+        {
+            // The one login-time battery query gets 3s. A slow battery camera (Argus
+            // Solar over UDP) misses it, and everything downstream then treats the
+            // camera as mains: the LONG idle grace instead of the short battery one,
+            // no battery reading anywhere. Two later paths prove the camera is
+            // battery-powered, and either must heal the flag.
+            var cfg = new Config.CameraConfig
+            {
+                Name = "solar",
+                Host = "127.0.0.1",
+                Username = "admin",
+                Password = "p",
+                AlwaysOn = false,
+            };
+            var svc = new Streaming.CameraService(cfg, Protocol.StreamKind.Main,
+                new Streaming.StreamHub("solar"), TimeSpan.Zero);
+            Assert(!svc.BatteryPowered, "missed login query -> starts out looking like a mains camera");
+
+            // Path 1: the capability sweep (longer probe budget) says battery=true.
+            svc.BatteryDetected();
+            Assert(svc.BatteryPowered, "capability sweep proving battery -> flag latches");
+
+            // Idempotent: a second notification must not re-announce or flap.
+            svc.BatteryDetected();
+            Assert(svc.BatteryPowered, "repeat notification -> still battery, no flap");
+        });
+
         Test("wake-capture edge detector: debounced sleep, prompt wake", () =>
         {
             // The sleep→wake edge only counts after CONSECUTIVE unanswered probes:
@@ -128,6 +156,64 @@ public static class SelfTest
                 Assert(!flappy.OnProbe(true), $"alternating answer {i} never fires a wake");
             }
             Assert(!flappy.Armed, "alternating loss pattern -> never armed, never a false wake");
+        });
+
+        Test("wake diagnostics: verdict separates our-probe wakes from real ones", () =>
+        {
+            const double timeoutMs = 2000;
+            var armed = DateTime.UtcNow;
+
+            // Mirrors the probe loop exactly: probes are fed BEFORE arming is
+            // recorded, so the two misses that arm the edge are not counted
+            // against it — only probes after "asleep" was declared are.
+            static Streaming.WakeDiag Park(DateTime armedAt, int missesAfterArming, double answerMs)
+            {
+                var d = new Streaming.WakeDiag { ParkedAt = armedAt.AddSeconds(-90) };
+                d.OnProbe(false, 2000);           // miss 1 of 2 (pre-arm)
+                d.OnProbe(false, 2000);           // miss 2 of 2 -> the loop arms here
+                d.ArmedAt = armedAt;
+                for (int i = 0; i < missesAfterArming; i++) d.OnProbe(false, 2000);
+                d.OnProbe(true, answerMs);        // the answer that fires the edge
+                d.EdgeAt = armedAt.AddSeconds(5 * (missesAfterArming + 1));
+                return d;
+            }
+
+            // Our probe woke it: answered the FIRST probe after arming, nothing
+            // detected afterwards. This is the issue #44 signature.
+            var ours = Park(armed, missesAfterArming: 0, answerMs: 40);
+            ours.SleepStatusOnArrival = true;
+            Assert(ours.ProbesSinceArmed == 1, "only post-arming probes count toward the edge");
+            Assert(ours.Verdict(timeoutMs).StartsWith("LIKELY OUR PROBE", StringComparison.Ordinal),
+                "first probe after arming answers, no detection -> our probe woke it");
+
+            // A detection during the session is what wake-capture exists to catch.
+            var real = Park(armed, missesAfterArming: 40, answerMs: 35);
+            real.SawDetection = true;
+            Assert(real.Verdict(timeoutMs).StartsWith("REAL self-wake", StringComparison.Ordinal),
+                "wake far from arming with a detection -> a real self-wake");
+
+            // Regression (live catch 2026-07-21): a REAL wake's edge probe answers
+            // SLOWLY — the SoC replies while still booting (4.9 s measured against a
+            // 6 s timeout). The detection must outrank the latency heuristic, or a
+            // successful catch gets reported as SUSPECT FALSE ASLEEP.
+            var slowReal = Park(armed, missesAfterArming: 1, answerMs: timeoutMs * 0.9);
+            slowReal.SawDetection = true;
+            slowReal.SleepStatusOnArrival = false; // "already up" — it woke before we connected
+            Assert(slowReal.Verdict(timeoutMs).StartsWith("REAL self-wake", StringComparison.Ordinal),
+                "slow edge answer + detection -> still a REAL self-wake");
+
+            // Answers crowding the timeout mean the "asleep" reading itself is suspect.
+            var slow = Park(armed, missesAfterArming: 10, answerMs: 1700);
+            slow.SleepStatusOnArrival = false;
+            Assert(slow.Verdict(timeoutMs).StartsWith("SUSPECT FALSE ASLEEP", StringComparison.Ordinal),
+                "answers near the timeout -> the unanswered probes may be slow answers, not sleep");
+
+            // The camera saying "I was awake" must veto the our-probe verdict even
+            // on a first-probe answer — it cannot have been woken if it never slept.
+            var awake = Park(armed, missesAfterArming: 0, answerMs: 30);
+            awake.SleepStatusOnArrival = false;
+            Assert(!awake.Verdict(timeoutMs).StartsWith("LIKELY OUR PROBE", StringComparison.Ordinal),
+                "camera reports it was awake -> not blamed on our probe");
         });
 
         Test("stream hub GOP cache: new viewer primed keyframe-first, resets per keyframe", () =>
@@ -675,6 +761,18 @@ public static class SelfTest
                 EventTypes: new List<string> { "line-crossing", "intrusion" });
             Assert(optedIn.AllowsLabel("line-crossing") && !optedIn.AllowsLabel("person"),
                 "explicit filter is exact");
+
+            // The synthetic self-wake event (wake-capture records the wake itself,
+            // not just detection pushes): label survives mapping, the push counts
+            // as active, and it is External — the type filter never sees it, which
+            // matters because no filter UI offers a "wake" chip to tick.
+            var wake = new Protocol.MotionPush("wake", new[] { "wake" }, External: true);
+            Assert(wake.Active, "synthetic wake push is an active detection");
+            Assert(Recording.EventRecorder.LabelsOf(wake) is ["wake"], "wake label passes through unmapped");
+            Assert(!untouched.AllowsLabel("wake"),
+                "the default filter would drop 'wake' — External bypass is what records it");
+            var wakeClear = new Protocol.MotionPush("none", Array.Empty<string>(), External: true);
+            Assert(!wakeClear.Active, "synthetic all-clear ends the wake clip via the post-roll");
         });
 
         Test("capture schedule (per-camera day/time gate on events)", () =>
@@ -2372,6 +2470,31 @@ public static class SelfTest
                 $"asleep sensor availability must be bridge-only, got: {asleepJson}");
         });
 
+        Test("battery tiles: only the user starts a stream, never the camera waking", () =>
+        {
+            // Attaching a tile's stream is what makes the server connect, and connecting
+            // is what WAKES a battery camera — or holds an already-awake one up. So the
+            // wall streams ONLY on a deliberate request. Field logs (a camera facing a
+            // blank wall, woken twice in five minutes by false wake-capture edges) showed
+            // the earlier "stream whenever it is awake" rule turning every wake, real or
+            // false, into viewer demand. A regression here quietly flattens a battery.
+            static bool May(bool released, bool watching) =>
+                Neolink.WebClient.Components.Pages.Home.BattMayStream(released, watching);
+
+            // Nobody asked: no stream, whatever the camera is doing.
+            Assert(!May(released: false, watching: false),
+                "a tile does not stream until the user asks");
+            // The user asked: stream it (this is the ONLY route to video).
+            Assert(May(released: false, watching: true),
+                "the user's request is what starts the stream");
+            // Released on budget outranks a stale watching flag, or the release would
+            // immediately undo itself.
+            Assert(!May(released: true, watching: true),
+                "a released tile stays released until resumed");
+            Assert(!May(released: true, watching: false),
+                "released and unwatched is still no stream");
+        });
+
         Test("UID-only cameras: allowed with udp, rejected without", () =>
         {
             // A UID can replace the address — but only over UDP, where broadcast
@@ -3771,8 +3894,12 @@ public static class SelfTest
             Directory.CreateDirectory(evDir);
             File.WriteAllText(Path.Combine(evDir, "event.json"),
                 $$"""{"id":"{{evId}}","camera":"apicam","startUtc":"2026-01-05T10:11:12Z","endUtc":"2026-01-05T10:11:30Z","labels":["person"]}""");
-            // A real config file: /api/admin/config reads and describes it.
-            File.WriteAllText(Path.Combine(dir, "config.json"), """{ "cameras": [] }""");
+            // A real config file: /api/admin/config reads and describes it. The
+            // stored camera lets the connection test be exercised the way the list
+            // row uses it — by name alone, resolving every field from config.json.
+            // Port 9 is closed, so the dial fails fast instead of timing out.
+            File.WriteAllText(Path.Combine(dir, "config.json"),
+                """{ "cameras": [ { "name": "storedcam", "username": "stored-admin", "password": "p", "address": "127.0.0.1:9" } ] }""");
 
             using var cts = new CancellationTokenSource();
             Task? server = null;
@@ -3978,6 +4105,37 @@ public static class SelfTest
                 Assert(fp.Length == 12 && fp.All(Uri.IsHexDigit), "key fingerprint is 12 hex chars");
                 Assert(encInfo.GetProperty("file").GetString()!.EndsWith("secret.key"),
                     "file-based key reports its path");
+
+                // Camera connection test: a UDP camera must be tested the way the
+                // server actually connects to it. These models never listen on TCP,
+                // so testing them the TCP way timed out however healthy they were.
+                // The routing shows up in the validation: over UDP an address is
+                // optional (the UID finds the camera) and the UID is what's required.
+                var udpNoUid = PostJson(http, $"/api/admin/cameras/test{tokenQ}",
+                    """{"type":"reolink","udp":true,"username":"admin"}""");
+                Assert(!udpNoUid.GetProperty("ok").GetBoolean(), "a UDP test without a UID fails");
+                Assert(udpNoUid.GetProperty("message").GetString()!.Contains("UID"),
+                    "a UDP test asks for the UID, never for an address: "
+                    + udpNoUid.GetProperty("message").GetString());
+                // A TCP camera with no address still complains about the address.
+                var tcpNoAddr = PostJson(http, $"/api/admin/cameras/test{tokenQ}",
+                    """{"type":"reolink","username":"admin"}""");
+                Assert(!tcpNoAddr.GetProperty("ok").GetBoolean(), "a TCP test without an address fails");
+                Assert(tcpNoAddr.GetProperty("message").GetString()!.Contains("address"),
+                    "a TCP test still complains about the address: "
+                    + tcpNoAddr.GetProperty("message").GetString());
+
+                // Testing by NAME alone — what the camera-list row sends, so a camera
+                // can be checked without opening its editor or touching a field. Every
+                // field must come from config.json: reaching the dial at all proves
+                // the address and credentials resolved (the port is closed, so it
+                // fails, but it must not fail complaining about missing input).
+                var stored = PostJson(http, $"/api/admin/cameras/test{tokenQ}",
+                    """{"name":"storedcam","type":"reolink"}""");
+                var storedMsg = stored.GetProperty("message").GetString()!;
+                Assert(!stored.GetProperty("ok").GetBoolean(), "the closed port makes the stored test fail");
+                Assert(!storedMsg.Contains("address is required") && !storedMsg.Contains("username is required"),
+                    "a name-only test resolves address and credentials from config.json, got: " + storedMsg);
 
                 // With accounts on, the background feed is admin-only: a normal
                 // user gets 403, the admin still reads it.

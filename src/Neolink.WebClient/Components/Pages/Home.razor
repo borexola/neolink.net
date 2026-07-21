@@ -530,7 +530,10 @@
                    them, drop a sidebar camera to load it, right-click to pick a
                    camera. Free mode keeps its own JS drag/resize; a maximized tile
                    is not draggable (dragging a full-screen card means nothing). *@
-                <div class="tile @(index == 0 && (_mode is "focus" or "mosaic") ? "hero" : "") @(_mode == "theater" || _maxIndex == index ? "zoom-on" : "") @(_maxIndex == index ? "maxed" : "") @(_dropIndex == index ? "drop-target" : "")"
+                @* A sleep-friendly battery camera gets a green edge: this tile is on a
+                   viewing budget, and the colour is the standing reminder that what
+                   you are watching costs the camera charge. *@
+                <div class="tile @(index == 0 && (_mode is "focus" or "mosaic") ? "hero" : "") @(_mode == "theater" || _maxIndex == index ? "zoom-on" : "") @(_maxIndex == index ? "maxed" : "") @(_dropIndex == index ? "drop-target" : "") @(Batt(index) != null ? "tile-battery" : "")"
                      id="tile-@index" data-slot="@index" data-cols="@slot.Cols" data-rows="@slot.Rows"
                      style="@TileStyle(index)" @key="index"
                      draggable="@(TileDraggable(index) ? "true" : "false")"
@@ -567,6 +570,18 @@
                         <img class="tile-poster" src="@SnapshotPoster(slot.Camera)" alt=""
                              onerror="this.style.display='none'" />
                         <div class="tile-status">connecting…</div>
+                        @if (Batt(index) is { } batt)
+                        {
+                            @* Keep-awake rides ON the video: CSS reveals it only while
+                               a frame is actually playing (video[data-live="1"]), so it
+                               costs no interop and never shows over a dead tile. *@
+                            <label class="tile-batt" title="Watching holds this battery camera awake. Ticked, the tile keeps streaming while this tab is visible; otherwise it lets go after @($"{BatteryViewBudget.TotalMinutes:0}") minutes."
+                                   @onclick:stopPropagation="true" @ondblclick:stopPropagation="true">
+                                <input type="checkbox" checked="@batt.KeepAlive"
+                                       @onchange="e => ToggleBatteryKeepAlive(index, (bool?)e.Value == true)" />
+                                <span>@(batt.KeepAlive ? "keeping awake" : $"sleeps in {BattSecondsLeft(batt) / 60}:{BattSecondsLeft(batt) % 60:00}")</span>
+                            </label>
+                        }
                         @* Privacy is its own OPAQUE overlay: the player neither shows a
                            frozen last frame under it nor overwrites it (it rewrites
                            .tile-status with its own connecting/reconnect text). *@
@@ -586,6 +601,43 @@
                                 <span class="tile-privacy-icon">🔒</span>
                                 <span>privacy mode</span>
                                 <small>the camera is dark on purpose</small>
+                            </div>
+                        }
+                        else if (Batt(index) is { Watching: true })
+                        {
+                            @* Waking takes seconds, not milliseconds. The overlay is
+                               dismissed by CSS the instant a frame paints, so no timer
+                               or interop is needed to know when the camera is up. *@
+                            <div class="tile-privacy tile-waking">
+                                <span class="tile-spinner"></span>
+                                <span>waking the camera…</span>
+                                <small>battery cameras take a few seconds to come up</small>
+                            </div>
+                        }
+                        else if (BattIdle(index) && Batt(index) is { } bs)
+                        {
+                            @* Deliberately NOT streaming. The tile reports the camera's
+                               real state — including when it is AWAKE — but never pulls
+                               video on its own: a battery camera wakes itself for its own
+                               reasons, and attaching then would hold it awake for the
+                               whole budget. Nothing here connects until the user asks. *@
+                            var awake = camera is { Online: true, Asleep: false };
+                            <div class="tile-privacy tile-resting tile-privacy-resume @(awake ? "tile-awake" : "")"
+                                 role="button" tabindex="0"
+                                 title="@(awake
+                                     ? $"{slot.Camera} is awake — click to watch (it is already up, so this costs no extra battery)"
+                                     : $"Click to wake {slot.Camera} and open the feed")"
+                                 @onclick="() => ResumeBatteryTileAsync(index)" @onclick:stopPropagation="true">
+                                <span class="tile-privacy-icon">@UiIcon.Render(awake ? "sun" : "moon", 22)</span>
+                                <span>@(awake ? "awake" : bs.Released ? "resting" : "asleep")</span>
+                                <small>@(awake
+                                    ? "camera is up — watching it now costs no extra battery"
+                                    : bs.Released
+                                        ? "stream released to save battery"
+                                        : "battery camera dozing — not woken automatically")</small>
+                                <span class="tile-resume-btn">
+                                    @UiIcon.Render("play", 12) @(awake ? "Watch" : "Wake & watch")
+                                </span>
                             </div>
                         }
                         else if (camera is { Online: false, Asleep: false })
@@ -1262,6 +1314,13 @@
                                     <div class="control-row">
                                         <span><b>@cam.Name</b>&nbsp;<span class="event-sub">@(cam.Type == "rtsp" ? "generic RTSP" : $"Reolink · {cam.Address}")</span></span>
                                         <span class="row-actions">
+                                            @* Tests the SAVED settings — no need to open the editor
+                                               (or touch a field) just to check a camera is reachable.
+                                               Works without write access: it changes nothing. *@
+                                            <button class="chip" disabled="@_camTestBusy"
+                                                    title="Try reaching @cam.Name with its saved settings"
+                                                    @onclick="() => TestStoredCameraAsync(cam)">
+                                                @(_camTestingName == cam.Name ? "Testing…" : "Test")</button>
                                             <button class="chip" disabled="@(!_adminCamsWritable)" @onclick="() => EditCamera(cam)">Edit</button>
                                             @if (_camDeleteConfirm == cam.Name)
                                             {
@@ -1389,13 +1448,13 @@
                                         <option value="false">No</option>
                                     </select></div>
                                 <div class="settings-foot-btns">
-                                    @* UID-only cameras are found by broadcast at connect time — the
-                                       test endpoint dials TCP, so it has nothing to dial here. *@
+                                    @* The test now dials whichever transport this camera uses, so a
+                                       UDP entry (address optional — found by its UID) can be tested
+                                       too. Only a TCP camera with no address has nothing to dial. *@
                                     <button class="chip"
-                                            disabled="@(_camTestBusy || CamFormError != null
-                                                        || (e.Type == "reolink" && string.IsNullOrWhiteSpace(e.Address)))"
-                                            title="@(e.Type == "reolink" && string.IsNullOrWhiteSpace(e.Address)
-                                                     ? "Testing needs an address — a UID-only camera is found by broadcast when the server connects"
+                                            disabled="@(_camTestBusy || CamFormError != null || CamTestUnavailable)"
+                                            title="@(CamTestUnavailable
+                                                     ? "Testing needs an address, or a UID with \"Connect over UDP\" set"
                                                      : "Try reaching the camera with these settings")"
                                             @onclick="TestCameraAsync">
                                         @(_camTestBusy ? "Testing…" : "Test connection")</button>
@@ -1805,6 +1864,36 @@
 
     private readonly Dictionary<int, string> _attached = new();
     private PeriodicTimer? _pollTimer;
+
+    // ---- battery cameras: a viewing budget, because watching costs charge ----
+
+    /// <summary>How long a sleep-friendly battery camera's tile streams before the
+    /// wall lets go of it. Holding the connection holds the camera AWAKE, so an
+    /// unattended dashboard would flatten the battery overnight; two minutes is
+    /// long enough to actually look at something and short enough to be kind.</summary>
+    private static readonly TimeSpan BatteryViewBudget = TimeSpan.FromMinutes(2);
+
+    /// <summary>One sleep-friendly tile's budget state. Keyed by slot, but carries
+    /// the camera name so that pointing the slot somewhere else resets it rather
+    /// than inheriting the previous camera's budget.</summary>
+    private sealed class BattTile
+    {
+        public string Camera = "";
+        public DateTime AttachedUtc;
+        /// <summary>User override: hold this camera awake while the tab is visible.</summary>
+        public bool KeepAlive;
+        /// <summary>The budget ran out and we let the camera go — tile shows Resume.</summary>
+        public bool Released;
+        /// <summary>The user asked to watch this camera. Holds for the whole viewing
+        /// session (not just the wake): it is the ONLY thing that makes the tile
+        /// stream, so a camera waking by itself never pulls video on its own.</summary>
+        public bool Watching;
+    }
+
+    private readonly Dictionary<int, BattTile> _batt = new();
+    /// <summary>Set from JS on the poll tick: a hidden tab must not hold a camera
+    /// awake, so keep-awake only protects a tile the user can actually see.</summary>
+    private bool _pageHidden;
 
     // Recorded events (populated when the server has recording enabled)
     private readonly List<ApiEvent> _events = new();
@@ -2595,6 +2684,9 @@
     private bool _camTestBusy, _camSaveBusy, _camsNeedRestart;
     private string? _camTestResult;
     private bool _camTestOk;
+    /// <summary>Which list row is being tested, so only that row reads "Testing…"
+    /// (null when the test came from the edit form).</summary>
+    private string? _camTestingName;
 
     /// <summary>The add/edit form buffer. Password is write-only: blank keeps the
     /// stored one (or none); the server never sends passwords to the browser.</summary>
@@ -2763,6 +2855,14 @@
     private string? CamFormError =>
         CamNameError ?? CamAddressError ?? CamUsernameError ?? CamRtspError ?? CamUidError;
 
+    /// <summary>The test has nothing to dial only when there is neither an address
+    /// nor a UID-over-UDP to find the camera by. A UDP camera with a UID is testable
+    /// with no address at all — that is exactly how the server connects to it.</summary>
+    private bool CamTestUnavailable =>
+        _camEdit is { Type: "reolink" } e
+        && string.IsNullOrWhiteSpace(e.Address)
+        && !(e.Udp && !string.IsNullOrWhiteSpace(e.Uid));
+
     private object CamRequestBody(CamEdit e, bool forSave) => new
     {
         originalName = forSave ? e.OriginalName : null,
@@ -2776,33 +2876,53 @@
         httpAddress = forSave && e.Type == "reolink" ? e.HttpAddress.Trim() : null,
         rtspMain = e.Type == "rtsp" ? e.RtspMain.Trim() : null,
         rtspSub = e.Type == "rtsp" ? e.RtspSub.Trim() : null,
-        // Optional settings only go up on SAVE (the connection test has no use for
-        // them) and only for Reolink entries, except "record" which suits both.
-        uid = forSave && e.Type == "reolink" ? e.Uid.Trim() : null,
+        // uid + udp go up on the TEST too: they decide which transport the test
+        // dials, and a UDP-only battery camera never answers TCP. The rest are
+        // save-only (the test has no use for them), except "record" which suits both.
+        uid = e.Type == "reolink" ? e.Uid.Trim() : null,
+        udp = e.Type == "reolink" ? e.Udp : (bool?)null,
         onvifAddress = forSave && e.Type == "reolink" ? e.OnvifAddress.Trim() : null,
         alwaysOn = forSave && e.Type == "reolink" ? e.AlwaysOn : null,
         stream = forSave && e.Type == "reolink" ? e.Stream : null,
-        udp = forSave && e.Type == "reolink" ? e.Udp : (bool?)null,
         udpProbe = forSave && e.Type == "reolink" ? e.UdpProbe : (bool?)null,
         wakeCapture = forSave && e.Type == "reolink" ? e.WakeCapture : (bool?)null,
         record = forSave ? e.Record : (bool?)null,
     };
 
+    /// <summary>Tests a configured camera using its SAVED settings — no edit form,
+    /// nothing typed. Sending only the name and type makes the server resolve every
+    /// field (address, credentials, uid, udp transport) from config.json, so this
+    /// checks the camera exactly as the server will actually reach it.</summary>
+    private Task TestStoredCameraAsync(ApiAdminCamera cam) =>
+        RunCameraTestAsync(new { name = cam.Name, type = cam.Type }, cam.Name);
+
     private async Task TestCameraAsync()
     {
-        if (_camEdit is not { } e || _camTestBusy || CamFormError != null) return;
+        if (_camEdit is not { } e || CamFormError != null) return;
+        await RunCameraTestAsync(CamRequestBody(e, forSave: false), null).ConfigureAwait(false);
+    }
+
+    /// <summary>The one place a connection test is issued — from the edit form (with
+    /// whatever is typed) or from a list row (with what is saved).</summary>
+    private async Task RunCameraTestAsync(object body, string? rowName)
+    {
+        if (_camTestBusy) return;
         _camTestBusy = true;
+        _camTestingName = rowName;
         _camTestResult = null;
         try
         {
             var req = ApiRequest(HttpMethod.Post, "/api/admin/cameras/test");
-            req.Content = JsonContent.Create(CamRequestBody(e, forSave: false));
+            req.Content = JsonContent.Create(body);
             using var res = await Http.SendAsync(req);
             var el = await res.Content.ReadFromJsonAsync<JsonElement>();
             _camTestOk = el.TryGetProperty("ok", out var ok) && ok.ValueKind == JsonValueKind.True;
             _camTestResult = el.TryGetProperty("message", out var msg) ? msg.GetString()
                 : el.TryGetProperty("error", out var err) ? err.GetString()
                 : $"no reply ({(int)res.StatusCode})";
+            // The verdict renders under the whole list, so say which camera it is for.
+            if (rowName != null && _camTestResult != null)
+                _camTestResult = $"{rowName}: {_camTestResult}";
         }
         catch (Exception ex)
         {
@@ -2812,6 +2932,7 @@
         finally
         {
             _camTestBusy = false;
+            _camTestingName = null;
         }
     }
 
@@ -3163,7 +3284,13 @@
             var req = new HttpRequestMessage(HttpMethod.Get, $"{ResolveApi(server)}/api/cameras");
             if (!string.IsNullOrEmpty(_authToken))
                 req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _authToken);
-            using var res = await Http.SendAsync(req);
+            // Own deadline, well under the poll cadence: the shared HttpClient's
+            // default is 100 s, and the poll loop AWAITS this — one hung request
+            // (server busy with camera work) froze that window's sidebar at stale
+            // state for minutes while other windows stayed live ("one window says
+            // resting, the other shows the feed"). Better to skip a beat.
+            using var fetchCts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+            using var res = await Http.SendAsync(req, fetchCts.Token);
             if (res.StatusCode == System.Net.HttpStatusCode.Unauthorized)
             {
                 // Reachable, but a session is required (or ours expired).
@@ -3178,7 +3305,7 @@
                 _error = $"Cannot reach {server}: HTTP {(int)res.StatusCode}";
                 return false;
             }
-            var cams = await res.Content.ReadFromJsonAsync<List<ApiCamera>>();
+            var cams = await res.Content.ReadFromJsonAsync<List<ApiCamera>>(cancellationToken: fetchCts.Token);
             _cameras.Clear();
             if (cams != null) _cameras.AddRange(cams);
             SyncClipStates();
@@ -3203,6 +3330,7 @@
             {
                 await RefreshCamerasAsync();
                 await RefreshEventsAsync();
+                await EvaluateBatteryTilesAsync();
                 StateHasChanged();
             }
         }
@@ -4852,11 +4980,20 @@
 
     private async Task ReconcilePlayersAsync()
     {
+        // Sync FIRST: the battery gate below depends on it, so a tile added this
+        // very pass is already protected from waking its camera.
+        bool battChanged = SyncBatteryTiles();
         int upper = Math.Max(_slots.Count, _attached.Count == 0 ? 0 : _attached.Keys.Max() + 1);
         for (int i = 0; i < upper; i++)
         {
             // Locked: force every tile to detach — a signed-out user sees no video.
             string? desired = (!Locked && i < _slots.Count) ? WsUrl(_slots[i]) : null;
+            // A sleeping battery camera is NEVER woken just by being on screen:
+            // attaching is what connects, and connecting is what wakes it. These
+            // tiles stream only when the camera is already awake, or when the user
+            // asked for it. Otherwise the tile shows the asleep overlay instead.
+            if (desired != null && _batt.TryGetValue(i, out var rel) && !BattMayStream(rel))
+                desired = null;
             _attached.TryGetValue(i, out var current);
             if (desired == current) continue;
 
@@ -4869,6 +5006,10 @@
             {
                 await JS.InvokeVoidAsync("neolink.attach", $"vid-{i}", desired);
                 _attached[i] = desired;
+                // The budget runs from ATTACH, not from the first frame: the camera
+                // is held awake from the moment the server connects, so that is the
+                // honest start of the cost.
+                if (_batt.TryGetValue(i, out var b)) b.AttachedUtc = DateTime.UtcNow;
             }
         }
 
@@ -4887,6 +5028,124 @@
                 _quickAttached = quick;
             }
         }
+
+        // This runs from OnAfterRender, so a tile that only just became known as a
+        // battery tile has already painted without its overlay. Re-render once so it
+        // says "asleep" immediately instead of sitting on "connecting…" until the
+        // next poll. Guarded by the change flag, so this cannot loop.
+        if (battChanged) StateHasChanged();
+    }
+
+    // ------------------------------------------------------------ battery tiles
+
+    /// <summary>Keeps <see cref="_batt"/> in step with the slots: a record exists for
+    /// exactly the sleep-friendly tiles, and re-pointing a slot at another camera
+    /// starts that camera's budget fresh instead of inheriting the last one's.</summary>
+    /// <returns>True when the set of battery tiles actually changed — the caller
+    /// re-renders, because this runs from OnAfterRender (after the paint) and the
+    /// tile would otherwise sit on "connecting…" until the next poll instead of
+    /// showing that the camera is asleep.</returns>
+    private bool SyncBatteryTiles()
+    {
+        bool changed = false;
+        foreach (var key in _batt.Keys.ToList())
+        {
+            var name = key < _slots.Count ? _slots[key].Camera : null;
+            if (name == null || !IsSleepFriendly(name) || !string.Equals(_batt[key].Camera, name, StringComparison.Ordinal))
+            {
+                _batt.Remove(key);
+                changed = true;
+            }
+        }
+        for (int i = 0; i < _slots.Count; i++)
+        {
+            if (_slots[i].Camera is not { } name || !IsSleepFriendly(name)) continue;
+            if (!_batt.ContainsKey(i))
+            {
+                _batt[i] = new BattTile { Camera = name, AttachedUtc = DateTime.UtcNow };
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    private bool IsSleepFriendly(string camera) =>
+        _cameras.FirstOrDefault(c => string.Equals(c.Name, camera, StringComparison.OrdinalIgnoreCase))?.Sleeps == true;
+
+    private bool BattMayStream(BattTile b) => BattMayStream(b.Released, b.Watching);
+
+    /// <summary>
+    /// May this battery tile hold a stream? ONLY when the user asked for it.
+    /// <para>
+    /// Deliberately NOT "stream whenever the camera happens to be awake". A battery
+    /// camera wakes on its own (motion, or a false wake-capture edge), and auto-
+    /// attaching on that turns every wake — including the false ones — into viewer
+    /// demand that holds the camera awake for the whole viewing budget. Field logs
+    /// showed exactly that: a camera facing a blank wall woke twice in five minutes
+    /// and the wall pulled up its sub stream each time. The Reolink app behaves the
+    /// same way — it never shows a battery camera live until you tap it.
+    /// </para>
+    /// The tile still REPORTS whether the camera is awake; it just doesn't spend the
+    /// battery without being asked.
+    /// </summary>
+    public static bool BattMayStream(bool released, bool watching) => !released && watching;
+
+    /// <summary>True when this tile is a battery camera we are deliberately not
+    /// streaming — the state overlay stands in for the video.</summary>
+    private bool BattIdle(int slot) => _batt.TryGetValue(slot, out var b) && !b.Watching;
+
+    /// <summary>The tile's battery record, or null when this slot isn't one.</summary>
+    private BattTile? Batt(int slot) => _batt.TryGetValue(slot, out var b) ? b : null;
+
+    /// <summary>Seconds of viewing budget left, floored at zero.</summary>
+    private int BattSecondsLeft(BattTile b) =>
+        (int)Math.Max(0, (BatteryViewBudget - (DateTime.UtcNow - b.AttachedUtc)).TotalSeconds);
+
+    /// <summary>Runs on the poll tick: lets go of any battery tile whose budget has
+    /// run out. Keep-awake defends a tile only while the tab is visible — holding a
+    /// camera awake for a dashboard nobody is looking at is the exact waste this
+    /// whole mechanism exists to prevent.</summary>
+    private async Task EvaluateBatteryTilesAsync()
+    {
+        SyncBatteryTiles();
+        if (_batt.Count == 0) return;
+        try { _pageHidden = await JS.InvokeAsync<bool>("neolink.pageHidden"); }
+        catch { /* interop not ready — assume visible */ }
+
+        foreach (var (slot, b) in _batt)
+        {
+            if (b.Released || !_attached.ContainsKey(slot)) continue;
+            if (b.KeepAlive && !_pageHidden) continue;
+            if (BattSecondsLeft(b) > 0) continue;
+            b.Released = true;
+            b.Watching = false;
+        }
+        // Reconcile every tick, not only after a release: a camera that woke on its
+        // own (wake-capture, or the Reolink app) is now free to watch, and this is
+        // what picks that up. Reconcile no-ops when nothing actually changed.
+        await ReconcilePlayersAsync();
+    }
+
+    /// <summary>Resume: re-attach the stream, which makes the server connect and
+    /// (if it is dozing) wake the camera. The spinner shows until the first frame
+    /// paints — waking a battery camera takes seconds, not milliseconds.</summary>
+    private async Task ResumeBatteryTileAsync(int slot)
+    {
+        if (Batt(slot) is not { } b) return;
+        b.Released = false;
+        b.Watching = true;
+        b.AttachedUtc = DateTime.UtcNow; // a fresh budget for a deliberate look
+        await ReconcilePlayersAsync();
+        StateHasChanged();
+    }
+
+    /// <summary>Keep-awake toggle. Ticking it also refreshes the budget, so the tile
+    /// doesn't release a second later just because the timer had nearly expired.</summary>
+    private void ToggleBatteryKeepAlive(int slot, bool on)
+    {
+        if (Batt(slot) is not { } b) return;
+        b.KeepAlive = on;
+        if (on) b.AttachedUtc = DateTime.UtcNow;
     }
 
     public async ValueTask DisposeAsync()

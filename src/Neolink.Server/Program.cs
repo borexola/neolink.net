@@ -545,7 +545,12 @@ foreach (var cam in config.Cameras)
             : v => recordingSettings.Update(cam.Name, events: null, continuous: v, eventTypes: null, setEventTypes: false))
         // The recorder rides along so the web API and the MQTT bridge share one
         // on-demand recording session per camera (UI button ≡ HA Record switch).
-        { EventRecorder = eventRecorder, Address = camAddress, Udp = cam.Udp });
+        {
+            EventRecorder = eventRecorder, Address = camAddress, Udp = cam.Udp,
+            // Any stream service saying it may doze makes the camera sleep-friendly:
+            // the policy is per camera (battery + no always_on), so the streams agree.
+            SleepFriendly = readers.Count == 0 ? null : () => readers.Any(s => s.SleepFriendly),
+        });
     if (primaryService != null)
         motionTargets.Add((camServices, cam.Name, recorderSink));
 }

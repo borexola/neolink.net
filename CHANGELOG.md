@@ -125,6 +125,40 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Fixed
 
+- **Wake-capture actually catches events now — validated end to end against a
+  live Argus Solar.** Four compounding defects, all found by instrumenting a
+  real camera:
+  - *False wakes:* the liveness probe's 2 s timeout misread an awake camera's
+    slow answers (up to 1.9 s measured; 4.9 s while the processor boots) as
+    "asleep", and the next answer became a phantom "camera woke itself" —
+    Neolink reconnecting every ~3 minutes around the clock, draining the very
+    battery the feature protects (the drain reported in issue #44). The timeout
+    is now 6 s.
+  - *Blind probing:* some models (Argus Solar; likely the issue-#44 doorbell)
+    answer discovery from a low-power chip through a LIGHT sleep stage, so the
+    edge detector never saw them sleep — and our own 30 s probing held them in
+    that stage. Probes now back off progressively (30 s doubling to a 10 min
+    ceiling, with gentler 1 s hello bursts) until the camera reaches DEEP
+    sleep, where it goes probe-silent and its next self-wake becomes
+    detectable.
+  - *Recording nothing on a catch:* a wake-triggered session used to wait for a
+    detection push that arrives late or never (measured 25 s after the PIR on a
+    real catch; never, when the subject already left frame) — 20 s of connected
+    silence, then disconnect, clip lost. A self-wake now records immediately
+    from the first keyframe as a "wake" event; a detection push extends and
+    relabels it.
+  - *Battery misclassification:* the one 3 s login-time battery query silently
+    missing left the camera treated as mains all session (long idle grace, no
+    battery reading anywhere). The camera's own battery pushes and the
+    capability probe now both heal the flag within seconds.
+  Every wake-capture cycle also reports its evidence at Info: a `[wake-diag]`
+  verdict separating a real self-wake from our-probe-woke-it from a false
+  asleep reading (with probe round-trips, the camera's own sleepStatus on
+  arrival, and time to first frame), a "held awake by …" line naming whatever
+  keeps a battery camera from sleeping, and park exits that say what pulled the
+  camera back up. The sleep-friendly idle release also dropped from 60 s to
+  30 s (battery cameras: 20 s).
+
 - **A live tile no longer paints a stale snapshot, and the video fades in
   instead of cutting.** The still shown while a stream spins up could be
   arbitrarily old: when a camera could not produce a fresh frame, the server fell

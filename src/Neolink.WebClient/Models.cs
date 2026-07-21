@@ -23,7 +23,7 @@ public sealed record ApiStream(string Kind, string Path, bool Ready, string? Cod
 public sealed record ApiCamera(string Name, bool Online, List<ApiStream> Streams, bool Recording = false,
     bool Asleep = false, ApiBattery? Battery = null, ApiOnDemand? OnDemand = null, bool Privacy = false,
     bool Suspended = false, bool CanSuspend = false, string? Address = null, bool Udp = false,
-    ApiWifi? WifiSignal = null);
+    ApiWifi? WifiSignal = null, bool Sleeps = false);
 
 /// <summary>How a camera is attached to the network, normalized by the server.
 /// <c>Kind</c> is "wifi" (with a 0-4 <c>Level</c> for the icon and the reading

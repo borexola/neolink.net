@@ -55,6 +55,12 @@ public sealed record WebCameraInfo(string Name, List<WebStreamInfo> Streams, ICa
     /// <summary>Baichuan-over-UDP transport (beta): UDP-only battery models
     /// (Argus family). Surfaced so the UI can badge these cameras as beta.</summary>
     public bool Udp { get; init; }
+
+    /// <summary>True for a battery camera Neolink lets doze (no always_on). The web
+    /// UI treats these tiles differently: watching one costs the camera charge, so
+    /// it marks them, bounds how long a tile streams, and offers a keep-awake
+    /// override. Null/false = stream it around the clock, as before.</summary>
+    public Func<bool>? SleepFriendly { get; init; }
 }
 
 /// <summary>Everything the web API needs from the host.</summary>
@@ -162,8 +168,11 @@ public static class WebApi
         string? RtspMain, string? RtspSub,
         string? Uid, string? AlwaysOn, string? Stream, string? OnvifAddress,
         bool? Record, bool? Udp, bool? UdpProbe, bool? WakeCapture);
+    /// <summary>Uid/Udp matter here as much as they do on save: a UDP-only battery
+    /// camera never listens on TCP, so testing it the TCP way always times out.</summary>
     private sealed record AdminCameraTestRequest(string? Name, string? Type, string? Address,
-        string? Username, string? Password, int? ChannelId, string? RtspMain, string? RtspSub);
+        string? Username, string? Password, int? ChannelId, string? RtspMain, string? RtspSub,
+        string? Uid, bool? Udp);
     private sealed record AutoTrackRequest(bool? On);
     private sealed record MdSensitivityRequest(int? Sensitivity);
     private sealed record AiSensitivityRequest(string? Type, int? Sensitivity);
@@ -819,6 +828,13 @@ public static class WebApi
                 catch { /* config unreadable — test with what was sent */ }
             }
 
+            // UDP transport: these models (Argus family) never listen on TCP, so
+            // dialling the TCP way always times out no matter how healthy they are.
+            // Test them the way the server will actually connect. Resolved out here
+            // so the timeout message below can name the right failure.
+            bool udp = req.Udp ?? stored?.Udp ?? false;
+            var uid = req.Uid is { Length: > 0 } ru ? ru.Trim() : stored?.Uid;
+
             try
             {
                 if (req.Type == "rtsp")
@@ -843,35 +859,58 @@ public static class WebApi
                 }
 
                 var address = req.Address is { Length: > 0 } a ? a
-                    : stored != null && !stored.IsGenericRtsp
+                    : stored != null && !stored.IsGenericRtsp && !string.IsNullOrWhiteSpace(stored.Host)
                         ? (stored.Port == 9000 ? stored.Host : $"{stored.Host}:{stored.Port}")
                         : null;
-                if (address == null || ConfigEditor.HostPortError(address) is { } addrErr2)
+                // An address is required for TCP; over UDP it is optional, because
+                // discovery finds the camera by UID via broadcast.
+                if (!udp && (address == null || ConfigEditor.HostPortError(address) is not null))
                     return Results.Json(new { ok = false, message = ConfigEditor.HostPortError(address ?? "") });
+                if (udp && string.IsNullOrWhiteSpace(uid))
+                    return Results.Json(new
+                    {
+                        ok = false,
+                        message = "a UDP camera needs its UID to test (Reolink app → device info, or the sticker)",
+                    });
+                if (address != null && ConfigEditor.HostPortError(address) is { } addrErr2)
+                    return Results.Json(new { ok = false, message = addrErr2 });
                 var username = req.Username is { Length: > 0 } u ? u : stored?.Username;
                 if (string.IsNullOrWhiteSpace(username))
                     return Results.Json(new { ok = false, message = "username is required to test" });
                 var password = req.Password is { Length: > 0 } p ? p : stored?.Password;
 
-                int colon = address.LastIndexOf(':');
-                var (host, port) = colon > address.LastIndexOf(']')
-                    ? (address[..colon].Trim('[', ']'), int.Parse(address[(colon + 1)..]))
-                    : (address.Trim('[', ']'), 9000);
+                var (host, port) = ("", 9000);
+                if (address != null)
+                {
+                    int colon = address.LastIndexOf(':');
+                    (host, port) = colon > address.LastIndexOf(']')
+                        ? (address[..colon].Trim('[', ']'), int.Parse(address[(colon + 1)..]))
+                        : (address.Trim('[', ']'), 9000);
+                }
                 byte channel = (byte)Math.Clamp(req.ChannelId ?? stored?.ChannelId ?? 0, 0, 255);
 
-                await using var camera = await Protocol.BcCamera.ConnectAsync(host, port, channel, cts.Token, tag: "test");
+                await using var camera = udp
+                    ? await Protocol.BcCamera.ConnectUdpAsync(host, uid!, channel, cts.Token, tag: "test")
+                    : await Protocol.BcCamera.ConnectAsync(host, port, channel, cts.Token, tag: "test");
                 await camera.LoginAsync(username!, password, cts.Token);
                 var di = camera.DeviceInfo;
                 return Results.Json(new
                 {
                     ok = true,
-                    message = "Connected and logged in" +
+                    message = (udp ? "Connected over UDP and logged in" : "Connected and logged in") +
                         (di is { Width: > 0 } ? $" — the camera reports {di.Width}x{di.Height}" : ""),
                 });
             }
             catch (OperationCanceledException) when (!ctx.RequestAborted.IsCancellationRequested)
             {
-                return Results.Json(new { ok = false, message = "timed out — is the address reachable from this server?" });
+                return Results.Json(new
+                {
+                    ok = false,
+                    message = udp
+                        ? "timed out — the camera did not answer UDP discovery. It may be asleep, on another "
+                          + "subnet, or broadcast may be blocked (a Docker bridge network blocks it; use host networking)."
+                        : "timed out — is the address reachable from this server?",
+                });
             }
             catch (Exception ex)
             {
@@ -1155,6 +1194,10 @@ public static class WebApi
                 // viewed or recorded here. Distinct from offline-because-unreachable.
                 suspended = c.Suspended?.Invoke() ?? false,
                 canSuspend = c.SetSuspended != null,
+                // Battery camera Neolink lets doze: the wall bounds how long its
+                // tile streams and offers a keep-awake override, because every
+                // second of video costs this camera charge.
+                sleeps = c.SleepFriendly?.Invoke() ?? false,
                 // Network link: { kind, level, label } — see LinkJson above.
                 wifiSignal = LinkJson(c),
                 battery = c.Battery?.Invoke() is { } b

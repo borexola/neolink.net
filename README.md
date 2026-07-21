@@ -1423,6 +1423,13 @@ around-the-clock monitoring matters. Issues and pull requests are welcome and
 handled on a best-effort basis. The [license](LICENSE) contains the formal
 warranty and liability disclaimers.
 
+## Sponsorship
+
+If Neolink.NET saves you or your business time, sponsorship funds the hours and the
+hardware that keep it moving. Buying cameras I do not own is the single biggest
+unlock for supporting more models, and it is the reason most model-specific gaps stay
+open. [Sponsor Neolink.NET](https://github.com/sponsors/borexola).
+
 ## Credits & license
 
 This project would not exist without the original Neolink — it began as a port of it and

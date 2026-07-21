@@ -509,6 +509,13 @@ public sealed class CameraControl : ICameraControl
             _caps = new CameraCapabilities(version, support, new CameraFeatures(
                 ptz, led, pir, battery, talk, zoom, siren, floodlight, privacy, whiteLed, spotlight, doorbell));
             _capsSession = camera;
+            // This sweep probes with a longer budget than the stream service's one
+            // short login-time battery query, so it is often the first path to prove
+            // a slow battery camera IS one. Tell every stream service: their idle
+            // grace and sleep policy hang off that flag.
+            if (battery)
+                foreach (var s in _sources)
+                    s.BatteryDetected();
             Log.Info($"{CameraName}: capabilities discovered " +
                      $"(ptz={ptz}, led={led}, pir={pir}, battery={battery}, talk={talk}" +
                      $", zoom={zoom}, siren={siren}, floodlight={floodlight}, privacy={privacy}" +

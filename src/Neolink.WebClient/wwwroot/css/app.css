@@ -219,6 +219,13 @@ html, body {
     align-items: center;
     gap: 8px;
     cursor: pointer;
+    /* Badges wrap to a second line rather than squeezing the name out. A camera
+       carrying the full set (UDP BETA + battery + Wi-Fi + asleep) overflows this
+       narrow column, and since every badge is `flex: 0 0 auto` the name was the
+       only item that could give — it collapsed to zero width and the camera in
+       the sidebar had no name at all. */
+    flex-wrap: wrap;
+    row-gap: 4px;
 }
 
 .cam-head:hover .cam-name { color: var(--accent); }
@@ -228,6 +235,10 @@ html, body {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    /* `overflow: hidden` zeroes a flex item's automatic minimum size, so without
+       a floor the name shrinks away entirely. Ellipsis, never disappearance. */
+    flex: 0 1 auto;
+    min-width: 6ch;
 }
 
 .solo-btn { margin-left: auto; }
@@ -674,6 +685,100 @@ video[data-live="1"] ~ .tile-status { display: none; }
 /* One-way: keyed on everLive, not live, so a reconnect never brings it back. */
 video[data-ever-live="1"] ~ .tile-poster {
     opacity: 0;
+}
+
+/* ---- battery cameras on a viewing budget ---------------------------------
+   A sleep-friendly battery camera (no always_on) is marked with a green edge:
+   watching it holds it awake and costs charge, so the wall bounds how long its
+   tile streams. The controls below are revealed and dismissed by CSS keyed on
+   the player's own data-live, which keeps the whole mechanism free of timers
+   and interop — the tile reacts to real frames, not to a guess. */
+.tile.tile-battery {
+    border-color: color-mix(in srgb, var(--ok) 55%, transparent);
+}
+
+.tile.tile-battery:hover {
+    border-color: color-mix(in srgb, var(--ok) 80%, transparent);
+}
+
+/* Keep-awake sits over the feed's bottom-left, and ONLY while a frame is
+   actually playing — there is nothing to keep awake otherwise. */
+.tile-batt {
+    position: absolute;
+    left: 8px;
+    bottom: 8px;
+    z-index: 4;
+    display: none;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 8px 3px 6px;
+    border-radius: 999px;
+    font-size: 10px;
+    letter-spacing: 0.5px;
+    color: var(--ok);
+    background: rgba(0, 0, 0, 0.55);
+    border: 1px solid color-mix(in srgb, var(--ok) 45%, transparent);
+    cursor: pointer;
+    user-select: none;
+}
+
+video[data-live="1"] ~ .tile-batt { display: inline-flex; }
+
+.tile-batt input { accent-color: var(--ok); cursor: pointer; margin: 0; }
+
+/* The tile is on a budget but currently resting/asleep: same overlay language as
+   privacy/suspended, in the battery colour. */
+.tile-resting { color: var(--ok); }
+.tile-resting .tile-privacy-icon { color: color-mix(in srgb, var(--ok) 75%, var(--muted)); }
+.tile-resting small { color: var(--muted); }
+
+/* Awake but not being watched: the camera is up for its own reasons, so viewing
+   costs nothing extra. Brighter than the dozing state to read as "available now"
+   rather than "spend battery to see this". */
+.tile-awake .tile-privacy-icon { color: var(--ok); }
+.tile-awake .tile-resume-btn {
+    background: color-mix(in srgb, var(--ok) 20%, transparent);
+    border-color: var(--ok);
+}
+
+/* An explicit button, not just a clickable overlay: waking a battery camera is a
+   deliberate act that costs charge, so it should look like one. */
+.tile-resume-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: 8px;
+    padding: 4px 12px;
+    border-radius: 999px;
+    font-size: 11px;
+    letter-spacing: 0.5px;
+    color: var(--ok);
+    border: 1px solid color-mix(in srgb, var(--ok) 55%, transparent);
+    background: color-mix(in srgb, var(--ok) 12%, transparent);
+}
+
+.tile-privacy-resume:hover .tile-resume-btn {
+    background: color-mix(in srgb, var(--ok) 22%, transparent);
+    border-color: var(--ok);
+}
+
+/* Waking: dismissed the moment a real frame paints, so the spinner can never
+   outlive the thing it is waiting for. */
+video[data-live="1"] ~ .tile-waking { display: none; }
+
+.tile-spinner {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: 2px solid color-mix(in srgb, var(--ok) 25%, transparent);
+    border-top-color: var(--ok);
+    animation: tile-spin 0.8s linear infinite;
+}
+
+@keyframes tile-spin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+    .tile-spinner { animation-duration: 2.4s; }
 }
 
 /* Someone who prefers reduced motion gets the swap without the dissolve. */

@@ -1633,6 +1633,12 @@
             this.statsClose(videoId);
         },
 
+        // Is the tab hidden? Battery tiles ask on each poll tick: "keep awake" must
+        // not hold a camera awake for a dashboard nobody is looking at.
+        pageHidden() {
+            return document.hidden === true;
+        },
+
         // Right-click on a single-camera view opens this instead of the tile's
         // camera picker (on that view the tile IS the camera — nothing to pick).
         // Toggles: a second right-click, the ✕, or leaving the view closes it.

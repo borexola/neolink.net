@@ -38,7 +38,22 @@ public static class UdpDiscovery
     internal const uint MagicData = 0x2A87CF10;      // transport data (BC inside)
 
     /// <summary>Camera-side discovery ports (the official client targets both).</summary>
-    private static readonly int[] CameraPorts = { 2015, 2018 };
+    // NEOLINK_UDP_PORTS overrides the discovery target ports (e.g. "2015") — a
+    // field-diagnosis knob: probing the ports separately is how to tell whether a
+    // battery model's low-power wake chip listens on both or just one of them.
+    private static readonly int[] CameraPorts = ParsePortsEnv() ?? new[] { 2015, 2018 };
+
+    private static int[]? ParsePortsEnv()
+    {
+        var raw = Environment.GetEnvironmentVariable("NEOLINK_UDP_PORTS");
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        var ports = raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(p => int.TryParse(p, out var v) && v is > 0 and < 65536 ? v : 0)
+            .Where(v => v != 0).ToArray();
+        if (ports.Length == 0) return null;
+        Log.Warn($"NEOLINK_UDP_PORTS override active — UDP discovery targets port(s) {string.Join("/", ports)} only");
+        return ports;
+    }
 
     // The fixed XOR key; each word is offset by the packet's tid, so the tid
     // in the clear-text header is all a receiver needs to decrypt.
@@ -210,7 +225,13 @@ public static class UdpDiscovery
                         catch (OperationCanceledException) { return; }
                         catch (SocketException) { }
                     }
-                    try { await Task.Delay(300, cts.Token).ConfigureAwait(false); }
+                    // 1 s between hello bursts, NOT the connect path's 300 ms: this
+                    // probe runs against cameras we hope are ASLEEP, and a storm of
+                    // hellos is itself enough to pull a wake chip out of deep sleep
+                    // back into its answering light-sleep stage (measured on an
+                    // Argus Solar: three dense probe windows re-lit its chip for
+                    // minutes) — sabotaging the very silence the probe looks for.
+                    try { await Task.Delay(1000, cts.Token).ConfigureAwait(false); }
                     catch (OperationCanceledException) { return; }
                 }
             }, cts.Token);
