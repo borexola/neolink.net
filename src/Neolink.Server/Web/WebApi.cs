@@ -154,9 +154,14 @@ public static class WebApi
     private sealed record AutoReplyRequest(int? FileId, int? Timeout);
     /// <summary>Camera add/edit. Password is WRITE-ONLY: null keeps the stored one,
     /// "" clears it, a value sets it. RTSP URLs sent back masked ("****") mean keep.</summary>
+    /// <summary>AlwaysOn is a STRING tri-state ("auto"|"true"|"false") because the
+    /// config key is itself tri-state: absent = auto (battery cams sleep, the rest
+    /// stay on). A bool? could not tell "auto" apart from "leave unchanged".</summary>
     private sealed record AdminCameraRequest(string? OriginalName, string? Name, string? Type,
         string? Address, string? Username, string? Password, int? ChannelId, string? HttpAddress,
-        string? RtspMain, string? RtspSub);
+        string? RtspMain, string? RtspSub,
+        string? Uid, string? AlwaysOn, string? Stream, string? OnvifAddress,
+        bool? Record, bool? Udp, bool? UdpProbe, bool? WakeCapture);
     private sealed record AdminCameraTestRequest(string? Name, string? Type, string? Address,
         string? Username, string? Password, int? ChannelId, string? RtspMain, string? RtspSub);
     private sealed record AutoTrackRequest(bool? On);
@@ -586,6 +591,17 @@ public static class WebApi
                         httpAddress = c.HttpAddress,
                         rtspMain = ConfigEditor.MaskRtspPassword(c.RtspMain),
                         rtspSub = ConfigEditor.MaskRtspPassword(c.RtspSub),
+                        // Optional per-camera settings the editor can now round-trip.
+                        // The UID is NOT secret (it's on the camera's sticker) but it
+                        // identifies the device, so it only ever goes to an admin.
+                        uid = c.Uid,
+                        alwaysOn = c.AlwaysOn == null ? "auto" : c.AlwaysOn.Value ? "true" : "false",
+                        stream = c.Stream,
+                        onvifAddress = c.OnvifAddress,
+                        record = c.Record,
+                        udp = c.Udp,
+                        udpProbe = c.UdpProbe,
+                        wakeCapture = c.WakeCapture,
                     }).ToList(),
                 });
             }
@@ -610,7 +626,12 @@ public static class WebApi
                 return Results.Json(new { error = "type must be reolink or rtsp" }, statusCode: 400);
             if (!isRtsp)
             {
-                if (req.Address is not { } addr || ConfigEditor.HostPortError(addr) is { } addrErr)
+                // Address is optional only for a UID-only UDP camera: broadcast
+                // discovery finds it by UID. Everything else needs a host.
+                bool uidOnly = string.IsNullOrWhiteSpace(req.Address)
+                    && !string.IsNullOrWhiteSpace(req.Uid) && req.Udp == true;
+                if (!uidOnly
+                    && (req.Address is not { } addr || ConfigEditor.HostPortError(addr) is { } addrErr))
                     return Results.Json(new { error = ConfigEditor.HostPortError(req.Address ?? "") }, statusCode: 400);
                 if (string.IsNullOrWhiteSpace(req.Username))
                     return Results.Json(new { error = "username is required for a Reolink camera" }, statusCode: 400);
@@ -618,6 +639,25 @@ public static class WebApi
                     return Results.Json(new { error = "channel id must be 0-255" }, statusCode: 400);
                 if (req.HttpAddress is { Length: > 0 } ha && ha.Any(char.IsWhiteSpace))
                     return Results.Json(new { error = "HTTP address must not contain spaces" }, statusCode: 400);
+                if (req.OnvifAddress is { Length: > 0 } oa && oa.Any(char.IsWhiteSpace))
+                    return Results.Json(new { error = "ONVIF address must not contain spaces" }, statusCode: 400);
+                if (req.Stream is { Length: > 0 } st && !NeolinkConfig.ValidCameraStreams.Contains(st))
+                    return Results.Json(new
+                    {
+                        error = $"stream must be one of: {string.Join(", ", NeolinkConfig.ValidCameraStreams)}",
+                    }, statusCode: 400);
+                if (req.AlwaysOn is { Length: > 0 } ao && ao is not ("auto" or "true" or "false"))
+                    return Results.Json(new { error = "always_on must be auto, true or false" }, statusCode: 400);
+                // Both UDP options are keyed on the camera's UID — without one the
+                // discovery probe has nothing to address, so it would fail at runtime.
+                bool wantsUdp = req.Udp == true || req.UdpProbe == true;
+                if (wantsUdp && string.IsNullOrWhiteSpace(req.Uid))
+                    return Results.Json(new
+                    {
+                        error = "the UDP options need the camera's UID (Reolink app → device info, or the sticker)",
+                    }, statusCode: 400);
+                if (req.Uid is { Length: > 0 } uid && uid.Any(char.IsWhiteSpace))
+                    return Results.Json(new { error = "UID must not contain spaces" }, statusCode: 400);
             }
             else
             {
@@ -654,7 +694,10 @@ public static class WebApi
                     ConfigEditor.Set(cam, "name", name);
                     if (!isRtsp)
                     {
-                        ConfigEditor.Set(cam, "address", req.Address!.Trim());
+                        // Blank address only survives validation for a UID-only UDP
+                        // camera — there it must actually REMOVE the key.
+                        ConfigEditor.Set(cam, "address",
+                            string.IsNullOrWhiteSpace(req.Address) ? null : req.Address.Trim());
                         ConfigEditor.Set(cam, "username", req.Username!.Trim());
                         // Write-only password: null keeps whatever the file has.
                         if (req.Password != null)
@@ -664,6 +707,24 @@ public static class WebApi
                         if (req.HttpAddress != null)
                             ConfigEditor.Set(cam, "http_address",
                                 req.HttpAddress.Length == 0 ? null : req.HttpAddress.Trim());
+                        if (req.OnvifAddress != null)
+                            ConfigEditor.Set(cam, "onvif_address",
+                                req.OnvifAddress.Length == 0 ? null : req.OnvifAddress.Trim());
+                        if (req.Uid != null)
+                            ConfigEditor.Set(cam, "uid", req.Uid.Length == 0 ? null : req.Uid.Trim());
+                        // Defaults are written as ABSENT keys, so config.json keeps only
+                        // what actually differs from stock (same idea as channel_id 0).
+                        if (req.AlwaysOn is { Length: > 0 } alwaysOn)
+                            ConfigEditor.Set(cam, "always_on",
+                                alwaysOn == "auto" ? null : alwaysOn == "true");
+                        if (req.Stream is { Length: > 0 } stream)
+                            ConfigEditor.Set(cam, "stream", stream == "both" ? null : stream);
+                        if (req.Udp is { } udp)
+                            ConfigEditor.Set(cam, "udp", udp ? true : null);
+                        if (req.UdpProbe is { } udpProbe)
+                            ConfigEditor.Set(cam, "udp_probe", udpProbe ? true : null);
+                        if (req.WakeCapture is { } wakeCapture)
+                            ConfigEditor.Set(cam, "wake_capture", wakeCapture ? true : null);
                         // A type switch must not leave generic-RTSP keys behind.
                         ConfigEditor.Set(cam, "rtsp_main", null);
                         ConfigEditor.Set(cam, "rtsp_sub", null);
@@ -685,7 +746,19 @@ public static class WebApi
                         ConfigEditor.Set(cam, "password", null);
                         ConfigEditor.Set(cam, "channel_id", null);
                         ConfigEditor.Set(cam, "http_address", null);
+                        // Baichuan-only settings must not linger after a type switch.
+                        ConfigEditor.Set(cam, "onvif_address", null);
+                        ConfigEditor.Set(cam, "uid", null);
+                        ConfigEditor.Set(cam, "always_on", null);
+                        ConfigEditor.Set(cam, "stream", null);
+                        ConfigEditor.Set(cam, "udp", null);
+                        ConfigEditor.Set(cam, "udp_probe", null);
+                        ConfigEditor.Set(cam, "wake_capture", null);
                     }
+                    // Event recording applies to both camera kinds, so it is set
+                    // outside the type branches (default true = key omitted).
+                    if (req.Record is { } record)
+                        ConfigEditor.Set(cam, "record", record ? null : false);
                 });
                 Log.Warn($"config.json cameras updated via the web UI by '{SessionName(ctx)}' " +
                          $"({(req.OriginalName == null ? "added" : "edited")} \"{name}\") — restart to apply");

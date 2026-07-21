@@ -539,7 +539,8 @@ public sealed class CameraService : ILiveCameraSource
         // UDP transport (experimental, opt-in) for battery-only cameras that never
         // listen on TCP; everything after connect is identical to the TCP path.
         Note(_config.Udp
-            ? $"{Tag}: connecting over UDP to {_config.Host} (uid set)"
+            ? $"{Tag}: connecting over UDP to " +
+              $"{(string.IsNullOrWhiteSpace(_config.Host) ? "the UID via broadcast discovery" : _config.Host)} (uid set)"
             : $"{Tag}: connecting to {_config.Host}:{_config.Port}");
         await using IBcCamera camera = _config.Udp
             ? await BcCamera.ConnectUdpAsync(_config.Host, _config.Uid!, _config.ChannelId, ct, tag: Tag).ConfigureAwait(false)

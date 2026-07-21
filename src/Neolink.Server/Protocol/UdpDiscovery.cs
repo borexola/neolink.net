@@ -163,14 +163,22 @@ public static class UdpDiscovery
     internal static async Task<bool> IsReachableAsync(string host, string uid, TimeSpan timeout, CancellationToken ct,
         string? logTag = null)
     {
-        IPAddress? ip = IPAddress.TryParse(host, out var lit) ? lit : null;
-        if (ip == null)
+        // UID-only camera (no address): the wake probe broadcasts like the connect
+        // path does — the UID keys the reply, so a hit still means OUR camera is up.
+        IPAddress? ip = null;
+        if (!string.IsNullOrWhiteSpace(host))
         {
-            try { ip = (await Dns.GetHostAddressesAsync(host, ct).ConfigureAwait(false))
-                .FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetwork); }
-            catch { return false; }
+            ip = IPAddress.TryParse(host, out var lit) ? lit : null;
+            if (ip == null)
+            {
+                try { ip = (await Dns.GetHostAddressesAsync(host, ct).ConfigureAwait(false))
+                    .FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetwork); }
+                catch { return false; }
+            }
+            if (ip == null || ip.AddressFamily != AddressFamily.InterNetwork) return false;
         }
-        if (ip == null || ip.AddressFamily != AddressFamily.InterNetwork) return false;
+        var targets = ip != null ? new[] { ip } : BroadcastTargets();
+        if (targets.Length == 0) return false;
 
         UdpClient? udp = null;
         for (int i = 0; i < 4 && udp == null; i++)
@@ -179,6 +187,7 @@ public static class UdpDiscovery
             catch (SocketException) { }
         }
         if (udp == null) return false;
+        if (ip == null) udp.EnableBroadcast = true;
 
         using (udp)
         {
@@ -193,10 +202,11 @@ public static class UdpDiscovery
             {
                 while (!cts.IsCancellationRequested)
                 {
+                    foreach (var target in targets)
                     foreach (var port in CameraPorts)
                     {
                         try { await udp.SendAsync(hello,
-                            new IPEndPoint(ip, port), cts.Token).ConfigureAwait(false); }
+                            new IPEndPoint(target, port), cts.Token).ConfigureAwait(false); }
                         catch (OperationCanceledException) { return; }
                         catch (SocketException) { }
                     }
@@ -253,21 +263,33 @@ public static class UdpDiscovery
     internal sealed record Session(UdpClient Socket, IPEndPoint Camera, int ClientId, int DeviceId, uint Tid);
 
     /// <summary>
-    /// Performs the discovery handshake against a KNOWN camera IP (direct, no
-    /// broadcast) and hands back a live session for the UDP transport to run on:
-    /// send C2D_C, wait for an accepted D2C_C_R, keep the socket. Null on failure.
-    /// This is the connect-path twin of <see cref="ProbeAsync"/> (which is the
-    /// throwaway diagnostic).
+    /// Performs the discovery handshake and hands back a live session for the UDP
+    /// transport to run on: send C2D_C, wait for an accepted D2C_C_R, keep the
+    /// socket. Null on failure. With a known camera IP the hello goes straight to
+    /// it; with <paramref name="ip"/> null (UID-only config, no address) it goes to
+    /// every local subnet's directed broadcast instead — the UID in the hello keys
+    /// the reply, so only the right camera answers, and the session binds to the
+    /// endpoint the reply CAME from either way. This is the connect-path twin of
+    /// <see cref="ProbeAsync"/> (which is the throwaway diagnostic).
     /// </summary>
-    internal static async Task<Session?> EstablishAsync(IPAddress ip, string uid, TimeSpan timeout,
+    internal static async Task<Session?> EstablishAsync(IPAddress? ip, string uid, TimeSpan timeout,
         CancellationToken ct, string tag)
     {
         string P(string m) => $"{tag}: [udp] {MaskUid(m, uid)}";
-        if (ip.AddressFamily != AddressFamily.InterNetwork)
+        if (ip != null && ip.AddressFamily != AddressFamily.InterNetwork)
         {
             Log.Warn(P($"{ip} is not IPv4 — UDP connect needs an IPv4 address"));
             return null;
         }
+        var targets = ip != null ? new[] { ip } : BroadcastTargets();
+        if (targets.Length == 0)
+        {
+            Log.Warn(P("no address configured and no usable interface for broadcast discovery"));
+            return null;
+        }
+        if (ip == null)
+            Log.Info(P($"no address configured — broadcasting discovery for the UID on " +
+                       $"{string.Join(", ", targets.AsEnumerable())}"));
 
         UdpClient? udp = null;
         for (int attempt = 0; attempt < 8 && udp == null; attempt++)
@@ -277,6 +299,7 @@ public static class UdpDiscovery
             catch (SocketException) { }
         }
         if (udp == null) { Log.Warn(P("could not bind a local UDP port")); return null; }
+        if (ip == null) udp.EnableBroadcast = true;
 
         int localPort = ((IPEndPoint)udp.Client.LocalEndPoint!).Port;
         int cid = Random.Shared.Next(1, int.MaxValue);
@@ -299,9 +322,10 @@ public static class UdpDiscovery
             {
                 while (!handshakeCts.IsCancellationRequested)
                 {
+                    foreach (var target in targets)
                     foreach (var port in CameraPorts)
                     {
-                        try { await udp.SendAsync(hello, new IPEndPoint(ip, port), handshakeCts.Token).ConfigureAwait(false); }
+                        try { await udp.SendAsync(hello, new IPEndPoint(target, port), handshakeCts.Token).ConfigureAwait(false); }
                         catch (OperationCanceledException) { return; }
                         catch (SocketException) { }
                     }
@@ -352,6 +376,15 @@ public static class UdpDiscovery
     /// broadcast per interface reaches a camera on any local subnet, out the
     /// right NIC (multi-homed hosts, VLANs, /23s and the like).
     /// </summary>
+    /// <summary>Where a UID-only handshake sends its hellos: every local subnet's
+    /// directed broadcast, with the limited broadcast as a last resort when the
+    /// interface sweep found nothing (containers with odd network stacks).</summary>
+    internal static IPAddress[] BroadcastTargets()
+    {
+        var targets = LocalDirectedBroadcasts().Distinct().ToArray();
+        return targets.Length > 0 ? targets : new[] { IPAddress.Broadcast };
+    }
+
     internal static IEnumerable<IPAddress> LocalDirectedBroadcasts()
     {
         foreach (var ni in SafeInterfaces())
@@ -442,13 +475,14 @@ public static class UdpDiscovery
     /// handshake it records the negotiated parameters and immediately sends a
     /// polite disconnect — this is a diagnostic, not a session.
     /// </summary>
-    public static async Task<UdpOutcome> ProbeAsync(string tag, IPAddress ip, string uid, CancellationToken ct)
+    public static async Task<UdpOutcome> ProbeAsync(string tag, IPAddress? ip, string uid, CancellationToken ct)
     {
         string P(string msg) => $"{tag}: [discover/udp] {MaskUid(msg, uid)}";
-        Log.Info(P($"Baichuan-over-UDP discovery (uid {uid}, target {ip}, ports {string.Join("/", CameraPorts)})"));
+        Log.Info(P($"Baichuan-over-UDP discovery (uid {uid}, target {ip?.ToString() ?? "(broadcast only)"}, " +
+                   $"ports {string.Join("/", CameraPorts)})"));
 
         // The discovery socket is IPv4 (ports 2015/2018, limited broadcast).
-        if (ip.AddressFamily != AddressFamily.InterNetwork)
+        if (ip != null && ip.AddressFamily != AddressFamily.InterNetwork)
         {
             Log.Warn(P($"{ip} is not IPv4; UDP discovery is IPv4-only — skipped"));
             return UdpOutcome.Aborted;
@@ -492,12 +526,12 @@ public static class UdpDiscovery
             //    a subnet this host has no interface on.
             // Broadcast destinations are de-duplicated.
             var bcasts = new HashSet<IPAddress>(LocalDirectedBroadcasts()) { IPAddress.Broadcast };
-            if (Slash24Broadcast(ip) is { } guess) bcasts.Add(guess);
+            if (ip != null && Slash24Broadcast(ip) is { } guess) bcasts.Add(guess);
 
             var targets = new List<IPEndPoint>();
             foreach (var port in CameraPorts)
             {
-                targets.Add(new IPEndPoint(ip, port));
+                if (ip != null) targets.Add(new IPEndPoint(ip, port));
                 foreach (var b in bcasts) targets.Add(new IPEndPoint(b, port));
             }
 

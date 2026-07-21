@@ -189,7 +189,9 @@ public sealed record ApiKeyInfo(bool Enabled, string Source, string Fingerprint,
 /// <summary>GET /api/admin/cameras — configured cameras for the settings editor.
 /// Passwords are never included (only HasPassword); RTSP URLs come masked.</summary>
 public sealed record ApiAdminCamera(string Name, string Type, string? Address, string? Username,
-    bool HasPassword, int ChannelId, string? HttpAddress, string? RtspMain, string? RtspSub);
+    bool HasPassword, int ChannelId, string? HttpAddress, string? RtspMain, string? RtspSub,
+    string? Uid = null, string? AlwaysOn = null, string? Stream = null, string? OnvifAddress = null,
+    bool Record = true, bool Udp = false, bool UdpProbe = false, bool WakeCapture = false);
 public sealed record ApiAdminCameras(bool Writable, List<ApiAdminCamera> Cameras);
 
 /// <summary>GET/PUT /api/admin/notifications — email alert settings. The SMTP

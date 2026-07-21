@@ -42,17 +42,28 @@ public static class CameraProbe
         string Mask(string s) => string.IsNullOrEmpty(cfg.Uid) ? s : UdpDiscovery.MaskUid(s, cfg.Uid!);
         string P(string msg) => $"{tag}: [discover] {Mask(msg)}";
 
-        Log.Info(P($"=== camera discovery sweep — host {cfg.Host}, uid {(string.IsNullOrEmpty(cfg.Uid) ? "(none)" : cfg.Uid)} ==="));
+        Log.Info(P($"=== camera discovery sweep — host {(string.IsNullOrWhiteSpace(cfg.Host) ? "(none — UID-only)" : cfg.Host)}, " +
+                   $"uid {(string.IsNullOrEmpty(cfg.Uid) ? "(none)" : cfg.Uid)} ==="));
 
-        var ip = await ResolveV4Async(P, cfg.Host, ct).ConfigureAwait(false);
-        if (ip == null) return;
+        // UID-only entry (no address): the TCP and HTTP steps have no target, so
+        // only the broadcast-capable probes below can say anything.
+        IPAddress? ip = null;
+        if (!string.IsNullOrWhiteSpace(cfg.Host))
+        {
+            ip = await ResolveV4Async(P, cfg.Host, ct).ConfigureAwait(false);
+            if (ip == null) return;
+        }
+        else
+            Log.Info(P("no address configured — skipping the TCP/HTTP steps; UDP discovery goes by broadcast"));
 
         // 1. TCP reachability map.
-        var open = await TcpMapAsync(P, ip, cfg.Port, ct).ConfigureAwait(false);
+        var open = ip == null ? new HashSet<int>() : await TcpMapAsync(P, ip, cfg.Port, ct).ConfigureAwait(false);
         if (ct.IsCancellationRequested) return;
 
         // 2. Reolink HTTP API — the capability jackpot when it answers.
-        var http = await HttpDumpAsync(P, cfg, ip, open, ct).ConfigureAwait(false);
+        var http = ip == null
+            ? new HttpResult(false, null, null)
+            : await HttpDumpAsync(P, cfg, ip, open, ct).ConfigureAwait(false);
         if (ct.IsCancellationRequested) return;
 
         // 3. ONVIF WS-Discovery.

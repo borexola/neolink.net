@@ -3596,6 +3596,23 @@ button.ev-switch-opt {
     align-items: center;
 }
 
+/* EVENTS row: a legend that filters. Each chip carries its category's mark colour
+   (set inline, so it can never drift from the colour drawn on the lanes); the
+   swatch keeps that colour even when the chip is switched off, so the row still
+   reads as a legend while filtering. */
+.tl-ev-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.tl-ev-swatch {
+    width: 9px;
+    height: 9px;
+    border-radius: 2px;
+    flex: 0 0 auto;
+}
+
 /* The scrubbing area. Its height is the user's to set (the divider below/above
    it drags): natural size until then, and whatever was dragged after — the
    tracks inside share it, so a taller board means thicker, easier-to-hit lanes. */

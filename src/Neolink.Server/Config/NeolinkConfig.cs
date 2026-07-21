@@ -30,7 +30,13 @@ public sealed class NeolinkConfig
     public List<UserConfig> Users { get; } = new();
     public List<CameraConfig> Cameras { get; } = new();
 
-    private static readonly string[] ValidStreams = { "mainStream", "subStream", "externStream", "both", "all" };
+    /// <summary>The per-camera "stream" values the loader accepts. Public so the web
+    /// admin API validates against the SAME list the loader enforces — one source of
+    /// truth, or the editor could save a config the loader then rejects on restart.</summary>
+    public static readonly string[] ValidCameraStreams =
+        { "mainStream", "subStream", "externStream", "both", "all" };
+
+    private static readonly string[] ValidStreams = ValidCameraStreams;
     private static readonly string[] ReservedNames = { "anyone", "anonymous" };
 
     /// <summary>
@@ -413,16 +419,20 @@ public sealed class NeolinkConfig
         }
 
         if (username == null) throw new FormatException($"Camera \"{name}\" missing \"username\"");
-        if (uid != null && address == null)
+        // UID-only (no address) works over UDP: discovery broadcasts on the local
+        // subnets and the camera whose UID matches answers with its own address.
+        // TCP has no such lookup, so an address-less entry REQUIRES "udp": true.
+        if (uid != null && address == null && !udp)
             throw new FormatException(
-                $"Camera \"{name}\": UID-only (relay/battery) connections are not supported by Neolink.NET yet; " +
-                "give the camera a direct \"address\" too (\"uid\" + \"udp\": true connects over UDP)");
-        if (address == null)
-            throw new FormatException($"Camera \"{name}\" needs an \"address\" (host or host:port)");
+                $"Camera \"{name}\": a \"uid\" without an \"address\" needs \"udp\": true — " +
+                "broadcast discovery finds the camera by UID, but only over UDP " +
+                "(or give the camera a direct \"address\" for TCP)");
+        if (address == null && uid == null)
+            throw new FormatException($"Camera \"{name}\" needs an \"address\" (host or host:port) or a \"uid\" with \"udp\": true");
         if (udp && string.IsNullOrWhiteSpace(uid))
             throw new FormatException($"Camera \"{name}\": \"udp\": true needs a \"uid\" (from the Reolink app or the sticker)");
 
-        var (host, port) = SplitHostPort(address);
+        var (host, port) = address == null ? ("", 9000) : SplitHostPort(address);
         return new CameraConfig
         {
             Name = name,

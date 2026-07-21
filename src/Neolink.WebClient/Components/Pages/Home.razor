@@ -1291,7 +1291,7 @@
                                 @if (CamNameError != null) { <div class="field-error">@CamNameError</div> }
                                 @if (e.Type == "reolink")
                                 {
-                                    <div class="control-row"><span>Address</span>
+                                    <div class="control-row"><span>Address (or UID below, for UDP battery cams)</span>
                                         <input class="notif-input @(CamAddressError != null ? "input-error" : "")"
                                                placeholder="192.168.1.50 (port 9000 assumed)" @bind="e.Address" @bind:event="oninput" /></div>
                                     @if (CamAddressError != null) { <div class="field-error">@CamAddressError</div> }
@@ -1307,6 +1307,56 @@
                                         <input class="notif-input" placeholder="usually blank" @bind="e.HttpAddress" /></div>
                                     <div class="control-row"><span>Channel (NVR only; 0 = standalone)</span>
                                         <input class="ret-input" type="number" min="0" max="255" @bind="e.ChannelId" /></div>
+
+                                    <div class="campanel-divider"></div>
+                                    <div class="campanel-subtitle">OPTIONAL</div>
+                                    <div class="control-row"><span>Streams to open</span>
+                                        <select class="event-filter" value="@e.Stream"
+                                                @onchange='ev => e.Stream = (string?)ev.Value ?? "both"'>
+                                            <option value="both">Main + sub (default)</option>
+                                            <option value="mainStream">Main only</option>
+                                            <option value="subStream">Sub only</option>
+                                            <option value="externStream">Extern only</option>
+                                            <option value="all">All three</option>
+                                        </select></div>
+                                    <div class="control-row"><span>Always on</span>
+                                        <select class="event-filter" value="@e.AlwaysOn"
+                                                @onchange='ev => e.AlwaysOn = (string?)ev.Value ?? "auto"'>
+                                            <option value="auto">Auto — battery cams sleep, others stay on</option>
+                                            <option value="true">Always on — hold the connection</option>
+                                            <option value="false">Let it sleep — connect only when watched</option>
+                                        </select></div>
+                                    <div class="control-row"><span>UID (battery / UDP models)</span>
+                                        <input class="notif-input @(CamUidError != null ? "input-error" : "")"
+                                               placeholder="95270000ABCDEFGH — from the app or the sticker"
+                                               @bind="e.Uid" @bind:event="oninput" /></div>
+                                    @if (CamUidError != null) { <div class="field-error">@CamUidError</div> }
+                                    <div class="control-row"><span>Connect over UDP (experimental)</span>
+                                        <select class="event-filter" value="@(e.Udp ? "true" : "false")"
+                                                @onchange='ev => e.Udp = (string?)ev.Value == "true"'>
+                                            <option value="false">No — over TCP (default)</option>
+                                            <option value="true">Yes — Baichuan over UDP</option>
+                                        </select></div>
+                                    <div class="control-row"><span>Wake capture (battery cams)</span>
+                                        <select class="event-filter" value="@(e.WakeCapture ? "true" : "false")"
+                                                @onchange='ev => e.WakeCapture = (string?)ev.Value == "true"'>
+                                            <option value="false">Off — connect on demand (default)</option>
+                                            <option value="true">On — catch events while it sleeps</option>
+                                        </select></div>
+                                    <div class="control-row"><span>UDP discovery probe (diagnostic)</span>
+                                        <select class="event-filter" value="@(e.UdpProbe ? "true" : "false")"
+                                                @onchange='ev => e.UdpProbe = (string?)ev.Value == "true"'>
+                                            <option value="false">Off (default)</option>
+                                            <option value="true">On — log the discovery exchange</option>
+                                        </select></div>
+                                    <div class="control-row"><span>ONVIF address (blank = derived)</span>
+                                        <input class="notif-input" placeholder="usually blank" @bind="e.OnvifAddress" /></div>
+                                    <div class="notice small">
+                                        <b>UID</b> is only needed for battery/UDP-only models (Argus family) —
+                                        with <b>Connect over UDP</b> set, it can replace the address entirely
+                                        (the camera is then found by broadcast on the local network).
+                                        <b>Always on</b> auto is right for almost everyone.
+                                    </div>
                                 }
                                 else
                                 {
@@ -1321,8 +1371,23 @@
                                         password shows as <b>****</b> — leave the URL untouched to keep it.
                                     </div>
                                 }
+                                @* Applies to both camera kinds, so it sits outside the branches. *@
+                                <div class="control-row"><span>Record detection events</span>
+                                    <select class="event-filter" value="@(e.Record ? "true" : "false")"
+                                            @onchange='ev => e.Record = (string?)ev.Value == "true"'>
+                                        <option value="true">Yes (default)</option>
+                                        <option value="false">No</option>
+                                    </select></div>
                                 <div class="settings-foot-btns">
-                                    <button class="chip" disabled="@(_camTestBusy || CamFormError != null)" @onclick="TestCameraAsync">
+                                    @* UID-only cameras are found by broadcast at connect time — the
+                                       test endpoint dials TCP, so it has nothing to dial here. *@
+                                    <button class="chip"
+                                            disabled="@(_camTestBusy || CamFormError != null
+                                                        || (e.Type == "reolink" && string.IsNullOrWhiteSpace(e.Address)))"
+                                            title="@(e.Type == "reolink" && string.IsNullOrWhiteSpace(e.Address)
+                                                     ? "Testing needs an address — a UID-only camera is found by broadcast when the server connects"
+                                                     : "Try reaching the camera with these settings")"
+                                            @onclick="TestCameraAsync">
                                         @(_camTestBusy ? "Testing…" : "Test connection")</button>
                                     <span class="tile-spacer"></span>
                                     <button class="chip" @onclick="CancelCameraEdit">Cancel</button>
@@ -2536,6 +2601,15 @@
         public string RtspMain = "";
         public string RtspSub = "";
         public bool HasPassword;
+        // Optional per-camera settings (Reolink/Baichuan entries).
+        public string Uid = "";
+        public string OnvifAddress = "";
+        public string AlwaysOn = "auto";   // "auto" | "true" | "false"
+        public string Stream = "both";
+        public bool Record = true;
+        public bool Udp;
+        public bool UdpProbe;
+        public bool WakeCapture;
     }
 
     private async Task OpenCamerasTabAsync()
@@ -2591,6 +2665,14 @@
             RtspMain = cam.RtspMain ?? "",
             RtspSub = cam.RtspSub ?? "",
             HasPassword = cam.HasPassword,
+            Uid = cam.Uid ?? "",
+            OnvifAddress = cam.OnvifAddress ?? "",
+            AlwaysOn = cam.AlwaysOn ?? "auto",
+            Stream = cam.Stream ?? "both",
+            Record = cam.Record,
+            Udp = cam.Udp,
+            UdpProbe = cam.UdpProbe,
+            WakeCapture = cam.WakeCapture,
         };
     }
 
@@ -2611,13 +2693,24 @@
             ? "A camera with this name already exists."
             : null;
 
-    private string? CamAddressError =>
-        _camEdit is { Type: "reolink" } e ? HostPortClientError(e.Address) : null;
+    private string? CamAddressError
+    {
+        get
+        {
+            if (_camEdit is not { Type: "reolink" } e) return null;
+            // UID-only entries (Argus-family battery cams) need no address: over UDP
+            // the camera is found by broadcast discovery keyed on its UID.
+            if (string.IsNullOrWhiteSpace(e.Address) && !string.IsNullOrWhiteSpace(e.Uid))
+                return e.Udp ? null
+                    : "Without an address, set \"Connect over UDP\" below — the camera is then found by its UID.";
+            return HostPortClientError(e.Address);
+        }
+    }
 
     private static string? HostPortClientError(string address)
     {
         address = address.Trim();
-        if (address.Length == 0) return "An address is required — the camera's IP or hostname.";
+        if (address.Length == 0) return "An address is required — the camera's IP or hostname (or a UID, for UDP battery cameras).";
         if (address.Contains("://")) return "Enter a bare host or host:port, not a URL.";
         if (address.Any(char.IsWhiteSpace)) return "The address must not contain spaces.";
         int colon = address.LastIndexOf(':');
@@ -2649,7 +2742,16 @@
         }
     }
 
-    private string? CamFormError => CamNameError ?? CamAddressError ?? CamUsernameError ?? CamRtspError;
+    /// <summary>Both UDP options are addressed by the camera's UID, so neither can be
+    /// switched on without one — mirrors the server's rule so the form says it first.</summary>
+    private string? CamUidError => _camEdit is not { Type: "reolink" } e ? null
+        : e.Uid.Any(char.IsWhiteSpace) ? "The UID must not contain spaces."
+        : (e.Udp || e.UdpProbe) && string.IsNullOrWhiteSpace(e.Uid)
+            ? "The UDP options need the camera's UID (Reolink app → device info, or the sticker)."
+            : null;
+
+    private string? CamFormError =>
+        CamNameError ?? CamAddressError ?? CamUsernameError ?? CamRtspError ?? CamUidError;
 
     private object CamRequestBody(CamEdit e, bool forSave) => new
     {
@@ -2664,6 +2766,16 @@
         httpAddress = forSave && e.Type == "reolink" ? e.HttpAddress.Trim() : null,
         rtspMain = e.Type == "rtsp" ? e.RtspMain.Trim() : null,
         rtspSub = e.Type == "rtsp" ? e.RtspSub.Trim() : null,
+        // Optional settings only go up on SAVE (the connection test has no use for
+        // them) and only for Reolink entries, except "record" which suits both.
+        uid = forSave && e.Type == "reolink" ? e.Uid.Trim() : null,
+        onvifAddress = forSave && e.Type == "reolink" ? e.OnvifAddress.Trim() : null,
+        alwaysOn = forSave && e.Type == "reolink" ? e.AlwaysOn : null,
+        stream = forSave && e.Type == "reolink" ? e.Stream : null,
+        udp = forSave && e.Type == "reolink" ? e.Udp : (bool?)null,
+        udpProbe = forSave && e.Type == "reolink" ? e.UdpProbe : (bool?)null,
+        wakeCapture = forSave && e.Type == "reolink" ? e.WakeCapture : (bool?)null,
+        record = forSave ? e.Record : (bool?)null,
     };
 
     private async Task TestCameraAsync()

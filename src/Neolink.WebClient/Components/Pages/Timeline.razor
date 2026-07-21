@@ -294,6 +294,29 @@
             </span>
         </div>
 
+        @* Legend + filter in one: each chip carries the exact colour its marks are
+           drawn in, and clicking it hides/shows that category on the lanes. *@
+        @if (PresentKinds.Any())
+        {
+            <div class="tl-cams tl-evfilter">
+                <span class="tool-label">EVENTS</span>
+                @foreach (var kind in PresentKinds)
+                {
+                    var on = _eventKinds.Contains(kind);
+                    <button class="chip tl-ev-chip @(on ? "" : "chip-off")"
+                            style="@(on ? $"border-color:{KindColor(kind)};color:{KindColor(kind)}" : "")"
+                            title="@(on ? $"{KindLabel(kind)} events shown — click to hide them" : $"{KindLabel(kind)} events hidden — click to show them")"
+                            @onclick="() => ToggleEventKind(kind)">
+                        <span class="tl-ev-swatch" style="background:@KindColor(kind)"></span>@KindLabel(kind)
+                    </button>
+                }
+                @if (!_eventKinds.Any())
+                {
+                    <span class="event-sub">— every category hidden; the lanes show no marks</span>
+                }
+            </div>
+        }
+
         @if (!Included.Any())
         {
             <div class="notice">Select cameras above to load their footage — colored marks on the lanes are events.</div>
@@ -363,7 +386,7 @@
                             }
                             @if (_marks.TryGetValue(cam.Name, out var marks))
                             {
-                                @foreach (var m in marks)
+                                @foreach (var m in VisibleMarks(marks))
                                 {
                                     @if (InView(m.Start, m.End))
                                     {
@@ -464,6 +487,12 @@
     private readonly Dictionary<string, List<Mark>> _marks = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _noFootage = new(StringComparer.OrdinalIgnoreCase);
 
+    // EVENTS filter: which legend categories are drawn on the lanes. Starts with
+    // everything on and is deliberately NOT persisted — it is a per-visit view
+    // filter, not a preference (the day's events reload unfiltered either way).
+    private readonly HashSet<string> _eventKinds =
+        new(EventKindTable.Select(k => k.Kind), StringComparer.OrdinalIgnoreCase);
+
     private DotNetObjectReference<Timeline>? _selfRef;
     private PeriodicTimer? _clock;
     private DateTime _covRefreshed = DateTime.UtcNow; // last periodic coverage reload (today only)
@@ -479,8 +508,9 @@
 
     /// <summary>One recording segment: seconds-of-day start, span and playback URL.</summary>
     private sealed record Seg(double Start, double Span, string Url);
-    /// <summary>One event as a colored lane mark (seconds of day).</summary>
-    private sealed record Mark(double Start, double End, string Color, string Title);
+    /// <summary>One event as a colored lane mark (seconds of day). Kind is the
+    /// legend category the EVENTS filter switches on and off.</summary>
+    private sealed record Mark(double Start, double End, string Color, string Title, string Kind);
 
     private const string PrefsKey = "neolink.timeline";
     /// <summary>Timeline preferences. Fields are nullable so a partial blob (an
@@ -850,7 +880,8 @@
                 double e = Math.Min(DaySeconds, s + dur);
                 if (!_marks.TryGetValue(ev.Camera, out var list))
                     _marks[ev.Camera] = list = new List<Mark>();
-                list.Add(new Mark(s, e, LabelColor(ev.Labels), $"{ev.Title} · {start:HH:mm:ss}"));
+                var evKind = EventKind(ev.Labels);
+                list.Add(new Mark(s, e, KindColor(evKind), $"{ev.Title} · {start:HH:mm:ss}", evKind));
 
                 // The clip (full main-stream) is what plays; the sub-stream preview
                 // is a lighter fallback. Offset into the file = cursor − event start.
@@ -978,14 +1009,62 @@
             ? h * 3600 + m * 60 + s
             : -1;
 
-    private static string LabelColor(List<string> labels) =>
-        labels.Contains("person") ? "#4f8cff"
-        : labels.Contains("vehicle") ? "#ffb020"
-        : labels.Contains("animal") ? "#3fd07f"
-        : labels.Contains("package") ? "#b06bff"
-        : labels.Contains("crying") ? "#ff7eb6" // crying-sound detection (indoor cams)
-        : labels.Contains("external") ? "#e05c6e" // held open from Home Assistant
-        : "#8a93a5"; // motion / other
+    /// <summary>The lane-mark legend, in precedence order: an event takes the colour
+    /// of the FIRST category whose label it carries. This one table drives both the
+    /// marks drawn on the lanes and the EVENTS filter chips, so the chip colour is
+    /// always exactly the colour on the timeline.</summary>
+    private static readonly (string Kind, string Label, string Color)[] EventKindTable =
+    {
+        ("person",   "Person",   "#4f8cff"),
+        ("vehicle",  "Vehicle",  "#ffb020"),
+        ("animal",   "Animal",   "#3fd07f"),
+        ("package",  "Package",  "#b06bff"),
+        ("crying",   "Crying",   "#ff7eb6"), // crying-sound detection (indoor cams)
+        ("external", "External", "#e05c6e"), // held open from Home Assistant
+        ("motion",   "Motion",   "#8a93a5"), // motion / anything unclassified
+    };
+
+    /// <summary>Which legend category an event falls in (the catch-all is "motion").</summary>
+    private static string EventKind(List<string> labels)
+    {
+        foreach (var (kind, _, _) in EventKindTable)
+            if (kind != "motion" && labels.Contains(kind))
+                return kind;
+        return "motion";
+    }
+
+    private static string KindColor(string kind) =>
+        EventKindTable.FirstOrDefault(k => k.Kind == kind).Color ?? "#8a93a5";
+
+    private static string KindLabel(string kind) =>
+        EventKindTable.FirstOrDefault(k => k.Kind == kind).Label ?? kind;
+
+    private static string LabelColor(List<string> labels) => KindColor(EventKind(labels));
+
+    /// <summary>Legend categories actually present on the loaded (included) lanes, in
+    /// table order — so the filter never shows a chip that would filter nothing.
+    /// Computed from the UNFILTERED marks, so chips stay put as you toggle them.</summary>
+    private IEnumerable<string> PresentKinds
+    {
+        get
+        {
+            var present = Included
+                .SelectMany(c => _marks.TryGetValue(c.Name, out var m) ? m : (IEnumerable<Mark>)Array.Empty<Mark>())
+                .Select(m => m.Kind)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            return EventKindTable.Select(k => k.Kind).Where(present.Contains);
+        }
+    }
+
+    /// <summary>The marks of one lane that the EVENTS filter lets through.</summary>
+    private IEnumerable<Mark> VisibleMarks(IEnumerable<Mark> marks) =>
+        marks.Where(m => _eventKinds.Contains(m.Kind));
+
+    private void ToggleEventKind(string kind)
+    {
+        if (!_eventKinds.Remove(kind)) _eventKinds.Add(kind);
+        StateHasChanged();
+    }
 
     // ------------------------------------------------------------ playback
 
@@ -1100,8 +1179,10 @@
     /// the fastest way to review a day: [ and ] hop from incident to incident.</summary>
     private async Task JumpEventAsync(int dir)
     {
+        // Hopping obeys the EVENTS filter: [ and ] skip the categories you switched
+        // off, so a filtered review really does jump incident to incident.
         var starts = Included
-            .SelectMany(c => _marks.TryGetValue(c.Name, out var m) ? m : (IEnumerable<Mark>)Array.Empty<Mark>())
+            .SelectMany(c => _marks.TryGetValue(c.Name, out var m) ? VisibleMarks(m) : Array.Empty<Mark>())
             .Select(m => m.Start)
             .OrderBy(s => s);
         double? target = dir > 0
