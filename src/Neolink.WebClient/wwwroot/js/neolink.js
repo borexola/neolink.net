@@ -413,10 +413,18 @@
             ['engine', `${s.engine} · audio ${s.hasAudio ? (s.muted ? 'present (muted)' : 'playing') : 'none'}`],
         ];
 
+        // Starved source: the link is fine and nothing was skipped or dropped, yet
+        // fragments arrive seconds apart at a trickle bitrate — the CAMERA is not
+        // producing/shipping enough video (some battery models' radios can't carry
+        // what their own encoder makes). No knob on this device helps.
+        const starved = s.ws === 1 && s.hop === 0 && dropPct < 2 && s.session > 20
+            && s.maxGap != null && s.maxGap >= 3 && avgBps > 0 && avgBps < 400_000 && s.frames > 0;
+
         let verdict = 'healthy — picture is arriving and decoding cleanly', vcls = 'ok';
         if (s.ws !== 1) { verdict = `link ${WS_STATE[s.ws]} — trying to reconnect`; vcls = 'bad'; }
         else if (dropPct >= 2) { verdict = 'this device is dropping frames — try the sub stream or close other tiles'; vcls = 'bad'; }
         else if (s.hop > 0) { verdict = 'footage went missing before it reached the browser — server or network, not this device'; vcls = 'warn'; }
+        else if (starved) { verdict = 'the camera is sending less video than the stream needs — its radio can’t keep up with its encoder (known on some battery models); not this device or network'; vcls = 'warn'; }
         else if (!s.live) { verdict = 'buffering — waiting for enough video to start'; vcls = 'warn'; }
         else if (s.rate > 1.001) { verdict = 'playing slightly fast to drift back toward live'; vcls = 'warn'; }
 

@@ -107,5 +107,9 @@ The rules, designed so nothing you set ever gets lost:
   battery section).
 - **Port conflict on 8654/8655** — change the host ports in the add-on's
   Network section; the web UI keeps working through **OPEN WEB UI**.
+- **A UDP-only battery camera (`"udp": true`) never connects** — these need
+  host networking, which the add-on does not use, so they are not supported
+  under the add-on today. Run the Docker image with `network_mode: host`
+  instead. See the project README's *UDP-only battery models*.
 
 Project docs, issues and source: https://github.com/borexola/neolink.net

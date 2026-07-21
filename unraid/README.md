@@ -33,6 +33,12 @@ restart the container. To record, add `"recording": { "path": "/recordings" }`
 and map the **Recordings** volume. Full reference:
 [`config.example.json`](../src/Neolink.Server/config.example.json).
 
+UDP-only battery cameras (`"udp": true`) need **Network Type: Host** instead of
+the template's default bridge — their handshake and discovery do not survive
+Docker's NAT. Switch it in the container's edit page (the WebUI and RTSP stay on
+8654/8655, now bound directly on the server). Every other camera works on
+bridge; see the project README's *UDP-only battery models*.
+
 Tiered storage: map the optional **Clips** / **Archive** volumes and set
 `clips_path` / `archive_path` in `config.json` — see the project README's
 *Tiered storage* section. In Unraid, put `/clips` on the cache/SSD and

@@ -27,5 +27,10 @@ services:
       # "archive_path": "/archive"; expired footage moves here instead of
       # being deleted once archiving is enabled per camera in the web UI
       # - /mnt/bigdisk/neolink:/archive
-    # For RTSP over UDP transport, prefer host networking instead of port maps:
+    # Host networking instead of port maps. REQUIRED for UDP-only battery
+    # cameras ("udp": true in config.json): their handshake puts the client's
+    # port inside the packet and their discovery relies on LAN broadcast, so
+    # neither survives a bridge network. Also needed for RTSP over UDP
+    # transport. Delete the `ports:` block above when you enable this — the
+    # container binds 8654/8655 on the host directly.
     # network_mode: host

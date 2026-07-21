@@ -2372,6 +2372,98 @@ public static class SelfTest
                 $"asleep sensor availability must be bridge-only, got: {asleepJson}");
         });
 
+        Test("UID-only cameras: allowed with udp, rejected without", () =>
+        {
+            // A UID can replace the address — but only over UDP, where broadcast
+            // discovery finds the camera by UID. TCP has no such lookup.
+            string Cfg(string body) => $$"""
+                { "cameras": [ { "name": "argus", "username": "admin", "password": "p", {{body}} } ] }
+                """;
+            var tmp = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}.json");
+            try
+            {
+                // UID + udp, no address: loads, empty host, uid kept.
+                File.WriteAllText(tmp, Cfg("\"uid\": \"95270000ABCDEFGH\", \"udp\": true"));
+                var cfg = NeolinkConfig.Load(tmp);
+                AssertEq(cfg.Cameras[0].Host, "");
+                Assert(cfg.Cameras[0].Udp && cfg.Cameras[0].Uid == "95270000ABCDEFGH", "uid-only udp camera loads");
+
+                // UID without udp and without address: must be refused with guidance.
+                File.WriteAllText(tmp, Cfg("\"uid\": \"95270000ABCDEFGH\""));
+                bool rejected = false;
+                try { NeolinkConfig.Load(tmp); }
+                catch (FormatException ex) { rejected = ex.Message.Contains("udp"); }
+                Assert(rejected, "uid without udp and address is refused, pointing at udp");
+
+                // Neither address nor uid: still an error.
+                File.WriteAllText(tmp, Cfg("\"channel_id\": 0"));
+                rejected = false;
+                try { NeolinkConfig.Load(tmp); } catch (FormatException) { rejected = true; }
+                Assert(rejected, "no address and no uid is refused");
+            }
+            finally
+            {
+                try { File.Delete(tmp); } catch { }
+            }
+        });
+
+        Test("camera 'stream' options: the admin editor validates the loader's list", () =>
+        {
+            // The add-camera screen offers these as a dropdown and the web API
+            // validates against the same array. If the two ever drift, the editor
+            // happily saves a config the loader then rejects on restart — so every
+            // advertised value must actually load, and anything else must not.
+            string Cfg(string stream) => $$"""
+                {
+                  "cameras": [ { "name": "c", "username": "u", "password": "p",
+                                 "address": "10.0.0.5", "stream": "{{stream}}" } ]
+                }
+                """;
+            var tmp = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}.json");
+            try
+            {
+                Assert(NeolinkConfig.ValidCameraStreams.Length > 0, "the advertised stream list is not empty");
+                foreach (var stream in NeolinkConfig.ValidCameraStreams)
+                {
+                    File.WriteAllText(tmp, Cfg(stream));
+                    var cfg = NeolinkConfig.Load(tmp);
+                    AssertEq(cfg.Cameras[0].Stream, stream);
+                }
+                // A value the dropdown never offers must still be refused by the loader.
+                File.WriteAllText(tmp, Cfg("bogusStream"));
+                bool rejected = false;
+                try { NeolinkConfig.Load(tmp); } catch { rejected = true; }
+                Assert(rejected, "an unlisted stream value must be rejected by the loader");
+            }
+            finally
+            {
+                try { File.Delete(tmp); } catch { }
+            }
+        });
+
+        Test("HA status LED switch: ON/OFF writes the lightState toggle", () =>
+        {
+            // The feature this exists for: turning the little status LED off (and
+            // back on) from Home Assistant — e.g. alongside Privacy Mode. It rides
+            // LedState's lightState, the same field the floodlight/spotlight use,
+            // which is why only one of the three is ever announced per camera.
+            var led = new LedRecordingControl("ledcam");
+            var cam = new Web.WebCameraInfo("ledcam", new List<Web.WebStreamInfo>(), led, null);
+            var hub = new Mqtt.HomeAssistantMqtt(
+                new Config.MqttConfig { Broker = "127.0.0.1", Port = 1 }, // never connected
+                new List<Web.WebCameraInfo> { cam }, "test");
+            var bridge = new Mqtt.CameraBridge(cam, hub);
+
+            bridge.HandleCommandAsync("status_led", "OFF").GetAwaiter().GetResult();
+            AssertEq(led.LastLightState, "close");
+            bridge.HandleCommandAsync("status_led", "ON").GetAwaiter().GetResult();
+            AssertEq(led.LastLightState, "open");
+            // It must drive ONLY lightState — never the IR "state" field, which is
+            // night vision and would go dark with it.
+            Assert(led.LastState == null && led.LastDoorbell == null && led.LastIrBrightness == null,
+                "status LED write must touch lightState alone");
+        });
+
         Test("HA detection-events switch: shares the web UI setting + persists", () =>
         {
             var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
@@ -4089,6 +4181,24 @@ public static class SelfTest
 
     /// <summary>An always-online camera that supports nothing — the API test only
     /// needs a control surface to exist, not to do anything.</summary>
+    /// <summary>A stub that records what the last LedState write asked for, so the
+    /// HA status-LED switch can be checked against the exact field it must drive.</summary>
+    private sealed class LedRecordingControl(string name) : StubCameraControl(name)
+    {
+        public string? LastState, LastLightState, LastDoorbell;
+        public int? LastIrBrightness;
+
+        public override Task SetLedStateAsync(string? state, string? lightState,
+            string? doorbellLightState, int? irBrightness, CancellationToken ct)
+        {
+            LastState = state;
+            LastLightState = lightState;
+            LastDoorbell = doorbellLightState;
+            LastIrBrightness = irBrightness;
+            return Task.CompletedTask;
+        }
+    }
+
     private class StubCameraControl(string name) : Streaming.ICameraControl
     {
         public string CameraName => name;
@@ -4107,7 +4217,7 @@ public static class SelfTest
         public virtual Task<byte[]?> SnapshotAsync(CancellationToken ct) => Task.FromResult<byte[]?>(null);
         public Task<System.Xml.Linq.XElement?> GetLedStateAsync(CancellationToken ct) =>
             Task.FromResult<System.Xml.Linq.XElement?>(null);
-        public Task SetLedStateAsync(string? state, string? lightState,
+        public virtual Task SetLedStateAsync(string? state, string? lightState,
             string? doorbellLightState, int? irBrightness, CancellationToken ct) => Task.CompletedTask;
         public Task<System.Xml.Linq.XElement?> GetPirStateAsync(CancellationToken ct) =>
             Task.FromResult<System.Xml.Linq.XElement?>(null);
@@ -4475,7 +4585,7 @@ public static class SelfTest
                         kaReplies++;
                     await cam.SendAsync(BcUdp.BuildAck(cid, 0, pid, 0, ReadOnlySpan<byte>.Empty), r.RemoteEndPoint, cts.Token);
                 }
-                else if (BcUdp.TryParseAck(r.Buffer, out _, out _, out _))
+                else if (BcUdp.TryParseAck(r.Buffer, out _, out _, out _, out _, out _))
                 {
                     clientAckPackets++; // the continuous ack timer — the keepalive the camera needs
                 }

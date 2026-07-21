@@ -143,6 +143,11 @@
       // your LAN; a sleeping battery camera can't be woken over UDP either (PIR
       // motion or the Reolink app wakes it). Everything after connect — video,
       // events, battery, controls — works the same as the TCP path.
+      // IN DOCKER THIS NEEDS HOST NETWORKING ("network_mode: host", or
+      // "--network host") — the UDP handshake carries the client's port inside
+      // the packet and discovery uses LAN broadcast, so neither survives a
+      // bridge network. TCP cameras are unaffected. See the README's "UDP-only
+      // battery models".
       // "uid": "95270000ABCDEFGH",
       // "udp": true,
 

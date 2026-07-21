@@ -307,7 +307,9 @@ services:
       # path you set, or that footage lands inside the container and is lost on recreate:
       # - /mnt/fast-ssd/neolink:/clips     # fast SSD tier  → "clips_path": "/clips"
       # - /mnt/bigdisk/neolink:/archive    # cold archive   → "archive_path": "/archive"
-    # For RTSP over UDP transport, use host networking instead of port maps:
+    # Host networking instead of port maps — REQUIRED for UDP-only battery
+    # cameras ("udp": true), and needed for RTSP over UDP transport. Delete the
+    # `ports:` block above when you enable it. See "UDP-only battery models".
     # network_mode: host
 ```
 
@@ -352,9 +354,12 @@ Then:
 - **Web UI**: http://localhost:8655
 - **RTSP**: `rtsp://localhost:8654/<camera-name>`
 
-> RTSP over **UDP** transport needs `network_mode: host` instead of port mapping.
-> TCP-interleaved transport (the default for ffmpeg/Frigate, and `--rtsp-tcp` in VLC)
-> works fine with plain port mapping.
+> **When you need host networking** (`network_mode: host`, or `--network host`,
+> instead of port mapping): for [UDP-only battery
+> cameras](#udp-only-battery-models-beta) — where it is required, not optional —
+> and for RTSP over **UDP** transport. Everything else, including TCP-interleaved
+> RTSP (the default for ffmpeg/Frigate, and `--rtsp-tcp` in VLC), works fine with
+> plain port mapping.
 
 ## Quick start (from source)
 
@@ -1103,6 +1108,28 @@ the sticker) and `"udp": true` in its config entry:
   "address": "192.168.178.50", "uid": "95270000ABCDEFGH", "udp": true }
 ```
 
+Required for a UDP camera to connect:
+
+| | |
+|---|---|
+| `"uid"` | the camera's UID (Reolink app → device info, or the sticker) |
+| `"udp": true` | selects the UDP transport |
+| `"address"` | its LAN IP — give it a DHCP reservation |
+| **host networking** | **in Docker/Podman: `network_mode: host` (compose) or `--network host` (run). Not optional** |
+
+**Why host networking is required.** The Baichuan UDP handshake writes the
+client's own port number *inside* the packet, and the camera replies to that
+port — a bridge network rewrites the header but not the payload, so the reply
+lands nowhere and the handshake times out. Discovery broadcasts have the same
+problem from the other end: they never leave the container's own subnet. TCP
+cameras are unaffected (NAT handles TCP fine), which is why a UDP camera can be
+the only one that fails on an otherwise healthy server. The tell in the log is a
+discovery sweep whose broadcast targets are all container-internal addresses
+(`172.x.255.255`) with no address on your camera's subnet, ending in
+`UDP: SILENCE`. Note host networking also removes the container's network
+isolation and binds 8654/8655 on every host interface — drop the `ports:` /
+`-p` mappings when you switch, they do nothing and can collide.
+
 The camera still has to be **awake and on your LAN** (the same sleep limitation
 applies — UDP can't wake a sleeping camera; pair it with
 [`wake_capture`](#wake-capture-catch-events-without-always_on) to catch its
@@ -1345,6 +1372,13 @@ by channel, nonce-derived AES session keys, binary-mode switching via
   video. Reads resume automatically when it recovers; nothing to do unless it
   never recovers (then check the camera's Wi-Fi signal, or set a wired
   `http_address`).
+- **A UDP camera (`"udp": true`) times out while every other camera works, and
+  the discovery sweep ends in `UDP: SILENCE`**: in Docker, the container is on a
+  bridge network — UDP-only cameras need `network_mode: host` / `--network host`
+  (see [UDP-only battery models](#udp-only-battery-models-beta)). Read the
+  sweep's `targets:` line to confirm: if the only broadcast address is
+  container-internal (`172.x.255.255`) and none is on the camera's subnet, that
+  is the cause.
 - Cameras limit concurrent Baichuan clients; if the Reolink app is streaming
   `mainStream`, use `stream: "subStream"` or close the app.
 - **Choppy browser video on Firefox for main streams**: that's H.265 — use the sub

@@ -86,6 +86,15 @@ public sealed class BcUdpConnection : IBcConnection
     private readonly DateTime _t0 = DateTime.UtcNow;
     private long _rxData, _rxCtrl, _txAck, _txHb, _txC2dA, _txData, _rxKa, _txKa;
     private uint _rxLastPid, _rxMaxPid;
+    // Duplicate-data forensics: when each pid FIRST arrived and how many copies came,
+    // so the log can tell burst redundancy (copies µs..ms apart, deliberate) from
+    // retransmit-because-unacked (copies a timer interval apart, our acks ignored).
+    private long _rxDup;
+    private readonly Dictionary<uint, (DateTime First, int Count)> _pidSeen = new();
+    private int _dupLogged;
+    private const int DupLogMax = 60;
+    private bool _saturationLogged;
+    private readonly HashSet<string> _rxEndpoints = new();
     private DateTime _lastRxUtc, _lastDataUtc, _lastCtrlUtc;
     // Per-session tally of the camera's control messages (D2C_T, D2C_HB, ...), so the
     // one-line D2C_DISC summary shows what the camera sent — no debug level needed.
@@ -126,10 +135,16 @@ public sealed class BcUdpConnection : IBcConnection
     public static async Task<BcUdpConnection> ConnectAsync(string host, string uid, TimeSpan timeout,
         CancellationToken ct, string tag)
     {
-        var ip = await ResolveV4Async(host, ct).ConfigureAwait(false)
-            ?? throw new IOException($"UDP: '{host}' has no IPv4 address");
+        // No host = UID-only config: discovery broadcasts on the local subnets and
+        // the camera whose UID matches answers with its own address.
+        IPAddress? ip = null;
+        if (!string.IsNullOrWhiteSpace(host))
+            ip = await ResolveV4Async(host, ct).ConfigureAwait(false)
+                ?? throw new IOException($"UDP: '{host}' has no IPv4 address");
         var session = await UdpDiscovery.EstablishAsync(ip, uid, timeout, ct, tag).ConfigureAwait(false)
-            ?? throw new IOException($"UDP handshake to {host} failed (camera asleep or unreachable)");
+            ?? throw new IOException(ip != null
+                ? $"UDP handshake to {host} failed (camera asleep or unreachable)"
+                : "UDP broadcast discovery found no camera with this UID (asleep, off-subnet, or broadcast blocked)");
         return new BcUdpConnection(session, tag, ct);
     }
 
@@ -213,6 +228,12 @@ public sealed class BcUdpConnection : IBcConnection
                 }
                 _lastRxUtc = DateTime.UtcNow;
                 var d = r.Buffer;
+                // Endpoint forensics: if the camera sources data/acks from a DIFFERENT
+                // port than the handshake endpoint we reply to, our acks are landing on
+                // the wrong peer — log each distinct source once.
+                if (Dbg && _rxEndpoints.Add($"{BcUdp.PeekKind(d)} {r.RemoteEndPoint}"))
+                    Log.Debug($"{_tag}: udp {El} source {r.RemoteEndPoint} first {BcUdp.PeekKind(d)} " +
+                              $"(session endpoint {_camera})");
                 switch (BcUdp.PeekKind(d))
                 {
                     case BcUdp.Kind.Data when BcUdp.TryParseData(d, out var dcid, out var pid, out var payload):
@@ -231,8 +252,10 @@ public sealed class BcUdpConnection : IBcConnection
                             Log.Debug($"{_tag}: udp {El} first DATA pid={pid} connId={dcid} ({payload.Length}B)");
                         await OnDataAsync(pid, payload, ct).ConfigureAwait(false);
                         break;
-                    case BcUdp.Kind.Ack when BcUdp.TryParseAck(d, out var acid, out var gid, out var apid):
-                        if (Dbg) Log.Debug($"{_tag}: udp {El} ← ACK connId={acid} group={(int)gid} pid={(int)apid}");
+                    case BcUdp.Kind.Ack when BcUdp.TryParseAck(d, out var acid, out var gid, out var apid,
+                        out var alat, out var atlen):
+                        if (Dbg) Log.Debug($"{_tag}: udp {El} ← ACK connId={acid} group={(int)gid} pid={(int)apid} " +
+                                           $"latency={alat} truth={atlen}B");
                         if (gid != BcUdp.NoneReceived && apid != BcUdp.NoneReceived) OnAck(apid);
                         break;
                     case BcUdp.Kind.Discovery
@@ -309,6 +332,48 @@ public sealed class BcUdpConnection : IBcConnection
         List<byte[]>? deliver = null;
         lock (_rxGate)
         {
+            // Duplicate forensics: the arrival spacing of repeat copies separates
+            // deliberate camera-side redundancy from "camera never registered our
+            // acks and is retransmitting". Some battery firmwares (Argus MagiCam)
+            // re-send EVERY data packet ~3x with backoff regardless of acks, which
+            // eats their own radio budget — tracked here so the session can say so.
+            {
+                var now = DateTime.UtcNow;
+                if (_pidSeen.TryGetValue(pid, out var seen))
+                {
+                    _pidSeen[pid] = (seen.First, seen.Count + 1);
+                    _rxDup++;
+                    if (Dbg && _dupLogged < DupLogMax)
+                    {
+                        _dupLogged++;
+                        Log.Debug($"{_tag}: udp {El} dup DATA pid={pid} copy#{seen.Count + 1} " +
+                                  $"+{(now - seen.First).TotalMilliseconds:0}ms after first sighting");
+                    }
+                }
+                else
+                {
+                    _pidSeen[pid] = (now, 1);
+                    if (_pidSeen.Count > 4096)
+                        foreach (var k in _pidSeen.Keys.Where(k => k + 2048 < pid).ToList())
+                            _pidSeen.Remove(k);
+                }
+                // One-time diagnosis, no debug level needed: over half the packets the
+                // camera sends are retransmit copies while nothing is actually lost on
+                // our side. The camera's transport is saturated — its encoder outruns
+                // what its UDP path ships (single 1080p encoder + slow wake-chip radio
+                // on some battery models), so video WILL lag and stutter on every
+                // client, the official app included. Named here so a user reading the
+                // log gets an answer instead of a mystery.
+                if (!_saturationLogged && _rxData > 600 && _rxDup * 2 > _rxData)
+                {
+                    _saturationLogged = true;
+                    Log.Info($"{_tag}: UDP transport saturated — {_rxDup} of {_rxData} data packets were " +
+                             "retransmit copies (the camera re-sends everything ~3x). Its radio path ships " +
+                             "less video than its encoder produces, so expect choppy playback on ALL clients " +
+                             "including the Reolink app; this is camera firmware behavior, not a network or " +
+                             "server problem. Known on: Argus MagiCam.");
+                }
+            }
             if (pid == _rxNext)
             {
                 deliver = new List<byte[]> { payload };
@@ -385,7 +450,7 @@ public sealed class BcUdpConnection : IBcConnection
                 uint rxNext; lock (_rxGate) rxNext = _rxNext;
                 double dataAge = _lastDataUtc == default ? -1 : (DateTime.UtcNow - _lastDataUtc).TotalMilliseconds;
                 double rxAge = _lastRxUtc == default ? -1 : (DateTime.UtcNow - _lastRxUtc).TotalMilliseconds;
-                Log.Debug($"{_tag}: udp {El} state — rx {_rxData} data (next {rxNext}, maxPid {_rxMaxPid}, " +
+                Log.Debug($"{_tag}: udp {El} state — rx {_rxData} data ({_rxDup} dup, next {rxNext}, maxPid {_rxMaxPid}, " +
                           $"lastData {dataAge:0}ms, lastRx {rxAge:0}ms), rxCtrl {_rxCtrl}; " +
                           $"tx {_txData} data ({unacked} unacked), {_txAck} acks, {_txHb} hb, {_txC2dA} C2D_A, " +
                           $"ka {_rxKa}rx/{_txKa}tx");
@@ -408,12 +473,30 @@ public sealed class BcUdpConnection : IBcConnection
             while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false))
             {
                 uint group, ackId;
+                byte[] truth = Array.Empty<byte>();
                 lock (_rxGate)
                 {
                     if (_rxNext == 0) { group = BcUdp.NoneReceived; ackId = BcUdp.NoneReceived; }
-                    else { group = 0; ackId = _rxNext - 1; }
+                    else
+                    {
+                        group = 0; ackId = _rxNext - 1;
+                        // Truth table: one byte per pid after ackId — 1 = held in the
+                        // reorder buffer, 0 = missing. Without it, a single lost packet
+                        // makes the camera retransmit its ENTIRE unacked window (it has
+                        // no idea we already hold everything past the hole), which eats
+                        // its send budget and collapses live video to a keyframe
+                        // slideshow. With it, the camera resends just the holes.
+                        if (_rxBuffer.Count > 0)
+                        {
+                            uint maxHeld = _rxBuffer.Keys.Last();
+                            int span = (int)Math.Min(maxHeld - _rxNext + 1, 1024);
+                            truth = new byte[span];
+                            for (int i = 0; i < span; i++)
+                                if (_rxBuffer.ContainsKey(_rxNext + (uint)i)) truth[i] = 1;
+                        }
+                    }
                 }
-                await SendRawAsync(BcUdp.BuildAck(_did, group, ackId, 0, ReadOnlySpan<byte>.Empty), ct)
+                await SendRawAsync(BcUdp.BuildAck(_did, group, ackId, 0, truth), ct)
                     .ConfigureAwait(false);
                 if (_txAck++ == 0) Log.Debug($"{_tag}: udp {El} → first ACK (connId=did {_did}, every {AckInterval.TotalMilliseconds:0}ms)");
             }

@@ -80,13 +80,16 @@ internal static class BcUdp
         return true;
     }
 
-    public static bool TryParseAck(ReadOnlySpan<byte> dgram, out int connId, out uint groupId, out uint packetId)
+    public static bool TryParseAck(ReadOnlySpan<byte> dgram, out int connId, out uint groupId, out uint packetId,
+        out uint latency, out int truthLen)
     {
-        connId = 0; groupId = 0; packetId = 0;
+        connId = 0; groupId = 0; packetId = 0; latency = 0; truthLen = 0;
         if (dgram.Length < AckHeader || PeekKind(dgram) != Kind.Ack) return false;
         connId = BinaryPrimitives.ReadInt32LittleEndian(dgram[4..]);
         groupId = BinaryPrimitives.ReadUInt32LittleEndian(dgram[12..]);
         packetId = BinaryPrimitives.ReadUInt32LittleEndian(dgram[16..]);
+        latency = BinaryPrimitives.ReadUInt32LittleEndian(dgram[20..]);
+        truthLen = (int)BinaryPrimitives.ReadUInt32LittleEndian(dgram[24..]);
         return true;
     }
 }
