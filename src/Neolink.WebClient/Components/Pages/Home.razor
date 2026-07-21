@@ -556,8 +556,16 @@
                     else
                     {
                         @* no autoplay: the JS player starts playback once its jitter buffer is filled.
-                           The snapshot poster paints a real frame immediately while it does. *@
-                        <video id="vid-@index" muted playsinline poster="@SnapshotPoster(slot.Camera)"></video>
+                           The snapshot still paints a real frame immediately while it does.
+                           It is a sibling <img>, not the native poster attribute, for two
+                           reasons: the native poster IS the video element, so it can't be
+                           crossfaded with the first live frame (that hard cut is what made
+                           the feed feel sudden), and a separate layer can stay hidden once
+                           the stream has ever been live instead of flashing back on retries.
+                           Plain src, so it loads in parallel with everything else. *@
+                        <video id="vid-@index" muted playsinline></video>
+                        <img class="tile-poster" src="@SnapshotPoster(slot.Camera)" alt=""
+                             onerror="this.style.display='none'" />
                         <div class="tile-status">connecting…</div>
                         @* Privacy is its own OPAQUE overlay: the player neither shows a
                            frozen last frame under it nor overwrites it (it rewrites
@@ -764,7 +772,9 @@
                 <button class="icon-btn" title="Close" @onclick="CloseQuickView">✕</button>
             </div>
             <div class="quick-view-media zoom-on" id="quick-view-media">
-                <video id="vid-quick" muted playsinline poster="@SnapshotPoster(qv.Camera)"></video>
+                <video id="vid-quick" muted playsinline></video>
+                <img class="tile-poster" src="@SnapshotPoster(qv.Camera)" alt=""
+                     onerror="this.style.display='none'" />
                 <div class="tile-status">connecting…</div>
                 @if (_cameras.FirstOrDefault(c => c.Name == qv.Camera) is { Suspended: true })
                 {
@@ -3403,10 +3413,15 @@
     /// paints a real frame the instant it loads while the stream spins up. Served
     /// from the server's short snapshot cache (so several tiles/refreshes reach the
     /// camera at most once), and best-effort — a parked or offline camera simply
-    /// yields no poster, and the endpoint never wakes a battery camera.</summary>
+    /// yields no poster, and the endpoint never wakes a battery camera.
+    /// maxStale caps how old a fallback frame may be: a tile is a claim about NOW,
+    /// so past two minutes we would rather show nothing than a stale scene that the
+    /// live feed then jumps away from. Loaded as a plain img src (never fetch()) so
+    /// it paints in parallel with the page — reading the age headers would cost a
+    /// round-trip before anything appeared.</summary>
     private string SnapshotPoster(string? cam) =>
         string.IsNullOrEmpty(cam) ? "" :
-        $"{_server.TrimEnd('/')}/api/cameras/{Uri.EscapeDataString(cam)}/snapshot.jpg?maxAge=15{TokenQuery('&')}";
+        $"{_server.TrimEnd('/')}/api/cameras/{Uri.EscapeDataString(cam)}/snapshot.jpg?maxAge=15&maxStale=120{TokenQuery('&')}";
 
     /// <summary>
     /// A strip card takes the exact shape of its camera (the meta text overlays

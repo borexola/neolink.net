@@ -1431,13 +1431,23 @@ public static class WebApi
             if (double.TryParse(ctx.Request.Query["maxAge"], System.Globalization.NumberStyles.Float,
                     System.Globalization.CultureInfo.InvariantCulture, out var q) && q >= 0)
                 maxAge = q;
+            // How old the FALLBACK frame may be when the camera can't produce a fresh
+            // one. This used to be unbounded, which is how a dashboard tile ended up
+            // painting an hours-old scene: the poster is fetched exactly when a
+            // parked/on-demand camera can't answer, so the fallback is the common
+            // path, not the exception. Past this bound an old frame misleads more
+            // than a black tile informs, so we 503 and the caller shows nothing.
+            double maxStale = 300;
+            if (double.TryParse(ctx.Request.Query["maxStale"], System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out var qs) && qs >= 0)
+                maxStale = qs;
 
             IResult? Cached(bool allowStale)
             {
                 if (!snapCache.TryGetValue(cam.Name, out var c))
                     return null;
                 var age = DateTime.UtcNow - c.AtUtc;
-                if (!allowStale && age.TotalSeconds > maxAge)
+                if (age.TotalSeconds > (allowStale ? maxStale : maxAge))
                     return null;
                 ctx.Response.Headers["X-Snapshot-Age"] = ((long)age.TotalSeconds).ToString();
                 if (age.TotalSeconds > maxAge)

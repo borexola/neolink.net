@@ -125,6 +125,22 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Fixed
 
+- **A live tile no longer paints a stale snapshot, and the video fades in
+  instead of cutting.** The still shown while a stream spins up could be
+  arbitrarily old: when a camera could not produce a fresh frame, the server fell
+  back to its last cached one with no age limit whatsoever. That fallback was the
+  common case rather than the exception, because a tile asks for its still at
+  exactly the moment an on-demand or dozing camera cannot answer — so a morning
+  frame could sit on the wall all afternoon, and the live feed then snapped to
+  reality in one jarring cut. The snapshot endpoint now takes a `maxStale` bound
+  (five minutes by default; the camera wall asks for two) and serves nothing past
+  it, on the grounds that a black tile is honest where an old scene is not. The
+  still is also its own layer now instead of the video element's built-in poster,
+  which could never be blended with the first live frame: the video dissolves in
+  over a quarter of a second. And once a stream has gone live, the still is
+  retired for good, so a flaky camera no longer flashes an old frame back over
+  its own frozen — and newer — last frame on every reconnect.
+
 - **Idle CPU cut ~5x; the periodic spikes reported against 0.9.5 are gone.**
   Profiling an idle server showed the system monitor's 2-second sampler was the
   single largest CPU consumer in the whole process: reading the process handle

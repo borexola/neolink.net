@@ -3871,6 +3871,22 @@ public static class SelfTest
                 using (var snap = http.GetAsync("/api/cameras/snapcam/snapshot.jpg?maxAge=0").Result)
                     AssertEq((int)snap.StatusCode, 200);
                 AssertEq(snapControl.Calls, 2); // maxAge=0 forces a fresh frame
+
+                // Staleness bound. With the camera no longer answering, the handler
+                // falls back to the cached frame — but only within maxStale. That
+                // bound used to be absent, which is how a dashboard tile could paint
+                // an hours-old scene and then jump when the live feed arrived.
+                snapControl.Offline = true;
+                using (var snap = http.GetAsync("/api/cameras/snapcam/snapshot.jpg?maxAge=0&maxStale=60").Result)
+                {
+                    AssertEq((int)snap.StatusCode, 200); // seconds old — still useful
+                    Assert(snap.Headers.Contains("X-Snapshot-Stale"), "fallback frame is labelled stale");
+                }
+                // maxStale=0 makes even a one-second-old frame too old: better a
+                // black tile than a scene the live feed will jump away from.
+                using (var snap = http.GetAsync("/api/cameras/snapcam/snapshot.jpg?maxAge=0&maxStale=0").Result)
+                    AssertEq((int)snap.StatusCode, 503);
+                snapControl.Offline = false;
                 // A camera without snapshot support (SnapshotAsync = null) is a 404,
                 // and so is a camera that does not exist.
                 AssertEq((int)http.GetAsync("/api/cameras/apicam/snapshot.jpg").Result.StatusCode, 404);
@@ -4268,9 +4284,14 @@ public static class SelfTest
     private sealed class SnapStub(string name) : StubCameraControl(name)
     {
         public int Calls;
+        /// <summary>Set to make the camera stop answering, so the handler falls back
+        /// to its cached frame — the path the maxStale bound governs.</summary>
+        public bool Offline;
+
         public override Task<byte[]?> SnapshotAsync(CancellationToken ct)
         {
             Interlocked.Increment(ref Calls);
+            if (Offline) throw new Streaming.CameraOfflineException(CameraName);
             var jpeg = new byte[200];
             jpeg[0] = 0xFF; jpeg[1] = 0xD8; // SOI — enough to pass the sanity check
             return Task.FromResult<byte[]?>(jpeg);

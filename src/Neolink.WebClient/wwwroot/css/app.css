@@ -652,6 +652,35 @@ html, body {
 /* Applies wherever a live player renders a status overlay (grid tiles, quick view) */
 video[data-live="1"] ~ .tile-status { display: none; }
 
+/* The snapshot still shown while the stream spins up. It sits directly ON TOP of
+   the (still frameless) video and dissolves away when the first live frame paints
+   — replacing the browser's instant poster→video cut, which read as a jolt
+   whenever the still didn't match the live scene.
+   Stacking is deliberately left to the defaults: the video is a static element, so
+   this positioned layer covers it, while every other overlay (status, privacy,
+   bar, name, handle) comes later in the DOM and/or carries a higher z-index and so
+   still paints above it. Nothing else needed a z-index change. */
+.tile-poster {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    z-index: 0;
+    pointer-events: none;
+    transition: opacity 0.28s ease;
+}
+
+/* One-way: keyed on everLive, not live, so a reconnect never brings it back. */
+video[data-ever-live="1"] ~ .tile-poster {
+    opacity: 0;
+}
+
+/* Someone who prefers reduced motion gets the swap without the dissolve. */
+@media (prefers-reduced-motion: reduce) {
+    .tile-poster { transition: none; }
+}
+
 /* Privacy mode: an OPAQUE cover so neither a frozen last frame nor the player's
    own status text shows through. Rendered by Blazor from the camera's state. */
 .tile-privacy {

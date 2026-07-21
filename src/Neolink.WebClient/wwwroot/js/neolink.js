@@ -38,7 +38,15 @@
             this.msgGaps = [];
             this.lastMsgAt = 0;
             this.msgCount = 0;
-            this.onPlaying = () => { this.video.dataset.live = '1'; };
+            // `live` tracks the CURRENT state (drives the status overlay and is
+            // cleared on every stall/reconnect). `everLive` is one-way: once a real
+            // frame has painted, the snapshot still is retired for good — otherwise
+            // a flaky camera flashes an old frame back over a frozen-but-newer last
+            // frame on each 3 s retry.
+            this.onPlaying = () => {
+                this.video.dataset.live = '1';
+                this.video.dataset.everLive = '1';
+            };
             this.onWaiting = () => { this.bump('stall'); this.jumpGap(); };
             video.addEventListener('playing', this.onPlaying);
             video.addEventListener('waiting', this.onWaiting);
