@@ -75,6 +75,15 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Changed
 
+- **Camera settings: the panel's cards no longer reshuffle as they load, and
+  SUSPEND has a fixed home at the top right.** The controls tab used flowed CSS
+  columns, so every section that lazy-loaded (streams table, picture settings,
+  HTTP extras) re-balanced the layout and moved the cards around — including
+  the one you were about to click. The tab now uses two explicit columns with a
+  fixed order: device configuration on the left (streams, lights, picture,
+  on-screen display…), actions and toggles on the right, led by SUSPEND, with
+  MAINTENANCE last. On narrow screens the two groups stack.
+
 - **The Camera settings tab no longer waits for the camera before you can open
   it.** Opening a camera's settings used to show a "querying the camera" banner
   across the panel, with the Camera settings tab missing entirely until the

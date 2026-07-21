@@ -147,9 +147,13 @@
         }
 
         @* The controls body reads capabilities/features, so it only renders once
-           the camera has answered (_caps != null) — the hint above covers the wait. *@
+           the camera has answered (_caps != null) — the hint above covers the wait.
+           Two EXPLICIT columns (not flowed): sections lazy-load as their probes
+           answer, and with flowed columns every arrival reshuffled the layout.
+           SUSPEND leads the right column so it has a fixed, findable home. *@
         @if (_camTab == "controls" && _caps != null)
         {
+        <div class="campanel-col">
         @if (_profiles is { Count: > 0 })
         {
             var canSetStream = _caps.Features?.StreamSettings == true;
@@ -507,6 +511,110 @@
             </div>
         }
 
+        @if (_http?.Osd is { } osd)
+        {
+            var posOptions = osd.PosOptions ?? new List<string>();
+            <div class="campanel-section">
+                <div class="campanel-section-title">@UiIcon.Render("logs", 13) ON-SCREEN DISPLAY</div>
+                <div class="control-row">
+                    <span>Camera name overlay @PendingMark(_pendingOsdName?.ToString())</span>
+                    <button class="chip @((_pendingOsdName ?? osd.ShowName) ? "" : "chip-off") @(_pendingOsdName != null ? "chip-pending" : "")"
+                            disabled="@_applying" @onclick="StageOsdNameToggle">
+                        @((_pendingOsdName ?? osd.ShowName) ? "on" : "off")
+                    </button>
+                </div>
+                @if ((_pendingOsdName ?? osd.ShowName) && posOptions.Count > 0)
+                {
+                    <div class="control-row">
+                        <span>Name position @PendingMark(_pendingOsdNamePos)</span>
+                        <select class="@(_pendingOsdNamePos != null ? "input-pending" : "")"
+                                value="@(_pendingOsdNamePos ?? osd.NamePos ?? posOptions[0])"
+                                disabled="@_applying" @onchange='e => StageOsdNamePos((string?)e.Value)'>
+                            @foreach (var pos in PosChoices(posOptions, osd.NamePos))
+                            {
+                                <option value="@pos">@pos.ToLowerInvariant()</option>
+                            }
+                        </select>
+                    </div>
+                }
+                <div class="control-row">
+                    <span>Timestamp overlay @PendingMark(_pendingOsdTime?.ToString())</span>
+                    <button class="chip @((_pendingOsdTime ?? osd.ShowTime) ? "" : "chip-off") @(_pendingOsdTime != null ? "chip-pending" : "")"
+                            disabled="@_applying" @onclick="StageOsdTimeToggle">
+                        @((_pendingOsdTime ?? osd.ShowTime) ? "on" : "off")
+                    </button>
+                </div>
+                @if ((_pendingOsdTime ?? osd.ShowTime) && posOptions.Count > 0)
+                {
+                    <div class="control-row">
+                        <span>Timestamp position @PendingMark(_pendingOsdTimePos)</span>
+                        <select class="@(_pendingOsdTimePos != null ? "input-pending" : "")"
+                                value="@(_pendingOsdTimePos ?? osd.TimePos ?? posOptions[0])"
+                                disabled="@_applying" @onchange='e => StageOsdTimePos((string?)e.Value)'>
+                            @foreach (var pos in PosChoices(posOptions, osd.TimePos))
+                            {
+                                <option value="@pos">@pos.ToLowerInvariant()</option>
+                            }
+                        </select>
+                    </div>
+                }
+                @if (osd.Watermark is { } wmCur)
+                {
+                    <div class="control-row">
+                        <span>Reolink watermark @PendingMark(_pendingOsdWatermark?.ToString())</span>
+                        <button class="chip @((_pendingOsdWatermark ?? wmCur) ? "" : "chip-off") @(_pendingOsdWatermark != null ? "chip-pending" : "")"
+                                disabled="@_applying" @onclick="StageOsdWatermarkToggle">
+                            @((_pendingOsdWatermark ?? wmCur) ? "on" : "off")
+                        </button>
+                    </div>
+                }
+                <div class="notice small">Burned into the video by the camera itself — it shows in live view and every recording, here and elsewhere.</div>
+            </div>
+        }
+        </div> @* /campanel-col (left) *@
+
+        <div class="campanel-col">
+        @if (Camera?.CanSuspend == true)
+        {
+            <div class="campanel-section">
+                <div class="campanel-section-title">@UiIcon.Render("eye-off", 13) SUSPEND</div>
+                <div class="notice small">
+                    Stops <b>Neolink.NET</b> from connecting to this camera — it can't be viewed
+                    or recorded here, and its Home Assistant entities go unavailable, until
+                    resumed. No restart needed; the setting survives one.
+                </div>
+                <div class="control-row">
+                    <span>Suspended in Neolink.NET @(_suspended == true ? "— on" : "")</span>
+                    @if (_suspendBusy)
+                    {
+                        <span class="chip chip-off" aria-busy="true"><span class="btn-spinner"></span>Saving…</span>
+                    }
+                    else if (_suspended == true)
+                    {
+                        <button class="chip chip-active" disabled="@(!CanEditRecording)"
+                                @onclick="() => SetSuspendAsync(false)">suspended — click to resume</button>
+                    }
+                    else if (!_confirmSuspend)
+                    {
+                        <button class="chip chip-off" disabled="@(!CanEditRecording)"
+                                @onclick="() => _confirmSuspend = true">active</button>
+                    }
+                    else
+                    {
+                        <span class="row-actions">
+                            <button class="chip chip-danger" @onclick="() => SetSuspendAsync(true)">Confirm — stop Neolink.NET for this camera</button>
+                            <button class="chip" @onclick="() => _confirmSuspend = false">Cancel</button>
+                        </span>
+                    }
+                </div>
+                <div class="notice warn small">
+                    ⚠ This only stops <b>Neolink.NET</b>. The camera keeps running: its own
+                    <b>SD-card / cloud recording</b> and any <b>other system</b> pulling its
+                    stream directly are unaffected. It is not a privacy guarantee.
+                </div>
+            </div>
+        }
+
         @if (_http?.Volume is { } vol)
         {
             <div class="campanel-section">
@@ -570,67 +678,6 @@
                     detection thresholds — they affect its app notifications and this server's
                     event recording alike.
                 </div>
-            </div>
-        }
-
-        @if (_http?.Osd is { } osd)
-        {
-            var posOptions = osd.PosOptions ?? new List<string>();
-            <div class="campanel-section">
-                <div class="campanel-section-title">@UiIcon.Render("logs", 13) ON-SCREEN DISPLAY</div>
-                <div class="control-row">
-                    <span>Camera name overlay @PendingMark(_pendingOsdName?.ToString())</span>
-                    <button class="chip @((_pendingOsdName ?? osd.ShowName) ? "" : "chip-off") @(_pendingOsdName != null ? "chip-pending" : "")"
-                            disabled="@_applying" @onclick="StageOsdNameToggle">
-                        @((_pendingOsdName ?? osd.ShowName) ? "on" : "off")
-                    </button>
-                </div>
-                @if ((_pendingOsdName ?? osd.ShowName) && posOptions.Count > 0)
-                {
-                    <div class="control-row">
-                        <span>Name position @PendingMark(_pendingOsdNamePos)</span>
-                        <select class="@(_pendingOsdNamePos != null ? "input-pending" : "")"
-                                value="@(_pendingOsdNamePos ?? osd.NamePos ?? posOptions[0])"
-                                disabled="@_applying" @onchange='e => StageOsdNamePos((string?)e.Value)'>
-                            @foreach (var pos in PosChoices(posOptions, osd.NamePos))
-                            {
-                                <option value="@pos">@pos.ToLowerInvariant()</option>
-                            }
-                        </select>
-                    </div>
-                }
-                <div class="control-row">
-                    <span>Timestamp overlay @PendingMark(_pendingOsdTime?.ToString())</span>
-                    <button class="chip @((_pendingOsdTime ?? osd.ShowTime) ? "" : "chip-off") @(_pendingOsdTime != null ? "chip-pending" : "")"
-                            disabled="@_applying" @onclick="StageOsdTimeToggle">
-                        @((_pendingOsdTime ?? osd.ShowTime) ? "on" : "off")
-                    </button>
-                </div>
-                @if ((_pendingOsdTime ?? osd.ShowTime) && posOptions.Count > 0)
-                {
-                    <div class="control-row">
-                        <span>Timestamp position @PendingMark(_pendingOsdTimePos)</span>
-                        <select class="@(_pendingOsdTimePos != null ? "input-pending" : "")"
-                                value="@(_pendingOsdTimePos ?? osd.TimePos ?? posOptions[0])"
-                                disabled="@_applying" @onchange='e => StageOsdTimePos((string?)e.Value)'>
-                            @foreach (var pos in PosChoices(posOptions, osd.TimePos))
-                            {
-                                <option value="@pos">@pos.ToLowerInvariant()</option>
-                            }
-                        </select>
-                    </div>
-                }
-                @if (osd.Watermark is { } wmCur)
-                {
-                    <div class="control-row">
-                        <span>Reolink watermark @PendingMark(_pendingOsdWatermark?.ToString())</span>
-                        <button class="chip @((_pendingOsdWatermark ?? wmCur) ? "" : "chip-off") @(_pendingOsdWatermark != null ? "chip-pending" : "")"
-                                disabled="@_applying" @onclick="StageOsdWatermarkToggle">
-                            @((_pendingOsdWatermark ?? wmCur) ? "on" : "off")
-                        </button>
-                    </div>
-                }
-                <div class="notice small">Burned into the video by the camera itself — it shows in live view and every recording, here and elsewhere.</div>
             </div>
         }
 
@@ -727,6 +774,28 @@
                 </div>
             </div>
         }
+
+        @if (_caps.Features?.Reboot != false)
+        {
+            <div class="campanel-section">
+                <div class="campanel-section-title">@UiIcon.Render("wrench", 13) MAINTENANCE</div>
+                <div class="control-row">
+                    <span>Restart the camera</span>
+                    @if (!_confirmReboot)
+                    {
+                        <button class="chip" @onclick="() => _confirmReboot = true">Reboot…</button>
+                    }
+                    else
+                    {
+                        <span class="row-actions">
+                            <button class="chip chip-danger" @onclick="RebootAsync">Confirm reboot</button>
+                            <button class="chip" @onclick="() => _confirmReboot = false">Cancel</button>
+                        </span>
+                    }
+                </div>
+            </div>
+        }
+        </div> @* /campanel-col (right) *@
 
         }
 
@@ -947,67 +1016,6 @@
             </div>
         }
 
-        @if (_camTab == "controls" && _caps != null && Camera?.CanSuspend == true)
-        {
-            <div class="campanel-section">
-                <div class="campanel-section-title">@UiIcon.Render("eye-off", 13) SUSPEND</div>
-                <div class="notice small">
-                    Stops <b>Neolink.NET</b> from connecting to this camera — it can't be viewed
-                    or recorded here, and its Home Assistant entities go unavailable, until
-                    resumed. No restart needed; the setting survives one.
-                </div>
-                <div class="control-row">
-                    <span>Suspended in Neolink.NET @(_suspended == true ? "— on" : "")</span>
-                    @if (_suspendBusy)
-                    {
-                        <span class="chip chip-off" aria-busy="true"><span class="btn-spinner"></span>Saving…</span>
-                    }
-                    else if (_suspended == true)
-                    {
-                        <button class="chip chip-active" disabled="@(!CanEditRecording)"
-                                @onclick="() => SetSuspendAsync(false)">suspended — click to resume</button>
-                    }
-                    else if (!_confirmSuspend)
-                    {
-                        <button class="chip chip-off" disabled="@(!CanEditRecording)"
-                                @onclick="() => _confirmSuspend = true">active</button>
-                    }
-                    else
-                    {
-                        <span class="row-actions">
-                            <button class="chip chip-danger" @onclick="() => SetSuspendAsync(true)">Confirm — stop Neolink.NET for this camera</button>
-                            <button class="chip" @onclick="() => _confirmSuspend = false">Cancel</button>
-                        </span>
-                    }
-                </div>
-                <div class="notice warn small">
-                    ⚠ This only stops <b>Neolink.NET</b>. The camera keeps running: its own
-                    <b>SD-card / cloud recording</b> and any <b>other system</b> pulling its
-                    stream directly are unaffected. It is not a privacy guarantee.
-                </div>
-            </div>
-        }
-
-        @if (_camTab == "controls" && _caps != null && _caps.Features?.Reboot != false)
-        {
-            <div class="campanel-section">
-                <div class="campanel-section-title">@UiIcon.Render("wrench", 13) MAINTENANCE</div>
-                <div class="control-row">
-                    <span>Restart the camera</span>
-                    @if (!_confirmReboot)
-                    {
-                        <button class="chip" @onclick="() => _confirmReboot = true">Reboot…</button>
-                    }
-                    else
-                    {
-                        <span class="row-actions">
-                            <button class="chip chip-danger" @onclick="RebootAsync">Confirm reboot</button>
-                            <button class="chip" @onclick="() => _confirmReboot = false">Cancel</button>
-                        </span>
-                    }
-                </div>
-            </div>
-        }
         </div> @* /campanel-cols *@
         </div> @* /campanel-body *@
 

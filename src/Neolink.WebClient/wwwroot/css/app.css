@@ -1758,18 +1758,30 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
    scroller that capped the columns at the visible area — fragmenting cards
    (break-inside notwithstanding) and clipping them mid-card. The wrapper grows
    with its content, so cards stay whole and the body scrolls past them. */
+/* Controls tab: two EXPLICIT columns, not flowed ones. Sections lazy-load as
+   their probes answer; with `columns: 2` every arrival re-balanced the flow and
+   cards (notably SUSPEND) wandered. Each column keeps its own fixed order —
+   SUSPEND is always the right column's first card. */
 .campanel-cols {
-    columns: 2;
-    column-gap: 12px;
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
 }
 
-.campanel-cols > * {
-    break-inside: avoid;
-    margin: 0 0 12px;
+.campanel-cols > * { margin: 0 0 12px; }
+
+.campanel-col {
+    flex: 1 1 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin: 0;
 }
 
-/* Single-card tabs (Recording) use the full width instead of a half-empty grid. */
-.campanel-cols.one-col { columns: 1; }
+/* Single-card tabs (Recording) and the probing notice use the full width. */
+.campanel-cols.one-col { display: block; }
+.campanel-cols > .campanel-probing { flex: 1 1 100%; }
 
 /* Camera-panel forms get the same label-column treatment as the server
    settings: the control sits right next to its label and lines up between
@@ -1822,7 +1834,9 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 }
 
 @media (max-width: 860px) {
-    .campanel-cols { columns: 1; }
+    /* Narrow: the two explicit columns stack — left group first, then the
+       right group (Suspend, Siren, PIR, Maintenance) as one block. */
+    .campanel-cols { flex-direction: column; align-items: stretch; }
 }
 
 /* Staged-edits bar: pinned to the panel's bottom edge (mirror of .campanel-head)
