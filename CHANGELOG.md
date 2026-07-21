@@ -100,7 +100,61 @@ in the README). Paste the matching section below into the GitHub release.
   connection ends, so opening a camera that has since gone offline (or dozed
   off) no longer replays a second of stale footage and freezes.
 
+### Documentation
+
+- **UDP-only battery cameras need host networking in Docker — now documented as
+  a requirement, not an aside.** Their Baichuan handshake carries the client's
+  port inside the packet and their discovery relies on LAN broadcast, so neither
+  survives a bridge network: the camera times out while every TCP camera on the
+  same server works fine. `network_mode: host` / `--network host` is now listed
+  alongside `uid` and `"udp": true` in the *UDP-only battery models* section
+  (with the reason, the cost — no container isolation, no port mapping — and how
+  to recognize the failure in a discovery sweep), and echoed in
+  `config.example.json`, `docker-compose.yml`, the README troubleshooting list,
+  the Unraid notes, and the Home Assistant add-on docs (where host networking is
+  unavailable, so these cameras need the plain Docker image).
+
 ### Fixed
+
+- **Idle CPU cut ~5x; the periodic spikes reported against 0.9.5 are gone.**
+  Profiling an idle server showed the system monitor's 2-second sampler was the
+  single largest CPU consumer in the whole process: reading the process handle
+  and thread counts forces a full process-information snapshot on every tick
+  (a /proc enumeration on Linux, a system process-table query on Windows), the
+  disk-space probe is a statfs that can be a network round trip on NAS-mounted
+  volumes, and — when recording is enabled — the recordings tree was re-sized
+  file-by-file every 60 s. On small Docker hosts this surfaced as CPU spikes to
+  ~30% of a core every half minute even with no streams and privacy mode on.
+  The 2 s tick now reads only cheap direct counters (CPU time,
+  working set, GC stats); handle/thread/disk gauges refresh once a minute, and
+  the recordings walk runs every 10 minutes. Measured on an idle one-camera
+  server: average idle CPU 0.85% → 0.17% of a core, and the spike magnitude and
+  frequency each dropped several-fold. In the same pass the 20 s MQTT refresh
+  stopped re-sending retained states the broker already has (identical payloads
+  are now deduplicated at the publish layer, with the cache cleared on every
+  reconnect so a restarted broker still gets everything back), and the battery/
+  night-vision/PIR polls it ran against the camera on every tick — real
+  Baichuan round-trips — now run once a minute instead; changes made through
+  HA or the web UI still publish immediately, so the minute is only the ceiling
+  for changes made in the Reolink app.
+  provides for.** After a packet went missing on Wi-Fi, our cumulative-only ack
+  left the camera blind to everything we already held past the hole, inviting it
+  to retransmit its whole send window. The ack's truth table (one byte per
+  packet after the acknowledged one: held or missing) now tells it exactly which
+  packets to resend. Found while investigating an Argus MagiCam that streams as
+  a slideshow — which turned out to be that model's firmware (see below), but
+  the ack gap was real and is fixed.
+
+- **A saturated battery-camera transport now diagnoses itself in the log and in
+  stats-for-nerds.** Some battery models (Argus MagiCam) re-send every UDP data
+  packet ~3x regardless of acknowledgment and ship less video than their single
+  1080p encoder produces — every client stutters, the official app included.
+  When over half the received packets are retransmit copies, the session now
+  says so once, at Info, naming the cause instead of leaving a mystery; the
+  stats-for-nerds verdict likewise distinguishes "the camera is sending less
+  video than the stream needs" from device- or network-side trouble. The
+  per-second UDP state line also gained a duplicate counter, and each session
+  logs any unexpected source endpoints — both future captures' first questions.
 
 - **Clicking the zoom buttons quickly no longer resets the view.** Two fast
   clicks on the +/− pill fired the browser's double-click event, and the

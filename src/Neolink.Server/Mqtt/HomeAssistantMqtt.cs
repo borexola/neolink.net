@@ -66,6 +66,8 @@ namespace Neolink.Mqtt;
 ///   • light:         spotlight (on/off + brightness), beta (white-LED cameras
 ///                    without a FloodlightTask: Lumus/Elite)
 ///   • number:        IR brightness 0-100, beta          (cameras reporting it)
+///   • switch:        status LED                         (cameras whose lightState
+///                    is the little status LED — i.e. no floodlight, no spotlight)
 ///   • switch:        doorbell light, beta               (video doorbells)
 ///   • select:        play quick reply, beta             (video doorbells; picking
 ///                                                        an option plays it)
@@ -205,8 +207,24 @@ public sealed class HomeAssistantMqtt
     /// <summary>Test seam: observe every string publish without standing up a broker.</summary>
     internal Action<string, string>? PublishObserver;
 
+    // Last retained payload per topic. Retained state topics are re-published by the
+    // periodic refresh whether or not anything changed — the broker treats identical
+    // retained publishes as no-ops, but SENDING them is not free: the 20 s refresh
+    // burst was the dominant idle-CPU cost of the whole process (issue report:
+    // periodic spikes to ~30% of a core on small Docker hosts). Deduplicate here, at
+    // the one choke point, so every state publisher stays simple and idempotent.
+    // Cleared on every (re)connect: a fresh broker may have lost its retained state.
+    private readonly Dictionary<string, string> _lastRetained = new();
+    private readonly object _retainedGate = new();
+
     internal Task PublishAsync(string topic, string payload, CancellationToken ct = default)
     {
+        lock (_retainedGate)
+        {
+            if (_lastRetained.TryGetValue(topic, out var prev) && prev == payload)
+                return Task.CompletedTask;
+            _lastRetained[topic] = payload;
+        }
         PublishObserver?.Invoke(topic, payload);
         return _client.PublishAsync(topic, payload, retain: true, ct);
     }
@@ -221,6 +239,9 @@ public sealed class HomeAssistantMqtt
 
     private async Task OnConnectedAsync()
     {
+        // Fresh session: forget what we think the broker holds — it may have
+        // restarted without persistence, so everything must be re-publishable.
+        lock (_retainedGate) _lastRetained.Clear();
         await _client.PublishAsync(_availabilityTopic, "online", retain: true, CancellationToken.None)
             .ConfigureAwait(false);
         // One wildcard per camera captures every ".../{entity}/set" command.
@@ -495,7 +516,14 @@ internal sealed class CameraBridge
     private IReadOnlyList<QuickReplyFile>? _quickReplies;
     private ImageSettings? _imgCaps;      // which picture fields this camera reports
     private bool _hasSpotlight, _hasWhiteLedBrightness, _isDoorbell, _ptzCapable;
-    private bool _hasIrBrightness, _hasDoorbellLight; // from the LedState probe
+    private bool _hasIrBrightness, _hasDoorbellLight, _hasLightState; // from the LedState probe
+
+    /// <summary>Whether this camera gets the plain "Status LED" switch. LedState's
+    /// lightState is shared: it drives the floodlight on floodlight cams and the
+    /// white spotlight on Lumus/Elite, and is only the little status LED when the
+    /// camera has neither. Gating on that keeps exactly ONE entity owning
+    /// lightState, so the three can never fight over the same field.</summary>
+    private bool HasStatusLed => _hasLightState && !_hasFloodlight && !_hasSpotlight;
     private bool _hasMdSens;              // motion-detection sensitivity (1-50)
     private string[]? _aiSensTypes;       // AI types the camera answered GetAiAlarm for
     private bool _hasHdr;                 // ISP hdr field present
@@ -508,6 +536,9 @@ internal sealed class CameraBridge
     private DateTime _lastHttpPublish = DateTime.MinValue;
     private string? _model;
     private DateTime _lastSnapshot = DateTime.MinValue;
+    // Last battery/LED/PIR poll — these are camera round-trips, not cached reads,
+    // so they run once a minute instead of every 20 s refresh tick.
+    private DateTime _lastStatePoll = DateTime.MinValue;
     private bool _lastOnline;
     private bool _everOnline;
     private DateTime? _offlineSince;
@@ -851,6 +882,14 @@ internal sealed class CameraBridge
             await AnnounceEntityAsync("light", "spotlight", SpotlightConfig(), ct).ConfigureAwait(false);
         else
             await ClearEntityAsync("light", "spotlight", ct).ConfigureAwait(false);
+        // The little status/power LED on cameras with no floodlight or spotlight —
+        // the same lightState toggle those use, so only one of the three is ever
+        // announced. Config category: it's a device setting, not a room light.
+        if (HasStatusLed)
+            await AnnounceEntityAsync("switch", "status_led",
+                SwitchConfig("Status LED", "status_led", "mdi:led-on", "config"), ct).ConfigureAwait(false);
+        else
+            await ClearEntityAsync("switch", "status_led", ct).ConfigureAwait(false);
         if (_hasIrBrightness)
             await AnnounceEntityAsync("number", "ir_brightness",
                 NumberConfig("IR brightness", "ir_brightness", 0, 100, "mdi:brightness-6"), ct).ConfigureAwait(false);
@@ -1594,9 +1633,20 @@ internal sealed class CameraBridge
 
         var caps2 = await TryGetCapabilitiesAsync(ct).ConfigureAwait(false);
         var feat = caps2?.Features;
-        if (feat?.Battery == true) await PublishBatteryAsync(ct).ConfigureAwait(false);
-        if (feat?.Led == true) await PublishLedAsync(ct).ConfigureAwait(false);
-        if (feat?.Pir == true) await PublishPirAsync(ct).ConfigureAwait(false);
+        // Battery/LED/PIR are POLLS — real Baichuan round-trips plus XML parsing,
+        // so they don't need to ride every 20 s tick (which also kept the camera
+        // busier than necessary). Changes made through HA or the web UI re-publish
+        // immediately (HandleCommandAsync / RepublishAsync); this cadence exists
+        // only to catch changes made in the Reolink app, so a minute of staleness
+        // is the ceiling — battery itself drains ~2%/hour and would tolerate far
+        // less, but the queries are small and share the one poll clock.
+        if (DateTime.UtcNow - _lastStatePoll > TimeSpan.FromMinutes(1))
+        {
+            _lastStatePoll = DateTime.UtcNow;
+            if (feat?.Battery == true) await PublishBatteryAsync(ct).ConfigureAwait(false);
+            if (feat?.Led == true) await PublishLedAsync(ct).ConfigureAwait(false);
+            if (feat?.Pir == true) await PublishPirAsync(ct).ConfigureAwait(false);
+        }
         if (_hasSnapshot && DateTime.UtcNow - _lastSnapshot > TimeSpan.FromMinutes(2))
             await PublishSnapshotAsync(ct).ConfigureAwait(false);
         // The HTTP-API states change rarely and cost a few camera HTTP calls, so
@@ -1828,6 +1878,8 @@ internal sealed class CameraBridge
         // lightState is free to feed the spotlight here).
         if (_hasSpotlight && Str(led, "lightState") is { Length: > 0 } sp)
             await _hub.PublishAsync(StateTopic("spotlight"), sp == "open" ? "ON" : "OFF", ct).ConfigureAwait(false);
+        if (HasStatusLed && Str(led, "lightState") is { Length: > 0 } sl)
+            await _hub.PublishAsync(StateTopic("status_led"), sl == "open" ? "ON" : "OFF", ct).ConfigureAwait(false);
         if (_hasIrBrightness && Num(led, "IRLedBrightness") is { } irb)
             await _hub.PublishAsync(StateTopic("ir_brightness"), irb.ToString(), ct).ConfigureAwait(false);
         if (_isDoorbell && _hasDoorbellLight && Str(led, "doorbellLightState") is { Length: > 0 } dbl)
@@ -1860,7 +1912,9 @@ internal sealed class CameraBridge
         if (led == null) return;
         _hasIr = Str(led, "state") is { Length: > 0 };
         // _hasFloodlight is NOT inferred from lightState here — a status LED reports
-        // it too. It's set from the FloodlightTask capability by the caller.
+        // it too. It's set from the FloodlightTask capability by the caller; this
+        // records only that the field EXISTS, and HasStatusLed decides who owns it.
+        _hasLightState = Str(led, "lightState") is { Length: > 0 };
         _hasIrBrightness = Num(led, "IRLedBrightness") != null;
         // The field alone doesn't gate the entity — the Elite reports one without
         // having the light; the announce also requires the doorbell capability.
@@ -1954,6 +2008,12 @@ internal sealed class CameraBridge
                     }
                     break;
                 case "spotlight":
+                    await _control.SetLedStateAsync(null, payload == "ON" ? "open" : "close", null, null, ct).ConfigureAwait(false);
+                    await PublishLedAsync(ct).ConfigureAwait(false);
+                    break;
+                case "status_led":
+                    // Same lightState toggle as the spotlight/floodlight — only one of
+                    // the three is ever announced, so this can't collide with them.
                     await _control.SetLedStateAsync(null, payload == "ON" ? "open" : "close", null, null, ct).ConfigureAwait(false);
                     await PublishLedAsync(ct).ConfigureAwait(false);
                     break;

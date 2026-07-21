@@ -38,7 +38,15 @@ public sealed class SystemMonitor
     private const int Capacity = 1800;                    // 1 hour at 2s (full detail)
     private const int MinuteCapacity = 1440;              // 24 hours at 1 min (aggregates)
     private const int TicksPerMinute = 30;                // fine samples folded into one aggregate
-    private const int RecordingsSizeEveryTicks = 30;      // walking the tree is expensive: once a minute
+    // The gauges that cost real syscalls refresh once a minute, not per tick:
+    // HandleCount/Threads force a full process-information snapshot (Windows) or
+    // /proc enumeration (Linux), and DriveInfo is a statfs that can be a network
+    // round-trip on NAS-mounted volumes. Sampled every 2 s they were the single
+    // largest idle-CPU consumer in the whole process (profiled: ~half of all busy
+    // CPU at idle) — visible as periodic spikes on small Docker hosts. They move
+    // slowly; the Monitor page charts them as gauges either way.
+    private const int GaugeEveryTicks = 30;               // once a minute
+    private const int RecordingsSizeEveryTicks = 300;     // walking the tree reads every file: every 10 min
 
     private readonly string _diskProbePath;
     private readonly string? _recordingsRoot;
@@ -64,6 +72,9 @@ public sealed class SystemMonitor
     private long _prevStorageBytes;
     private long _recordingsBytes = -1;
     private int _tick;
+    // Minute-cadence gauge caches (see GaugeEveryTicks).
+    private int _handles, _threads;
+    private long _diskTotal, _diskFree;
 
     private static readonly DateTimeOffset StartedUtc = DateTimeOffset.UtcNow;
 
@@ -171,7 +182,11 @@ public sealed class SystemMonitor
 
     private void TakeSample(Process proc)
     {
-        proc.Refresh();
+        // The per-tick reads are deliberately cheap, direct syscalls only:
+        // TotalProcessorTime is GetProcessTimes, Environment.WorkingSet is
+        // GetProcessMemoryInfo, and the GC counters are in-process. No
+        // proc.Refresh() here — that belongs to the once-a-minute gauge block,
+        // whose properties are the ones backed by the expensive snapshot.
         var now = DateTime.UtcNow;
         var cpuTime = proc.TotalProcessorTime;
         double elapsed = (now - _prevWall).TotalSeconds;
@@ -189,17 +204,25 @@ public sealed class SystemMonitor
             : Math.Max(0, storageBytes - _prevStorageBytes) / elapsed / (1024.0 * 1024.0);
         _prevStorageBytes = storageBytes;
 
-        long diskTotal = 0, diskFree = 0;
-        try
+        // Slow-moving gauges on the minute cadence (tick 0 primes them at startup).
+        if (_tick % GaugeEveryTicks == 0)
         {
-            var drive = new DriveInfo(Path.GetFullPath(_diskProbePath));
-            diskTotal = drive.TotalSize;
-            diskFree = drive.AvailableFreeSpace;
+            proc.Refresh();
+            try { _handles = proc.HandleCount; } catch { }
+            try { _threads = proc.Threads.Count; } catch { }
+            try
+            {
+                var drive = new DriveInfo(Path.GetFullPath(_diskProbePath));
+                _diskTotal = drive.TotalSize;
+                _diskFree = drive.AvailableFreeSpace;
+            }
+            catch { /* unmapped/network volume: leave zeros */ }
         }
-        catch { /* unmapped/network volume: leave zeros */ }
 
-        // Sizing the recordings tree walks every file — do it once a minute, keep the last answer.
-        if (_recordingsRoot != null && _tick++ % RecordingsSizeEveryTicks == 0)
+        // Sizing the recordings tree reads every file's length — over a NAS mount
+        // that is the most expensive thing this process does at idle, so it runs
+        // on its own long cadence and keeps the last answer in between.
+        if (_recordingsRoot != null && _tick % RecordingsSizeEveryTicks == 0)
         {
             try
             {
@@ -212,9 +235,8 @@ public sealed class SystemMonitor
             }
             catch { /* keep the previous figure */ }
         }
+        _tick++;
 
-        int handles = 0;
-        try { handles = proc.HandleCount; } catch { }
         int viewers = 0;
         try { viewers = _viewerCount(); } catch { }
         int recCams = 0;
@@ -231,13 +253,13 @@ public sealed class SystemMonitor
         var sample = new SystemSample(
             DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             Math.Round(cpu, 2),
-            proc.WorkingSet64,
+            Environment.WorkingSet,
             GC.GetTotalMemory(forceFullCollection: false),
             Math.Round(allocRate, 2),
-            proc.Threads.Count,
-            handles,
-            diskTotal,
-            diskFree,
+            _threads,
+            _handles,
+            _diskTotal,
+            _diskFree,
             _recordingsBytes,
             viewers,
             recCams,
