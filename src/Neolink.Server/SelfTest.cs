@@ -268,6 +268,21 @@ public static class SelfTest
             var blocked = new Streaming.WakeRttDetector();
             for (int i = 0; i < 50; i++)
                 Assert(!blocked.OnSample(null), "pure misses never fire an edge");
+
+            // Adaptive skepticism (live loop 2026-07-21): after fruitless wake
+            // connects the probe loop raises ArmThreshold so an idle-awake
+            // camera — whose radio power-save also pings as a sawtooth, but
+            // whose housekeeping keeps producing flat runs — never arms, and
+            // therefore is never re-woken by us. A flat run RESETS the arming
+            // count, so the pattern must be truly uninterrupted.
+            var wary = new Streaming.WakeRttDetector { ArmThreshold = 16 };
+            for (int i = 0; i < 12; i++) wary.OnSample(300 + i * 40);
+            Assert(!wary.Armed, "12 sawtooth samples < threshold 16 -> not armed yet");
+            wary.OnSample(20); wary.OnSample(22); // idle-awake housekeeping flat
+            for (int i = 0; i < 15; i++) wary.OnSample(300 + i * 40);
+            Assert(!wary.Armed, "the flat run reset the count — 15 more still short of 16");
+            Assert(!wary.OnSample(20) && !wary.OnSample(21) && !wary.OnSample(19),
+                "fast run while UNARMED never fires — the idle-awake camera is left alone");
         });
 
         Test("wake diagnostics: verdict separates our-probe wakes from real ones", () =>

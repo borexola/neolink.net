@@ -133,9 +133,10 @@ in exchange you get an integration light enough to leave running forever.
   models list recordings but their firmware cannot serve the files over HTTP at
   all (Video Doorbell WiFi — a firmware bug; those clips only play in the
   Reolink app, and the player says so)
-- **Battery cameras** (Argus etc.) are auto-detected: charge badge in the sidebar,
-  sleep-friendly by default (the camera dozes while nobody watches), `always_on`
-  per camera to hold it awake — see [Battery cameras](#battery-cameras-argus-etc)
+- **Battery cameras** (Argus etc., BETA — in active development) are
+  auto-detected: charge badge in the sidebar, sleep-friendly by default (the
+  camera dozes while nobody watches), `always_on` per camera to hold it
+  awake — see [Battery cameras](#battery-cameras-argus-etc)
 - **Tiered storage (optional)**: an SSD tier for fresh event clips and a cold
   archive tier that expired footage **moves** to instead of being deleted
   (per camera, per recording type, BETA) — with capacity watching: an amber
@@ -1031,6 +1032,19 @@ within 10 s so Frigate's watchdog recovers quickly. For headless Frigate boxes s
 
 ## Battery cameras (Argus etc.)
 
+> **Beta — under active development and testing.** Battery support is
+> validated against real hardware but constrained by what these cameras
+> allow: a sleeping camera is off the network and cannot be woken remotely,
+> sleep can only be inferred from the outside, and models vary in how they
+> behave while dozing. It is being actively tuned against field logs — expect
+> rough edges on untested models, and open an issue with the `[wake-diag]`
+> lines if yours misbehaves.
+>
+> **Full guide: [docs/battery-cameras.md](docs/battery-cameras.md)** — how
+> sleep works (and how Neolink watches it without waking anything), wake
+> capture, what gets stored where, every setting, a log-line cheat sheet,
+> timings, and troubleshooting. The section below is the short version.
+
 Battery-powered Reolinks (Argus Eco/Pro, Reolink Go, battery doorbells) speak the
 same Baichuan protocol over the same direct TCP connection as mains cameras —
 **an awake battery camera streams out of the box**, no special transport needed.
@@ -1063,7 +1077,7 @@ from our side):
   next retry. `always_on` doesn't wake a sleeping camera either — it *keeps* one
   awake once it is up (the held-open connection is what prevents it dozing), so
   after the first wake it stays reachable. Set it per camera in the config
-  (`"always_on": true`); it is not in the web-UI camera editor.
+  (`"always_on": true`) or in the web-UI camera editor ("Always on").
 - While asleep there are **no motion events, no MQTT updates, no recording, no
   snapshots** — the camera is off the network on purpose. It still records
   PIR events to its own SD card, as it does with the official app. See
@@ -1075,25 +1089,31 @@ By default a sleep-friendly battery camera only connects when *you* open its
 stream, so a motion event while nobody is watching is missed. Set
 `"wake_capture": true` per camera to change that: Neolink.NET watches for the
 **sleep→wake edge** and connects the instant the camera wakes *itself* for
-motion — capturing that event — then lets it sleep again. Concretely, after the
-last viewer leaves: a probe-free settle window (~90 s) lets the camera doze off
-undisturbed, then sparse liveness probes wait until it is actually asleep (the
-log says *"armed to connect on its next self-wake"*; asleep means **two**
-consecutive unanswered probes, so a single packet lost to Wi-Fi power save
-can't fake the edge), and only a probe answered **after** that counts as a
-self-wake. Exactly **one** stream service does this probing and connects on the
-wake — the stream that records events — and once the event's detection ends the
-session lingers only ~20 s before letting the camera sleep again. Most sleeping
-models don't answer probes at all (radio off — the probes cost no battery);
-a few battery models answer discovery from their low-power wake chip even
-while asleep, which makes the "armed" line rare and self-wakes hard to detect
-on them — if yours behaves that way, run with debug logging and open an issue
-with the *wake probe* lines. This is the middle ground between sleep-friendly
-(misses events) and `always_on` (catches everything but drains the battery). It
-has no effect with `always_on` (which never sleeps) or on non-battery cameras.
-Note it may miss the first second or two of an event — Neolink connects a
-moment after the camera wakes — and on a very busy camera it trends toward
-`always_on`-like battery use.
+motion — capturing that event — then lets it sleep again. The watching is done
+by **listening, not knocking**: plain ping round-trips reveal the camera's
+state (a dozing camera's Wi-Fi module answers in a slow power-save sawtooth,
+a woken processor answers flat and fast), so nothing is ever sent that a
+sleeping camera would react to and the watching itself costs no battery. Once
+the camera reads asleep (the log says *"armed to connect on its next
+self-wake"*) the scan tightens, and a run of fast replies IS the wake —
+Neolink connects and records **immediately from the first keyframe**. The
+scan is also self-skeptical: a wake connect that catches nothing makes the
+next arming stricter (an idle-awake camera's radio can mimic the sleep
+pattern), so misreads can never become a connect loop that keeps the camera
+from sleeping. What is
+*kept* follows the camera's event-type selection: a self-wake records
+tentatively and is stored (and announced) only when a detection the camera's
+event types allow confirms it — otherwise the footage is discarded (the raw
+frames still land on the Timeline if *Record wake events* is on). Exactly
+**one** stream service watches and connects — the stream that records
+events — and the session is released ~10 s after the event ends. Full
+mechanics, `[wake-diag]` verdicts, timings and troubleshooting:
+[docs/battery-cameras.md](docs/battery-cameras.md). This is the middle ground
+between sleep-friendly (misses events) and `always_on` (catches everything
+but drains the battery). It has no effect with `always_on` (which never
+sleeps) or on non-battery cameras. Note it may miss the first second or two
+of an event — Neolink connects a moment after the camera wakes — and on a
+very busy camera it trends toward `always_on`-like battery use.
 
 ### UDP-only battery models (beta)
 

@@ -22,6 +22,14 @@ public interface ILiveCameraSource
     /// treated as mains for the whole session — mains idle grace, no battery
     /// reading. Default: ignore, for sources that have no such state.</summary>
     void BatteryDetected() { }
+
+    /// <summary>True while this source is deliberately offline so a battery camera
+    /// can sleep (sleep-friendly + parked). While EVERY source of a camera says so,
+    /// background pollers (camera-HTTP reads, ONVIF discovery, Wi-Fi warms) must
+    /// not touch the network for it: nothing can answer, and the traffic itself
+    /// keeps the camera's radio out of power-save — seen live as ping-flat runs
+    /// that faked wake edges. Default: never quiet.</summary>
+    bool NetworkQuiet => false;
 }
 
 /// <summary>
@@ -62,12 +70,14 @@ public sealed class CameraService : ILiveCameraSource
     /// anything (its power-save sawtooth continues under sustained 1 s pings,
     /// measured), so even this is generous.</summary>
     private static readonly TimeSpan WakeScanInterval = TimeSpan.FromSeconds(3);
-    /// <summary>Ping cadence once ARMED (camera asleep). Events are short — a real
-    /// PIR event measured ~27 s of flat single-digit RTTs with the sawtooth back the
-    /// instant it ended — so every second of detection latency is footage lost.
-    /// At 1 s, the three-sample confirmation lands ~3–4 s after the PIR; the same
-    /// capture shows 1 s pings leave the sleeping camera's power-save undisturbed.</summary>
-    private static readonly TimeSpan ArmedScanInterval = TimeSpan.FromSeconds(1);
+    /// <summary>Ping cadence once ARMED (camera asleep) — the SAME as unarmed, on
+    /// purpose. It was 1 s (faster wake confirmation), but live runs showed flat
+    /// RTT runs appearing 6–20 s after every switch to the tighter cadence — the
+    /// denser traffic itself plausibly pulling the radio out of power-save and
+    /// faking the wake. A steady cadence removes that confound; the three-sample
+    /// confirmation lands ~9 s after the PIR, well inside the ~27 s flat window a
+    /// real event measured, and the recording reaches back to our connect anyway.</summary>
+    private static readonly TimeSpan ArmedScanInterval = TimeSpan.FromSeconds(3);
     /// <summary>Quiet beat after parking before the scan starts — long enough for
     /// the session teardown to drain. The scan itself is non-waking, so this no
     /// longer needs to cover the camera's whole descent into sleep.</summary>
@@ -121,6 +131,17 @@ public sealed class CameraService : ILiveCameraSource
     // read "camera woke itself". These carry the evidence that tells them apart
     // from the probe loop into the session that follows.
     private WakeDiag? _wakeDiag;
+    // Consecutive wake-scan connects that caught nothing (no detection during
+    // the session): each one raises the next park's arming threshold and settle
+    // (see WakeRttDetector.ArmThreshold), so misreading an idle-awake camera as
+    // asleep can't become a connect loop that never lets it sleep. A real catch
+    // resets. Capped so a real-but-quiet camera is never locked out for good.
+    private int _fruitlessWakes;
+    // Capped LOW: at cap the scan needs 32 clean samples (~96 s) + a 45 s settle,
+    // so re-arming is never minutes away — a REAL event during a skeptical park
+    // (missed live, 2026-07-22, cap was 4 = up to 6.4 min unarmed) costs footage
+    // that skepticism is not entitled to spend.
+    private const int MaxWakeSkepticism = 2; // 8→32 samples, 15→45 s settle
     private double _lastProbeMs;
     private bool _wakeClipStarted; // one wake clip per session, on the first keyframe
     // "Held awake by …" reporting: when it was last said, and when the current
@@ -194,6 +215,9 @@ public sealed class CameraService : ILiveCameraSource
 
     /// <summary>True while intentionally disconnected so a battery camera can sleep.</summary>
     public bool Parked => _parked;
+
+    /// <summary>Leave the network alone for this camera (see ILiveCameraSource).</summary>
+    public bool NetworkQuiet => _parked && SleepFriendly;
 
     /// <summary>True while the user has SUSPENDED this stream: Neolink holds no
     /// connection, so it can't be viewed or recorded here (the camera is untouched).</summary>
@@ -402,8 +426,12 @@ public sealed class CameraService : ILiveCameraSource
                         // RUN of fast answers only ever appears when the camera is
                         // truly up. Radios that power off entirely just stop
                         // answering, and misses arm the detector the same way.
-                        var rtt = new WakeRttDetector();
-                        var nextProbe = DateTime.UtcNow + WakeSettleWindow;
+                        int skepticism = Math.Min(_fruitlessWakes, MaxWakeSkepticism);
+                        var rtt = new WakeRttDetector
+                        {
+                            ArmThreshold = WakeRttDetector.NonFastToArm << skepticism,
+                        };
+                        var nextProbe = DateTime.UtcNow + WakeSettleWindow * (1 + skepticism);
                         var diag = new WakeDiag { ParkedAt = DateTime.UtcNow, NonWakingScan = true };
                         bool sawAnyReply = false;
                         var lastLegacyProbe = DateTime.MinValue;
@@ -423,8 +451,8 @@ public sealed class CameraService : ILiveCameraSource
                                 break;
                             }
                             if (DateTime.UtcNow < nextProbe) continue;
-                            // Armed = the event clock could start any second: scan at
-                            // 1 s so the wake is confirmed while the event is young.
+                            // One steady cadence, armed or not: tightening on arm
+                            // correlated with fake flat runs (see ArmedScanInterval).
                             nextProbe = DateTime.UtcNow + (rtt.Armed ? ArmedScanInterval : WakeScanInterval);
                             double? ms = await PingRttAsync(ct).ConfigureAwait(false);
                             if (ms != null) sawAnyReply = true;
@@ -463,7 +491,8 @@ public sealed class CameraService : ILiveCameraSource
                                     diag.NonWakingScan = false; // this edge came from a probe that can wake
                                     _wakeDiag = diag;
                                     Log.Info($"{Tag}: camera answered the transport probe after an all-silent park " +
-                                             "(ICMP appears blocked here) — connecting to catch the event");
+                                             $"({(ResolveProbeTarget() == null ? "no address known yet to ping — the first connect will teach it" : "ICMP appears blocked here")}) — " +
+                                             "connecting to catch the event");
                                     break;
                                 }
                             }
@@ -1083,6 +1112,7 @@ public sealed class CameraService : ILiveCameraSource
                      $"asleep ({d.ProbesTotal} probes this park, slowest answer {d.SlowestAnsweredMs:0}ms of a " +
                      $"{WakeProbeTimeout.TotalMilliseconds:0}ms timeout) — a probe answered but the camera then " +
                      "refused the connection, which points at the probe having briefly roused it.");
+            _fruitlessWakes++; // caught nothing — the next park is stricter too
             return;
         }
         string sleepSaid = d.SleepStatusOnArrival switch
@@ -1098,6 +1128,31 @@ public sealed class CameraService : ILiveCameraSource
                  $"{d.UnansweredSummary(WakeProbeTimeout.TotalMilliseconds)}; {sleepSaid}; " +
                  $"first frame {(d.FirstFrameMs is { } ff ? $"{ff:0}ms after connect" : "never arrived")}; " +
                  $"detection during the session: {(d.SawDetection ? "YES" : "none")}.");
+
+        // Adaptive skepticism (live loop, 2026-07-21): connects on a wake edge
+        // that yield NO detection — especially with the camera reporting it was
+        // already up — mean the scan is misreading an idle-awake camera's radio
+        // power-save as sleep, and every such connect re-wakes it: left alone,
+        // a self-sustaining loop that never lets the camera doze. Each fruitless
+        // cycle makes the next park's arming stricter and its settle longer;
+        // one real catch resets to full sensitivity.
+        if (d.SawDetection)
+        {
+            if (_fruitlessWakes > 0)
+                Log.Info($"{Tag}: real catch — wake-scan skepticism reset");
+            _fruitlessWakes = 0;
+        }
+        else
+        {
+            _fruitlessWakes++;
+            int shift = Math.Min(_fruitlessWakes, MaxWakeSkepticism);
+            Log.Info($"{Tag}: that self-wake connect caught nothing ({_fruitlessWakes} in a row" +
+                     $"{(d.SleepStatusOnArrival == false ? "; the camera was already up" : "")}) — " +
+                     $"being more skeptical: the next park needs " +
+                     $"{WakeRttDetector.NonFastToArm << shift} uninterrupted sleep-pattern samples " +
+                     $"and settles {(WakeSettleWindow * (1 + shift)).TotalSeconds:0}s before scanning, " +
+                     "so the camera actually gets to fall asleep");
+        }
     }
 
     /// <summary>Session-activity ping for UDP cameras: msg 93 every 5 s, like the
@@ -1365,6 +1420,17 @@ internal sealed class WakeRttDetector
     private int _nonFast;
     private int _fastRun;
 
+    /// <summary>Arming threshold for THIS park. Defaults to NonFastToArm; the
+    /// probe loop raises it after fruitless self-wake connects (adaptive
+    /// skepticism, live loop 2026-07-21): an IDLE-AWAKE camera's radio power-save
+    /// also pings as a sawtooth, so right after a session the scan can read
+    /// "asleep" on a camera that never dozed, connect on its next housekeeping
+    /// flat, and re-wake it — a loop that never lets it sleep. Requiring a much
+    /// longer uninterrupted pattern breaks the loop: a truly sleeping camera
+    /// passes anyway (sleep lasts hours), an idle-awake one keeps interrupting
+    /// the count with flats and never arms, so it finally gets to doze off.</summary>
+    public int ArmThreshold { get; init; } = NonFastToArm;
+
     /// <summary>True once the sleep pattern has been established — a fast run
     /// after this is a wake edge.</summary>
     public bool Armed { get; private set; }
@@ -1377,7 +1443,7 @@ internal sealed class WakeRttDetector
         if (!fast)
         {
             _fastRun = 0;
-            if (++_nonFast >= NonFastToArm) Armed = true;
+            if (++_nonFast >= ArmThreshold) Armed = true;
             return false;
         }
         _nonFast = 0;

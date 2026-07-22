@@ -403,6 +403,14 @@ public sealed class CameraControl : ICameraControl
     public string CameraName => _source.Name;
     public bool Online => _sources.Any(s => s.LiveCamera != null);
 
+    /// <summary>The camera is deliberately offline so its battery can sleep (every
+    /// stream parked, sleep-friendly). Background HTTP/ONVIF traffic is suppressed
+    /// while this holds: nothing can answer, and the packets themselves keep the
+    /// camera's radio out of power-save — which the wake scan then misreads as the
+    /// camera waking (seen live, 2026-07-22: ONVIF retries and HTTP feature reads
+    /// against a parked Argus Solar faked its ping pattern flat).</summary>
+    private bool SleepingOnPurpose => _sources.All(s => s.NetworkQuiet);
+
     /// <summary>The primary stream's session when connected, else any live one.</summary>
     private IBcCamera? AnyLive()
     {
@@ -787,7 +795,10 @@ public sealed class CameraControl : ICameraControl
         // force = an explicit user action (SD-card browse): it gets its try even
         // while the transport backoff is armed — the user pressed refresh NOW,
         // and a no-op that quietly returns "nothing" reads as data loss.
-        if (_httpApi == null || (!force && DateTime.UtcNow < _httpRetryAt)) return default;
+        // A camera sleeping on purpose is left in radio silence: best-effort reads
+        // return "nothing" without sending a packet (see SleepingOnPurpose).
+        if (_httpApi == null || (!force && (DateTime.UtcNow < _httpRetryAt || SleepingOnPurpose)))
+            return default;
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         // A call without a live session token pays for a LOGIN round-trip before
         // the command — on a Wi-Fi camera under streaming load (dual-lens Duos)
@@ -1046,6 +1057,10 @@ public sealed class CameraControl : ICameraControl
     /// fields). Never throws — null just means ONVIF had nothing.</summary>
     private async Task<ImageSettings?> GetOnvifImageSettingsAsync(CancellationToken ct)
     {
+        // Radio silence for a camera sleeping on purpose — an ONVIF discovery
+        // retry against a parked battery camera is exactly the traffic that
+        // faked its wake pattern (2026-07-22).
+        if (SleepingOnPurpose) return null;
         var o = await _onvif!.TryGetImagingAsync(ct).ConfigureAwait(false);
         if (o == null) return null;
         // HDR (WDR) is deliberately left null: its WRITE rides a separate endpoint
@@ -1306,6 +1321,9 @@ public sealed class CameraControl : ICameraControl
 
     public async Task WarmWifiSignalAsync(CancellationToken ct)
     {
+        // A dozing battery camera keeps its last reading — warming it would put
+        // packets on the air at the exact moment the wake scan needs radio quiet.
+        if (SleepingOnPurpose) return;
         // Throttle: one read per interval regardless of how often the list is polled.
         if (DateTime.UtcNow - _wifiWarmedAt < WifiWarmInterval) return;
         _wifiWarmedAt = DateTime.UtcNow;

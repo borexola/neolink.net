@@ -154,10 +154,32 @@ in the README). Paste the matching section below into the GitHub release.
   answers in a power-save sawtooth (hundreds of ms, ramping), while a woken
   processor answers flat and fast — so a run of fast replies IS the wake, no
   packet ever sent that the module wouldn't answer in its sleep. Detection
-  runs a 3 s scan, tightening to 1 s once the camera is confirmed asleep, and
-  falls back to the old transport probe on networks where ping goes
-  unanswered. Verified against recorded traces of a real Argus Solar sleeping,
-  waking on PIR, and streaming.
+  runs a steady 3 s scan and falls back to the old transport probe on networks
+  where ping goes unanswered. Verified against recorded traces of a real Argus
+  Solar sleeping, waking on PIR, and streaming.
+
+  The scan is also **self-skeptical**: an idle-awake camera's radio power-save
+  pings just like the sleep pattern, so right after a session the scan could
+  read "asleep" on a camera that never dozed, connect on its next flat run,
+  and re-wake it — a loop that never let it sleep (caught live). Every
+  wake-scan connect that yields no detection now raises the next park's
+  arming requirement and settle time (up to ~96 s of uninterrupted sleep
+  pattern — capped low, because an over-skeptical scan sits unarmed and
+  missed a real event in testing), so the camera is left alone until it
+  genuinely sleeps; one real catch resets full sensitivity. The same loop
+  also let our own synthetic wake marker "confirm" a lingering tentative
+  recording (an event with no labels at all) — a wake marker can no longer
+  confirm, relabel, or extend any running event.
+
+  And the biggest disturber turned out to be Neolink itself: **background
+  HTTP and ONVIF polling now goes radio-silent for a camera that is sleeping
+  on purpose.** Wi-Fi signal warms, best-effort HTTP feature reads and ONVIF
+  discovery retries were hitting the parked camera every few seconds to
+  minutes — traffic that keeps its radio out of power-save (faking the wake
+  pattern) and can keep the camera itself from ever dozing off. While every
+  stream of a sleep-friendly camera is parked, those pollers no longer send
+  a single packet; the panel simply shows the last known readings. Explicit
+  user actions (SD-card browse) still get their try.
 
 ### Documentation
 

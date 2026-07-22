@@ -566,6 +566,13 @@ public sealed class EventRecorder
 
             if (push.Active)
             {
+                // Our own synthetic self-wake marker proves nothing inside a
+                // running event: a new park's wake push must never CONFIRM a
+                // still-tentative recording (only a real detection may), never
+                // re-add the wake label, and never extend the event. (Seen live:
+                // back-to-back wake sessions promoted a lingering tentative event
+                // with no labels at all — "event started ( — confirmed…".)
+                if (push.Status == "wake") continue;
                 // Filtered-out detection types don't extend the event either —
                 // as far as recording is concerned, they never happened.
                 // External holds always extend: the switch is still on.
