@@ -136,7 +136,7 @@ in exchange you get an integration light enough to leave running forever.
 - **Battery cameras** (Argus etc., BETA — in active development) are
   auto-detected: charge badge in the sidebar, sleep-friendly by default (the
   camera dozes while nobody watches), `always_on` per camera to hold it
-  awake — see [Battery cameras](#battery-cameras-argus-etc)
+  awake — see [Battery cameras](#battery-cameras-argus-etc--beta)
 - **Tiered storage (optional)**: an SSD tier for fresh event clips and a cold
   archive tier that expired footage **moves** to instead of being deleted
   (per camera, per recording type, BETA) — with capacity watching: an amber
@@ -1031,109 +1031,49 @@ Frigate roles/consumers attach, and hands stalled ffmpeg processes a hard discon
 within 10 s so Frigate's watchdog recovers quickly. For headless Frigate boxes set
 `"webui": false` (or `"web_port": 0`).
 
-## Battery cameras (Argus etc.)
+## Battery cameras (Argus etc.) — BETA
 
-> **Beta — under active development and testing.** Battery support is
-> validated against real hardware but constrained by what these cameras
-> allow: a sleeping camera is off the network and cannot be woken remotely,
-> sleep can only be inferred from the outside, and models vary in how they
-> behave while dozing. It is being actively tuned against field logs — expect
-> rough edges on untested models, and open an issue with the `[wake-diag]`
-> lines if yours misbehaves.
+> ### 📖 Full guide: **[docs/battery-cameras.md](docs/battery-cameras.md)**
 >
-> **Full guide: [docs/battery-cameras.md](docs/battery-cameras.md)** — how
-> sleep works (and how Neolink watches it without waking anything), wake
-> capture, what gets stored where, every setting, a log-line cheat sheet,
-> timings, and troubleshooting. The section below is the short version.
+> Setup for all three modes (constant power, battery, battery + router wake
+> hints), every setting, what gets recorded where, and troubleshooting.
 
-Battery-powered Reolinks (Argus Eco/Pro, Reolink Go, battery doorbells) speak the
-same Baichuan protocol over the same direct TCP connection as mains cameras —
-**an awake battery camera streams out of the box**, no special transport needed.
-What sets them apart is power management: left to the default always-connected
-behavior, a permanent stream holds the camera awake and flattens the battery in a
-day or two. That's what this support is about — knowing the camera is
-battery-powered and managing sleep deliberately:
+**Beta — under active development and testing.** Validated against real
+hardware, but sleep behavior varies by model and is still being tuned against
+field logs — open an issue with the `[wake-diag]` log lines if yours
+misbehaves.
 
-- **Auto-detected**: a camera that reports a battery gets a charge badge in the
-  sidebar (with a charging bolt when powered), and defaults to **sleep-friendly
-  mode** — Neolink.NET disconnects while nobody watches so the camera can power down,
-  and reconnects when you open one of its streams. A dozing camera shows an
-  "asleep" badge instead of the red offline one.
-- **`"always_on": true`** (per camera in the config) holds the connection — and
-  therefore the camera — awake around the clock. That's what you want for motion
-  events, MQTT and recording, which all need a live connection; it also drains a
-  battery in a day or two, so pair it with a solar panel or USB power.
-- **`"always_on": false`** forces sleep-friendly mode even if battery detection
-  fails.
+The short version:
 
-Limitations to know about (all inherited from how these cameras work, not fixable
-from our side):
-
-- The camera must be reachable **by IP over Wi-Fi** (`"address"` in the config —
-  give it a DHCP reservation). The Reolink cloud/P2P relay transport is not
-  implemented, so a camera reachable only through Reolink's servers won't connect.
-- **A sleeping camera cannot be woken by Neolink.NET** — over TCP or UDP. While
-  asleep it is fully off the network, so there is nothing to connect to; it must
-  wake itself (PIR motion or the Reolink app). Reconnection then succeeds on the
-  next retry. `always_on` doesn't wake a sleeping camera either — it *keeps* one
-  awake once it is up (the held-open connection is what prevents it dozing), so
-  after the first wake it stays reachable. Set it per camera in the config
-  (`"always_on": true`) or in the web-UI camera editor ("Always on").
-- While asleep there are **no motion events, no MQTT updates, no recording, no
-  snapshots** — the camera is off the network on purpose. It still records
-  PIR events to its own SD card, as it does with the official app. See
-  **wake-capture** below to close this gap without keeping the camera awake.
-
-### Wake-capture (catch events without `always_on`)
-
-By default a sleep-friendly battery camera only connects when *you* open its
-stream, so a motion event while nobody is watching is missed. Set
-`"wake_capture": true` per camera to change that: Neolink.NET watches for the
-**sleep→wake edge** and connects the instant the camera wakes *itself* for
-motion — capturing that event — then lets it sleep again. The watching is done
-by **listening, not knocking**: plain ping round-trips reveal the camera's
-state (a dozing camera's Wi-Fi module answers in a slow power-save sawtooth,
-a woken processor answers flat and fast), so nothing is ever sent that a
-sleeping camera would react to and the watching itself costs no battery. Once
-the camera reads asleep (the log says *"armed to connect on its next
-self-wake"*) a run of fast replies IS the wake — the first fast reply makes
-the confirming probes burst, and Neolink connects and records **immediately
-from the first keyframe**. The
-scan is also self-skeptical: a wake connect that catches nothing makes the
-next arming stricter (an idle-awake camera's radio can mimic the sleep
-pattern), so misreads can never become a connect loop that keeps the camera
-from sleeping. For even faster, gap-free wakes your **router** can help: it
-sees the camera call Reolink's push service the instant a PIR event fires,
-and can forward that to Neolink as an instant wake hint (OPNsense/pfSense
-remote syslog, `wake_hints` in the config — recipe in the full guide). What is
-*kept* follows the camera's event-type selection: a self-wake records
-tentatively and is stored (and announced) only when a detection the camera's
-event types allow confirms it — otherwise the footage is discarded (the raw
-frames still land on the Timeline if *Record wake events* is on). Exactly
-**one** stream service watches and connects — the stream that records
-events — and the session is released ~10 s after the event ends. Full
-mechanics, `[wake-diag]` verdicts, timings and troubleshooting:
-[docs/battery-cameras.md](docs/battery-cameras.md). This is the middle ground
-between sleep-friendly (misses events) and `always_on` (catches everything
-but drains the battery). It has no effect with `always_on` (which never
-sleeps) or on non-battery cameras. Note it may miss the first second or two
-of an event — Neolink connects a moment after the camera wakes — and on a
-very busy camera it trends toward `always_on`-like battery use.
+- A camera that reports a battery is **auto-detected** and defaults to
+  **sleep-friendly mode**: Neolink.NET disconnects while nobody watches
+  (connection time is battery), shows an "asleep" badge, and reconnects when
+  you open a stream.
+- On solar/USB power, set `"always_on": true` — the camera then behaves
+  exactly like a wired one (permanent connection, 24/7 recording, live
+  events).
+- On battery, `"wake_capture": true` catches motion events while it sleeps,
+  and an OPNsense/pfSense router can feed **instant wake hints**
+  (`wake_hints` in the config).
+- A sleeping camera **cannot be woken from the network** — it wakes itself
+  on PIR — and it always keeps recording events to its own SD card.
 
 ### UDP-only battery models (beta)
 
-Some battery-only models (parts of the Argus line) never listen on TCP at all —
-they speak Baichuan **over UDP** — so they log `Connection refused` forever on the
-normal path, and a port scan shows no open ports. Neolink.NET supports these
-over UDP as a **beta**: set the camera's **UID** (Reolink app → device info, or
-the sticker) and `"udp": true` in its config entry:
+Some battery models (parts of the Argus line) never listen on TCP — they log
+`Connection refused` forever and a port scan shows no open ports. They speak
+Baichuan **over UDP** instead:
 
 ```jsonc
-{ "name": "Retro", "username": "admin", "password": "…",
-  "address": "192.168.178.50", "uid": "95270000ABCDEFGH", "udp": true }
+{
+  "name": "Retro",
+  "username": "admin",
+  "password": "…",
+  "address": "192.168.178.50",
+  "uid": "95270000ABCDEFGH",
+  "udp": true
+}
 ```
-
-Required for a UDP camera to connect:
 
 | | |
 |---|---|
@@ -1142,28 +1082,14 @@ Required for a UDP camera to connect:
 | `"address"` | its LAN IP — give it a DHCP reservation |
 | **host networking** | **in Docker/Podman: `network_mode: host` (compose) or `--network host` (run). Not optional** |
 
-**Why host networking is required.** The Baichuan UDP handshake writes the
-client's own port number *inside* the packet, and the camera replies to that
-port — a bridge network rewrites the header but not the payload, so the reply
-lands nowhere and the handshake times out. Discovery broadcasts have the same
-problem from the other end: they never leave the container's own subnet. TCP
-cameras are unaffected (NAT handles TCP fine), which is why a UDP camera can be
-the only one that fails on an otherwise healthy server. The tell in the log is a
-discovery sweep whose broadcast targets are all container-internal addresses
-(`172.x.255.255`) with no address on your camera's subnet, ending in
-`UDP: SILENCE`. Note host networking also removes the container's network
-isolation and binds 8654/8655 on every host interface — drop the `ports:` /
-`-p` mappings when you switch, they do nothing and can collide.
-
-The camera still has to be **awake and on your LAN** (the same sleep limitation
-applies — UDP can't wake a sleeping camera; pair it with
-[`wake_capture`](#wake-capture-catch-events-without-always_on) to catch its
-self-wakes). Once connected, everything is the same as the TCP path: video,
-events, battery, recording and controls all work, because only the transport
-differs. UDP cameras carry a **UDP BETA badge** in the sidebar and on their
-settings panel so it's always clear which transport a camera runs on. As a beta,
-rough edges are possible — if a UDP camera connects but misbehaves, please open
-an issue with the log.
+Host networking is required because the Baichuan UDP handshake carries the
+client's port *inside* the packet and discovery relies on LAN broadcast —
+neither survives a bridge network. The tell in the log is a discovery sweep
+listing only container-internal broadcast addresses (`172.x.255.255`) ending
+in `UDP: SILENCE`. Drop the `ports:` / `-p` mappings when you switch — with
+host networking they do nothing and can collide. Once connected, everything
+works as over TCP (video, events, battery, recording, controls); these
+cameras carry a **UDP BETA** badge in the UI.
 
 Validated against real hardware (Argus Eco Pro) — with thanks to
 **[Rihan9](https://github.com/Rihan9)**, whose patient testing and log captures
@@ -1424,7 +1350,7 @@ per-client backpressure, in-stream resynchronization.
 
 Not (yet) supported: TLS for RTSP (`rtsps://` — put a TLS-terminating proxy in front)
 and the UID/UDP discovery + relay transport (battery cameras work over direct TCP —
-see [Battery cameras](#battery-cameras-argus-etc) — but cameras reachable ONLY via
+see [Battery cameras](#battery-cameras-argus-etc--beta) — but cameras reachable ONLY via
 Reolink's P2P relay are not). The auxiliary features (PIR, reboot, status LED,
 two-way talk) are covered by the web UI and API instead of CLI subcommands.
 

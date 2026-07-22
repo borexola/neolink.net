@@ -11,9 +11,14 @@ on TCP) always need `uid` + `"udp": true`, and in Docker **host networking**
 ## 1. On constant power (solar/USB): `always_on`
 
 ```jsonc
-{ "name": "Solar", "username": "admin", "password": "…",
-  "uid": "95270000ABCDEFGH", "udp": true,
-  "always_on": true }
+{
+  "name": "Solar",
+  "username": "admin",
+  "password": "…",
+  "uid": "95270000ABCDEFGH",
+  "udp": true,
+  "always_on": true
+}
 ```
 
 Done — the camera behaves **exactly like a wired camera**: permanent
@@ -23,9 +28,14 @@ live. Nothing else in this guide applies.
 ## 2. On battery: `wake_capture`
 
 ```jsonc
-{ "name": "Solar", "username": "admin", "password": "…",
-  "uid": "95270000ABCDEFGH", "udp": true,   // UDP-only model; omit for TCP models
-  "wake_capture": true }
+{
+  "name": "Solar",
+  "username": "admin",
+  "password": "…",
+  "uid": "95270000ABCDEFGH",
+  "udp": true,              // UDP-only model; omit for TCP models
+  "wake_capture": true
+}
 ```
 
 The camera sleeps between events to preserve charge. Neolink watches its ping
@@ -66,7 +76,9 @@ wake).
 In Neolink's config (server level, next to `cameras`):
 
 ```json
-"wake_hints": { "syslog_port": 5140 }
+"wake_hints": {
+  "syslog_port": 5140
+}
 ```
 
 ### OPNsense
