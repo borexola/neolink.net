@@ -757,6 +757,13 @@ public sealed class EventRecorder
             "vehicle" or "car" => "vehicle",
             "dog_cat" or "animal" or "pet" => "animal",
             "package" => "package",
+            // "other" is Reolink's own vocabulary for "motion, no AI class" (their
+            // HTTP AI-state API uses exactly people/vehicle/dog_cat/other). Battery
+            // cameras (Argus Solar, live 2026-07-22) report PIR wake detections as
+            // it — left unmapped it became a raw "other" label no filter allows,
+            // so every wake-capture recording on those models was discarded even
+            // though the default event types include "motion".
+            "other" => "motion",
             "visitor" or "doorbell" => "doorbell", // video doorbells: the button was pressed
             // Crying-sound detection (indoor cams listen for it through the mic;
             // "cry" confirmed from an E1 Pro, the others are spelling guesses).

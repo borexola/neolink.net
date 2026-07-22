@@ -396,6 +396,7 @@ dotnet publish src/Neolink.Server -c Release -r linux-x64    # or win-x64, linux
 | `GET`/`POST /api/cameras/driveway/pir` | PIR motion sensor — `{"enabled":true}` |
 | `POST /api/cameras/driveway/ptz` | pan/tilt — `{"command":"left","speed":32}` (`up/down/left/right/stop`) |
 | `POST /api/cameras/driveway/reboot` | reboot the camera |
+| `POST /api/cameras/driveway/wake-hint` | external "the camera is up for an event" signal (battery cameras — see the battery guide) |
 
 `POST` (control) endpoints require HTTP **Basic auth** when `users` are configured,
 honouring the same per-camera `permitted_users` rules as RTSP; with no users
@@ -1095,12 +1096,16 @@ state (a dozing camera's Wi-Fi module answers in a slow power-save sawtooth,
 a woken processor answers flat and fast), so nothing is ever sent that a
 sleeping camera would react to and the watching itself costs no battery. Once
 the camera reads asleep (the log says *"armed to connect on its next
-self-wake"*) the scan tightens, and a run of fast replies IS the wake —
-Neolink connects and records **immediately from the first keyframe**. The
+self-wake"*) a run of fast replies IS the wake — the first fast reply makes
+the confirming probes burst, and Neolink connects and records **immediately
+from the first keyframe**. The
 scan is also self-skeptical: a wake connect that catches nothing makes the
 next arming stricter (an idle-awake camera's radio can mimic the sleep
 pattern), so misreads can never become a connect loop that keeps the camera
-from sleeping. What is
+from sleeping. For even faster, gap-free wakes your **router** can help: it
+sees the camera call Reolink's push service the instant a PIR event fires,
+and can forward that to Neolink as an instant wake hint (OPNsense/pfSense
+remote syslog, `wake_hints` in the config — recipe in the full guide). What is
 *kept* follows the camera's event-type selection: a self-wake records
 tentatively and is stored (and announced) only when a detection the camera's
 event types allow confirms it — otherwise the footage is discarded (the raw

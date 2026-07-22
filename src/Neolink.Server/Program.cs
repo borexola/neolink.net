@@ -176,6 +176,9 @@ if (users.Count > 0)
 var server = new RtspServer(users);
 var tasks = new List<Task>();
 var webCameras = new List<WebCameraInfo>();
+// Router wake hints (wake_hints.syslog_port) route to each camera's wake-probe
+// owner by source IP; populated as the cameras are built below.
+var wakeHintTargets = new List<CameraService>();
 
 // MQTT / Home Assistant bridge is created after the cameras are built (below) so
 // it can reference their controls; declared here so motion wiring can reach it.
@@ -475,6 +478,9 @@ foreach (var cam in config.Cameras)
                         ?? camServices[0];
         foreach (var s in camServices) s.WakeProbeOwner = ReferenceEquals(s, wakeOwner);
     }
+    // Router wake hints go to the probe owner — the stream whose park loop
+    // watches for self-wakes. Harmless for cameras that never park.
+    wakeHintTargets.AddRange(camServices.Where(s => s.WakeProbeOwner));
 
     // On-demand video: while nothing consumes this camera's frames the stream
     // services hold control-only connections and subscribe video only on demand.
@@ -563,12 +569,57 @@ foreach (var cam in config.Cameras)
         // on-demand recording session per camera (UI button ≡ HA Record switch).
         {
             EventRecorder = eventRecorder, Address = camAddress, Udp = cam.Udp,
+            // External wake hints (the wake-hint API endpoint) land on the same
+            // probe-owner path the syslog listener feeds.
+            WakeHint = camServices.Count == 0 ? null : detail =>
+            {
+                foreach (var s in camServices)
+                    if (s.WakeProbeOwner) s.NotifyWakeHint(detail);
+            },
             // Any stream service saying it may doze makes the camera sleep-friendly:
             // the policy is per camera (battery + no always_on), so the streams agree.
             SleepFriendly = readers.Count == 0 ? null : () => readers.Any(s => s.SleepFriendly),
         });
     if (primaryService != null)
         motionTargets.Add((camServices, cam.Name, recorderSink));
+}
+
+// Router wake hints: OPNsense/pfSense remote syslog → instant, event-grade wake
+// signal for battery cameras (the router sees the camera itself call the Reolink
+// push service — see WakeHintListener). Restarts itself on unexpected errors so
+// a transient socket failure can't silently kill the feature.
+if (config.WakeHints is { SyslogPort: > 0 } wakeHintCfg)
+{
+    var hintListener = new WakeHintListener(
+        wakeHintCfg.SyslogPort, wakeHintCfg.Bind ?? config.BindAddr,
+        (ip, detail) =>
+        {
+            bool matched = false;
+            foreach (var s in wakeHintTargets)
+                if (s.MatchesAddress(ip)) { s.NotifyWakeHint(detail); matched = true; }
+            // Matched hints are rare (one per camera event) and worth seeing even
+            // when the camera isn't parked. Unmatched TCP/443 lines can be every
+            // HTTPS connection of every logged LAN device — Debug only.
+            if (matched)
+                Log.Info($"Wake hints: {detail}");
+            else
+                Log.Debug($"Wake hints: {detail} — no camera with address {ip}, ignored");
+        });
+    tasks.Add(Task.Run(async () =>
+    {
+        while (!shutdown.Token.IsCancellationRequested)
+        {
+            try { await hintListener.RunAsync(shutdown.Token); return; }
+            catch (OperationCanceledException) { return; }
+            catch (Exception e)
+            {
+                Log.Error($"Wake hints: listener failed ({e.Message}); retrying in 30s. " +
+                          $"If another service owns udp:{wakeHintCfg.SyslogPort}, change wake_hints.syslog_port.");
+                try { await Task.Delay(TimeSpan.FromSeconds(30), shutdown.Token); }
+                catch (OperationCanceledException) { return; }
+            }
+        }
+    }));
 }
 
 // Resource sampler: feeds the UI's monitor page AND the server's own Home

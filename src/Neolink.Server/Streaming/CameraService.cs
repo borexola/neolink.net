@@ -65,6 +65,17 @@ public sealed class CameraService : ILiveCameraSource
     /// (post_seconds, default 8) so a wake-capture clip isn't cut short, without
     /// letting the recorder hold a battery camera awake around the clock.</summary>
     private static readonly TimeSpan MotionDemandHold = TimeSpan.FromSeconds(10);
+    /// <summary>How long a wake-opened session that has NOT seen a detection yet is
+    /// held before the idle release may act. The camera starts capturing BEFORE it
+    /// classifies and phones home — its detection push to us measured up to ~25 s
+    /// late — so the ~10 s idle grace routinely dropped the session one push short
+    /// of confirming, and the tentative footage was discarded mid-event (live
+    /// 2026-07-22). 30 s covers the measured worst case and matches the event
+    /// confirmation window. A fresh router hint during the session restarts it.
+    /// Scan-opened sessions release early on the first detection (MotionDemandHold
+    /// takes over); hint-opened sessions record the full window — see
+    /// WakeLingerActive.</summary>
+    private static readonly TimeSpan WakeSessionLinger = TimeSpan.FromSeconds(30);
     /// <summary>Wake-capture ping cadence while the camera still reads awake or
     /// settling. ICMP is answered by the camera's Wi-Fi module without waking
     /// anything (its power-save sawtooth continues under sustained 1 s pings,
@@ -74,10 +85,24 @@ public sealed class CameraService : ILiveCameraSource
     /// purpose. It was 1 s (faster wake confirmation), but live runs showed flat
     /// RTT runs appearing 6–20 s after every switch to the tighter cadence — the
     /// denser traffic itself plausibly pulling the radio out of power-save and
-    /// faking the wake. A steady cadence removes that confound; the three-sample
-    /// confirmation lands ~9 s after the PIR, well inside the ~27 s flat window a
-    /// real event measured, and the recording reaches back to our connect anyway.</summary>
+    /// faking the wake. A steady cadence removes that confound; once a fast
+    /// answer arrives the confirm probes burst at <see cref="BurstConfirmInterval"/>,
+    /// so the three-sample confirmation lands ~3–5 s after the radio goes flat —
+    /// well inside even a short PIR wake, and the recording reaches back to our
+    /// connect anyway.</summary>
     private static readonly TimeSpan ArmedScanInterval = TimeSpan.FromSeconds(3);
+    /// <summary>Follow-up cadence while an ARMED scan is mid fast-run — one fast
+    /// answer has arrived and the detector needs two more to fire. At the steady
+    /// 3 s cadence the whole confirmation spans ~7–9 s, which misses short wakes:
+    /// a camera that idles awake with its radio in power-save (sawtooth, reads
+    /// asleep) answers a fresh PIR trigger with only a brief flat blip — a push
+    /// upload, a few seconds — and a live miss (2026-07-22 06:27) showed exactly
+    /// that gap. Bursting the two confirm probes at 1 s shrinks the window to
+    /// ~3–5 s. This cannot recreate the sustained-1 s-cadence false wakes: a fast
+    /// answer means the radio is ALREADY out of power-save, so the burst probes
+    /// nothing that was sleeping, and the moment the run breaks the cadence falls
+    /// back to steady.</summary>
+    private static readonly TimeSpan BurstConfirmInterval = TimeSpan.FromSeconds(1);
     /// <summary>Quiet beat after parking before the scan starts — long enough for
     /// the session teardown to drain. The scan itself is non-waking, so this no
     /// longer needs to cover the camera's whole descent into sleep.</summary>
@@ -105,6 +130,8 @@ public sealed class CameraService : ILiveCameraSource
     {
         "people", "person", "face", "vehicle", "car", "dog_cat", "animal", "pet",
         "package", "visitor", "doorbell",
+        // Reolink's "motion, no AI class" bucket (battery cams report PIR wakes as it)
+        "other",
         // Crying-sound detection (indoor cams, e.g. E1 series): "cry" confirmed
         // from an E1 Pro; the other spellings are guesses at firmware variants.
         "cry", "baby_cry", "babycry",
@@ -142,6 +169,30 @@ public sealed class CameraService : ILiveCameraSource
     // (missed live, 2026-07-22, cap was 4 = up to 6.4 min unarmed) costs footage
     // that skepticism is not entitled to spend.
     private const int MaxWakeSkepticism = 2; // 8→32 samples, 15→45 s settle
+    // External wake hint (router syslog / wake-hint API): "the camera itself just
+    // called the Reolink push service" — event-grade, so a parked wake-capture
+    // owner connects on it at once, armed or not (it even covers the re-arming
+    // blind window right after a wake, where the ping scan is structurally deaf).
+    // Ticks + detail are written from listener threads; the park loop consumes.
+    private long _hintTicks;
+    private volatile string? _hintDetail;
+    private DateTime _lastHintFire;
+    /// <summary>Floor between hint-triggered connects. Scaled up by the fruitless-
+    /// wake counter (15/30/60 s), so a firewall rule that matches non-event traffic
+    /// cannot chain connects that never let the camera sleep — the same guarantee
+    /// the scan's adaptive skepticism gives, reached the same way: no detection,
+    /// stricter next time; a real catch resets to the floor.</summary>
+    private static readonly TimeSpan HintCooldown = TimeSpan.FromSeconds(15);
+    /// <summary>How long after the last received hint the router is trusted to be
+    /// reporting this camera's event pushes. While trusted, a ping-scan wake edge
+    /// with NO hint is treated as the camera's periodic housekeeping and NOT
+    /// connected to: router logs (2026-07-22) show the radio waking every 5-14 min
+    /// for ~20+ s of p2p re-registration — long enough to fire the scan — with a
+    /// pushx call (~4 s after radio-up) present ONLY on real events. Bounded so a
+    /// silently broken pipe can never blind the scan: no hint for this long and
+    /// scan-only connects resume exactly as before. Hints refresh it; housekeeping
+    /// wakes (no push) do not.</summary>
+    private static readonly TimeSpan HintTrustWindow = TimeSpan.FromHours(2);
     private double _lastProbeMs;
     private bool _wakeClipStarted; // one wake clip per session, on the first keyframe
     // "Held awake by …" reporting: when it was last said, and when the current
@@ -222,6 +273,22 @@ public sealed class CameraService : ILiveCameraSource
     /// <summary>True while the user has SUSPENDED this stream: Neolink holds no
     /// connection, so it can't be viewed or recorded here (the camera is untouched).</summary>
     public bool Suspended => _suspended;
+
+    /// <summary>External wake hint: something outside Neolink (a router that saw the
+    /// camera contact the Reolink push service, or the wake-hint API) says the camera
+    /// is up RIGHT NOW for an event. Recorded always; acted on only by a parked
+    /// wake-capture probe owner, with a misfire-scaled cooldown. Costless to the
+    /// camera by construction — it was already awake and transmitting.</summary>
+    public void NotifyWakeHint(string source)
+    {
+        _hintDetail = source;
+        System.Threading.Interlocked.Exchange(ref _hintTicks, DateTime.UtcNow.Ticks);
+    }
+
+    /// <summary>True when the address is this camera — the configured host, or the
+    /// IP discovery learned on the last connect (UID-only cameras). Routes router
+    /// syslog wake hints; false until a UID-only camera's first session teaches it.</summary>
+    public bool MatchesAddress(System.Net.IPAddress ip) => ip.Equals(ResolveProbeTarget());
 
     /// <summary>Suspends or resumes the stream at runtime. Suspending drops any live
     /// session at once; resuming lets the connect loop reconnect on the next tick.</summary>
@@ -320,6 +387,31 @@ public sealed class CameraService : ILiveCameraSource
     // awake longer than the detection itself plus the hold).
     private bool MotionActiveRecently =>
         DateTime.UtcNow.Ticks - Interlocked.Read(ref _lastMotionActiveTicks) < MotionDemandHold.Ticks;
+
+    // The router has recently proven it reports this camera's event pushes
+    // (see HintTrustWindow) — scan edges without a hint are then housekeeping.
+    private bool HintsLive =>
+        DateTime.UtcNow.Ticks - Interlocked.Read(ref _hintTicks) < HintTrustWindow.Ticks;
+
+    // A wake-opened session waiting for its detection (see WakeSessionLinger).
+    // Anchored to the LATER of connect time and the last router hint: the camera
+    // calling the push service again mid-session means another event just fired,
+    // so the wait restarts. A SCAN-opened session releases early once a detection
+    // arrives (MotionDemandHold carries it from there); a HINT-opened session
+    // holds the FULL window regardless — the router said an event is happening
+    // right now, so 30 s of footage is the whole point of having connected, and
+    // a detection whose motion clears in seconds must not cut it short.
+    private bool WakeLingerActive
+    {
+        get
+        {
+            var d = _wakeDiag;
+            if (d == null || d.Reported || d.ConnectedAt == default) return false;
+            if (d.HintSource == null && d.SawDetection) return false;
+            long anchor = Math.Max(d.ConnectedAt.Ticks, Interlocked.Read(ref _hintTicks));
+            return DateTime.UtcNow.Ticks - anchor < WakeSessionLinger.Ticks;
+        }
+    }
 
     /// <summary>
     /// When set (on the primary stream service), alarm pushes are requested on each
@@ -450,6 +542,34 @@ public sealed class CameraService : ILiveCameraSource
                                          "(the camera did not wake on its own)");
                                 break;
                             }
+                            // Event-grade external hint (router syslog / wake-hint
+                            // API): the camera itself just contacted the push
+                            // service, so it is up and transmitting RIGHT NOW —
+                            // connect at once, armed or not. This covers the
+                            // re-arming blind window after a wake, where the ping
+                            // scan is structurally deaf to a second event. Only
+                            // FRESH hints count (a hint held back by the cooldown
+                            // must never fire late into a camera that has since
+                            // dozed off — that connect would be the waker).
+                            long hintTicks = System.Threading.Interlocked.Read(ref _hintTicks);
+                            if (hintTicks > diag.ParkedAt.Ticks
+                                && DateTime.UtcNow.Ticks - hintTicks < TimeSpan.FromSeconds(10).Ticks)
+                            {
+                                var cooldown = HintCooldown *
+                                    (1 << Math.Min(_fruitlessWakes, MaxWakeSkepticism));
+                                if (DateTime.UtcNow - _lastHintFire >= cooldown)
+                                {
+                                    _lastHintFire = DateTime.UtcNow;
+                                    diag.EdgeAt = DateTime.UtcNow;
+                                    diag.HintSource = _hintDetail ?? "external";
+                                    _wakeDiag = diag;
+                                    Log.Info($"{Tag}: wake hint ({diag.HintSource}) — the camera is " +
+                                             "calling home for an event; connecting to catch it");
+                                    break;
+                                }
+                                Log.Debug($"{Tag}: wake hint ({_hintDetail}) suppressed — " +
+                                          $"inside the {cooldown.TotalSeconds:0}s hint cooldown");
+                            }
                             if (DateTime.UtcNow < nextProbe) continue;
                             // One steady cadence, armed or not: tightening on arm
                             // correlated with fake flat runs (see ArmedScanInterval).
@@ -458,9 +578,29 @@ public sealed class CameraService : ILiveCameraSource
                             if (ms != null) sawAnyReply = true;
                             diag.OnProbe(ms != null, ms ?? PingTimeout.TotalMilliseconds);
                             bool armedBefore = rtt.Armed;
+                            int runBefore = rtt.FastRun;
                             bool woke = rtt.OnSample(ms);
                             Log.Debug($"{Tag}: wake scan {(ms is { } v ? $"{v:0}ms" : "no reply")} " +
                                       $"(armed={rtt.Armed})");
+                            // Mid fast-run while armed: burst the confirm probes.
+                            // Safe by construction — see BurstConfirmInterval.
+                            if (!woke && rtt.Armed && rtt.FastRun > 0)
+                                nextProbe = DateTime.UtcNow + BurstConfirmInterval;
+                            // A fast run that collapsed before confirming, while
+                            // armed, is the fingerprint of a SHORT wake (or of an
+                            // idle-awake camera's housekeeping). It used to be
+                            // debug-only, which made a missed PIR event look
+                            // identical to a PIR that never fired (live miss
+                            // 2026-07-22): at Info, the user's log now separates
+                            // "we saw it and it was too short" from "the camera
+                            // never woke at all".
+                            if (armedBefore && runBefore > 0 && rtt.FastRun == 0)
+                            {
+                                diag.Blips++;
+                                Log.Info($"{Tag}: brief fast-ping blip ({runBefore} sample(s)) ended before " +
+                                         $"the {WakeRttDetector.FastToFire}-sample wake confirmation — not " +
+                                         $"connecting (blip #{diag.Blips} this park; a real wake holds flat longer)");
+                            }
                             if (rtt.Armed && !armedBefore)
                             {
                                 diag.ArmedAt = DateTime.UtcNow;
@@ -469,6 +609,28 @@ public sealed class CameraService : ILiveCameraSource
                             }
                             if (woke)
                             {
+                                // Hint-corroborated scan: while the router provably
+                                // reports this camera's event pushes, a flat run with
+                                // no hint is its periodic housekeeping (radio up
+                                // ~20+ s every 5-14 min re-registering with the p2p
+                                // host, router-log measured) — connecting on it is
+                                // what wakes the camera. Stay parked; a real event's
+                                // push lands ~4 s after radio-up and the hint path
+                                // connects then. The detector restarts so it must see
+                                // the camera asleep again before the next edge.
+                                if (HintsLive)
+                                {
+                                    diag.SuppressedEdges++;
+                                    var hintAge = DateTime.UtcNow -
+                                        new DateTime(System.Threading.Interlocked.Read(ref _hintTicks), DateTimeKind.Utc);
+                                    Log.Info($"{Tag}: ping went flat (a scan-only build would call this a wake) " +
+                                             $"but the router — which reported an event push {hintAge.TotalMinutes:0} min " +
+                                             "ago — saw no push now: treating it as the camera's housekeeping wake and " +
+                                             "staying parked; a wake hint connects us the moment a real event fires " +
+                                             $"(scan-only connects resume if no hint arrives for {HintTrustWindow.TotalMinutes:0} min)");
+                                    rtt = new WakeRttDetector { ArmThreshold = rtt.ArmThreshold };
+                                    continue;
+                                }
                                 diag.EdgeAt = DateTime.UtcNow;
                                 _wakeDiag = diag;
                                 Log.Info($"{Tag}: camera woke itself — connecting to catch the event " +
@@ -954,7 +1116,7 @@ public sealed class CameraService : ILiveCameraSource
                         if (video.Keyframe && !_wakeClipStarted && _wakeDiag is { Reported: false })
                         {
                             _wakeClipStarted = true;
-                            StartWakeClip(linked.Token);
+                            StartWakeClip();
                         }
                         break;
                     case AacFrame aac:
@@ -975,7 +1137,7 @@ public sealed class CameraService : ILiveCameraSource
                 // every event's awake time several-fold (issue #44).
                 if (AllowSleep)
                 {
-                    if (DemandNow || MotionActiveRecently)
+                    if (DemandNow || MotionActiveRecently || WakeLingerActive)
                     {
                         idleSince = null;
                         // WHY a sleep-friendly camera is still awake is the one thing
@@ -989,7 +1151,10 @@ public sealed class CameraService : ILiveCameraSource
                             _lastHoldLog = DateTime.UtcNow;
                             string held = MotionActiveRecently
                                 ? $"active motion {(DateTime.UtcNow - new DateTime(Interlocked.Read(ref _lastMotionActiveTicks), DateTimeKind.Utc)).TotalSeconds:0}s ago"
-                                : DemandReason();
+                                : WakeLingerActive
+                                    ? "the wake's detection window (the camera classifies and pushes late; " +
+                                      $"waiting up to {WakeSessionLinger.TotalSeconds:0}s)"
+                                    : DemandReason();
                             Log.Info($"{Tag}: held awake by {held} — this battery camera cannot sleep " +
                                      $"while that holds{(first ? "" : $" (still held after {(DateTime.UtcNow - _heldSince).TotalMinutes:0} min)")}");
                         }
@@ -1066,7 +1231,7 @@ public sealed class CameraService : ILiveCameraSource
     /// <see cref="WakeClipWindow"/>, a matching all-clear ends the clip through the
     /// recorder's normal post-roll; a real one takes over the event's lifecycle.
     /// </summary>
-    private void StartWakeClip(CancellationToken ct)
+    private void StartWakeClip()
     {
         if (MotionSink is not { } sink || !_config.WakeCapture) return;
         var started = DateTime.UtcNow.Ticks;
@@ -1074,10 +1239,16 @@ public sealed class CameraService : ILiveCameraSource
         sink(new MotionPush("wake", WakeLabel, External: true));
         Log.Debug($"{Tag}: self-wake recording window open ({WakeClipWindow.TotalSeconds:0}s) — " +
                   "the recorder keeps the footage only if a detection this camera's event types allow arrives");
+        // The closing timer deliberately ignores the session token: it is the ONLY
+        // closer an unconfirmed tentative event has, and a session that dies before
+        // the window elapses used to cancel it — the tentative then lingered open
+        // with no end until the NEXT session's activity finally flushed it (live
+        // 2026-07-22: discards reported 57 s and 191 s for ~20 s sessions). The
+        // recorder outlives sessions, so the late all-clear is always safe; a
+        // newer wake clip or a real detection supersedes via the ticks guard.
         _ = Task.Run(async () =>
         {
-            try { await Task.Delay(WakeClipWindow, ct).ConfigureAwait(false); }
-            catch (OperationCanceledException) { return; }
+            await Task.Delay(WakeClipWindow).ConfigureAwait(false);
             // A real detection arrived meanwhile: its own all-clear governs.
             if (Interlocked.Read(ref _lastMotionActiveTicks) > started) return;
             sink(new MotionPush("none", Array.Empty<string>(), External: true));
@@ -1104,14 +1275,22 @@ public sealed class CameraService : ILiveCameraSource
         if (_wakeDiag is not { Reported: false } d) return;
         d.Reported = true;
         _wakeDiag = null;
+        // How the edge came about, in words — the ping-scan wording assumes an
+        // armed detector, which a hint edge doesn't need.
+        string edge = d.HintSource != null
+            ? $"wake hint from {d.HintSource}" +
+              (d.ArmedAt == default ? " (before the scan had armed)" : $" {d.SinceArmedSeconds:0}s after reading asleep")
+            : $"woke {d.SinceArmedSeconds:0}s / {d.ProbesSinceArmed} probe(s) after reading asleep";
         if (d.ConnectedAt == default)
         {
             // The wake fired but the session never got as far as logging in.
             Log.Info($"{Tag}: [wake-diag] the wake did not lead to a session (connect or login failed). " +
-                     $"Evidence: woke {d.SinceArmedSeconds:0}s / {d.ProbesSinceArmed} probe(s) after reading " +
-                     $"asleep ({d.ProbesTotal} probes this park, slowest answer {d.SlowestAnsweredMs:0}ms of a " +
-                     $"{WakeProbeTimeout.TotalMilliseconds:0}ms timeout) — a probe answered but the camera then " +
-                     "refused the connection, which points at the probe having briefly roused it.");
+                     $"Evidence: {edge} ({d.ProbesTotal} probes this park, slowest answer " +
+                     $"{d.SlowestAnsweredMs:0}ms of a {WakeProbeTimeout.TotalMilliseconds:0}ms timeout)" +
+                     (d.HintSource != null
+                         ? " — the router saw the camera calling home but it refused our connection."
+                         : " — a probe answered but the camera then refused the connection, which points " +
+                           "at the probe having briefly roused it."));
             _fruitlessWakes++; // caught nothing — the next park is stricter too
             return;
         }
@@ -1122,11 +1301,13 @@ public sealed class CameraService : ILiveCameraSource
             _ => "the camera never sent a sleepStatus push",
         };
         Log.Info($"{Tag}: [wake-diag] {d.Verdict(WakeProbeTimeout.TotalMilliseconds)}. " +
-                 $"Evidence: woke {d.SinceArmedSeconds:0}s / {d.ProbesSinceArmed} probe(s) after reading asleep " +
+                 $"Evidence: {edge} " +
                  $"({d.ProbesTotal} probes this park, slowest answer {d.SlowestAnsweredMs:0}ms of a " +
                  $"{WakeProbeTimeout.TotalMilliseconds:0}ms timeout); " +
                  $"{d.UnansweredSummary(WakeProbeTimeout.TotalMilliseconds)}; {sleepSaid}; " +
                  $"first frame {(d.FirstFrameMs is { } ff ? $"{ff:0}ms after connect" : "never arrived")}; " +
+                 $"{(d.Blips > 0 ? $"{d.Blips} fast blip(s) ignored earlier this park; " : "")}" +
+                 $"{(d.SuppressedEdges > 0 ? $"{d.SuppressedEdges} scan edge(s) treated as housekeeping (hints live); " : "")}" +
                  $"detection during the session: {(d.SawDetection ? "YES" : "none")}.");
 
         // Adaptive skepticism (live loop, 2026-07-21): connects on a wake edge
@@ -1325,10 +1506,24 @@ internal sealed class WakeDiag
     public double? SleepStatusMs;
     public bool SawDetection;
     public bool Reported;
+    /// <summary>Scan wake edges NOT connected to because the router's hints were
+    /// live and no hint accompanied them — the camera's housekeeping wakes. Carried
+    /// into the diag of whatever session eventually starts this park.</summary>
+    public int SuppressedEdges;
+    /// <summary>Fast runs that collapsed before the wake confirmation while armed.
+    /// Many blips in one park suggest wakes shorter than the scan can confirm (or
+    /// an idle-awake camera's housekeeping); zero blips before a reported miss
+    /// means the camera's own PIR never fired.</summary>
+    public int Blips;
     /// <summary>True while the edge came from the ICMP RTT scan, which cannot wake
     /// or disturb the camera — the "our probe woke it" verdict is then impossible
     /// by construction. Cleared if the legacy transport probe produced the edge.</summary>
     public bool NonWakingScan;
+    /// <summary>Set when an external wake hint (router syslog / the wake-hint API)
+    /// produced the edge instead of the ping scan: who reported it, in words.
+    /// Hints are event-grade — the router saw the camera itself calling the push
+    /// service — so they may fire before the scan is even armed.</summary>
+    public string? HintSource;
 
     public double SinceArmedSeconds =>
         ArmedAt == default ? -1 : (EdgeAt - ArmedAt).TotalSeconds;
@@ -1372,7 +1567,17 @@ internal sealed class WakeDiag
         // NATURALLY slow (the SoC answers while still booting — 4.9 s measured on
         // a genuine catch), so the latency check must never get to veto this.
         if (SawDetection)
-            return "REAL self-wake — a detection followed, which is exactly what wake-capture is for";
+            return HintSource != null
+                ? "REAL self-wake (router wake hint) — the camera phoned home, the hint fired, and a " +
+                  "detection followed"
+                : "REAL self-wake — a detection followed, which is exactly what wake-capture is for";
+        // A hint that led to no detection is a rule problem, not a scan problem:
+        // the router matched traffic that was not an event push (or the camera's
+        // event-type filter discarded what followed).
+        if (HintSource != null)
+            return "HINT MISFIRE — the router reported the camera calling home, but no detection followed. " +
+                   "If this repeats, tighten the firewall rule to the push host only (TCP 443), or check " +
+                   "this camera's event-type selection";
         // Our own probe woke it: the answer came on the FIRST probe after arming,
         // i.e. the camera was asleep until we knocked. A real motion wake has no
         // reason to land inside that one interval. IMPOSSIBLE for the ICMP RTT
@@ -1434,6 +1639,11 @@ internal sealed class WakeRttDetector
     /// <summary>True once the sleep pattern has been established — a fast run
     /// after this is a wake edge.</summary>
     public bool Armed { get; private set; }
+
+    /// <summary>Length of the fast run in progress (0 when the last sample was
+    /// non-fast). The probe loop reads this to burst the confirm probes while a
+    /// run is live and to notice runs that collapsed before confirming.</summary>
+    public int FastRun => _fastRun;
 
     /// <summary>Feed one scan sample (RTT in ms, or null for a miss). Returns
     /// true exactly when the wake edge is detected.</summary>

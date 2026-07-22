@@ -283,6 +283,21 @@ public static class SelfTest
             Assert(!wary.Armed, "the flat run reset the count — 15 more still short of 16");
             Assert(!wary.OnSample(20) && !wary.OnSample(21) && !wary.OnSample(19),
                 "fast run while UNARMED never fires — the idle-awake camera is left alone");
+
+            // FastRun exposure (live miss 2026-07-22 06:27): the probe loop bursts
+            // the confirm probes while a fast run is live and logs runs that
+            // collapse before confirming — both read FastRun, so its accounting
+            // is contract, not detail.
+            var burst = new Streaming.WakeRttDetector();
+            for (int i = 0; i < Streaming.WakeRttDetector.NonFastToArm; i++) burst.OnSample(400);
+            Assert(burst.Armed && burst.FastRun == 0, "armed, no run in progress");
+            Assert(!burst.OnSample(4) && burst.FastRun == 1, "fast 1 of 3 -> run length 1 (burst kicks in)");
+            Assert(!burst.OnSample(5) && burst.FastRun == 2, "fast 2 of 3 -> run length 2");
+            Assert(!burst.OnSample(300) && burst.FastRun == 0,
+                "sawtooth back -> the run collapsed short of confirming (a blip, logged)");
+            Assert(burst.Armed, "a blip does not disarm");
+            burst.OnSample(3); burst.OnSample(3);
+            Assert(burst.OnSample(2), "the next sustained run still fires");
         });
 
         Test("wake diagnostics: verdict separates our-probe wakes from real ones", () =>
@@ -341,6 +356,64 @@ public static class SelfTest
             awake.SleepStatusOnArrival = false;
             Assert(!awake.Verdict(timeoutMs).StartsWith("LIKELY OUR PROBE", StringComparison.Ordinal),
                 "camera reports it was awake -> not blamed on our probe");
+
+            // Hint-triggered wakes (router saw the camera call the push service):
+            // a detection makes it REAL; none makes it a rule problem (MISFIRE),
+            // never LIKELY OUR PROBE — we sent nothing.
+            var hinted = Park(armed, missesAfterArming: 0, answerMs: 30);
+            hinted.HintSource = "router saw 10.1.0.13 -> 104.18.25.250:443 (pass)";
+            hinted.SawDetection = true;
+            Assert(hinted.Verdict(timeoutMs).StartsWith("REAL self-wake (router wake hint)", StringComparison.Ordinal),
+                "hint + detection -> REAL self-wake credited to the hint");
+            var misfire = Park(armed, missesAfterArming: 0, answerMs: 30);
+            misfire.HintSource = "router saw 10.1.0.13 -> 34.205.159.164:443 (pass)";
+            Assert(misfire.Verdict(timeoutMs).StartsWith("HINT MISFIRE", StringComparison.Ordinal),
+                "hint with no detection -> misfire pointing at the firewall rule");
+        });
+
+        Test("wake hints: filterlog parsing keeps push calls, drops the p2p noise", () =>
+        {
+            // Real shapes from the live OPNsense capture (2026-07-22): on PIR the
+            // camera opens ONE TCP/443 state to pushx.reolink.com; ~30-45 s later
+            // the wake chip bursts NEW UDP states to the p2p host as the camera
+            // dozes off. Only the former may hint, or every park re-connects.
+            const string rfc3164 =
+                "<134>Jul 22 19:01:45 OPNsense filterlog: 82,,,02f4bab0,igc0,match,pass,in,4," +
+                "0x0,,63,25182,0,DF,6,tcp,60,10.1.0.13,104.18.25.250,64082,443,0,S,1234,,64240,,mss";
+            Assert(Streaming.WakeHintListener.TryParseEventHint(rfc3164, out var src, out var detail),
+                "RFC3164 filterlog TCP/443 line -> hint");
+            Assert(src.ToString() == "10.1.0.13", "hint carries the camera source IP");
+            Assert(detail.Contains("104.18.25.250"), "hint detail names the destination");
+
+            const string rfc5424 =
+                "<134>1 2026-07-22T19:01:45-06:00 OPNsense.local filterlog 21674 - [meta seq=\"1\"] " +
+                "82,,,02f4bab0,igc0,match,block,in,4,0x0,,63,25182,0,DF,6,tcp,60," +
+                "10.1.0.13,104.18.25.250,64083,443,0,S,1235,,64240,,mss";
+            Assert(Streaming.WakeHintListener.TryParseEventHint(rfc5424, out src, out _),
+                "RFC5424 framing parses too, and a BLOCK rule still hints (the attempt is the signal)");
+            Assert(src.ToString() == "10.1.0.13", "RFC5424: source IP extracted");
+
+            // The p2p re-registration burst: UDP, must NOT hint.
+            const string p2pNoise =
+                "<134>Jul 22 19:01:50 OPNsense filterlog: 82,,,02f4bab0,igc0,match,pass,in,4," +
+                "0x0,,63,25183,0,none,17,udp,44,10.1.0.13,34.205.159.164,52409,57850,24";
+            Assert(!Streaming.WakeHintListener.TryParseEventHint(p2pNoise, out _, out _),
+                "UDP p2p keep-alive burst -> no hint (it trails every park)");
+
+            // TCP to a non-443 port (some other device chatter): no hint.
+            const string otherTcp =
+                "<134>Jul 22 19:02:12 OPNsense filterlog: 82,,,02f4bab0,igc0,match,pass,in,4," +
+                "0x0,,63,25184,0,DF,6,tcp,60,10.1.0.132,157.90.0.173,58020,8080,0,S,1,,64240,,mss";
+            Assert(!Streaming.WakeHintListener.TryParseEventHint(otherTcp, out _, out _),
+                "TCP to a non-443 port -> no hint");
+
+            // Garbage a syslog port inevitably receives.
+            Assert(!Streaming.WakeHintListener.TryParseEventHint("<13>random syslog chatter", out _, out _),
+                "non-filterlog syslog -> ignored");
+            Assert(!Streaming.WakeHintListener.TryParseEventHint("", out _, out _), "empty -> ignored");
+            Assert(!Streaming.WakeHintListener.TryParseEventHint(
+                "<134>Jul 22 19:01:45 OPNsense filterlog: 82,,,short", out _, out _),
+                "truncated filterlog CSV -> ignored");
         });
 
         Test("stream hub GOP cache: new viewer primed keyframe-first, resets per keyframe", () =>
@@ -801,6 +874,18 @@ public static class SelfTest
             AssertEq(string.Join(",", labels.OrderBy(x => x)), "animal,person");
             AssertEq(string.Join(",", Recording.EventRecorder.LabelsOf(new MotionPush("MD", Array.Empty<string>()))),
                 "motion");
+            // Reolink's non-AI bucket: battery cameras (Argus Solar, 2026-07-22)
+            // report PIR wake detections as AI type "other". It must land on the
+            // "motion" label — the raw token is not a selectable event type, so
+            // left unmapped it silently discarded every wake-capture recording.
+            AssertEq(string.Join(",", Recording.EventRecorder.LabelsOf(new MotionPush("MD", new[] { "other" }))),
+                "motion");
+            AssertEq(string.Join(",", Recording.EventRecorder.LabelsOf(
+                new MotionPush("MD", new[] { "people", "other" })).OrderBy(x => x)),
+                "motion,person");
+            Assert(new Recording.CameraRecordingSettings(Events: true, Continuous: false, EventTypes: null)
+                    .AllowsLabel("motion"),
+                "default event types allow motion, so PIR-grade wakes are kept out of the box");
             Assert(new MotionPush("MD", Array.Empty<string>()).Active, "MD is active");
             Assert(!new MotionPush("none", Array.Empty<string>()).Active, "none is all-clear");
             Assert(new MotionPush("none", new[] { "people" }).Active, "AI type implies activity");

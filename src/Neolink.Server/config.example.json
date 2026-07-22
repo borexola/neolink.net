@@ -90,6 +90,15 @@
   //                                    // (0 = off, minimum 5; editable in the web UI)
   // },
 
+  // Optional: router wake hints for battery cameras (OPNsense/pfSense).
+  // The router forwards its firewall log (remote syslog, filterlog) here; when a
+  // battery camera opens a TCP/443 connection to Reolink's push service — which
+  // it does the instant a PIR event fires — Neolink connects immediately instead
+  // of waiting for the ping-pattern scan. Full recipe: docs/battery-cameras.md.
+  // "wake_hints": {
+  //   "syslog_port": 5140              // UDP port to receive the router's syslog on
+  // },
+
   // Optional: password-protect the RTSP server. Remove entries for open access.
   // Connect with e.g. rtsp://me:mepass@192.168.1.100:8654/driveway
   "users": [

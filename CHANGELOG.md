@@ -8,6 +8,38 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Added
 
+- **Router wake hints: your firewall can tell Neolink a battery camera just
+  woke — instantly.** On a PIR event the camera itself opens a TLS connection
+  to Reolink's push service (that is how the phone app gets notified), and
+  the router, as the camera's gateway, sees it the moment it happens. Point
+  the router's firewall log at Neolink (OPNsense/pfSense remote syslog +
+  `"wake_hints": { "syslog_port": 5140 }`) and a logged TCP/443 state from a
+  camera's IP becomes an event-grade wake signal: Neolink connects at once,
+  even in the re-arming window right after a previous wake where the ping
+  scan is structurally blind. The attempt is the signal, so a block+log rule
+  works too — instant wakes on a cloud-isolated camera. Push notifications
+  must be enabled for the camera in the Reolink app (that is what makes it
+  call the push service); with push off the ping scan simply carries on
+  alone. Only new TCP/443
+  states count (validated live: the camera also bursts UDP to the p2p host
+  ~30-45 s after each wake as it re-registers its remote-wake channel —
+  treating that as a hint would never let it sleep), and a hint that leads to
+  a connect with no detection is called out as `HINT MISFIRE` and raises an
+  escalating cooldown, so a too-broad rule cannot drain the battery. Anything
+  else that knows the camera is up (a Home Assistant automation, an external
+  PIR) can feed the same path: `POST /api/cameras/{name}/wake-hint`. Recipe
+  in docs/battery-cameras.md.
+
+  With hints flowing, the ping scan becomes **hint-corroborated**: router
+  logs showed these cameras waking their radio every 5-14 minutes for ~20 s
+  of cloud housekeeping — indistinguishable from a real wake from the
+  outside, and each scan connect onto one wakes the camera fully. While the
+  router has reported an event push within the last 2 hours, a scan edge
+  with no accompanying hint is now treated as housekeeping and skipped (a
+  real event's push follows radio-up by ~4 s and connects via the hint
+  path). Self-disabling: no hint for 2 hours and scan-only connects resume
+  exactly as before, so a broken syslog pipe never blinds the scan.
+
 - **Right-click a single camera's view for "stats for nerds".** On
   `/cameras/{name}` the right-click menu used to offer a camera picker, which
   only contradicted the address bar; it now opens a live technical readout of
@@ -158,6 +190,16 @@ in the README). Paste the matching section below into the GitHub release.
   where ping goes unanswered. Verified against recorded traces of a real Argus
   Solar sleeping, waking on PIR, and streaming.
 
+  Short wakes are caught too: once a single fast reply lands, the remaining
+  confirm probes burst at 1 s (safe — a fast reply means the radio is already
+  out of power-save), so a wake is confirmed ~3–5 s after the radio goes flat
+  instead of ~9 s. A camera that idles with its radio napping answers a fresh
+  PIR trigger with only a brief flat blip, and a live test showed the steady
+  cadence walking right past one. Fast runs that still end short of the
+  confirmation are now logged (`brief fast-ping blip`) and counted in the
+  wake diagnosis, so a missed event visibly separates "the wake was too short"
+  from "the camera's PIR never fired".
+
   The scan is also **self-skeptical**: an idle-awake camera's radio power-save
   pings just like the sleep pattern, so right after a session the scan could
   read "asleep" on a camera that never dozed, connect on its next flat run,
@@ -196,6 +238,32 @@ in the README). Paste the matching section below into the GitHub release.
   unavailable, so these cameras need the plain Docker image).
 
 ### Fixed
+
+- **PIR-grade detections from battery cameras are Motion events, not silently
+  discarded.** Battery cameras (Argus line) report a wake's detection as
+  Reolink's non-AI bucket — AI type `other` on the wire, the event the
+  Reolink app shows as plain "Motion". Neolink passed the token through as a
+  raw `other` label that no event-type filter allows, so on those models
+  every wake-capture recording was discarded even with Motion enabled — and
+  each discarded wake counted as fruitless, needlessly escalating the scan's
+  skepticism and the wake-hint cooldown. `other` now maps to the `motion`
+  label: wakes confirm as Motion events out of the box, and person/vehicle/
+  animal labels still apply whenever the camera's own AI classifies.
+
+- **Wake sessions no longer give up before the camera's late detection
+  push.** Battery cameras start capturing before they classify and phone
+  home — the detection push measured up to ~25 s after the PIR — but a
+  wake-opened session used to leave after ~10 s of quiet, one push short of
+  confirming, and the footage was discarded mid-event. A wake-opened session
+  that has not seen its detection yet is now held up to 30 s (matching the
+  confirmation window); on scan-opened sessions the first detection ends the
+  hold, so confirmed catches cost no extra awake time, while hint-opened
+  sessions record the full 30 s — the router said an event is happening, and
+  a detection whose motion clears in seconds must not cut the footage short.
+  A router wake hint arriving mid-session (the camera phoning home again —
+  another event) restarts the wait either way. The tentative recording's closing timer also survives the session
+  now: it used to die with an early disconnect, leaving the tentative event
+  open with no end until the next session flushed it.
 
 - **A self-wake only becomes a stored event if the camera's own event-type
   selection says so.** Wake-triggered recordings used to be kept

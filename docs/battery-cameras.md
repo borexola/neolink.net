@@ -1,276 +1,248 @@
-# Battery cameras — setup, sleep, and recording
+# Battery cameras — setup
 
-> **Status: beta — under active development and testing.** Battery support
-> works against real hardware, but it lives on top of hard limitations these
-> cameras impose: a sleeping camera is off the network and cannot be woken
-> remotely, sleep can only be observed indirectly (and some models mimic the
-> sleep pattern while idle-awake), the first seconds of an event happen before
-> any connection exists, and the UDP transport some models require is itself
-> beta. Behavior is validated on a handful of models and still being tuned —
-> expect rough edges on models we haven't seen, and please open an issue with
-> the `[wake-diag]` log lines when yours misbehaves; that evidence is what
-> drives the tuning.
+> **Beta — under active development.** Validated on real hardware (Argus
+> line, battery doorbells), still being tuned. If something misbehaves, open
+> an issue with the `[wake-diag]` log lines — that evidence drives the fixes.
 
-How Neolink.NET runs battery-powered Reolinks (Argus line, Reolink Go, battery
-doorbells): what it does on its own, which knobs exist, what ends up recorded
-where, and how to read the logs when something looks off.
+Three setups, pick one. UDP-only models (much of the Argus line never listens
+on TCP) always need `uid` + `"udp": true`, and in Docker **host networking**
+(`network_mode: host`) — see [UDP-only models](#udp-only-models).
 
-The one rule everything below follows: **connection time is battery.** A held
-connection keeps the camera's main processor and radio up, and that — not
-video bitrate, not polling — is what flattens a battery in a day or two.
-Neolink.NET therefore treats every second connected to a battery camera as a
-cost, spends it only on purpose, and tells you (tile, badges, logs) whenever
-something is spending it.
-
-Everything here applies to a **sleep-friendly** camera: one that reports a
-battery and does not have `"always_on": true`. Setting `"always_on": true`
-opts the camera out of all of it — it is then treated exactly like a wired
-camera (permanent connection, no view limits, no wake logic), which is the
-right call on solar or USB power.
-
-## Quick start
-
-A battery camera that is reachable over TCP needs nothing special:
-
-```jsonc
-{ "name": "Yard", "username": "admin", "password": "…",
-  "address": "192.168.1.50" }          // give it a DHCP reservation
-```
-
-Battery power is auto-detected; the camera gets a charge badge and defaults to
-sleep-friendly mode. UDP-only models (parts of the Argus line never listen on
-TCP) additionally need the UID, the UDP transport, and — in Docker — **host
-networking** (see [UDP-only models](#udp-only-models) below):
+## 1. On constant power (solar/USB): `always_on`
 
 ```jsonc
 { "name": "Solar", "username": "admin", "password": "…",
-  "uid": "95270000ABCDEFGH", "udp": true }
+  "uid": "95270000ABCDEFGH", "udp": true,
+  "always_on": true }
 ```
 
-To also catch motion events while nobody is watching, add
-`"wake_capture": true`. A typical full battery entry:
+Done — the camera behaves **exactly like a wired camera**: permanent
+connection, unlimited live view, 24/7 recording available, every event caught
+live. Nothing else in this guide applies.
+
+## 2. On battery: `wake_capture`
 
 ```jsonc
-{
-  "name": "Solar",
-  "username": "admin",
-  "password": "…",
-  "uid": "95270000ABCDEFGH",
-  "udp": true,             // UDP-only model; omit for TCP-reachable cameras
-  "wake_capture": true,    // catch events while it sleeps (recommended)
-  "record": true
-}
+{ "name": "Solar", "username": "admin", "password": "…",
+  "uid": "95270000ABCDEFGH", "udp": true,   // UDP-only model; omit for TCP models
+  "wake_capture": true }
 ```
+
+The camera sleeps between events to preserve charge. Neolink watches its ping
+pattern **without waking it** and connects the moment the camera wakes itself
+for motion, recording from the first keyframe. Works with no extra
+infrastructure, but it is inference — very short wakes can be missed.
+
+## 3. On battery, with a capable router: wake hints (best)
+
+Keep `wake_capture` on and add the router. On a PIR event the camera calls
+Reolink's push service; the router sees it instantly and tells Neolink, which
+connects at once — faster and more reliable than the ping scan, and it also
+catches events the scan is blind to (e.g. a second trigger right after a
+wake).
+
+**Know the limitations before you set this up:**
+
+- **This is a work-around.** Reolink battery cameras currently have no way
+  to push events to LAN software — Reolink is building a proper push
+  protocol (together with the Home Assistant integration developers), but it
+  needs new firmware that does not exist yet. Until it ships, having the
+  router report the camera's own cloud push call is the most reliable event
+  signal available. When the native protocol lands, Neolink will adopt it
+  and this recipe becomes unnecessary.
+- **Requires push notifications enabled** for the camera in the Reolink
+  app — that is what makes it call the push service at all. You don't have
+  to *receive* them: silence them on your phone, or **block** the traffic at
+  the firewall — the logged attempt is still the signal (pass+log is the
+  tested setup; whether firmware keeps attempting forever under a long-term
+  block is untested). With push disabled the camera produces **no
+  distinguishable event traffic at all** (its remaining cloud chatter also
+  occurs periodically without any event, verified in router logs), so there
+  are no hints and the ping scan carries on alone.
+- A hint-opened session records for a full **30 seconds** (extended by
+  further pushes or ongoing motion), so short events still yield usable
+  footage.
+
+In Neolink's config (server level, next to `cameras`):
+
+```json
+"wake_hints": { "syslog_port": 5140 }
+```
+
+### OPNsense
+
+1. Give the camera a **static DHCP lease**.
+2. Firewall → Aliases → add: type *Host(s)*, content `pushx.reolink.com`.
+3. Firewall → Rules (camera's interface) → add: source = camera IP,
+   destination = the alias, **Log packets** checked (pass or block, your
+   policy).
+4. System → Settings → Logging → **Remote** tab → add:
+
+   | Field | Value |
+   |---|---|
+   | Enabled | checked |
+   | Transport | UDP(4) |
+   | Applications | **filter** (filterlog) |
+   | Levels | leave empty |
+   | Facilities | leave empty |
+   | Hostname | the Neolink host's IP |
+   | Port | **5140** (must match `wake_hints.syslog_port`) |
+   | RFC5424 | either |
+   | Description | e.g. "Neolink wake hints" |
+
+   ![OPNsense remote logging destination](opnsense-logPush.png)
+
+### pfSense
+
+Steps 1–3 as above, then Status → System Logs → **Settings**: check
+**Enable Remote Logging**, remote log server `<neolink-host>:5140`, contents:
+**Firewall Events**. Same log format — Neolink parses both.
+
+### Verify
+
+Watch Neolink's log: `Wake hints: listening …` at startup, `receiving syslog
+from … — the pipe works` on the first datagram, `Wake hints: router saw
+<camera> -> …:443` on each event push. No pipe-works line → wrong port, or
+UDP 5140 isn't reaching the container.
+
+Neolink only reacts to new **TCP/443** connections from a configured camera's
+IP; everything else in the log stream is ignored. Anything else that knows
+the camera is up (a Home Assistant automation, an external PIR) can feed the
+same path: `POST /api/cameras/{name}/wake-hint`.
 
 ## Settings reference
 
-All per camera, in the config file. Only `uid`/`udp` are required for anything
-(UDP-only models); the rest are choices.
-
 | Setting | Default | What it does |
 |---|---|---|
-| `always_on` | unset (auto) | `true`: hold the camera awake around the clock and treat it exactly like a wired camera — for solar/USB power. `false`: force sleep-friendly mode even if battery detection fails. Unset: battery cameras sleep, wired cameras stay on. Also editable in the web UI camera editor ("Always on"). |
-| `wake_capture` | `false` | Watch a sleeping camera (without waking it — see below) and connect the instant it wakes itself for motion, so the event is recorded. No effect with `always_on` or on non-battery cameras. |
-| `keep_alive_hours` | `0` (off) | Hold the camera awake for this many hours after startup (0–24) — for stretches when you want it responsive regardless of cost. The tile shows "held awake — spending battery" while it runs; behavior returns to normal when the window ends. Also a slider in the web UI camera editor. |
-| `uid` | — | The camera's UID (Reolink app → device info, or the sticker). Required for UDP. |
+| `always_on` | unset (auto) | `true`: treat exactly like a wired camera (constant power). `false`: force sleep-friendly even if battery detection fails. Unset: battery cameras sleep, wired stay on. Also in the web UI camera editor. |
+| `wake_capture` | `false` | Watch a sleeping camera (without waking it) and connect the instant it wakes itself, so the event is recorded. No effect with `always_on`. |
+| `keep_alive_hours` | `0` (off) | Hold the camera awake N hours after startup (0–24), battery cost accepted. Also a slider in the web UI. |
+| `uid` | — | Camera UID (Reolink app → device info, or the sticker). Required for UDP. |
 | `udp` | `false` | Baichuan-over-UDP transport for models that never listen on TCP (beta). Requires `uid`. |
-| `udp_probe` | `false` | Diagnostic only: while the camera is unreachable over TCP, probe UDP discovery and log the exchange (UID masked). Useful to find out whether a stubborn camera is a UDP-only model. |
-| `record` | `true` | Seed value for the camera's event-recording switch (the web UI switch wins afterwards). |
+| `udp_probe` | `false` | Diagnostic: probe UDP discovery while unreachable over TCP and log the exchange — tells you whether a stubborn camera is a UDP-only model. |
+| `record` | `true` | Seed for the event-recording switch (the web UI switch wins afterwards). |
+| `wake_hints` (server level) | off | `{ "syslog_port": 5140 }` — receive router firewall logs as instant wake signals (setup above). |
 
-## How sleep actually works
+## What to expect
 
-These cameras have two sleep stages, and knowing them explains most of the log:
-
-- **Light sleep** — the main processor is off, but a low-power *wake chip*
-  still answers discovery (slowly, 2–5 s). Connecting to a camera in this
-  stage **boots it**: any connection attempt through the wake chip is a wake.
-- **Deep sleep** — the wake chip goes quiet too. Discovery gets silence.
-  Curiously, plain ICMP pings are still answered (by the Wi-Fi module,
-  autonomously, in a power-save rhythm) — without waking anything.
-
-What wakes a camera: its own PIR, the Reolink app, or **any connection
-attempt** while the wake chip listens. What cannot wake it: ICMP pings, and
-nothing at all in deep sleep except its own PIR.
-
-This is why Neolink.NET's sleep watching is built on **listening, not
-knocking**. With `wake_capture` on, after the last viewer leaves:
-
-1. The stream parks and a settle window (~15 s) lets the camera doze
-   undisturbed.
-2. A ping scan starts (every 3 s). A dozing camera's Wi-Fi module answers in
-   a distinctive power-save sawtooth — hundreds of milliseconds, ramping —
-   while a woken processor answers flat and fast (single-digit ms). Models
-   that switch the radio off entirely simply stop answering; both patterns
-   count as "asleep".
-3. After enough sleep-pattern samples the camera is declared asleep — the log
-   says `armed to connect on its next self-wake`.
-4. A run of consecutive **fast** replies is the wake edge: the camera's own
-   PIR woke it. Neolink connects (about 1.5 s to first video) and records.
-   On networks where ping is filtered, a slow transport probe takes over as a
-   fallback — the log notes `ICMP appears blocked here` when that happens.
-
-No step in this sends anything a sleeping camera would react to, so the
-watching itself costs no battery.
-
-The rest of Neolink honors the same radio silence: while every stream of a
-sleep-friendly camera is parked, background HTTP feature reads, Wi-Fi signal
-warms and ONVIF discovery retries send **no packets at all** — that traffic
-would keep the camera's radio out of power-save (mimicking the wake pattern)
-and could keep the camera itself from dozing off. The UI simply shows the
-last known readings until the next natural connection.
-
-## Watching live
-
-A sleep-friendly camera's tile never opens its stream by itself — opening a
-stream is what wakes and holds the camera, so it must be your choice:
-
-- The tile shows the last snapshot with an **asleep** badge and a
-  **Wake & watch** button. Clicking it wakes the camera (if the wake chip is
-  listening) and opens the feed.
-- The view is bounded: the tile counts down ("view ends in 1:47 to spare
-  battery") and stops itself after ~2 minutes. The checkbox on the tile keeps
-  it going if you're actively watching.
-- When the view ends, the camera is released after ~10 s of no demand and
-  goes back to sleep on its own (Reolink firmware doses off some seconds
-  after the last connection closes).
-
-A camera being held awake for any reason says so: the tile chip reads
-"held awake — spending battery", and the server logs one `held awake by …`
-line per hour naming the reason (viewer, keep-alive, recording, HA stream).
-
-## Catching events while it sleeps (`wake_capture`)
-
-Without it, a motion event while nobody watches is lost to Neolink (the
-camera still records to its own SD card). With it, the wake edge above
-triggers a connection and recording starts **immediately from the first
-keyframe** — no waiting for the camera's detection push, which arrives late
-(25 s measured) or never (subject already left frame).
-
-What becomes a *stored event* is governed by the camera's **event-type
-selection** (camera settings → Recording), exactly like any detection:
-
-- The self-wake recording starts **tentatively**. Nothing is announced — no
-  event on the list, no Home Assistant trigger, no browser alert.
-- If a detection the camera's event types allow arrives within the
-  confirmation window (~30 s), the event is announced and kept, labeled by
-  the detection ("Human detected"), with footage reaching back to the wake
-  itself.
-- If nothing allowed arrives, the tentative footage is **deleted** — a squirrel
-  tripping the PIR does not become a stored video. The log records the
-  decision either way.
-
-"Wake" is therefore never an event type: wake events do not appear on the
-events list at all. What self-wakes leave behind lives on the **Timeline**
-instead — see next section.
-
-Every wake-capture cycle also writes a `[wake-diag]` line at Info classifying
-what happened — a real self-wake, something our side caused, or a false
-asleep reading — with the probe evidence, the camera's own sleep status on
-arrival, and time to first frame. If wake-capture misbehaves, this line is
-the first thing to read (and to paste into an issue).
-
-Limitations: the first second or two of an event happens before the
-connection is up; on a very busy camera (a wake every few minutes)
-wake-capture trends toward `always_on`-like battery use — the diag lines will
-show it.
-
-## What is stored where
-
-- **Events list**: only confirmed detections (person, vehicle, animal, … per
-  the camera's event-type selection). Never bare wakes.
-- **Timeline**: with **Record wake events** on (camera settings → Recording →
-  CONTINUOUS section; on by default), whatever the camera streams during
-  self-wakes and viewing sessions is taped into ordinary timeline segments.
-  This is a *passive tap*: it only writes frames that are already flowing and
-  never demands video itself, so it cannot wake the camera, extend a hold, or
-  block sleep — zero battery cost by construction. The result is islands of
-  footage around each wake, with honest gaps while the camera sleeps. It
-  follows the continuous retention and archive settings.
-- **24/7 recording is deliberately unavailable** while the camera is allowed
-  to sleep: taping around the clock would hold it awake until the battery
-  dies. The toggle is disabled with the reason shown; the API and the Home
-  Assistant switch refuse it too, and a stale `continuous: true` left in
-  settings.json is ignored. Set *Always on* (constant power) to get real
-  24/7 recording.
-- **SD card**: the camera itself records PIR events to its card while asleep,
-  same as with the official app, independent of all of the above.
-
-## Home Assistant
-
-- A dozing camera **stays available** in HA: retained readings (battery,
-  switches, last states) remain visible, and a dedicated **Asleep** binary
-  sensor says the camera is napping on purpose. Only a genuinely unreachable
-  camera goes Unavailable.
-- **Polls never wake a sleeping camera.** Battery/state refreshes wait for
-  the next natural connection.
-- Detection events arrive only when Neolink is connected — i.e. on confirmed
-  wake-captures, during views, or with `always_on`/keep-alive. Automations
-  fire on *confirmed* events only; tentative self-wakes are invisible to HA.
-- Offline alerts skip cameras that are merely dozing.
+- **Events list**: confirmed detections only. Battery cameras usually report
+  PIR events as plain **Motion** (same as the Reolink app shows); person/
+  vehicle/animal labels appear only when the camera's own AI classifies
+  (Smart Detection in the Reolink app). A wake whose detection your
+  event-type selection excludes is discarded — keep **Motion** ticked.
+- **Timeline**: with *Record wake events* on (default), wake footage lands as
+  timeline segments — islands around each wake, honest gaps while it sleeps.
+  Zero battery cost (it only tapes frames already flowing).
+- **24/7 recording is unavailable** while the camera may sleep — it would
+  hold it awake until the battery dies. Set *Always on* to get it.
+- **Live view is click-to-watch**: tiles show the last snapshot with a
+  **Wake & watch** button; a view runs ~2 minutes (extendable) and the camera
+  is released ~10 s after the last viewer leaves. Anything holding it awake
+  says so on the tile and in the log (`held awake by …`).
+- **SD card**: the camera still records PIR events to its own card while
+  asleep, independent of all of the above.
+- **Home Assistant**: a dozing camera stays available (retained readings +
+  an **Asleep** sensor); polls never wake it; automations fire on confirmed
+  events only.
 
 ## UDP-only models
 
-Parts of the Argus line never listen on TCP — they log `Connection refused`
-forever on the normal path. For these, set `uid` and `"udp": true`, and in
-Docker/Podman use **host networking** (`network_mode: host` / `--network
-host`) — this is required, not optional: the Baichuan UDP handshake carries
-the client's port *inside* the packet and discovery relies on LAN broadcast,
-neither of which survives a bridge network. The tell in the log is a
-discovery sweep listing only container-internal broadcast addresses
-(`172.x.255.255`) and ending in `UDP: SILENCE`. Full details, including the
-compose/run snippets, are in the README's
-[UDP-only battery models](../README.md#udp-only-battery-models-beta) section.
-
-UDP cameras wear a **UDP BETA** badge in the sidebar. Once connected, video,
-events, battery, recording and controls all work — only the transport
-differs.
-
-## Reading the logs
-
-The battery lifecycle narrates itself at Info. The lines worth knowing:
-
-| Log line | Meaning |
-|---|---|
-| `parked — the recording stream watches for self-wakes…` | Streams released; the camera may sleep. One stream keeps watch (if `wake_capture`). |
-| `camera is asleep (ping settled into the power-save pattern) — armed…` | Sleep confirmed by the ping pattern; the wake scan is now at 1 s. |
-| `camera answered the transport probe after an all-silent park (ICMP appears blocked here)` | Ping is filtered on this network; the fallback prober caught the wake instead. |
-| `self-wake — recording tentatively…` | Wake caught; footage is being captured, nothing announced yet. |
-| `event started (person — confirmed self-wake, footage from the wake onward)` | A detection the event types allow confirmed it; the event is now real and announced. |
-| `self-wake ended with no matching detection — footage discarded…` | Nothing allowed arrived; the tentative event was deleted. |
-| `taping this wake to the timeline (passive — never holds the camera awake)` | The timeline tap is writing a segment from the frames already flowing. |
-| `held awake by …` (hourly) | Something is spending battery: names the viewer/recorder/keep-alive holding the camera up. |
-| `that self-wake connect caught nothing (N in a row) — being more skeptical…` | Self-healing: connects that yield no detection raise the next park's arming requirement and settle time, so a camera whose idle radio mimics the sleep pattern is left alone until it truly sleeps. A real catch resets. |
-| `[wake-diag] REAL self-wake / LIKELY OUR PROBE / SUSPECT FALSE ASLEEP / INCONCLUSIVE` | Post-mortem of each wake with the evidence. Paste this into issues. |
-
-## Timing reference
-
-| What | Value |
-|---|---|
-| Settle window after parking (no probes) | ~15 s |
-| Wake scan cadence | 3 s, steady (a tighter armed cadence proved able to disturb the radio's power-save) |
-| "Fast" reply threshold (wake edge) | < 50 ms, 3 in a row |
-| Tile view budget | ~2 min (checkbox extends) |
-| Idle release after last demand | ~10 s |
-| Wake confirmation window (event kept vs discarded) | ~30 s |
-| Keep-alive maximum | 24 h |
+Parts of the Argus line never listen on TCP — the log shows `Connection
+refused` forever. Set `uid` + `"udp": true`, and in Docker/Podman use **host
+networking** (required: the UDP handshake and discovery don't survive a
+bridge network — the tell is a discovery sweep listing `172.x.255.255` and
+ending in `UDP: SILENCE`). Compose/run snippets: README →
+[UDP-only battery models](../README.md#udp-only-battery-models-beta).
 
 ## Troubleshooting
 
 | Symptom | Likely cause and fix |
 |---|---|
-| `Connection refused` forever, no open ports on a port scan | UDP-only model: set `uid` + `"udp": true`. |
-| Discovery sweep ends in `UDP: SILENCE`, broadcasts all `172.x.…` | Docker bridge network. Use host networking (required for UDP models). |
-| Camera never shows "armed", wake-capture catches nothing | Ping may be filtered (look for the fallback line), or the camera never truly sleeps — read the `held awake by` lines to see what's holding it. |
-| Repeated "camera woke itself" with `[wake-diag] INCONCLUSIVE` and "it was already up" | The scan misread an idle-awake camera as asleep (its radio power-save pings like the sleep pattern). This self-heals: each fruitless connect makes the next arming stricter until the camera genuinely sleeps — watch for the "being more skeptical" line. |
-| Events missed although wake-capture is armed | Check the camera's event-type selection: a wake with no allowed detection is discarded by design. The raw footage is still on the Timeline if *Record wake events* is on. |
-| Stream is choppy on every client, including the Reolink app | The camera's radio ceiling, not Neolink (seen on Argus MagiCam: a single 1080p encoder outrunning a ~250 kb/s link). Neolink logs a saturation self-diagnosis naming it. |
+| `Connection refused` forever, no open ports | UDP-only model: set `uid` + `"udp": true`. |
+| Discovery sweep ends in `UDP: SILENCE` | Docker bridge network. Use host networking. |
+| Camera never reads "armed", wake-capture catches nothing | Ping filtered (look for the fallback line), or something holds the camera awake — read the `held awake by` lines. |
+| Repeated `[wake-diag] INCONCLUSIVE` + "it was already up" | The scan misread an idle-awake camera as asleep. Self-heals — watch for the "being more skeptical" line. |
+| Events missed while armed | Event-type selection excludes what the camera reports (keep **Motion** ticked). `brief fast-ping blip` lines near the miss = wake too short for the scan (router hints fix this); no lines at all = the camera's own PIR never fired. |
+| A second event right after a wake is missed | The scan re-arms only after the camera sleeps again (~40–65 s blind). Router wake hints close exactly this gap. |
+| Wake hints configured but nothing happens | No `pipe works` line: wrong port / UDP 5140 not reaching the container. Pipe works but no hints: the pushx rule isn't logging, or the camera IP doesn't match the config. |
+| Choppy stream on every client incl. the app | The camera's radio ceiling, not Neolink (logged as a saturation self-diagnosis). |
 | First 1–2 s of an event missing | Inherent: the camera must wake and accept a connection first. |
-| Battery drains fast | Something holds it awake: `always_on`, keep-alive, a forgotten open tile, or very frequent wakes. The hourly `held awake by` line and the tile chip name the culprit. |
-| Old "Wake detected" entries disappeared from the events list | By design since 0.9.6: wakes belong to the Timeline. The clips are still on disk. |
+| Battery drains fast | Something holds it awake — the hourly `held awake by` line and the tile chip name it. |
 
----
+<details>
+<summary><b>Deep dive</b> — how sleep watching works, log lines, timings</summary>
 
-Battery support is validated against real hardware (Argus Solar, Argus Eco
-Pro, Argus MagiCam, battery doorbells). If your model behaves differently,
-open an issue with the `[wake-diag]` lines and a debug log — that evidence is
-exactly what drove every improvement on this page.
+### How sleep watching works
+
+These cameras have two sleep stages: **light sleep** (main processor off; a
+low-power wake chip still answers discovery — and any connection attempt
+through it *boots the camera*) and **deep sleep** (the wake chip is silent
+too). Plain ICMP pings are answered in both by the Wi-Fi module,
+autonomously, without waking anything — so Neolink watches by **listening,
+not knocking**:
+
+1. After the last viewer leaves, the stream parks; a ~15 s settle window lets
+   the camera doze.
+2. A ping scan (every 3 s) reads the pattern: a dozing camera answers in a
+   power-save sawtooth (hundreds of ms, ramping), a woken processor answers
+   flat and fast (single-digit ms). Radios that switch off just stop
+   answering — also "asleep".
+3. Enough sleep-pattern samples → `armed to connect on its next self-wake`.
+4. A run of fast replies is the wake edge (the confirm probes burst at 1 s
+   once the first fast reply lands); Neolink connects (~1.5 s to first video)
+   and records. Where ping is filtered, a sparse transport probe is the
+   fallback.
+
+The scan is self-skeptical (fruitless connects make the next arming stricter;
+a real catch resets) and the rest of Neolink honors the same radio silence —
+while every stream of a sleep-friendly camera is parked, background HTTP/
+ONVIF/Wi-Fi polling sends no packets at all.
+
+With router wake hints flowing, the scan also becomes **hint-corroborated**:
+these cameras wake their radio every 5–14 minutes for ~20 s of cloud
+housekeeping (measured in router logs), which can look identical to a real
+wake from the outside. While the router has reported an event push within the
+last 2 hours, a scan edge with no accompanying hint is treated as
+housekeeping and not connected to — the hint connects us ~4 s after radio-up
+when it's real. If hints stop arriving, scan-only connects resume
+automatically, so a broken pipe never blinds the scan.
+
+Wake-triggered recordings start **tentatively**: announced and kept only when
+a detection the camera's event types allow arrives (~30 s window), labeled by
+the detection; otherwise deleted. "Wake" is never an event type — what wakes
+leave behind lives on the Timeline.
+
+### Log lines worth knowing
+
+| Log line | Meaning |
+|---|---|
+| `parked — the recording stream watches for self-wakes…` | Streams released; the camera may sleep. |
+| `camera is asleep (ping settled into the power-save pattern) — armed…` | Sleep confirmed; watching for the wake edge. |
+| `camera answered the transport probe after an all-silent park` | Ping filtered here; the fallback prober caught the wake. |
+| `self-wake — recording tentatively…` | Wake caught; capturing, nothing announced yet. |
+| `event started (motion — confirmed self-wake, footage from the wake onward)` | An allowed detection confirmed it; the event is real and announced. |
+| `self-wake ended with no matching detection — footage discarded…` | Nothing allowed arrived; the tentative event was deleted. |
+| `taping this wake to the timeline (passive — never holds the camera awake)` | The timeline tap is writing a segment from frames already flowing. |
+| `held awake by …` (hourly) | Something is spending battery; this names it. |
+| `that self-wake connect caught nothing (N in a row) — being more skeptical…` | Self-healing against misread sleep patterns. A real catch resets. |
+| `brief fast-ping blip (N sample(s)) ended before the 3-sample wake confirmation` | The radio went flat too briefly to be a confirmed wake. Frequent blips near a miss = wakes too short for the scan; none = the PIR never fired. |
+| `wake hint (router saw …) — the camera is calling home for an event` | Router-fed instant wake; connecting at once. |
+| `[wake-diag] REAL self-wake / LIKELY OUR PROBE / SUSPECT FALSE ASLEEP / HINT MISFIRE / INCONCLUSIVE` | Post-mortem of each wake with evidence. Paste this into issues. |
+
+### Timings
+
+| What | Value |
+|---|---|
+| Settle window after parking | ~15 s |
+| Wake scan cadence | 3 s, steady |
+| Confirm-probe burst after a fast reply | 1 s — wake confirmed ~3–5 s after the radio goes flat |
+| "Fast" reply threshold | < 50 ms, 3 in a row |
+| Tile view budget | ~2 min (checkbox extends) |
+| Idle release after last demand | ~10 s |
+| Wake confirmation window (event kept vs discarded) | ~30 s |
+| Wake-opened session held for the late detection push | 30 s. Scan-opened: ends early on the first detection. Hint-opened: records the full window; a fresh hint restarts it |
+| Router wake hint → connect | immediate; misfire cooldown 15/30/60 s |
+| Hint trust window (scan edges without a hint = housekeeping, skipped) | 2 h since the last hint; expires back to scan-only behavior |
+| Keep-alive maximum | 24 h |
+
+</details>

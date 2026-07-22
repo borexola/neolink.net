@@ -22,6 +22,8 @@ public sealed class NeolinkConfig
     public UiConfig Ui { get; set; } = new();
     /// <summary>MQTT / Home Assistant integration ("mqtt" section); null = disabled.</summary>
     public MqttConfig? Mqtt { get; set; }
+    /// <summary>Router wake hints ("wake_hints" section); null = disabled.</summary>
+    public WakeHintConfig? WakeHints { get; set; }
     /// <summary>Recovery switch (legacy top-level spelling; "ui.reset_admin_password" preferred).</summary>
     public bool ResetAdminPassword { get; set; }
 
@@ -103,6 +105,9 @@ public sealed class NeolinkConfig
                     break;
                 case "mqtt":
                     config.Mqtt = ParseJsonMqtt(prop.Value);
+                    break;
+                case "wakehints":
+                    config.WakeHints = ParseJsonWakeHints(prop.Value);
                     break;
                 case "users":
                     foreach (var u in prop.Value.EnumerateArray())
@@ -250,6 +255,23 @@ public sealed class NeolinkConfig
         return mqtt;
     }
 
+    private static WakeHintConfig ParseJsonWakeHints(JsonElement el)
+    {
+        var wh = new WakeHintConfig();
+        foreach (var prop in el.EnumerateObject())
+        {
+            switch (Key(prop.Name))
+            {
+                case "syslogport" or "port": wh.SyslogPort = prop.Value.GetInt32(); break;
+                case "bind": wh.Bind = prop.Value.GetString(); break;
+                default:
+                    Log.Warn($"Config: ignoring unknown wake_hints option '{prop.Name}'");
+                    break;
+            }
+        }
+        return wh;
+    }
+
     private static void ParseJsonUi(JsonElement el, NeolinkConfig config)
     {
         foreach (var prop in el.EnumerateObject())
@@ -294,6 +316,15 @@ public sealed class NeolinkConfig
 
         if (MiniToml.GetString(root, "certificate") != null)
             WarnTls();
+
+        if (MiniToml.GetTable(root, "wake_hints") is { } wh)
+        {
+            config.WakeHints = new WakeHintConfig
+            {
+                SyslogPort = (int)(MiniToml.GetInt(wh, "syslog_port") ?? MiniToml.GetInt(wh, "port") ?? 5140),
+                Bind = MiniToml.GetString(wh, "bind"),
+            };
+        }
 
         if (MiniToml.GetTable(root, "mqtt") is { } mqtt)
         {
@@ -623,6 +654,19 @@ public sealed class MqttConfig
     /// 60 s covers dashboards comfortably; lower it for near-live gauges.
     /// 0 disables the server device entirely.</summary>
     public int StatsIntervalSeconds { get; set; } = 60;
+}
+
+/// <summary>Router wake-hint settings ("wake_hints" in the config): a UDP syslog
+/// listener that turns the router's "this camera just called the Reolink push
+/// service" firewall log line into an instant wake signal for battery cameras.
+/// See docs/battery-cameras.md for the OPNsense recipe.</summary>
+public sealed class WakeHintConfig
+{
+    /// <summary>UDP port to receive the router's remote syslog (filterlog) on.
+    /// 5140 by convention — 514 needs elevated privileges on most systems.</summary>
+    public int SyslogPort { get; set; } = 5140;
+    /// <summary>Bind address for the listener; defaults to the server bind address.</summary>
+    public string? Bind { get; set; }
 }
 
 /// <summary>Event recording settings ("recording" in the config).</summary>

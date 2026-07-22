@@ -56,6 +56,12 @@ public sealed record WebCameraInfo(string Name, List<WebStreamInfo> Streams, ICa
     /// (Argus family). Surfaced so the UI can badge these cameras as beta.</summary>
     public bool Udp { get; init; }
 
+    /// <summary>Feeds an external wake hint to this camera's wake-capture scan (the
+    /// generic entry for POST /api/cameras/{name}/wake-hint — Home Assistant, a
+    /// router webhook, any external motion source). No-op unless the camera is a
+    /// parked wake-capture battery camera; see CameraService.NotifyWakeHint.</summary>
+    public Action<string>? WakeHint { get; init; }
+
     /// <summary>True for a battery camera Neolink lets doze (no always_on). The web
     /// UI treats these tiles differently: watching one costs the camera charge, so
     /// it marks them, bounds how long a tile streams, and offers a keep-awake
@@ -133,6 +139,7 @@ public sealed class WebApiOptions
 ///   POST /api/events/delete {ids[],estimate} — bulk delete events + files (admin; ?estimate summarizes)
 ///   GET/POST /api/cameras/{name}/recording  — per-camera recording switches + event-type filter
 ///   POST /api/cameras/{name}/record         — start/stop an on-demand clip (one clip, auto-capped)
+///   POST /api/cameras/{name}/wake-hint      — external "the camera is up for an event" signal (battery cams)
 ///   GET /api/recordings/{camera}[/{date}[/{file}]] — browse/play continuous footage
 ///   GET .../{date}/export?from=&to=[&format=mp4][&estimate=1] — a range (≤ one day) as one MP4 or a zip
 ///   /api/auth/* (status/setup/login/reset-admin), /api/users (admin CRUD),
@@ -1728,6 +1735,26 @@ public static class WebApi
             cam.SetSuspended(s);
             NudgeHa(name);
             return Results.Json(new { ok = true, suspended = s });
+        });
+
+        // External wake hint: anything that knows the camera is up for an event
+        // RIGHT NOW (a Home Assistant automation, a router webhook, an external
+        // PIR) can tell the wake-capture scan to connect immediately instead of
+        // waiting for the ping pattern. Harmless when the camera isn't a parked
+        // wake-capture battery camera — the hint is simply ignored, so callers
+        // never need to check state first. The built-in syslog listener
+        // (wake_hints.syslog_port) feeds the same path.
+        app.MapPost("/api/cameras/{name}/wake-hint", (string name, HttpContext ctx) =>
+        {
+            var cam = cameras.FirstOrDefault(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase));
+            if (cam == null)
+                return Results.Json(new { error = $"unknown camera '{name}'" }, statusCode: 404);
+            if (CheckAuth(ctx, cam) is { } denied)
+                return denied;
+            if (cam.WakeHint == null)
+                return Results.Json(new { error = "wake hints are not available for this camera" }, statusCode: 404);
+            cam.WakeHint($"wake-hint API ({ctx.Connection.RemoteIpAddress})");
+            return Results.Json(new { ok = true });
         });
 
         // Floodlight behavior (cameras with a spotlight): brightness and the
