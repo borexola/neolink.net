@@ -374,6 +374,18 @@ html, body {
 
 .chip-off { opacity: 0.45; }
 
+/* A chip the server vetoes (e.g. 24/7 taping on a dozing battery camera):
+   visibly inert — no hover invite, no pointer. */
+.chip:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+}
+.chip:disabled:hover {
+    border-color: var(--line);
+    color: var(--text);
+    background: var(--bg);
+}
+
 .badge {
     font-size: 9px;
     background: var(--line);
@@ -5113,6 +5125,21 @@ select.input-pending {
     margin: -2px 0 4px;
     text-align: right;
 }
+
+/* Battery keep-alive drain warning: same voice as .field-error but cautionary,
+   not an error, and left-aligned since it is explanatory prose. */
+.field-warn {
+    color: var(--warn, #d9a441);
+    font-size: 11px;
+    line-height: 1.4;
+    margin: -2px 0 6px;
+}
+
+/* Keep-alive slider row: the range fills the space, the readout is fixed-width so
+   it doesn't jitter as the hours change. */
+.keepalive { display: flex; align-items: center; gap: 10px; flex: 1; }
+.keepalive input[type="range"] { flex: 1; accent-color: var(--accent); cursor: pointer; }
+.keepalive-val { min-width: 3.5ch; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
 
 .admin-field.edited input {
     border-color: var(--accent);

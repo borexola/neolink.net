@@ -40,7 +40,10 @@ public static class BcCodec
 
         uint magic = BinaryPrimitives.ReadUInt32LittleEndian(head.AsSpan(0));
         if (magic != BcConstants.MagicHeader)
-            throw new BcProtocolException($"Invalid magic header 0x{magic:x8} (stream desynchronized)");
+            // The whole mis-read header goes into the message: when this fires the
+            // bytes themselves are the only evidence of WHERE the stream slipped.
+            throw new BcProtocolException($"Invalid magic header 0x{magic:x8} (stream desynchronized; " +
+                                          $"head {Convert.ToHexString(head)})");
 
         uint msgId = BinaryPrimitives.ReadUInt32LittleEndian(head.AsSpan(4));
         uint bodyLen = BinaryPrimitives.ReadUInt32LittleEndian(head.AsSpan(8));
@@ -56,6 +59,16 @@ public static class BcCodec
             var ext = new byte[4];
             await stream.ReadExactlyAsync(ext, ct).ConfigureAwait(false);
             payloadOffset = BinaryPrimitives.ReadUInt32LittleEndian(ext);
+        }
+        else if (cls == BcConstants.ClassModernFfff)
+        {
+            // 24-byte header like 0x6414/0x0000, established empirically: after a
+            // 20-byte read the next message's magic sat exactly 4 bytes late, every
+            // time. The word is consumed to keep the stream framed but NOT used as
+            // an extension offset — its meaning is unverified, and a garbage offset
+            // would fail the extension bounds check and kill the connection.
+            var ext = new byte[4];
+            await stream.ReadExactlyAsync(ext, ct).ConfigureAwait(false);
         }
 
         if (bodyLen > 64 * 1024 * 1024)

@@ -54,6 +54,7 @@ public sealed class BcUdpConnection : IBcConnection
     private readonly string _tag;
 
     public EncryptionState Encryption { get; } = new();
+    public IPEndPoint? RemoteEndpoint => _camera;
     private readonly BcContext _context;
 
     private readonly Dictionary<uint, Channel<BcMessage>> _subscribers = new();
@@ -541,6 +542,12 @@ public sealed class BcUdpConnection : IBcConnection
 
     // ------------------------------------------------------------------ BC framing (shared)
 
+    // Last successfully framed BC message — the desync forensics: when the parser
+    // slips, the message BEFORE the slip is the one whose length lied.
+    private uint _lastBcId, _lastBcLen;
+    private ushort _lastBcClass;
+    private long _bcParsed;
+
     private async Task ReadLoopAsync(CancellationToken ct)
     {
         var stream = _pipe.Reader.AsStream();
@@ -550,6 +557,10 @@ public sealed class BcUdpConnection : IBcConnection
             while (!ct.IsCancellationRequested)
             {
                 var msg = await BcCodec.ReadMessageAsync(stream, _context, ct).ConfigureAwait(false);
+                _bcParsed++;
+                _lastBcId = msg.Meta.MsgId;
+                _lastBcClass = msg.Meta.Class;
+                _lastBcLen = (uint)(msg.Binary?.Length ?? 0);
                 if (Dbg)
                     Log.Debug($"{_tag}: udp {El} ← BC msgId={msg.Meta.MsgId} class=0x{msg.Meta.Class:x4} " +
                               $"msgNum={msg.Meta.MsgNum} resp=0x{msg.Meta.ResponseCode:x4}");
@@ -601,7 +612,21 @@ public sealed class BcUdpConnection : IBcConnection
             }
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) { fault = ex; }
+        catch (Exception ex)
+        {
+            fault = ex;
+            if (ex is BcProtocolException)
+            {
+                // Transport-state snapshot at the moment of the desync: which BC
+                // message framed last (its length is the prime suspect) and whether
+                // the reliable layer was clean (dups/holes) when the parser slipped.
+                uint rxNext; int held; lock (_rxGate) { rxNext = _rxNext; held = _rxBuffer.Count; }
+                Log.Warn($"{_tag}: udp {El} BC stream desynced after {_bcParsed} messages — " +
+                         $"last good msgId={_lastBcId} class=0x{_lastBcClass:x4} binLen={_lastBcLen}; " +
+                         $"transport rx {_rxData} data ({_rxDup} dup, next pid {rxNext}, maxPid {_rxMaxPid}, " +
+                         $"{held} held out-of-order); {ex.Message}");
+            }
+        }
         finally
         {
             lock (_subGate)

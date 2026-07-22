@@ -62,10 +62,16 @@ public static class BcConstants
     //  0x6614: modern, 20 byte header (reply to the legacy login)
     //  0x6414: modern, 24 byte header (has payload offset)
     //  0x0000: modern, 24 byte header (has payload offset)
+    //  0xffff: modern, 24 byte header — undocumented; observed live on an Argus
+    //          Solar as the class of its msg-124 PushInfo reply. Not in either
+    //          reference neolink. Parsing it with a 20-byte header left 4 stray
+    //          bytes in the stream and desynced every message after it (the
+    //          trailing word is consumed but not trusted as an offset).
     public const ushort ClassLegacy = 0x6514;
     public const ushort ClassModernNoOffset = 0x6614;
     public const ushort ClassModern = 0x6414;
     public const ushort ClassModernZero = 0x0000;
+    public const ushort ClassModernFfff = 0xffff;
 
     // Legacy "login upgrade" request: the response_code advertises the highest
     // encryption scheme the client supports. The camera replies with the scheme it

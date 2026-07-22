@@ -933,17 +933,50 @@
                     <div class="control-row">
                         <span>Record around the clock</span>
                         <button class="chip @(_recording.Continuous ? "" : "chip-off")"
+                                disabled="@_recording.ContinuousBlockedBySleep"
+                                title="@(_recording.ContinuousBlockedBySleep ? "Unavailable — this battery camera is allowed to sleep" : null)"
                                 @onclick="() => SetRecordingAsync(continuous: !_recording.Continuous)">
                             @(_recording.Continuous ? "on" : "off")
                         </button>
                     </div>
-                    @if (_recording.Continuous)
+                    @if (_recording.ContinuousBlockedBySleep)
+                    {
+                        <div class="notice small">
+                            This battery camera is allowed to sleep, and taping around the clock
+                            would hold it awake until the battery dies. To record 24/7, set
+                            <b>Always on</b> to “hold the connection” in this camera's setup
+                            (Settings → Cameras) — sensible only on constant power.
+                        </div>
+                        @* The battery-safe replacement: tape frames that are already
+                           flowing (self-wakes, viewing sessions) — never wakes the
+                           camera or holds it awake, so it costs the battery nothing. *@
+                        <div class="control-row">
+                            <span>Record wake events</span>
+                            <button class="chip @(_recording.WakeTimeline ? "" : "chip-off")"
+                                    title="@(_recording.WakeTimeline
+                                        ? "Footage from self-wakes and viewing sessions is taped while it's streaming anyway — click to stop keeping it"
+                                        : "Wake footage is not kept — click to tape self-wakes while the camera streams anyway")"
+                                    @onclick="() => SetRecordingAsync(wakeTimeline: !_recording.WakeTimeline)">
+                                @(_recording.WakeTimeline ? "on" : "off")
+                            </button>
+                        </div>
+                        @if (_recording.WakeTimeline)
+                        {
+                            <div class="event-sub">
+                                This footage goes on the <b>Timeline</b> — islands around each wake
+                                and viewing session, with honest gaps while the camera sleeps.
+                                Zero battery cost: it only tapes what is already streaming, and the
+                                camera is still released on the usual timeouts.
+                            </div>
+                        }
+                    }
+                    @if (_recording.Continuous || (_recording.ContinuousBlockedBySleep && _recording.WakeTimeline))
                     {
                         <div class="control-row">
                             <span>Keep continuous footage (days)</span>
                             <input class="ret-input" type="number" min="0" step="1"
                                    placeholder="@RetentionLabel(_recording.DefaultContinuousRetentionDays)"
-                                   title="How long this camera's 24/7 footage is kept. Blank = server default, 0 = keep forever."
+                                   title="How long this camera's timeline footage is kept. Blank = server default, 0 = keep forever."
                                    value="@(_recording.ContinuousRetentionDays?.ToString() ?? "")"
                                    @onchange="e => SetRetentionAsync(forEvents: false, (string?)e.Value)" />
                         </div>
@@ -991,7 +1024,8 @@
                         </div>
                     }
                 }
-                @if ((_recording.EventsAvailable && _recording.Events) || _recording.Continuous)
+                @if ((_recording.EventsAvailable && _recording.Events) || _recording.Continuous
+                     || (_recording.ContinuousBlockedBySleep && _recording.WakeTimeline))
                 {
                     @* The story of this camera's footage, told with the CURRENT settings —
                        it re-renders on every toggle, so cause and effect are immediate. *@
@@ -1005,6 +1039,11 @@
                         @if (_recording.Continuous)
                         {
                             @LifecycleRow("24/7", _recording.ContinuousRetentionDays ?? _recording.DefaultContinuousRetentionDays, _recording.ArchiveContinuous)
+                        }
+                        @if (_recording.ContinuousBlockedBySleep && _recording.WakeTimeline)
+                        {
+                            @* Wake-tap footage is continuous footage — same retention, same archive routing. *@
+                            @LifecycleRow("Wake footage", _recording.ContinuousRetentionDays ?? _recording.DefaultContinuousRetentionDays, _recording.ArchiveContinuous)
                         }
                         @if (_recording.ArchiveEvents || _recording.ArchiveContinuous)
                         {
@@ -1916,13 +1955,14 @@
         int? eventRetentionDays = null, int? continuousRetentionDays = null, string? recordStream = null,
         List<string>? scheduleDays = null, string? scheduleStart = null, string? scheduleEnd = null,
         bool? scheduleEnabled = null,
-        bool? archiveEvents = null, bool? archiveContinuous = null, int? archiveRetentionDays = null)
+        bool? archiveEvents = null, bool? archiveContinuous = null, int? archiveRetentionDays = null,
+        bool? wakeTimeline = null)
     {
         object body = new
         {
             events, continuous, eventTypes, eventRetentionDays, continuousRetentionDays, recordStream,
             scheduleDays, scheduleStart, scheduleEnd, scheduleEnabled,
-            archiveEvents, archiveContinuous, archiveRetentionDays,
+            archiveEvents, archiveContinuous, archiveRetentionDays, wakeTimeline,
         };
         if (await PostAsync("recording", body))
             _recording = await GetAsync<ApiRecordingSettings>("recording");

@@ -25,6 +25,10 @@ public interface IBcCamera : IAsyncDisposable
     /// <summary>Resolution info the camera reported at login, if any.</summary>
     DeviceInfoXml? DeviceInfo { get; }
 
+    /// <summary>The camera's resolved IP address once connected (null before), so a
+    /// UID-only battery camera can be liveness-scanned by ping without waking it.</summary>
+    System.Net.IPAddress? RemoteIp { get; }
+
     Task LoginAsync(string username, string? password, CancellationToken ct);
 
     /// <summary>

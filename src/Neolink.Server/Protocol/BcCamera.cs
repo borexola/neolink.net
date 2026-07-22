@@ -40,6 +40,7 @@ public sealed class BcCamera : IBcCamera
 
     public byte ChannelId => _channelId;
     public DeviceInfoXml? DeviceInfo { get; private set; }
+    public System.Net.IPAddress? RemoteIp => _conn.RemoteEndpoint?.Address;
 
     // Log tag: with several cameras every one is usually channel 0, so a bare
     // "ch0" is ambiguous in captures — callers pass the camera name instead.
@@ -294,7 +295,14 @@ public sealed class BcCamera : IBcCamera
         {
             var reply = await sub.ReceiveAsync(replyTimeout ?? RxTimeout, ct).ConfigureAwait(false);
             if (reply.Meta.ResponseCode != 200)
+            {
+                // The rejection reply sometimes carries an XML body naming the actual
+                // problem — surface it, the numeric code alone is rarely diagnosable.
+                if (reply.Xml is { Raw.Count: > 0 } replyXml)
+                    Log.Debug($"BC command {msgId} rejected ({reply.Meta.ResponseCode}); reply body: " +
+                              string.Concat(replyXml.Raw.Select(e => e.ToString(SaveOptions.DisableFormatting))));
                 throw new CameraCommandException(msgId, reply.Meta.ResponseCode);
+            }
             return reply;
         }
         catch (TimeoutException) when (tolerateNoReply)

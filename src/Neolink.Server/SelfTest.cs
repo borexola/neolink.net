@@ -134,28 +134,140 @@ public static class SelfTest
             Assert(svc.BatteryPowered, "repeat notification -> still battery, no flap");
         });
 
-        Test("wake-capture edge detector: debounced sleep, prompt wake", () =>
+        Test("always_on battery camera is treated exactly like a wired camera", () =>
         {
-            // The sleep→wake edge only counts after CONSECUTIVE unanswered probes:
-            // one lost packet (Wi-Fi power save) must not arm it, or the next
-            // answered probe reads as a false "camera woke itself" and Neolink
-            // wakes the very camera it is letting sleep (issue #44).
-            var d = new Streaming.WakeEdgeDetector();
-            Assert(!d.OnProbe(true) && !d.Armed, "answered while awake -> nothing");
-            Assert(!d.OnProbe(false) && !d.Armed, "one miss -> not armed yet (could be packet loss)");
-            Assert(!d.OnProbe(true) && !d.Armed, "answer after a single miss -> miss forgotten");
-            Assert(!d.OnProbe(false), "miss 1 of 2");
-            Assert(!d.OnProbe(false) && d.Armed, "second consecutive miss -> armed");
-            Assert(!d.OnProbe(false) && d.Armed, "still asleep -> stays armed");
-            Assert(d.OnProbe(true), "answer while armed -> the wake edge");
-
-            var flappy = new Streaming.WakeEdgeDetector();
-            for (int i = 0; i < 50; i++)
+            // The contract: always_on: true opts a battery camera OUT of every
+            // battery behavior — no parking, no wake probing, no short battery
+            // idle grace or demand window, no asleep badge / click-to-view gate
+            // in the UI (all keyed on SleepFriendly). Only the battery SENSORS
+            // remain. Pinned here because every one of those behaviors reads
+            // this flag, and a battery-side change must not regress it.
+            Streaming.CameraService Make(bool? alwaysOn)
             {
-                Assert(!flappy.OnProbe(false), $"alternating miss {i} never arms");
-                Assert(!flappy.OnProbe(true), $"alternating answer {i} never fires a wake");
+                var cfg = new Config.CameraConfig
+                {
+                    Name = "batt",
+                    Host = "127.0.0.1",
+                    Username = "admin",
+                    Password = "p",
+                    AlwaysOn = alwaysOn,
+                };
+                var svc = new Streaming.CameraService(cfg, Protocol.StreamKind.Main,
+                    new Streaming.StreamHub("batt"), TimeSpan.Zero);
+                svc.BatteryDetected(); // it IS a battery model — the setting must win anyway
+                return svc;
             }
-            Assert(!flappy.Armed, "alternating loss pattern -> never armed, never a false wake");
+
+            Assert(!Make(alwaysOn: true).SleepFriendly,
+                "always_on: true + battery -> NOT sleep-friendly (wired treatment)");
+            Assert(Make(alwaysOn: null).SleepFriendly,
+                "always_on unset + battery -> sleep-friendly (the battery default)");
+            Assert(Make(alwaysOn: false).SleepFriendly,
+                "always_on: false -> sleep-friendly by explicit choice");
+            Assert(!Streaming.CameraService.MediaOnDemandPolicy(true, true),
+                "always_on battery camera never rides the on-demand video path either");
+        });
+
+        Test("24/7 recording is vetoed for a sleep-friendly battery camera", () =>
+        {
+            // The web UI disables the toggle and the API refuses the switch, but
+            // the recorder's own gate is the backstop: a stale settings.json with
+            // continuous=true must never hold a dozing battery camera awake — the
+            // on-demand video hold asks ContinuousEnabled to decide frame demand.
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var settings = new Recording.RecordingSettings(dir);
+                settings.Update("dozer", events: null, continuous: true, eventTypes: null, setEventTypes: false);
+                var store = new Recording.EventStore(Path.Combine(dir, "rec"));
+                bool sleepFriendly = true;
+                var recorder = new Recording.ContinuousRecorder("dozer",
+                    new Streaming.StreamHub("dozer"), store, settings,
+                    new Config.RecordingConfig { SegmentMinutes = 10, MaxSegmentSizeMb = 256 },
+                    blocked: () => sleepFriendly);
+                Assert(!recorder.ContinuousEnabled,
+                    "switch ON + sleep-friendly -> effectively OFF (no frame demand, no taping)");
+                // What a vetoed camera gets instead: the passive wake tap (default
+                // ON) — tapes frames that already flow, but must never register as
+                // a consumer, or it would hold the camera awake like 24/7 would.
+                Assert(recorder.WakeTapActive,
+                    "sleep-friendly -> wake tap active by default (self-wakes land on the timeline)");
+                Assert(!recorder.ContinuousEnabled,
+                    "the tap NEVER counts as frame demand — only ContinuousEnabled feeds the hold");
+                settings.Update("dozer", events: null, continuous: null, eventTypes: null,
+                    setEventTypes: false, wakeTimeline: false);
+                Assert(!recorder.WakeTapActive, "wake tap is a real switch — off means off");
+                settings.Update("dozer", events: null, continuous: null, eventTypes: null,
+                    setEventTypes: false, wakeTimeline: true);
+                // The veto is live: battery status heals in after connect, and
+                // always_on can change on a config reload — no restart needed.
+                sleepFriendly = false;
+                Assert(recorder.ContinuousEnabled,
+                    "veto lifted -> the persisted switch takes effect again");
+                Assert(!recorder.WakeTapActive,
+                    "the tap is battery-cam-only — a wired/always_on camera uses the real 24/7 switch");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        });
+
+        Test("wake-capture RTT detector: arms on the sleep sawtooth, fires on a fast run", () =>
+        {
+            // The samples below are a REAL ping trace of a sleeping Argus Solar
+            // (2026-07-21): power-save sawtooth ramps while asleep, a dead-flat
+            // 2-3 ms run when PIR wakes the main processor. The detector must read
+            // patterns, not samples — the trace has mid-sleep dips (37/52/60 ms)
+            // that a naive threshold would call a wake.
+            var d = new Streaming.WakeRttDetector();
+
+            // Awake camera (flat and fast) never arms — no false asleep.
+            foreach (var ms in new double[] { 2, 2, 15, 3, 2, 8, 2, 2, 2, 2, 2, 2 })
+                Assert(!d.OnSample(ms), "fast flat samples while awake -> no edge");
+            Assert(!d.Armed, "an awake camera's flat pings never read as sleep");
+
+            // The sleep sawtooth arms it (from the trace, verbatim).
+            double[] sawtooth = { 257, 782, 282, 294, 307, 323, 338, 350, 358, 371 };
+            foreach (var ms in sawtooth) d.OnSample(ms);
+            Assert(d.Armed, "sustained power-save sawtooth -> armed");
+
+            // Mid-sleep dips from the trace: 37 is fast, 52/60 are not — no run,
+            // no false wake, and the detector stays armed.
+            Assert(!d.OnSample(37) && !d.OnSample(52) && !d.OnSample(60),
+                "isolated fast dip (37,52,60 from the trace) -> no false wake");
+            Assert(d.Armed, "dips do not disarm");
+            foreach (var ms in new double[] { 378, 391, 404 }) d.OnSample(ms);
+
+            // The real wake: a flat fast run fires on the third consecutive sample.
+            Assert(!d.OnSample(2), "fast 1 of 3");
+            Assert(!d.OnSample(2), "fast 2 of 3");
+            Assert(d.OnSample(2), "three consecutive fast answers -> the wake edge");
+
+            // Second real capture (2026-07-21, PIR event): the sawtooth, one
+            // boundary sample, then single digits the instant the event starts.
+            // The detector must fire on the third fast sample — every further
+            // second of confirmation is event footage lost (the whole event
+            // measured ~27 s flat, sawtooth back the moment it ended).
+            var ev = new Streaming.WakeRttDetector();
+            foreach (var ms in new double[] { 157, 163, 177, 196, 400, 437, 123, 151, 164 })
+                Assert(!ev.OnSample(ms), "pre-event sawtooth -> no edge");
+            Assert(ev.Armed, "sawtooth armed it before the event");
+            Assert(!ev.OnSample(6), "event begins: fast 1 of 3");
+            Assert(!ev.OnSample(4), "fast 2 of 3");
+            Assert(ev.OnSample(3), "fast 3 of 3 -> edge, ~3s into the event");
+
+            // Radios that power off entirely: misses arm, first fast run fires.
+            var dark = new Streaming.WakeRttDetector();
+            for (int i = 0; i < Streaming.WakeRttDetector.NonFastToArm; i++)
+                Assert(!dark.OnSample(null), "misses accumulate toward arming");
+            Assert(dark.Armed, "sustained silence -> armed (radio-off models)");
+            dark.OnSample(3); dark.OnSample(2);
+            Assert(dark.OnSample(2), "radio back + fast run -> wake edge");
+
+            // ICMP-blocked network: all misses forever — arms but can never fire
+            // (the legacy transport probe is the fallback there).
+            var blocked = new Streaming.WakeRttDetector();
+            for (int i = 0; i < 50; i++)
+                Assert(!blocked.OnSample(null), "pure misses never fire an edge");
         });
 
         Test("wake diagnostics: verdict separates our-probe wakes from real ones", () =>
@@ -462,6 +574,7 @@ public static class SelfTest
                       "udp_probe": true,
                       "udp": true,
                       "wake_capture": true,
+                      "keep_alive_hours": 3,
                     },
                   ],
                 }
@@ -488,6 +601,8 @@ public static class SelfTest
                 Assert(cfg.Cameras[1].UdpProbe, "udp_probe parsed");
                 Assert(cfg.Cameras[1].Udp && !cfg.Cameras[0].Udp, "udp transport flag parsed (opt-in, default off)");
                 Assert(cfg.Cameras[1].WakeCapture && !cfg.Cameras[0].WakeCapture, "wake_capture flag parsed (opt-in, default off)");
+                Assert(cfg.Cameras[1].KeepAliveHours == 3 && cfg.Cameras[0].KeepAliveHours == 0,
+                    "keep_alive_hours parsed (default 0)");
                 // Tiered-storage keys must round-trip through the parser — the
                 // archive UI only appears when archive_path survives loading.
                 AssertEq(cfg.Recording!.Path, "/recordings");
@@ -762,17 +877,19 @@ public static class SelfTest
             Assert(optedIn.AllowsLabel("line-crossing") && !optedIn.AllowsLabel("person"),
                 "explicit filter is exact");
 
-            // The synthetic self-wake event (wake-capture records the wake itself,
-            // not just detection pushes): label survives mapping, the push counts
-            // as active, and it is External — the type filter never sees it, which
-            // matters because no filter UI offers a "wake" chip to tick.
+            // The synthetic self-wake push (wake-capture): starts a PROVISIONAL
+            // recording only — the footage is kept solely when a detection the
+            // camera's event-type selection allows confirms it, and discarded
+            // otherwise. The Status "wake" marker is what the recorder keys the
+            // provisional path on; the label itself is never a recordable type.
             var wake = new Protocol.MotionPush("wake", new[] { "wake" }, External: true);
             Assert(wake.Active, "synthetic wake push is an active detection");
+            Assert(wake.Status == "wake", "the wake marker rides Status — the recorder's provisional key");
             Assert(Recording.EventRecorder.LabelsOf(wake) is ["wake"], "wake label passes through unmapped");
             Assert(!untouched.AllowsLabel("wake"),
-                "the default filter would drop 'wake' — External bypass is what records it");
+                "no filter ever allows 'wake' itself — only a confirming detection keeps the footage");
             var wakeClear = new Protocol.MotionPush("none", Array.Empty<string>(), External: true);
-            Assert(!wakeClear.Active, "synthetic all-clear ends the wake clip via the post-roll");
+            Assert(!wakeClear.Active, "synthetic all-clear ends the wake window via the post-roll");
         });
 
         Test("capture schedule (per-camera day/time gate on events)", () =>

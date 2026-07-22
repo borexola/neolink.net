@@ -472,8 +472,19 @@ public sealed class EventRecorder
             // switch can veto them — no schedule, no type filter.
             var settings = _settings.Get(_camera);
             if (!settings.Events) continue;
+            // The synthetic self-wake (wake-capture) is neither a detection nor a
+            // user command: it starts a PROVISIONAL recording that is kept only if
+            // a detection this camera is configured to record confirms it — the
+            // event-type selection in the camera's settings stays in charge of
+            // what actually becomes a stored video. The schedule applies too.
+            bool wakeProvisional = push.External && push.Status == "wake";
             List<string> labels;
-            if (push.External)
+            if (wakeProvisional)
+            {
+                if (!settings.ScheduleAllows(DateTime.Now)) continue;
+                labels = LabelsOf(push);
+            }
+            else if (push.External)
             {
                 labels = LabelsOf(push);
             }
@@ -486,7 +497,7 @@ public sealed class EventRecorder
 
             try
             {
-                await RunEventAsync(labels, ct).ConfigureAwait(false);
+                await RunEventAsync(labels, wakeProvisional, ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -495,17 +506,28 @@ public sealed class EventRecorder
         }
     }
 
-    private async Task RunEventAsync(List<string> initialLabels, CancellationToken ct)
+    private async Task RunEventAsync(List<string> initialLabels, bool provisional, CancellationToken ct)
     {
         var rec = _store.Create(_camera,
             DateTime.UtcNow - TimeSpan.FromSeconds(_cfg.PreSeconds), initialLabels);
-        Log.Info($"{_camera}: ⚡ event started ({string.Join("+", rec.Labels)})");
-        EventStarted?.Invoke(rec); // id out first: HA sees it with the trigger
+        if (provisional)
+        {
+            // A self-wake: footage is being captured, but nothing is announced —
+            // no HA trigger, no browser alert, no "event started". Promotion (a
+            // detection this camera records) announces; otherwise it all vanishes.
+            Log.Info($"{_camera}: self-wake — recording tentatively (kept only if a detection " +
+                     "this camera's event types allow arrives)");
+        }
+        else
+        {
+            Log.Info($"{_camera}: ⚡ event started ({string.Join("+", rec.Labels)})");
+            EventStarted?.Invoke(rec); // id out first: HA sees it with the trigger
+        }
         _eventActive = true;
         RecordingChanged?.Invoke(true);
         try
         {
-            await RunEventCoreAsync(rec, ct).ConfigureAwait(false);
+            await RunEventCoreAsync(rec, provisional, ct).ConfigureAwait(false);
         }
         finally
         {
@@ -514,7 +536,7 @@ public sealed class EventRecorder
         }
     }
 
-    private async Task RunEventCoreAsync(EventRecord rec, CancellationToken ct)
+    private async Task RunEventCoreAsync(EventRecord rec, bool provisional, CancellationToken ct)
     {
         StartClip(rec);
         var thumbTask = CaptureThumbAsync(rec, ct);
@@ -558,6 +580,23 @@ public sealed class EventRecorder
                     rec.Labels.AddRange(fresh);
                     rec.EndUtc = DateTime.UtcNow;
                     _store.Save(rec);
+                }
+                if (provisional)
+                {
+                    // A detection this camera records arrived: the tentative wake
+                    // recording becomes a real event, announced only NOW — with
+                    // the footage reaching back to the wake itself. The wake tag
+                    // comes off: from here this is an ordinary detection event
+                    // ("Human detected", never "Wake") — wakes as such belong to
+                    // the timeline, not the events list.
+                    provisional = false;
+                    if (rec.Labels.Remove("wake")) _store.Save(rec);
+                    Log.Info($"{_camera}: ⚡ event started ({string.Join("+", rec.Labels)} — " +
+                             "confirmed self-wake, footage from the wake onward)");
+                    EventStarted?.Invoke(rec);
+                }
+                else if (fresh.Count > 0)
+                {
                     Log.Info($"{_camera}: event escalated (+{string.Join("+", fresh)})");
                 }
             }
@@ -581,6 +620,22 @@ public sealed class EventRecorder
         }
         rec.EndUtc = DateTime.UtcNow;
         rec.Ongoing = false;
+
+        if (provisional)
+        {
+            // Still tentative at the end: nothing this camera is configured to
+            // record happened. The footage is deleted, not kept — the event-type
+            // selection decides what becomes a stored video, and a bare wake is
+            // not on the list. (The thumbnail task must finish before the tree
+            // goes, or its write recreates the directory.)
+            try { await thumbTask.ConfigureAwait(false); } catch { }
+            _store.DeleteEvent(rec.Id);
+            Log.Info($"{_camera}: self-wake ended with no matching detection " +
+                     $"({(rec.EndUtc - rec.StartUtc).TotalSeconds:0}s) — footage discarded, as this " +
+                     "camera's event types direct");
+            return;
+        }
+
         _store.Save(rec);
         try { await thumbTask.ConfigureAwait(false); } catch { }
         Log.Info($"{_camera}: event ended ({string.Join("+", rec.Labels)}, " +

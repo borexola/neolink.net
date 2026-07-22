@@ -190,6 +190,9 @@ public static class MiniToml
     public static long? GetInt(Dictionary<string, object> table, string key) =>
         table.TryGetValue(key, out var v) && v is long l ? l : null;
 
+    public static double? GetDouble(Dictionary<string, object> table, string key) =>
+        table.TryGetValue(key, out var v) ? v switch { double d => d, long l => l, _ => null } : null;
+
     public static bool? GetBool(Dictionary<string, object> table, string key) =>
         table.TryGetValue(key, out var v) && v is bool b
             ? b

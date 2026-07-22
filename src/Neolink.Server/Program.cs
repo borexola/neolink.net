@@ -446,7 +446,11 @@ foreach (var cam in config.Cameras)
                 var continuous = new ContinuousRecorder(cam.Name, recordStream.Hub, eventStore,
                     recordingSettings, config.Recording, hubsByKind,
                     hasRoom: storage == null ? null : () => storage.HasRoom(StorageRole.Main),
-                    onWriteError: recordingHealth.MarkWriteError);
+                    onWriteError: recordingHealth.MarkWriteError,
+                    // Sleep veto, evaluated live (battery status can heal in after
+                    // connect): a dozing battery camera never tapes 24/7 — the
+                    // recorder's frame demand would hold it awake until it dies.
+                    blocked: () => camServices.Any(s => s.SleepFriendly));
                 continuousRecorder = continuous;
                 tasks.Add(Task.Run(() => continuous.RunAsync(shutdown.Token)));
             }
@@ -538,11 +542,23 @@ foreach (var cam in config.Cameras)
         ActiveSegment: continuousRecorder == null ? null : () => continuousRecorder.ActiveSegment,
         // 24/7 recording on/off — the same persisted setting the web UI toggles;
         // the recorder reads it live, so flipping it starts/stops taping at once.
-        // Offered (Baichuan and generic RTSP alike) whenever a continuous recorder runs.
+        // Offered (Baichuan and generic RTSP alike) whenever a continuous recorder
+        // runs. Reported EFFECTIVE (setting minus the sleep veto) so the HA switch
+        // never claims a dozing battery camera is taping.
         ContinuousEnabled: continuousRecorder == null || recordingSettings == null ? null
-            : () => recordingSettings.Get(cam.Name).Continuous,
+            : () => continuousRecorder.ContinuousEnabled,
         SetContinuousEnabled: continuousRecorder == null || recordingSettings == null ? null
-            : v => recordingSettings.Update(cam.Name, events: null, continuous: v, eventTypes: null, setEventTypes: false))
+            : v =>
+            {
+                if (v && camServices.Any(s => s.SleepFriendly))
+                {
+                    Log.Warn($"{cam.Name}: 24/7 recording refused — this battery camera is " +
+                             "allowed to sleep, and taping around the clock would hold it awake " +
+                             "until the battery dies; set always_on = true to enable it");
+                    return;
+                }
+                recordingSettings.Update(cam.Name, events: null, continuous: v, eventTypes: null, setEventTypes: false);
+            })
         // The recorder rides along so the web API and the MQTT bridge share one
         // on-demand recording session per camera (UI button ≡ HA Record switch).
         {

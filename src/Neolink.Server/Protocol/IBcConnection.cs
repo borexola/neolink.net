@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Oluwabori Olaleye
 // Licensed under the GNU Affero General Public License v3.0; see the LICENSE file
 // in the repository root.
+using System.Net;
 using Neolink.Bc;
 
 namespace Neolink.Protocol;
@@ -18,4 +19,9 @@ public interface IBcConnection : IAsyncDisposable
     EncryptionState Encryption { get; }
     BcSubscription Subscribe(uint msgId);
     Task SendAsync(BcMessage msg, CancellationToken ct);
+
+    /// <summary>The camera's resolved IP once connected — used for the non-waking
+    /// liveness scan (ICMP), which a UID-only camera has no address for otherwise.
+    /// Null before the endpoint is known.</summary>
+    IPEndPoint? RemoteEndpoint { get; }
 }

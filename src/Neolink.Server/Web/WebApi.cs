@@ -32,8 +32,8 @@ public sealed record WebStreamInfo(string Kind, string Path, IStreamHub Hub);
 /// <param name="Suspended">Probe: has the user suspended this camera in Neolink (no connection held)?</param>
 /// <param name="SetSuspended">Suspends/resumes the camera at runtime and persists it; null when unsupported.</param>
 /// <param name="ActiveSegment">Probe: the continuous segment being written right now (day, file, media seconds) — the recorder's in-memory truth for the day listing.</param>
-/// <param name="ContinuousEnabled">Probe: is 24/7 recording switched ON for this camera (the persisted setting, not whether a segment is open right now)? Null when the camera has no continuous recorder.</param>
-/// <param name="SetContinuousEnabled">Turns 24/7 recording on/off at runtime and persists it (same setting as the web UI toggle); null when unsupported.</param>
+/// <param name="ContinuousEnabled">Probe: is 24/7 recording EFFECTIVELY on for this camera (the persisted setting minus the battery-sleep veto, not whether a segment is open right now)? Null when the camera has no continuous recorder.</param>
+/// <param name="SetContinuousEnabled">Turns 24/7 recording on/off at runtime and persists it (same setting as the web UI toggle); refuses ON for a battery camera that is allowed to sleep. Null when unsupported.</param>
 public sealed record WebCameraInfo(string Name, List<WebStreamInfo> Streams, ICameraControl Control,
     HashSet<string>? PermittedUsers, Func<bool>? ContinuousActive = null, bool SupportsEvents = true,
     Func<BatteryPush?>? Battery = null, Func<int?>? WifiSignal = null, Func<string?>? NetType = null,
@@ -167,7 +167,7 @@ public static class WebApi
         string? Address, string? Username, string? Password, int? ChannelId, string? HttpAddress,
         string? RtspMain, string? RtspSub,
         string? Uid, string? AlwaysOn, string? Stream, string? OnvifAddress,
-        bool? Record, bool? Udp, bool? UdpProbe, bool? WakeCapture);
+        bool? Record, bool? Udp, bool? UdpProbe, bool? WakeCapture, double? KeepAliveHours);
     /// <summary>Uid/Udp matter here as much as they do on save: a UDP-only battery
     /// camera never listens on TCP, so testing it the TCP way always times out.</summary>
     private sealed record AdminCameraTestRequest(string? Name, string? Type, string? Address,
@@ -202,7 +202,8 @@ public static class WebApi
         int? EventRetentionDays = null, int? ContinuousRetentionDays = null, string? RecordStream = null,
         List<string>? ScheduleDays = null, string? ScheduleStart = null, string? ScheduleEnd = null,
         bool? ScheduleEnabled = null,
-        bool? ArchiveEvents = null, bool? ArchiveContinuous = null, int? ArchiveRetentionDays = null);
+        bool? ArchiveEvents = null, bool? ArchiveContinuous = null, int? ArchiveRetentionDays = null,
+        bool? WakeTimeline = null);
     private sealed record CredentialsRequest(string? Username, string? Password);
 
     /// <summary>
@@ -611,6 +612,7 @@ public static class WebApi
                         udp = c.Udp,
                         udpProbe = c.UdpProbe,
                         wakeCapture = c.WakeCapture,
+                        keepAliveHours = c.KeepAliveHours,
                     }).ToList(),
                 });
             }
@@ -734,6 +736,9 @@ public static class WebApi
                             ConfigEditor.Set(cam, "udp_probe", udpProbe ? true : null);
                         if (req.WakeCapture is { } wakeCapture)
                             ConfigEditor.Set(cam, "wake_capture", wakeCapture ? true : null);
+                        if (req.KeepAliveHours is { } keepAlive)
+                            ConfigEditor.Set(cam, "keep_alive_hours",
+                                keepAlive > 0 ? System.Text.Json.Nodes.JsonValue.Create(Math.Clamp(keepAlive, 0, 24)) : null);
                         // A type switch must not leave generic-RTSP keys behind.
                         ConfigEditor.Set(cam, "rtsp_main", null);
                         ConfigEditor.Set(cam, "rtsp_sub", null);
@@ -763,6 +768,7 @@ public static class WebApi
                         ConfigEditor.Set(cam, "udp", null);
                         ConfigEditor.Set(cam, "udp_probe", null);
                         ConfigEditor.Set(cam, "wake_capture", null);
+                        ConfigEditor.Set(cam, "keep_alive_hours", null);
                     }
                     // Event recording applies to both camera kinds, so it is set
                     // outside the type branches (default true = key omitted).
@@ -862,18 +868,16 @@ public static class WebApi
                     : stored != null && !stored.IsGenericRtsp && !string.IsNullOrWhiteSpace(stored.Host)
                         ? (stored.Port == 9000 ? stored.Host : $"{stored.Host}:{stored.Port}")
                         : null;
-                // An address is required for TCP; over UDP it is optional, because
-                // discovery finds the camera by UID via broadcast.
-                if (!udp && (address == null || ConfigEditor.HostPortError(address) is not null))
-                    return Results.Json(new { ok = false, message = ConfigEditor.HostPortError(address ?? "") });
+                // An address is required for TCP; over UDP it is optional (discovery
+                // finds the camera by UID via broadcast), but must be valid if given.
+                if (ConfigEditor.HostPortError(address ?? "") is { } addrErr2 && (address != null || !udp))
+                    return Results.Json(new { ok = false, message = addrErr2 });
                 if (udp && string.IsNullOrWhiteSpace(uid))
                     return Results.Json(new
                     {
                         ok = false,
                         message = "a UDP camera needs its UID to test (Reolink app → device info, or the sticker)",
                     });
-                if (address != null && ConfigEditor.HostPortError(address) is { } addrErr2)
-                    return Results.Json(new { ok = false, message = addrErr2 });
                 var username = req.Username is { Length: > 0 } u ? u : stored?.Username;
                 if (string.IsNullOrWhiteSpace(username))
                     return Results.Json(new { ok = false, message = "username is required to test" });
@@ -2133,7 +2137,12 @@ public static class WebApi
                         return Results.Json(new { error = "date must be yyyy-MM-dd" }, statusCode: 400);
                     day = d;
                 }
-                return Results.Json(events.List(camera, reviewed, limit ?? 200, day).Select(Shape));
+                // Wake-only records never belong on the events list: tentative
+                // self-wake recordings (still unconfirmed) and wake events stored
+                // by older versions. Their footage lives on the timeline instead.
+                return Results.Json(events.List(camera, reviewed, limit ?? 200, day)
+                    .Where(r => !(r.Labels is ["wake"]))
+                    .Select(Shape));
             });
 
             // Days that hold any footage (events or continuous) — the timeline's
@@ -2293,8 +2302,16 @@ public static class WebApi
             {
                 events = s.Events,
                 eventsAvailable = cam.SupportsEvents,
-                continuous = RecordingConfig.ContinuousEnabled && s.Continuous,
+                // A battery camera Neolink lets doze (no always_on) never tapes
+                // 24/7 — taping would hold it awake until the battery dies. The
+                // panel shows the toggle disabled with this reason.
+                continuous = RecordingConfig.ContinuousEnabled && s.Continuous
+                             && cam.SleepFriendly?.Invoke() != true,
                 continuousAvailable = RecordingConfig.ContinuousEnabled,
+                continuousBlockedBySleep = cam.SleepFriendly?.Invoke() == true,
+                // The passive wake tap that replaces 24/7 on those cameras —
+                // self-wake footage lands on the timeline at zero battery cost.
+                wakeTimeline = s.WakeTimeline,
                 // Always the EFFECTIVE list (never null): unset means the default
                 // set, which excludes the opt-in perimeter labels — the UI chips
                 // must show those as off until the user ticks them.
@@ -2353,6 +2370,15 @@ public static class WebApi
                 // work, like every other server setting.
                 if (userStore.Enabled && !IsAdmin(ctx))
                     return Results.Json(new { error = "admin only — recording settings are server settings" }, statusCode: 403);
+                // The UI disables the 24/7 toggle for these cameras; this catches
+                // direct API callers with the same reason.
+                if (req.Continuous == true && cam.SleepFriendly?.Invoke() == true)
+                    return Results.Json(new
+                    {
+                        error = "24/7 recording is unavailable while this battery camera is allowed " +
+                                "to sleep — taping around the clock would hold it awake until the " +
+                                "battery dies; set always_on = true for this camera first"
+                    }, statusCode: 400);
 
                 List<string>? types = null;
                 if (req.EventTypes != null)
@@ -2415,7 +2441,8 @@ public static class WebApi
                     archiveEvents: archiveEvents,
                     archiveContinuous: archiveContinuous,
                     archiveRetentionDays: Retention(req.ArchiveRetentionDays),
-                    setArchiveRetention: req.ArchiveRetentionDays != null);
+                    setArchiveRetention: req.ArchiveRetentionDays != null,
+                    wakeTimeline: req.WakeTimeline);
                 NudgeHa(cam.Name);
                 return Results.Json(ShapeSettings(cam, updated));
             });

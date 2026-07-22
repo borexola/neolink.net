@@ -73,6 +73,23 @@ in the README). Paste the matching section below into the GitHub release.
   sends without any signal, and which used to be discarded). Once a camera is
   known to be wired it is no longer asked for a Wi-Fi reading at all.
 
+- **Battery cameras: self-wake footage lands on the Timeline — at zero battery
+  cost.** A new per-camera switch, *Record wake events* (on by default, in the
+  recording settings' CONTINUOUS section), tapes whatever the camera streams
+  during its self-wakes and viewing sessions into ordinary timeline segments.
+  The tap is passive by construction: it only writes frames that are already
+  flowing and never counts as a video consumer, so it cannot wake the camera,
+  extend a hold, or block parking — the usual timeouts still release the camera,
+  and the segment simply closes on the silence. The result is a timeline of
+  islands around each wake, with honest gaps while the camera sleeps; the
+  footage follows the continuous retention and archive settings.
+
+- **Battery cameras: a keep-awake override, right on the camera.** A camera
+  that is normally allowed to doze can be held awake for a chosen stretch —
+  a 0-24 h slider in its setup — for the times you want it responsive (guests,
+  deliveries). The tile says so while it costs charge, and everything returns
+  to battery-friendly behavior when the window ends.
+
 ### Changed
 
 - **Camera settings: the panel's cards no longer reshuffle as they load, and
@@ -109,6 +126,39 @@ in the README). Paste the matching section below into the GitHub release.
   connection ends, so opening a camera that has since gone offline (or dozed
   off) no longer replays a second of stale footage and freezes.
 
+- **Battery cameras guard their charge aggressively now.** A sleep-friendly
+  camera's tile no longer opens its stream automatically — it shows the last
+  snapshot with a *Wake & watch* button, so a dashboard refresh can't silently
+  wake (or hold) the camera; each view is bounded, with the countdown spelled
+  out on the tile ("view ends in 1:47 to spare battery"). Once nothing needs
+  the video, the camera is released after 10 s (down from 30) and a viewer's
+  demand lingers for 5 s (down from 20). `always_on: true` opts a battery
+  camera out of ALL of this — it is treated exactly like a wired camera (no
+  parking, no view budget, no wake probing), pinned by a self-test so battery
+  work can't regress it.
+
+- **24/7 recording is off the table for a battery camera that is allowed to
+  sleep — enforced, with the reason shown.** Taping around the clock would
+  hold the camera awake until the battery dies, so for these cameras the
+  *Record around the clock* toggle is disabled with an explanation (set
+  *Always on* to enable it, sensible only on constant power), the API refuses
+  the switch, the Home Assistant switch bounces with a logged reason, and the
+  recorder itself ignores a stale `continuous: true` left in settings.json —
+  it never demands frames, so the camera sleeps regardless of what old state
+  claims. *Record wake events* (above) is the battery-safe replacement.
+
+- **Battery cameras: the sleeping camera is now watched by listening to the
+  network, not by knocking.** Wake detection previously probed the camera —
+  and on wake-chip models the probes themselves kept it from sleeping. It now
+  reads the pattern in plain ping round-trips: a dozing camera's Wi-Fi module
+  answers in a power-save sawtooth (hundreds of ms, ramping), while a woken
+  processor answers flat and fast — so a run of fast replies IS the wake, no
+  packet ever sent that the module wouldn't answer in its sleep. Detection
+  runs a 3 s scan, tightening to 1 s once the camera is confirmed asleep, and
+  falls back to the old transport probe on networks where ping goes
+  unanswered. Verified against recorded traces of a real Argus Solar sleeping,
+  waking on PIR, and streaming.
+
 ### Documentation
 
 - **UDP-only battery cameras need host networking in Docker — now documented as
@@ -124,6 +174,29 @@ in the README). Paste the matching section below into the GitHub release.
   unavailable, so these cameras need the plain Docker image).
 
 ### Fixed
+
+- **A self-wake only becomes a stored event if the camera's own event-type
+  selection says so.** Wake-triggered recordings used to be kept
+  unconditionally — every squirrel that tripped the PIR became a "Wake
+  detected" video. A self-wake now records *tentatively*: nothing is announced,
+  and the footage is kept (and only then announced, reaching back to the wake
+  itself) when a detection the camera's event types allow arrives within the
+  window; otherwise it is deleted as if it never happened. Confirmed events
+  are ordinary detection events — "Human detected", never "Wake" — and
+  wake-only records (including ones stored by older versions) no longer appear
+  on the events list at all: wakes belong to the Timeline, via *Record wake
+  events* above.
+
+- **Two browser windows no longer disagree about a camera's state.** The
+  dashboard's status poll had no timeout of its own, so a single hung request
+  (default: 100 s) could freeze one window's view of the world — one browser
+  showing a camera asleep while another showed it live. Polls now time out
+  after 8 s and simply retry.
+
+- **A camera's name can no longer be squeezed out of the sidebar.** A UDP
+  battery camera wears enough badges (UDP, BETA, battery, Wi-Fi) that the name
+  itself was flexed down to zero width. Badges now wrap to a second row and
+  the name always keeps room.
 
 - **Wake-capture actually catches events now — validated end to end against a
   live Argus Solar.** Four compounding defects, all found by instrumenting a

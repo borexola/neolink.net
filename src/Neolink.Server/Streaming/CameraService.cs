@@ -41,40 +41,48 @@ public sealed class CameraService : ILiveCameraSource
     /// leaves. Short on purpose: every second past the last viewer is a second the
     /// camera is held awake for nobody.</summary>
     private static readonly TimeSpan IdleGrace = TimeSpan.FromSeconds(30);
-    /// <summary>Battery cameras get a much shorter idle linger: every awake second
-    /// costs charge, and the Reolink app itself holds sessions for ~15s. Active
-    /// motion counts as demand (see <see cref="MotionDemandHold"/>), so event
-    /// clips still run to their natural end before this timer starts.</summary>
-    private static readonly TimeSpan BatteryIdleGrace = TimeSpan.FromSeconds(20);
+    /// <summary>Battery cameras get an aggressive idle linger: every awake second
+    /// costs charge. Active motion counts as demand (see
+    /// <see cref="MotionDemandHold"/>), so event clips still run to their natural
+    /// end before this timer starts; a viewer coming back inside these 10 s reuses
+    /// the warm session anyway, so a longer linger buys nothing.</summary>
+    private static readonly TimeSpan BatteryIdleGrace = TimeSpan.FromSeconds(10);
+    /// <summary>Battery cameras also get a much shorter DEMAND window: a mere
+    /// stream-open attempt holds a mains camera for 20 s, but on a battery model
+    /// the ask either turns into an attached viewer within seconds (ViewerCount
+    /// takes over) or it was a stray page load that must not keep the camera up.</summary>
+    private static readonly TimeSpan BatteryDemandWindow = TimeSpan.FromSeconds(5);
     /// <summary>How long after the last ACTIVE motion push the session still counts
     /// as in-demand on a sleep-friendly camera — covers the recorder's post-roll
     /// (post_seconds, default 8) so a wake-capture clip isn't cut short, without
     /// letting the recorder hold a battery camera awake around the clock.</summary>
     private static readonly TimeSpan MotionDemandHold = TimeSpan.FromSeconds(10);
-    /// <summary>Wake-capture: how often to check whether a sleeping camera has woken.</summary>
-    private static readonly TimeSpan WakeScanInterval = TimeSpan.FromSeconds(5);
-    /// <summary>Probe-free window after parking: the camera needs quiet to doze off,
-    /// and our own discovery probes would reset its idle timer.</summary>
-    private static readonly TimeSpan WakeSettleWindow = TimeSpan.FromSeconds(90);
-    /// <summary>Probe cadence while the camera is still awake after our release
-    /// (sibling stream, Reolink app, slow dozer) — sparse on purpose.</summary>
-    private static readonly TimeSpan AwaitSleepInterval = TimeSpan.FromSeconds(30);
-    /// <summary>Probe-interval ceiling while a parked camera keeps answering — the
-    /// backoff schedule doubles from <see cref="AwaitSleepInterval"/> up to here.
-    /// Ten minutes, because the Argus Solar needed roughly that much TRUE quiet to
-    /// sink from its answering light sleep into probe-silent deep sleep — and a
-    /// probe burst resets that clock.</summary>
-    private static readonly TimeSpan MaxAwaitSleepInterval = TimeSpan.FromMinutes(10);
-    /// <summary>Consecutive answered probes at which the backoff explains itself once.</summary>
-    private const int WakeChipBackoffNote = 6;
-    /// <summary>Wake-capture liveness probe timeout. Generous on purpose: measured
-    /// against a live Argus Solar, an AWAKE camera's discovery answers ranged from
-    /// 211 ms to 1883 ms — a 2 s timeout misclassified 4 of 9 probes as unanswered,
-    /// two in a row read as "asleep", and the next slow answer became a false
-    /// "camera woke itself" (the reconnect churn of issue #44). Its wake chip's
-    /// light-sleep answers run slower still (up to 4.5 s measured). A deeply
-    /// sleeping camera never answers at all, so the patience costs nothing.</summary>
+    /// <summary>Wake-capture ping cadence while the camera still reads awake or
+    /// settling. ICMP is answered by the camera's Wi-Fi module without waking
+    /// anything (its power-save sawtooth continues under sustained 1 s pings,
+    /// measured), so even this is generous.</summary>
+    private static readonly TimeSpan WakeScanInterval = TimeSpan.FromSeconds(3);
+    /// <summary>Ping cadence once ARMED (camera asleep). Events are short — a real
+    /// PIR event measured ~27 s of flat single-digit RTTs with the sawtooth back the
+    /// instant it ended — so every second of detection latency is footage lost.
+    /// At 1 s, the three-sample confirmation lands ~3–4 s after the PIR; the same
+    /// capture shows 1 s pings leave the sleeping camera's power-save undisturbed.</summary>
+    private static readonly TimeSpan ArmedScanInterval = TimeSpan.FromSeconds(1);
+    /// <summary>Quiet beat after parking before the scan starts — long enough for
+    /// the session teardown to drain. The scan itself is non-waking, so this no
+    /// longer needs to cover the camera's whole descent into sleep.</summary>
+    private static readonly TimeSpan WakeSettleWindow = TimeSpan.FromSeconds(15);
+    /// <summary>Ping timeout for the wake scan. The measured power-save sawtooth
+    /// tops out under 1 s; anything past 2 s is a genuine miss.</summary>
+    private static readonly TimeSpan PingTimeout = TimeSpan.FromSeconds(2);
+    /// <summary>Timeout for the LEGACY transport probe (UDP discovery / TCP
+    /// connect), used only when ICMP is blocked outright on the network. Generous:
+    /// measured against a live Argus Solar, awake discovery answers ranged 211 ms
+    /// to 1.9 s — and 4.9 s while the SoC boots from a PIR wake.</summary>
     private static readonly TimeSpan WakeProbeTimeout = TimeSpan.FromSeconds(6);
+    /// <summary>Cadence of the legacy transport probe on ICMP-blocked networks —
+    /// sparse, because unlike ping it CAN disturb a sleeping camera.</summary>
+    private static readonly TimeSpan LegacyProbeInterval = TimeSpan.FromSeconds(60);
 
     private readonly CameraConfig _config;
     private readonly StreamKind _kind;
@@ -115,7 +123,6 @@ public sealed class CameraService : ILiveCameraSource
     private WakeDiag? _wakeDiag;
     private double _lastProbeMs;
     private bool _wakeClipStarted; // one wake clip per session, on the first keyframe
-    private bool _wakeChipLogged;  // the wake-chip explanation is said once, at Warn
     // "Held awake by …" reporting: when it was last said, and when the current
     // hold began, so a camera that never sleeps says so instead of going quiet.
     private DateTime _lastHoldLog;
@@ -204,14 +211,28 @@ public sealed class CameraService : ILiveCameraSource
     }
 
     // Sleep policy: explicit always_on wins; unset = battery cameras doze,
-    // everything else streams around the clock (the pre-battery behavior).
-    private bool AllowSleep => _demandHub != null && !(_config.AlwaysOn ?? !_batteryPowered);
+    // everything else streams around the clock (the pre-battery behavior). A live
+    // keep-alive window suspends dozing entirely (see KeepAliveActive).
+    private bool AllowSleep => _demandHub != null && !(_config.AlwaysOn ?? !_batteryPowered) && !KeepAliveActive;
+
+    private readonly DateTime _serviceStartUtc = DateTime.UtcNow;
+
+    /// <summary>User chose to hold this battery camera awake: while the keep-alive
+    /// window is open (keep_alive_hours after startup, capped at 24h so it can never
+    /// drain forever), the camera never dozes and every event is caught live. This is
+    /// the deliberate, warned battery cost — the reliable alternative to the
+    /// best-effort non-waking wake-scan.</summary>
+    private bool KeepAliveActive =>
+        _config.KeepAliveHours > 0
+        && DateTime.UtcNow - _serviceStartUtc < TimeSpan.FromHours(_config.KeepAliveHours);
 
     /// <summary>True when this camera is one Neolink lets doze — a battery model
     /// without always_on. The web UI marks these tiles and manages their viewing
     /// budget, since every second of video costs the camera charge. Only becomes
-    /// true once the camera has actually reported a battery.</summary>
-    public bool SleepFriendly => AllowSleep;
+    /// true once the camera has actually reported a battery. Note this reflects the
+    /// STANDING policy (battery + no always_on); a transient keep-alive window makes
+    /// AllowSleep false without changing what the UI should badge.</summary>
+    public bool SleepFriendly => _demandHub != null && !(_config.AlwaysOn ?? !_batteryPowered);
 
     /// <summary>
     /// Set at wiring for cameras that MAY idle without a video subscription. While
@@ -250,9 +271,11 @@ public sealed class CameraService : ILiveCameraSource
 
     // Demand = someone is watching, or recently tried to start watching (viewers
     // only subscribe once video is ready, so the DESCRIBE attempt is the wake call).
+    // Sleep-friendly battery cameras use the short ask-window: the ask either turns
+    // into an attached viewer within seconds or must not hold the camera awake.
     private bool DemandNow => _demandHub == null
         || _demandHub.ViewerCount > 0
-        || DateTime.UtcNow - _demandHub.LastViewerAskUtc < DemandWindow;
+        || DateTime.UtcNow - _demandHub.LastViewerAskUtc < (SleepFriendly ? BatteryDemandWindow : DemandWindow);
 
     /// <summary>Which half of <see cref="DemandNow"/> is asserting, in words — the
     /// log line that ends a park has to name what pulled the camera back up, or a
@@ -370,20 +393,20 @@ public sealed class CameraService : ILiveCameraSource
                             // something on OUR side asking for the stream.
                             Log.Debug($"{Tag}: parked again — watching for a self-wake");
                         }
-                        var parkedAt = DateTime.UtcNow;
-                        var edge = new WakeEdgeDetector();
+                        // The scan is ICMP RTT-PATTERN based (field data, Argus Solar):
+                        // a sleeping camera's Wi-Fi module answers ping through a
+                        // power-save sawtooth (150–950 ms climbing ramps, the radio
+                        // napping between beacon windows), while an awake main
+                        // processor answers dead flat at 2–15 ms. Single samples
+                        // overlap — mid-sleep dips like 37/52/60 ms happen — but a
+                        // RUN of fast answers only ever appears when the camera is
+                        // truly up. Radios that power off entirely just stop
+                        // answering, and misses arm the detector the same way.
+                        var rtt = new WakeRttDetector();
                         var nextProbe = DateTime.UtcNow + WakeSettleWindow;
-                        var diag = new WakeDiag { ParkedAt = DateTime.UtcNow };
-                        // Wake-chip models (Argus Solar, the issue-#44 doorbell):
-                        // a low-power chip answers discovery IN THE CAMERA'S SLEEP —
-                        // measured live: full session offers 3+ minutes into true
-                        // radio silence. Probing can then never see sleep OR wake;
-                        // every probe just pokes the chip. When every post-settle
-                        // probe keeps answering, stop for this park and wait
-                        // passively. (Per park, not forever: a sibling viewer
-                        // session also answers everything while it streams, and
-                        // the next park re-evaluates from scratch.)
-                        int answeredStraight = 0;
+                        var diag = new WakeDiag { ParkedAt = DateTime.UtcNow, NonWakingScan = true };
+                        bool sawAnyReply = false;
+                        var lastLegacyProbe = DateTime.MinValue;
                         while (!DemandNow)
                         {
                             await Task.Delay(TimeSpan.FromSeconds(1), ct).ConfigureAwait(false);
@@ -395,60 +418,55 @@ public sealed class CameraService : ILiveCameraSource
                                 // event was caught" and "something here just spent your
                                 // charge", and it was previously a silent break.
                                 Log.Info($"{Tag}: {DemandReason()} — reconnecting after " +
-                                         $"{(DateTime.UtcNow - parkedAt).TotalSeconds:0}s parked " +
+                                         $"{(DateTime.UtcNow - diag.ParkedAt).TotalSeconds:0}s parked " +
                                          "(the camera did not wake on its own)");
                                 break;
                             }
                             if (DateTime.UtcNow < nextProbe) continue;
-                            bool answered = await ProbeAwakeAsync(ct).ConfigureAwait(false);
-                            bool armedBefore = edge.Armed;
-                            diag.OnProbe(answered, _lastProbeMs);
-                            if (edge.OnProbe(answered))
+                            // Armed = the event clock could start any second: scan at
+                            // 1 s so the wake is confirmed while the event is young.
+                            nextProbe = DateTime.UtcNow + (rtt.Armed ? ArmedScanInterval : WakeScanInterval);
+                            double? ms = await PingRttAsync(ct).ConfigureAwait(false);
+                            if (ms != null) sawAnyReply = true;
+                            diag.OnProbe(ms != null, ms ?? PingTimeout.TotalMilliseconds);
+                            bool armedBefore = rtt.Armed;
+                            bool woke = rtt.OnSample(ms);
+                            Log.Debug($"{Tag}: wake scan {(ms is { } v ? $"{v:0}ms" : "no reply")} " +
+                                      $"(armed={rtt.Armed})");
+                            if (rtt.Armed && !armedBefore)
+                            {
+                                diag.ArmedAt = DateTime.UtcNow;
+                                Log.Info($"{Tag}: camera is asleep (ping settled into the power-save pattern) — " +
+                                         "armed to connect on its next self-wake");
+                            }
+                            if (woke)
                             {
                                 diag.EdgeAt = DateTime.UtcNow;
                                 _wakeDiag = diag;
                                 Log.Info($"{Tag}: camera woke itself — connecting to catch the event " +
-                                         $"({diag.ProbesSinceArmed} probe(s) and {diag.SinceArmedSeconds:0}s after it " +
-                                         $"read asleep; this probe answered in {_lastProbeMs:0}ms)");
+                                         $"(ping fell from the sleep sawtooth to a flat {ms:0}ms run, " +
+                                         $"{diag.SinceArmedSeconds:0}s after it read asleep)");
                                 break;
                             }
-                            Log.Debug($"{Tag}: wake probe {(answered ? "answered" : "unanswered")} " +
-                                      $"in {_lastProbeMs:0}ms (armed={edge.Armed})");
-                            if (edge.Armed && !armedBefore)
+                            // ICMP blocked on this network (no ping has EVER answered
+                            // this park): the pattern scan is blind, so fall back to
+                            // the legacy transport probe — sparse, because unlike ping
+                            // it CAN disturb a sleeping camera. Its answer after an
+                            // all-miss park is the old-style wake edge.
+                            if (rtt.Armed && !sawAnyReply
+                                && DateTime.UtcNow - lastLegacyProbe > LegacyProbeInterval)
                             {
-                                diag.ArmedAt = DateTime.UtcNow;
-                                Log.Info($"{Tag}: camera is asleep ({WakeEdgeDetector.MissesToArm} probes " +
-                                         "unanswered) — armed to connect on its next self-wake");
+                                lastLegacyProbe = DateTime.UtcNow;
+                                if (await LegacyProbeAwakeAsync(ct).ConfigureAwait(false))
+                                {
+                                    diag.EdgeAt = DateTime.UtcNow;
+                                    diag.NonWakingScan = false; // this edge came from a probe that can wake
+                                    _wakeDiag = diag;
+                                    Log.Info($"{Tag}: camera answered the transport probe after an all-silent park " +
+                                             "(ICMP appears blocked here) — connecting to catch the event");
+                                    break;
+                                }
                             }
-                            // Persistent answers are NOT a verdict — they are pressure
-                            // to back off. Measured on an Argus Solar: its wake chip
-                            // answers discovery slowly (1.7–4.5 s) through a LIGHT
-                            // sleep stage that our own 30 s probing helps sustain, but
-                            // after ~10 minutes of true quiet it reaches DEEP sleep
-                            // and goes probe-silent (ICMP stays up — the Wi-Fi module
-                            // answers that autonomously) — and silence is exactly what
-                            // the edge detector needs. So: every answered probe
-                            // stretches the next interval (30 s → 60 → 120 → 240,
-                            // capped at 300 s), giving the camera the quiet it needs
-                            // to sink; the first miss snaps back to the fast scan.
-                            answeredStraight = answered && !edge.Armed ? answeredStraight + 1 : 0;
-                            if (answeredStraight == WakeChipBackoffNote && !_wakeChipLogged)
-                            {
-                                _wakeChipLogged = true;
-                                Log.Info($"{Tag}: still answering probes ({answeredStraight} straight) — either " +
-                                         "something holds it awake, or this model's low-power chip answers discovery " +
-                                         "through its light sleep (Argus Solar, some doorbells). Backing the probes " +
-                                         "off so it can reach deep sleep, where it goes silent and its next " +
-                                         "self-wake becomes detectable.");
-                            }
-                            var awaitSleep = answeredStraight <= 1
-                                ? AwaitSleepInterval
-                                : TimeSpan.FromTicks(Math.Min(MaxAwaitSleepInterval.Ticks,
-                                    AwaitSleepInterval.Ticks << Math.Min(answeredStraight - 1, 4)));
-                            // Unanswered: recheck soon (confirm the miss, then scan for
-                            // the wake). Answered while unarmed: back off as above so
-                            // we never hold the camera in light sleep ourselves.
-                            nextProbe = DateTime.UtcNow + (answered ? awaitSleep : WakeScanInterval);
                         }
                     }
                     else if (_config.WakeCapture)
@@ -615,16 +633,68 @@ public sealed class CameraService : ILiveCameraSource
         }
     }
 
+    // Where the camera was last seen (from a prior connect) — the ICMP scan target
+    // for a UID-only camera that has no configured host address.
+    private System.Net.IPAddress? _lastCameraIp;
+    private bool _probeNoTargetLogged;
+
     /// <summary>
-    /// Cheap liveness probe for wake-capture: is the camera answering right now?
-    /// A short-timeout UDP discovery reply (udp cameras) or TCP connect (everything
-    /// else). Never throws; at Debug level the UDP path logs the raw reply — some
-    /// battery models answer discovery from their low-power wake chip even while
-    /// asleep, and the reply contents are the evidence needed to tell those apart.
+    /// Non-waking liveness sample for wake-capture: one ICMP ping, returning the
+    /// round-trip in milliseconds, or null when it went unanswered. A ping never
+    /// reaches the camera's main processor — the Wi-Fi module's stack answers it —
+    /// so unlike a connect-probe it cannot wake or even disturb a sleeping camera
+    /// (its power-save sawtooth continues under sustained 1 s pings, measured).
+    /// The RTT is the signal, not the mere answer: see <see cref="WakeRttDetector"/>.
     /// </summary>
-    private async Task<bool> ProbeAwakeAsync(CancellationToken ct)
+    private async Task<double?> PingRttAsync(CancellationToken ct)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
+        var target = ResolveProbeTarget();
+        if (target == null)
+        {
+            // UID-only camera we have never connected to yet: no address to scan
+            // without a session-establishing (and therefore waking) broadcast. Skip —
+            // a viewer opening the stream, or keep-alive, establishes the address.
+            if (!_probeNoTargetLogged)
+            {
+                _probeNoTargetLogged = true;
+                Log.Debug($"{Tag}: wake-scan idle — no address known yet (open the stream once, or set keep_alive_hours)");
+            }
+            _lastProbeMs = 0;
+            return null;
+        }
+        try
+        {
+            using var ping = new System.Net.NetworkInformation.Ping();
+            var reply = await ping.SendPingAsync(target, PingTimeout).ConfigureAwait(false);
+            return reply.Status == System.Net.NetworkInformation.IPStatus.Success
+                ? Math.Max(1, reply.RoundtripTime)
+                : null;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw; // real shutdown — let the caller unwind
+        }
+        catch
+        {
+            return null; // unreachable / ICMP blocked — a miss, the detector's problem
+        }
+        finally
+        {
+            _lastProbeMs = sw.Elapsed.TotalMilliseconds;
+        }
+    }
+
+    /// <summary>
+    /// The LEGACY transport probe — UDP discovery hello or a bare TCP connect — used
+    /// only on networks where ICMP is blocked outright (the RTT scan then never sees
+    /// a single reply). It can disturb a sleeping camera, which is exactly why the
+    /// ping scan replaced it as the primary; here it runs sparse and last-resort.
+    /// The TCP arm doubles as the crisp check for models that accept TCP: a sleeping
+    /// camera can't complete a connect that an awake one accepts instantly.
+    /// </summary>
+    private async Task<bool> LegacyProbeAwakeAsync(CancellationToken ct)
+    {
         try
         {
             if (_config.Udp)
@@ -645,14 +715,16 @@ public sealed class CameraService : ILiveCameraSource
         {
             return false; // asleep / unreachable — the expected common case
         }
-        finally
-        {
-            // How long the answer took matters as much as whether it came: an
-            // answered probe that lands near the timeout means the timeout is the
-            // marginal thing, and an "unanswered" probe may be a false negative
-            // rather than a sleeping camera. See WakeDiag.
-            _lastProbeMs = sw.Elapsed.TotalMilliseconds;
-        }
+    }
+
+    /// <summary>The address the ICMP scan pings: the configured host if any, else the
+    /// IP discovery found on the last connection (UID-only cameras).</summary>
+    private System.Net.IPAddress? ResolveProbeTarget()
+    {
+        if (!string.IsNullOrWhiteSpace(_config.Host)
+            && System.Net.IPAddress.TryParse(_config.Host, out var literal))
+            return literal;
+        return _lastCameraIp;
     }
 
     /// <summary>
@@ -688,6 +760,10 @@ public sealed class CameraService : ILiveCameraSource
         await using IBcCamera camera = _config.Udp
             ? await BcCamera.ConnectUdpAsync(_config.Host, _config.Uid!, _config.ChannelId, ct, tag: Tag).ConfigureAwait(false)
             : await BcCamera.ConnectAsync(_config.Host, _config.Port, _config.ChannelId, ct, tag: Tag).ConfigureAwait(false);
+
+        // Remember where discovery found it, so the non-waking liveness scan (ICMP)
+        // has an address for a UID-only camera that has no configured host.
+        if (camera.RemoteIp is { } ip) _lastCameraIp = ip;
 
         Note($"{Tag}: logging in as '{_config.Username}'");
         await camera.LoginAsync(_config.Username, _config.Password, ct).ConfigureAwait(false);
@@ -892,6 +968,7 @@ public sealed class CameraService : ILiveCameraSource
                     }
                     else
                     {
+                        _heldSince = default; // hold released — the next one counts from its own start
                         var grace = _batteryPowered ? BatteryIdleGrace : IdleGrace;
                         idleSince ??= DateTime.UtcNow;
                         if (DateTime.UtcNow - idleSince > grace)
@@ -966,8 +1043,8 @@ public sealed class CameraService : ILiveCameraSource
         var started = DateTime.UtcNow.Ticks;
         Interlocked.Exchange(ref _lastMotionActiveTicks, started); // hold the session while the clip runs
         sink(new MotionPush("wake", WakeLabel, External: true));
-        Log.Info($"{Tag}: recording the self-wake (no detection push needed; " +
-                 $"a detection within {WakeClipWindow.TotalSeconds:0}s extends and relabels the clip)");
+        Log.Debug($"{Tag}: self-wake recording window open ({WakeClipWindow.TotalSeconds:0}s) — " +
+                  "the recorder keeps the footage only if a detection this camera's event types allow arrives");
         _ = Task.Run(async () =>
         {
             try { await Task.Delay(WakeClipWindow, ct).ConfigureAwait(false); }
@@ -979,9 +1056,12 @@ public sealed class CameraService : ILiveCameraSource
     }
 
     private static readonly string[] WakeLabel = { "wake" };
-    /// <summary>How much footage a bare self-wake keeps (plus the recorder's
-    /// pre/post-roll) when no detection push follows to say more.</summary>
-    private static readonly TimeSpan WakeClipWindow = TimeSpan.FromSeconds(10);
+    /// <summary>How long the tentative self-wake recording stays open waiting for a
+    /// detection push to confirm it. Thirty seconds because the pushes are LATE:
+    /// measured 25 s after the PIR on a genuine catch — a shorter window ends the
+    /// tentative clip before the push lands, and the confirmed event then starts a
+    /// second, beheaded clip missing the wake footage this feature exists to keep.</summary>
+    private static readonly TimeSpan WakeClipWindow = TimeSpan.FromSeconds(30);
 
     /// <summary>
     /// Closes out one wake-capture cycle: prints the evidence gathered by the probe
@@ -1148,14 +1228,6 @@ public sealed class CameraService : ILiveCameraSource
 }
 
 /// <summary>
-/// The wake-capture sleep→wake edge, debounced. Feed it one probe result at a
-/// time: it arms only after <see cref="MissesToArm"/> CONSECUTIVE unanswered
-/// probes (a single miss is routinely just Wi-Fi power save eating a packet,
-/// and arming on it made the next answered probe read as a false "camera woke
-/// itself" — Neolink then connected and woke the camera it was trying to let
-/// sleep). Once armed, the first answered probe reports the wake edge.
-/// </summary>
-/// <summary>
 /// Evidence for ONE wake-capture cycle, carried from the probe loop into the
 /// session it triggered, so the log can say WHY the camera was awake instead of
 /// asserting "it woke itself" (issue #44).
@@ -1166,7 +1238,7 @@ public sealed class CameraService : ILiveCameraSource
 ///      passive ping, so on firmware whose low-power chip forwards it to the
 ///      main SoC we are the ones turning the camera on, every probe interval,
 ///      forever (and flattening the battery doing it);
-///   3. it was never asleep — probes timed out (2 s) on a camera that answers
+///   3. it was never asleep — probes timed out on a camera that answers
 ///      slowly, manufacturing a false asleep→awake edge.
 ///
 /// The discriminators, all recorded here: how quickly the "wake" followed our
@@ -1184,7 +1256,6 @@ internal sealed class WakeDiag
     public DateTime ConnectedAt;
     public int ProbesSinceArmed;
     public int ProbesTotal;
-    public double EdgeProbeMs;
     public double SlowestAnsweredMs;
     // Unanswered probes carry as much signal as answered ones, and it is the
     // discriminator the answered-only view is missing: a probe that burned the WHOLE
@@ -1199,6 +1270,10 @@ internal sealed class WakeDiag
     public double? SleepStatusMs;
     public bool SawDetection;
     public bool Reported;
+    /// <summary>True while the edge came from the ICMP RTT scan, which cannot wake
+    /// or disturb the camera — the "our probe woke it" verdict is then impossible
+    /// by construction. Cleared if the legacy transport probe produced the edge.</summary>
+    public bool NonWakingScan;
 
     public double SinceArmedSeconds =>
         ArmedAt == default ? -1 : (EdgeAt - ArmedAt).TotalSeconds;
@@ -1209,7 +1284,6 @@ internal sealed class WakeDiag
         if (ArmedAt != default) ProbesSinceArmed++;
         if (answered)
         {
-            EdgeProbeMs = ms;
             if (ms > SlowestAnsweredMs) SlowestAnsweredMs = ms;
         }
         else
@@ -1246,43 +1320,67 @@ internal sealed class WakeDiag
             return "REAL self-wake — a detection followed, which is exactly what wake-capture is for";
         // Our own probe woke it: the answer came on the FIRST probe after arming,
         // i.e. the camera was asleep until we knocked. A real motion wake has no
-        // reason to land inside that one interval.
-        if (ProbesSinceArmed <= 1 && SleepStatusOnArrival != false)
+        // reason to land inside that one interval. IMPOSSIBLE for the ICMP RTT
+        // scan (pings don't reach the main processor) — only the legacy transport
+        // probe, on ICMP-blocked networks, can still earn this verdict.
+        if (!NonWakingScan && ProbesSinceArmed <= 1 && SleepStatusOnArrival != false)
             return "LIKELY OUR PROBE woke the camera (it answered the first probe after reading asleep, " +
                    "and no detection followed) — wake-capture is costing battery instead of saving it";
         // Answers were crowding the timeout, so the "asleep" reading is suspect.
-        if (SlowestAnsweredMs > probeTimeoutMs * 0.6)
+        // RTT-scan parks judge by pattern, not timeout, so this only means
+        // something for the legacy transport probe.
+        if (!NonWakingScan && SlowestAnsweredMs > probeTimeoutMs * 0.6)
             return $"SUSPECT FALSE ASLEEP — answered probes ran to {SlowestAnsweredMs:0}ms against a " +
                    $"{probeTimeoutMs:0}ms timeout, so the unanswered ones may be slow answers, not sleep";
         return "INCONCLUSIVE — the wake did not follow our probe immediately, but no detection arrived either";
     }
 }
 
-internal sealed class WakeEdgeDetector
+/// <summary>
+/// The wake-capture sleep→wake edge, read from PING ROUND-TRIP PATTERNS.
+/// Field data (Argus Solar, 1 s pings): a sleeping camera's Wi-Fi module answers
+/// through a power-save sawtooth — RTTs climbing 150→950 ms as the radio naps
+/// between beacon windows — while an awake main processor answers dead flat at
+/// 2–15 ms. Single samples overlap (mid-sleep dips of 37/52/60 ms occur, and an
+/// awake camera can hiccup high), so no single ping means anything; the PATTERN
+/// does: it arms after a sustained run of non-fast samples (sleep), and fires
+/// only on <see cref="FastToFire"/> CONSECUTIVE fast answers, a run that in the
+/// captures only ever appears when the camera is truly up. Misses count as
+/// non-fast, so radios that power off entirely arm the same way — and their
+/// first fast answers after silence fire the same edge.
+/// </summary>
+internal sealed class WakeRttDetector
 {
-    /// <summary>Consecutive unanswered probes required before the camera counts
-    /// as asleep. Two, 5s apart (WakeScanInterval), keeps wake detection prompt
-    /// while filtering single lost packets.</summary>
-    public const int MissesToArm = 2;
+    /// <summary>An answer at or above LAN-flat speed. Awake answers measure
+    /// 2–15 ms; 50 leaves jitter margin without admitting the sawtooth.</summary>
+    public const double FastMs = 50;
+    /// <summary>Non-fast samples in a row before the camera counts as asleep —
+    /// ~24 s of sustained power-save pattern at the 3 s scan cadence. A single
+    /// fast dip resets it, which only delays arming; sleep lasts minutes.</summary>
+    public const int NonFastToArm = 8;
+    /// <summary>Consecutive fast answers that mean "the main processor is up".
+    /// Three: isolated dips never chain, real wakes hold flat for many samples.</summary>
+    public const int FastToFire = 3;
 
-    private int _misses;
+    private int _nonFast;
+    private int _fastRun;
 
-    /// <summary>True once the camera has been seen asleep (debounced) — the next
-    /// answered probe is a wake edge.</summary>
+    /// <summary>True once the sleep pattern has been established — a fast run
+    /// after this is a wake edge.</summary>
     public bool Armed { get; private set; }
 
-    /// <summary>Feed one probe result. Returns true exactly when a wake edge is
-    /// detected: the camera answered after having been seen asleep.</summary>
-    public bool OnProbe(bool answered)
+    /// <summary>Feed one scan sample (RTT in ms, or null for a miss). Returns
+    /// true exactly when the wake edge is detected.</summary>
+    public bool OnSample(double? rttMs)
     {
-        if (!answered)
+        bool fast = rttMs is { } ms && ms < FastMs;
+        if (!fast)
         {
-            _misses++;
-            if (_misses >= MissesToArm) Armed = true;
+            _fastRun = 0;
+            if (++_nonFast >= NonFastToArm) Armed = true;
             return false;
         }
-        if (Armed) return true;
-        _misses = 0; // an answer between misses: they weren't consecutive
-        return false;
+        _nonFast = 0;
+        return ++_fastRun >= FastToFire && Armed;
     }
 }

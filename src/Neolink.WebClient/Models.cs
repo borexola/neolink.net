@@ -191,7 +191,8 @@ public sealed record ApiKeyInfo(bool Enabled, string Source, string Fingerprint,
 public sealed record ApiAdminCamera(string Name, string Type, string? Address, string? Username,
     bool HasPassword, int ChannelId, string? HttpAddress, string? RtspMain, string? RtspSub,
     string? Uid = null, string? AlwaysOn = null, string? Stream = null, string? OnvifAddress = null,
-    bool Record = true, bool Udp = false, bool UdpProbe = false, bool WakeCapture = false);
+    bool Record = true, bool Udp = false, bool UdpProbe = false, bool WakeCapture = false,
+    double KeepAliveHours = 0);
 public sealed record ApiAdminCameras(bool Writable, List<ApiAdminCamera> Cameras);
 
 /// <summary>GET/PUT /api/admin/notifications — email alert settings. The SMTP
@@ -240,7 +241,12 @@ public sealed record ApiRecordingSettings(bool Events, bool Continuous,
     bool ScheduleEnabled = false,
     bool ArchiveAvailable = false, bool ArchiveEvents = false,
     bool ArchiveContinuous = false, int? ArchiveRetentionDays = null,
-    List<string>? SupportedAiTypes = null, bool? SupportedDoorbell = null)
+    List<string>? SupportedAiTypes = null, bool? SupportedDoorbell = null,
+    // 24/7 taping would hold a dozing battery camera awake until it dies, so the
+    // server vetoes it (no always_on) — the panel disables the toggle and says why.
+    // WakeTimeline is the replacement offered there: passively tape self-wakes
+    // to the timeline (zero battery cost — the frames are already flowing).
+    bool ContinuousBlockedBySleep = false, bool WakeTimeline = true)
 {
     /// <summary>null EventTypes = every detection type is recorded.</summary>
     public bool TypeEnabled(string label) => EventTypes == null || EventTypes.Contains(label);

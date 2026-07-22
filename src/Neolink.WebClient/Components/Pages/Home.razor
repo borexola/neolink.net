@@ -575,11 +575,25 @@
                             @* Keep-awake rides ON the video: CSS reveals it only while
                                a frame is actually playing (video[data-live="1"]), so it
                                costs no interop and never shows over a dead tile. *@
-                            <label class="tile-batt" title="Watching holds this battery camera awake. Ticked, the tile keeps streaming while this tab is visible; otherwise it lets go after @($"{BatteryViewBudget.TotalMinutes:0}") minutes."
+                            @* The chip must carry its own meaning at a glance: WHAT
+                               happens (this view stops / the camera is held awake),
+                               WHY (battery), and what the tick does — "sleeps in
+                               1:47" next to a bare checkbox answered none of those,
+                               and ticking read like "make it sleep" when it means
+                               the opposite. Battery glyph = the subject is battery. *@
+                            <label class="tile-batt" title="@(batt.KeepAlive
+                                       ? "Held awake for as long as this tab watches — this spends the camera's battery. Untick to give the view a time limit again."
+                                       : $"Live view of a battery camera: this tile stops itself after {BatteryViewBudget.TotalMinutes:0} minutes so the camera can go back to sleep. Tick to keep watching (holds the camera awake and spends its battery).")"
                                    @onclick:stopPropagation="true" @ondblclick:stopPropagation="true">
                                 <input type="checkbox" checked="@batt.KeepAlive"
                                        @onchange="e => ToggleBatteryKeepAlive(index, (bool?)e.Value == true)" />
-                                <span>@(batt.KeepAlive ? "keeping awake" : $"sleeps in {BattSecondsLeft(batt) / 60}:{BattSecondsLeft(batt) % 60:00}")</span>
+                                @if (camera?.Battery is { } tileBatt)
+                                {
+                                    @UiIcon.RenderBattery(tileBatt.Percent, 10)
+                                }
+                                <span>@(batt.KeepAlive
+                                          ? "held awake — spending battery"
+                                          : $"view ends in {BattSecondsLeft(batt) / 60}:{BattSecondsLeft(batt) % 60:00} to spare battery")</span>
                             </label>
                         }
                         @* Privacy is its own OPAQUE overlay: the player neither shows a
@@ -614,7 +628,7 @@
                                 <small>battery cameras take a few seconds to come up</small>
                             </div>
                         }
-                        else if (BattIdle(index) && Batt(index) is { } bs)
+                        else if (Batt(index) is { Watching: false } bs)
                         {
                             @* Deliberately NOT streaming. The tile reports the camera's
                                real state — including when it is AWAKE — but never pulls
@@ -1412,6 +1426,27 @@
                                             <option value="false">Off — connect on demand (default)</option>
                                             <option value="true">On — catch events while it sleeps</option>
                                         </select></div>
+                                    @* Keep-alive only makes sense when the camera is allowed to
+                                       sleep — hidden entirely when Always on is forced true. *@
+                                    @if (e.AlwaysOn != "true")
+                                    {
+                                        <div class="control-row"><span>Keep awake (battery cams)</span>
+                                            <div class="keepalive">
+                                                <input type="range" min="0" max="24" step="1" value="@e.KeepAliveHours"
+                                                       @oninput='ev => e.KeepAliveHours = double.TryParse((string?)ev.Value, out var h) ? h : 0' />
+                                                <span class="keepalive-val">@(e.KeepAliveHours <= 0 ? "Off" : $"{e.KeepAliveHours:0} h")</span>
+                                            </div></div>
+                                        @if (e.KeepAliveHours > 0)
+                                        {
+                                            <div class="field-warn">
+                                                Holds the camera awake for @($"{e.KeepAliveHours:0}") hour(s) after Neolink starts, so
+                                                every event is caught live — @(e.KeepAliveHours >= 8
+                                                    ? "this drains a battery camera heavily."
+                                                    : "at a real battery cost.")
+                                                Leave it Off to let the camera sleep and catch self-wakes without waking it (best-effort).
+                                            </div>
+                                        }
+                                    }
                                     <div class="control-row"><span>UDP discovery probe (diagnostic)</span>
                                         <select class="event-filter" value="@(e.UdpProbe ? "true" : "false")"
                                                 @onchange='ev => e.UdpProbe = (string?)ev.Value == "true"'>
@@ -1447,28 +1482,14 @@
                                         <option value="true">Yes (default)</option>
                                         <option value="false">No</option>
                                     </select></div>
-                                <div class="settings-foot-btns">
-                                    @* The test now dials whichever transport this camera uses, so a
-                                       UDP entry (address optional — found by its UID) can be tested
-                                       too. Only a TCP camera with no address has nothing to dial. *@
-                                    <button class="chip"
-                                            disabled="@(_camTestBusy || CamFormError != null || CamTestUnavailable)"
-                                            title="@(CamTestUnavailable
-                                                     ? "Testing needs an address, or a UID with \"Connect over UDP\" set"
-                                                     : "Try reaching the camera with these settings")"
-                                            @onclick="TestCameraAsync">
-                                        @(_camTestBusy ? "Testing…" : "Test connection")</button>
-                                    <span class="tile-spacer"></span>
-                                    <button class="chip" @onclick="CancelCameraEdit">Cancel</button>
-                                    <button class="chip chip-active" disabled="@(_camSaveBusy || CamFormError != null || !_adminCamsWritable)"
-                                            @onclick="SaveCameraAsync">@(_camSaveBusy ? "Saving…" : "Save camera")</button>
-                                </div>
+                                @* Test/Cancel/Save live in the pinned .settings-foot below —
+                                   the form scrolls, its actions must not. *@
                             }
-                            @if (_camTestResult != null)
+                            @if (_camTestResult != null && _camEdit == null)
                             {
                                 <div class="notice small @(_camTestOk ? "" : "error")">@_camTestResult</div>
                             }
-                            @if (_camsNeedRestart)
+                            @if (_camsNeedRestart && _camEdit == null)
                             {
                                 <div class="notice warn small">
                                     Camera changes are saved to <code>config.json</code> — <b>restart the
@@ -1635,8 +1656,11 @@
                         </div>
                     }
 
-                    @if (_adminConfig != null && _settingsTab is not ("notifications" or "connection" or "users" or "alerts"))
+                    @if (_adminConfig != null && _settingsTab is not ("notifications" or "connection" or "users" or "alerts")
+                         && !(_settingsTab == "cameras" && _camEdit != null))
                     {
+                        @* Hidden while the camera editor is open — its footer replaces the
+                           Restart button this notice explains. *@
                         <div class="notice small">
                             Restart stops the service; your container/systemd restart policy brings it back within seconds
                             (needed to apply saved changes). The UI reconnects automatically.
@@ -1686,6 +1710,32 @@
                             {
                                 <button class="chip chip-off" @onclick="LogoutAsync">Sign out</button>
                             }
+                        </div>
+                    }
+                    else if (_settingsTab == "cameras" && _camEdit != null)
+                    {
+                        @* Camera editor open: its actions own the pinned footer. The form is
+                           long enough to scroll them away, and a lone visible Restart button
+                           where Save should be invited the wrong click. *@
+                        @if (_camTestResult != null)
+                        {
+                            <div class="notice small @(_camTestOk ? "" : "error")">@_camTestResult</div>
+                        }
+                        <div class="settings-foot-btns">
+                            @* The test dials whichever transport this camera uses, so a
+                               UDP entry (address optional — found by its UID) can be tested
+                               too. Only a TCP camera with no address has nothing to dial. *@
+                            <button class="chip"
+                                    disabled="@(_camTestBusy || CamFormError != null || CamTestUnavailable)"
+                                    title="@(CamTestUnavailable
+                                             ? "Testing needs an address, or a UID with \"Connect over UDP\" set"
+                                             : "Try reaching the camera with these settings")"
+                                    @onclick="TestCameraAsync">
+                                @(_camTestBusy ? "Testing…" : "Test connection")</button>
+                            <span class="tile-spacer"></span>
+                            <button class="chip" @onclick="CancelCameraEdit">Cancel</button>
+                            <button class="chip chip-active" disabled="@(_camSaveBusy || CamFormError != null || !_adminCamsWritable)"
+                                    @onclick="SaveCameraAsync">@(_camSaveBusy ? "Saving…" : "Save camera")</button>
                         </div>
                     }
                     else if (_adminConfig != null)
@@ -2712,6 +2762,7 @@
         public bool Udp;
         public bool UdpProbe;
         public bool WakeCapture;
+        public double KeepAliveHours;
     }
 
     private async Task OpenCamerasTabAsync()
@@ -2775,6 +2826,7 @@
             Udp = cam.Udp,
             UdpProbe = cam.UdpProbe,
             WakeCapture = cam.WakeCapture,
+            KeepAliveHours = cam.KeepAliveHours,
         };
     }
 
@@ -2886,6 +2938,7 @@
         stream = forSave && e.Type == "reolink" ? e.Stream : null,
         udpProbe = forSave && e.Type == "reolink" ? e.UdpProbe : (bool?)null,
         wakeCapture = forSave && e.Type == "reolink" ? e.WakeCapture : (bool?)null,
+        keepAliveHours = forSave && e.Type == "reolink" ? e.KeepAliveHours : (double?)null,
         record = forSave ? e.Record : (bool?)null,
     };
 
@@ -4992,7 +5045,7 @@
             // attaching is what connects, and connecting is what wakes it. These
             // tiles stream only when the camera is already awake, or when the user
             // asked for it. Otherwise the tile shows the asleep overlay instead.
-            if (desired != null && _batt.TryGetValue(i, out var rel) && !BattMayStream(rel))
+            if (desired != null && _batt.TryGetValue(i, out var rel) && !BattMayStream(rel.Released, rel.Watching))
                 desired = null;
             _attached.TryGetValue(i, out var current);
             if (desired == current) continue;
@@ -5072,8 +5125,6 @@
     private bool IsSleepFriendly(string camera) =>
         _cameras.FirstOrDefault(c => string.Equals(c.Name, camera, StringComparison.OrdinalIgnoreCase))?.Sleeps == true;
 
-    private bool BattMayStream(BattTile b) => BattMayStream(b.Released, b.Watching);
-
     /// <summary>
     /// May this battery tile hold a stream? ONLY when the user asked for it.
     /// <para>
@@ -5089,10 +5140,6 @@
     /// battery without being asked.
     /// </summary>
     public static bool BattMayStream(bool released, bool watching) => !released && watching;
-
-    /// <summary>True when this tile is a battery camera we are deliberately not
-    /// streaming — the state overlay stands in for the video.</summary>
-    private bool BattIdle(int slot) => _batt.TryGetValue(slot, out var b) && !b.Watching;
 
     /// <summary>The tile's battery record, or null when this slot isn't one.</summary>
     private BattTile? Batt(int slot) => _batt.TryGetValue(slot, out var b) ? b : null;

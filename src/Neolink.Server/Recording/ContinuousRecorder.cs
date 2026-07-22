@@ -32,6 +32,7 @@ public sealed class ContinuousRecorder
     private readonly long _maxSegmentBytes;
     private readonly Func<bool>? _hasRoom;
     private readonly Action<string>? _onWriteError;
+    private readonly Func<bool>? _blocked;
     private volatile bool _writing;
     private bool _fullLogged;
 
@@ -55,10 +56,15 @@ public sealed class ContinuousRecorder
     /// "record from main/sub" runtime choice; null pins recording to <paramref name="hub"/>.</param>
     /// <param name="hasRoom">Free-space guard: false = the recordings volume is full,
     /// so no new segment is opened (retried on a backoff). Null = never blocks.</param>
+    /// <param name="blocked">Live veto: true = never tape, whatever the switch says.
+    /// A battery camera Neolink lets doze (no always_on) is blocked — 24/7 taping
+    /// would demand frames around the clock and hold it awake until the battery
+    /// dies. Null = never blocked.</param>
     public ContinuousRecorder(string camera, IStreamHub hub, EventStore store,
         RecordingSettings settings, RecordingConfig cfg,
         IReadOnlyDictionary<string, IStreamHub>? hubsByKind = null,
-        Func<bool>? hasRoom = null, Action<string>? onWriteError = null)
+        Func<bool>? hasRoom = null, Action<string>? onWriteError = null,
+        Func<bool>? blocked = null)
     {
         _camera = camera;
         _hub = hub;
@@ -69,11 +75,20 @@ public sealed class ContinuousRecorder
         _maxSegmentBytes = (long)cfg.MaxSegmentSizeMb * 1024 * 1024;
         _hasRoom = hasRoom;
         _onWriteError = onWriteError;
+        _blocked = blocked;
     }
 
-    /// <summary>Whether the camera's 24/7 switch is on right now (live from settings)
-    /// — the on-demand video hold asks this to know if frames have a consumer.</summary>
-    public bool ContinuousEnabled => _settings.Get(_camera).Continuous;
+    /// <summary>Whether 24/7 taping is EFFECTIVELY on right now: the camera's switch
+    /// (live from settings) minus the sleep veto — the on-demand video hold asks this
+    /// to know if frames have a consumer, so a blocked camera never gets held awake.</summary>
+    public bool ContinuousEnabled => _settings.Get(_camera).Continuous && !(_blocked?.Invoke() ?? false);
+
+    /// <summary>The passive wake tap: on a sleep-vetoed battery camera, tape whatever
+    /// frames happen to flow (self-wakes, viewer sessions) into timeline segments.
+    /// NEVER a frame consumer — only ContinuousEnabled feeds the demand hold, so the
+    /// tap cannot wake the camera, extend a hold, or block parking; when the session
+    /// ends the silence roll closes the segment. Battery cost: zero by construction.</summary>
+    public bool WakeTapActive => (_blocked?.Invoke() ?? false) && _settings.Get(_camera).WakeTimeline;
 
     /// <summary>The stream taped right now: the user's per-camera choice when set (and served).</summary>
     private IStreamHub RecordHub()
@@ -148,6 +163,9 @@ public sealed class ContinuousRecorder
                         _writing = false;
                         Log.Info($"{_camera}: stream quiet for {SilenceRoll.TotalSeconds:0}s — segment closed; " +
                                  "footage after the gap starts a new segment");
+                        // Wake-tap sessions are short and episodic — announce each
+                        // one, not just the first after a toggle.
+                        if (WakeTapActive) wasOn = false;
                     }
                     continue;
                 }
@@ -170,7 +188,8 @@ public sealed class ContinuousRecorder
                 }
                 if (packet is not HubVideo v) continue;
 
-                bool on = _settings.Get(_camera).Continuous;
+                bool tap = WakeTapActive;
+                bool on = ContinuousEnabled || tap;
                 if (!on)
                 {
                     if (writer != null)
@@ -186,8 +205,10 @@ public sealed class ContinuousRecorder
                 }
                 if (!wasOn)
                 {
-                    Log.Info($"{_camera}: continuous recording started " +
-                             $"(segments roll at {_segmentSeconds / 60:0} min or {_maxSegmentBytes / (1024 * 1024)} MB)");
+                    Log.Info(tap
+                        ? $"{_camera}: taping this wake to the timeline (passive — never holds the camera awake)"
+                        : $"{_camera}: continuous recording started " +
+                          $"(segments roll at {_segmentSeconds / 60:0} min or {_maxSegmentBytes / (1024 * 1024)} MB)");
                     wasOn = true;
                 }
 

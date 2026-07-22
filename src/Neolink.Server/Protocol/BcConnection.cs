@@ -31,6 +31,7 @@ public sealed class BcConnection : IBcConnection
     private readonly Task _readLoop;
 
     public EncryptionState Encryption { get; } = new();
+    public System.Net.IPEndPoint? RemoteEndpoint => _tcp.Client?.RemoteEndPoint as System.Net.IPEndPoint;
     private readonly BcContext _context;
 
     private BcConnection(TcpClient tcp, CancellationToken appCt)

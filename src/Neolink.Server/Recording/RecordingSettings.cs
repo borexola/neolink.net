@@ -31,7 +31,12 @@ public sealed record CameraRecordingSettings(bool Events, bool Continuous, List<
     string? RecordStream = null,
     List<string>? ScheduleDays = null, string? ScheduleStart = null, string? ScheduleEnd = null,
     bool ScheduleEnabled = false,
-    bool ArchiveEvents = false, bool ArchiveContinuous = false, int? ArchiveRetentionDays = null)
+    bool ArchiveEvents = false, bool ArchiveContinuous = false, int? ArchiveRetentionDays = null,
+    // Battery cameras only (sleep-friendly, where 24/7 taping is vetoed): tape
+    // the camera's self-wakes to the timeline as continuous segments — a passive
+    // tap of frames that are already flowing, so it costs the battery nothing.
+    // Default ON; footage follows the continuous retention/archive settings.
+    bool WakeTimeline = true)
 {
     /// <summary>Known detection labels (what the UI offers as event-type filters).</summary>
     public static readonly string[] KnownLabels =
@@ -187,7 +192,8 @@ public sealed class RecordingSettings
         string? scheduleEnd = null, bool setScheduleEnd = false,
         bool? scheduleEnabled = null,
         bool? archiveEvents = null, bool? archiveContinuous = null,
-        int? archiveRetentionDays = null, bool setArchiveRetention = false)
+        int? archiveRetentionDays = null, bool setArchiveRetention = false,
+        bool? wakeTimeline = null)
     {
         lock (_gate)
         {
@@ -207,7 +213,8 @@ public sealed class RecordingSettings
                 scheduleEnabled ?? cur.ScheduleEnabled,
                 archiveEvents ?? cur.ArchiveEvents,
                 archiveContinuous ?? cur.ArchiveContinuous,
-                setArchiveRetention ? archiveRetentionDays : cur.ArchiveRetentionDays);
+                setArchiveRetention ? archiveRetentionDays : cur.ArchiveRetentionDays,
+                wakeTimeline ?? cur.WakeTimeline);
             _cameras[camera] = next;
             SaveLocked();
             return next;
