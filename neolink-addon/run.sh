@@ -55,7 +55,8 @@ fi
 # or removing a camera in the add-on UI just works. An EMPTY options list keeps
 # whatever config.json already has — cameras managed by hand stay untouched.
 cams=$(jq '[.cameras[]? | {name, address, username, password: (.password // "")}
-            + (if .always_on == true then {always_on: true} else {} end)]' "$OPTIONS")
+            + (if .always_on == true then {always_on: true} else {} end)
+            + (if .channel != null then {channel_id: .channel} else {} end)]' "$OPTIONS")
 count=$(jq 'length' <<<"$cams")
 if [ "$count" -gt 0 ]; then
   base=$(jq --argjson cams "$cams" '.cameras = $cams' <<<"$base")

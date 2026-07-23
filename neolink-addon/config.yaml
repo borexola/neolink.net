@@ -57,5 +57,6 @@ schema:
       username: str
       password: password?
       always_on: bool?
+      channel: int?
   auto_mqtt: bool
   log_verbose: bool

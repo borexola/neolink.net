@@ -4,6 +4,21 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
+## 0.9.7 — unreleased
+
+### Fixed
+
+- **Home Assistant add-on: cameras behind an NVR couldn't pick their channel.**
+  Cameras configured through the add-on's Configuration tab had no way to say
+  which NVR channel they are — the options schema rejected the field and the
+  launcher stripped it even when added by hand — so every camera behind the
+  same NVR or Home Hub address landed on channel 0 and showed the first
+  camera repeated. Each camera entry now takes an optional `channel`
+  (Reolink counts from 0), which the launcher carries into config.json as
+  `channel_id`; stable and beta manifests both. Entries without it are
+  written byte-for-byte as before, and hand-managed config.json setups
+  (empty add-on camera list) stay untouched.
+
 ## 0.9.6
 
 ### Added
