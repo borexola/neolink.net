@@ -15,7 +15,70 @@
         <div class="backdrop" @onclick="() => _sidebarOpen = false"></div>
     }
 
-    <aside class="sidebar @(_sidebarOpen ? "open" : "")">
+    <aside class="sidebar @(_sidebarOpen ? "open" : "") @(_sidebarCollapsed ? "collapsed" : "")">
+
+        @* Desktop-only icon rail: what the sidebar folds into. The full sidebar
+           and the rail are BOTH rendered and CSS picks one, so the mobile drawer
+           (which reuses this same <aside>) can ignore the collapsed state. *@
+        <div class="sidebar-rail">
+            @* The logo tile is the whole brand when collapsed — same "home" role
+               as the wordmark (restores the full wall). Inline copy of favicon.svg;
+               ids renamed so they can't collide with another inline use. *@
+            <span class="rail-brand" role="button" title="Neolink.NET — back to the full camera wall" @onclick="RestoreView">
+                <svg class="rail-logo" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                    <defs>
+                        <linearGradient id="railTile" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0" stop-color="#3B82F6"/>
+                            <stop offset="1" stop-color="#1D4ED8"/>
+                        </linearGradient>
+                        <linearGradient id="railSheen" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0" stop-color="#ffffff" stop-opacity="0.18"/>
+                            <stop offset="0.5" stop-color="#ffffff" stop-opacity="0"/>
+                        </linearGradient>
+                    </defs>
+                    <rect x="16" y="16" width="224" height="224" rx="52" fill="url(#railTile)"/>
+                    <rect x="16" y="16" width="224" height="224" rx="52" fill="url(#railSheen)"/>
+                    <g fill="#ffffff">
+                        <rect x="72" y="70" width="26" height="116" rx="4"/>
+                        <rect x="150" y="70" width="26" height="116" rx="4"/>
+                        <polygon points="72,70 98,70 176,186 150,186"/>
+                    </g>
+                    <circle cx="196" cy="188" r="13" fill="#38BDF8"/>
+                </svg>
+                @if (_footageEncrypted)
+                {
+                    <span class="rail-lock" title="Footage encryption is on — recordings are stored encrypted">@UiIcon.Render("lock", 9)</span>
+                }
+            </span>
+
+            <button class="icon-btn rail-toggle"
+                    title="@(RailAttention ? "Expand the sidebar — a warning is waiting there" : "Expand the sidebar")"
+                    @onclick="() => SetSidebarCollapsedAsync(false)">
+                @UiIcon.Render("chev-right", 16)
+                @if (RailAttention)
+                {
+                    <span class="rail-alert"></span>
+                }
+            </button>
+
+            <div class="rail-cams">
+                @foreach (var cam in SidebarCameras)
+                {
+                    <button class="rail-cam @(cam.Online || cam.Asleep ? "" : "rail-cam-offline") @(IsRouteCamera(cam.Name) ? "rail-cam-active" : "")"
+                            title="@cam.Name — @CamHeadTitle(cam)"
+                            @onclick="() => OpenCameraMain(cam)">
+                        <span class="dot @(cam.Online ? "on" : cam.Asleep ? "doze" : "off")"></span>
+                        <span class="rail-abbr">@RailAbbr(cam.Name)</span>
+                    </button>
+                }
+            </div>
+
+            <div class="rail-foot">
+                <button class="icon-btn" title="Server settings" @onclick="OpenServerSettingsAsync">@UiIcon.Render("gear", 18)</button>
+            </div>
+        </div>
+
+        <div class="sidebar-full">
         <div class="brand">
             @* The logo doubles as "home": it restores the full wall, exactly like
                the toolbar's Restore view button (no-op when nothing is maximized). *@
@@ -32,6 +95,10 @@
                 NEOLINK<span class="brand-net">.NET</span>
             </span>
             <button class="icon-btn" title="Server settings" @onclick="OpenServerSettingsAsync">@UiIcon.Render("gear", 18)</button>
+            @* Desktop only (hidden in the mobile drawer): fold the sidebar into
+               the icon rail, giving the room to the tiles. *@
+            <button class="icon-btn rail-toggle" title="Collapse the sidebar to a slim rail — more room for the tiles"
+                    @onclick="() => SetSidebarCollapsedAsync(true)">@UiIcon.Render("chev-left", 16)</button>
         </div>
 
         @if (_setupRequired && !_secWarnDismissed)
@@ -252,6 +319,7 @@
             {
                 <span>Neolink.NET web client</span>
             }
+        </div>
         </div>
     </aside>
 
@@ -1897,6 +1965,53 @@
     private string? _error;
     private bool _loaded;
     private bool _sidebarOpen;
+
+    /// <summary>Desktop only: the sidebar is folded into the icon rail. Persisted
+    /// per browser. Orthogonal to _sidebarOpen — the mobile drawer ignores it
+    /// (the CSS neutralizes .collapsed under the drawer breakpoint).</summary>
+    private bool _sidebarCollapsed;
+    private const string RailCollapsedKey = "neolink.sidebarCollapsed";
+
+    private async Task SetSidebarCollapsedAsync(bool collapsed)
+    {
+        _sidebarCollapsed = collapsed;
+        try { await JS.InvokeVoidAsync("neolink.lsSet", RailCollapsedKey, collapsed ? "1" : ""); } catch { }
+    }
+
+    /// <summary>True while the expanded sidebar would be showing a banner (security,
+    /// update, storage). The rail can't show banners, so its expand button carries
+    /// an amber dot instead — collapsing must never silently hide a warning.</summary>
+    private bool RailAttention =>
+        (_setupRequired && !_secWarnDismissed)
+        || UpdateAvailable
+        || _storage is { Full: true }
+        || (_storage != null && !_storageWarnDismissed);
+
+    /// <summary>Collapsed-rail label: at most 3 characters standing in for the name.
+    /// Multi-word names become initials ("Front Door" → "FD", "Back Yard Cam" → "BYC");
+    /// a single word keeps its first three letters ("Driveway" → "DRI") — unless it
+    /// ends in a short number, which survives ("Cam2" → "CA2", "Cam12" → "C12") so
+    /// numbered cameras stay distinguishable.</summary>
+    private static string RailAbbr(string name)
+    {
+        var words = name.Split(new[] { ' ', '-', '_', '.' }, StringSplitOptions.RemoveEmptyEntries);
+        string abbr;
+        if (words.Length == 0)
+            abbr = "?";
+        else if (words.Length > 1)
+            abbr = string.Concat(words.Take(3).Select(w => w[0]));
+        else
+        {
+            var w = words[0];
+            var stem = w.Length;
+            while (stem > 0 && char.IsDigit(w[stem - 1])) stem--;
+            var tail = w[stem..];
+            abbr = tail.Length is > 0 and <= 2 && stem > 0
+                ? w[..Math.Min(stem, 3 - tail.Length)] + tail
+                : w[..Math.Min(w.Length, 3)];
+        }
+        return abbr.ToUpperInvariant();
+    }
     private string? _panelCamera;
 
     // Quick view: temporary pop-up player opened from the sidebar (⛶)
@@ -2263,6 +2378,7 @@
             _storageWarnDismissed = await JS.InvokeAsync<string?>("neolink.ssGet", StorageWarnDismissKey) == "1";
             _mainWarned = await JS.InvokeAsync<string?>("neolink.lsGet", MainWarnKey) == "1";
             _updateDismissedVersion = await JS.InvokeAsync<string?>("neolink.lsGet", "neolink.updateDismissed");
+            _sidebarCollapsed = await JS.InvokeAsync<string?>("neolink.lsGet", RailCollapsedKey) == "1";
             _playSd = await JS.InvokeAsync<string?>("neolink.lsGet", "neolink.eventSd") == "1";
             if (double.TryParse(await JS.InvokeAsync<string?>("neolink.lsGet", "neolink.eventSpeed"),
                     System.Globalization.NumberStyles.Float,

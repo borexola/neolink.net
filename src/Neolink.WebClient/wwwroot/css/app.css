@@ -57,6 +57,18 @@ html, body {
     padding: 14px 12px;
     gap: 10px;
     overflow: hidden; /* only the camera list scrolls (below), so the footer pins */
+    transition: width 0.18s ease; /* desktop collapse; the drawer overrides with transform */
+}
+
+/* Everything the full-width sidebar shows lives in this wrapper, so the
+   collapsed rail can swap it out with one display toggle. It replicates the
+   aside's own column layout (the aside keeps only padding + width). */
+.sidebar-full {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    flex: 1 1 auto;
+    min-height: 0;
 }
 
 /* The camera list is the sole scroll region: it takes the leftover height and
@@ -116,6 +128,104 @@ html, body {
 .brand-net {
     color: var(--accent);
     margin-left: -6px; /* sit tight against "NEOLINK" despite the flex gap */
+}
+
+/* ---------- collapsed icon rail (desktop only) ----------
+   The sidebar folds into a slim rail: the logo tile replaces the wordmark,
+   each camera becomes a 3-letter pill with its status dot, and the settings
+   gear pins to the bottom. The drawer breakpoint below neutralizes all of
+   this — a phone's sidebar always opens full. */
+.sidebar-rail { display: none; }
+
+.sidebar.collapsed { width: 66px; padding: 14px 9px; }
+.sidebar.collapsed .sidebar-full { display: none; }
+.sidebar.collapsed .sidebar-rail {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+/* keep the collapse chevron beside the gear (both would otherwise take the
+   brand row's auto margin and drift apart) */
+.brand .rail-toggle { margin-left: 0; }
+
+.rail-brand { position: relative; cursor: pointer; line-height: 0; }
+.rail-logo { width: 32px; height: 32px; display: block; }
+.rail-brand:hover .rail-logo { filter: drop-shadow(0 0 10px var(--accent)); }
+
+/* Footage-encryption padlock, riding the logo tile's corner */
+.rail-lock {
+    position: absolute;
+    right: -5px;
+    bottom: -5px;
+    display: inline-flex;
+    padding: 2.5px;
+    border-radius: 50%;
+    background: var(--panel);
+    color: var(--accent);
+}
+
+.rail-toggle { position: relative; }
+
+/* The rail can't show banners; this amber dot on the expand button says
+   "open me — a warning is waiting" (same amber as the banners themselves). */
+.rail-alert {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #ffb020;
+    box-shadow: 0 0 6px #ffb020;
+}
+
+/* Same role as .sidebar-cams: the one scroll region, so the gear stays pinned.
+   No scrollbar — 66px is too narrow to share with one. */
+.rail-cams {
+    flex: 1 1 auto;
+    min-height: 0;
+    width: 100%;
+    overflow-y: auto;
+    scrollbar-width: none;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+}
+
+.rail-cams::-webkit-scrollbar { display: none; }
+
+.rail-cam {
+    position: relative;
+    flex: 0 0 auto;
+    width: 48px;
+    height: 40px;
+    border-radius: 10px;
+    background: var(--panel-2);
+    border: 1px solid transparent;
+    color: var(--text);
+    font: inherit;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    padding: 0;
+}
+
+.rail-cam:hover { border-color: var(--line); background: var(--accent-soft); }
+.rail-cam-active { border-color: var(--accent); box-shadow: 0 0 8px var(--accent-soft); }
+.rail-cam-offline { opacity: 0.45; }
+
+.rail-cam .dot { position: absolute; top: 5px; right: 5px; }
+
+.rail-abbr {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
 }
 
 .settings {
@@ -1639,6 +1749,13 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     }
 
     .sidebar.open { transform: none; }
+
+    /* The desktop collapse is meaningless in the drawer: whatever the saved
+       rail state says, a phone's sidebar always opens full. */
+    .sidebar.collapsed { width: 290px; padding: 14px 12px; }
+    .sidebar.collapsed .sidebar-full { display: flex; }
+    .sidebar.collapsed .sidebar-rail { display: none; }
+    .brand .rail-toggle { display: none; }
 
     .backdrop {
         display: block;
