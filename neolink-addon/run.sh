@@ -7,8 +7,11 @@
 # parse (the app itself accepts // comments) is left completely untouched.
 set -uo pipefail
 
-CONFIG=/config/config.json
-OPTIONS=/data/options.json
+# Overridable ONLY so CI can exercise this script against fixtures
+# (tests/check.sh); inside the add-on container neither variable exists and
+# the paths are exactly what they always were.
+CONFIG=${NEOLINK_CONFIG_PATH:-/config/config.json}
+OPTIONS=${NEOLINK_OPTIONS_PATH:-/data/options.json}
 APP=(dotnet /app/neolink.net.dll --config "$CONFIG")
 
 log() { echo "[addon] $*"; }
@@ -56,7 +59,7 @@ fi
 # whatever config.json already has — cameras managed by hand stay untouched.
 cams=$(jq '[.cameras[]? | {name, address, username, password: (.password // "")}
             + (if .always_on == true then {always_on: true} else {} end)
-            + (if .channel != null then {channel_id: .channel} else {} end)]' "$OPTIONS")
+            + (if .channel_id != null then {channel_id: .channel_id} else {} end)]' "$OPTIONS")
 count=$(jq 'length' <<<"$cams")
 if [ "$count" -gt 0 ]; then
   base=$(jq --argjson cams "$cams" '.cameras = $cams' <<<"$base")

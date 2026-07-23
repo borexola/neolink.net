@@ -823,16 +823,22 @@ video[data-ever-live="1"] ~ .tile-poster {
     border-color: color-mix(in srgb, var(--ok) 80%, transparent);
 }
 
-/* Keep-awake sits over the feed's bottom-left, and ONLY while a frame is
-   actually playing — there is nothing to keep awake otherwise. */
+/* Keep-awake sits over the feed's bottom-CENTER (the corners belong to the
+   player's own controls), and ONLY while a frame is actually playing — there
+   is nothing to keep awake otherwise. Wraps on narrow tiles instead of
+   overflowing them. */
 .tile-batt {
     position: absolute;
-    left: 8px;
+    left: 50%;
     bottom: 8px;
+    transform: translateX(-50%);
+    max-width: calc(100% - 16px);
     z-index: 4;
     display: none;
     align-items: center;
-    gap: 5px;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 4px 8px;
     padding: 3px 8px 3px 6px;
     border-radius: 999px;
     font-size: 10px;
@@ -840,13 +846,42 @@ video[data-ever-live="1"] ~ .tile-poster {
     color: var(--ok);
     background: rgba(0, 0, 0, 0.55);
     border: 1px solid color-mix(in srgb, var(--ok) 45%, transparent);
-    cursor: pointer;
     user-select: none;
 }
 
 video[data-live="1"] ~ .tile-batt { display: inline-flex; }
 
 .tile-batt input { accent-color: var(--ok); cursor: pointer; margin: 0; }
+
+.tile-batt-keep {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+/* "Sleep now": hand the rest of the viewing budget back with one click. */
+.tile-batt-sleep {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font: inherit;
+    font-size: 10px;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+    color: var(--ok);
+    background: color-mix(in srgb, var(--ok) 14%, transparent);
+    border: 1px solid color-mix(in srgb, var(--ok) 45%, transparent);
+    cursor: pointer;
+}
+
+.tile-batt-sleep:hover {
+    background: color-mix(in srgb, var(--ok) 24%, transparent);
+    border-color: var(--ok);
+}
 
 /* The tile is on a budget but currently resting/asleep: same overlay language as
    privacy/suspended, in the battery colour. */
@@ -864,7 +899,8 @@ video[data-live="1"] ~ .tile-batt { display: inline-flex; }
 }
 
 /* An explicit button, not just a clickable overlay: waking a battery camera is a
-   deliberate act that costs charge, so it should look like one. */
+   deliberate act that costs charge, so it IS the only thing that wakes one — a
+   stray click on the tile spends nothing. */
 .tile-resume-btn {
     display: inline-flex;
     align-items: center;
@@ -872,16 +908,33 @@ video[data-live="1"] ~ .tile-batt { display: inline-flex; }
     margin-top: 8px;
     padding: 4px 12px;
     border-radius: 999px;
+    font: inherit;
     font-size: 11px;
     letter-spacing: 0.5px;
     color: var(--ok);
     border: 1px solid color-mix(in srgb, var(--ok) 55%, transparent);
     background: color-mix(in srgb, var(--ok) 12%, transparent);
+    cursor: pointer;
 }
 
-.tile-privacy-resume:hover .tile-resume-btn {
+/* Highlight from anywhere only while the whole overlay is clickable (awake);
+   an asleep tile lights the button up only when the button itself is hovered. */
+.tile-awake:hover .tile-resume-btn,
+.tile-resume-btn:hover {
     background: color-mix(in srgb, var(--ok) 22%, transparent);
     border-color: var(--ok);
+}
+
+/* Asleep: the overlay is informational, not a button — no pointer, no hover
+   invitation. The Wake & watch button carries all the interactivity. Doubled-up
+   selectors: .tile-privacy-resume declares cursor/hover later in this sheet. */
+.tile-privacy-resume.tile-asleep { cursor: default; }
+.tile-privacy-resume.tile-asleep:hover {
+    color: var(--ok);
+    background: var(--panel-2);
+}
+.tile-privacy-resume.tile-asleep:hover .tile-privacy-icon {
+    color: color-mix(in srgb, var(--ok) 75%, var(--muted));
 }
 
 /* Waking: dismissed the moment a real frame paints, so the spinner can never

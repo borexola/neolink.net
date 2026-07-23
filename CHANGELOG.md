@@ -6,6 +6,25 @@ in the README). Paste the matching section below into the GitHub release.
 
 ## 0.9.7 — unreleased
 
+### Added
+
+- **A "sleep now" button on the battery-camera chip.** Done watching before the
+  budget runs out? One click releases the stream and lets the camera doze off,
+  instead of leaving it awake for the rest of the viewing window. Pressing it
+  while "held awake" also clears keep-awake — sleep means sleep. The chip
+  itself moved to the tile's bottom **center** (it used to sit on the player's
+  own corner controls), its countdown now ticks every second instead of
+  jumping with the 10-second poll — and hitting 0:00 releases the camera that
+  instant, not up to ten seconds later — and it says "to save battery".
+
+### Changed
+
+- **A single click no longer wakes a sleeping battery camera.** Waking costs
+  charge, so it now takes the explicit "Wake & watch" button — a stray click
+  anywhere else on the tile spends nothing. A camera that is already awake
+  keeps the whole-tile click to start watching, because that costs no extra
+  battery.
+
 ### Fixed
 
 - **Home Assistant add-on: cameras behind an NVR couldn't pick their channel.**
@@ -13,11 +32,23 @@ in the README). Paste the matching section below into the GitHub release.
   which NVR channel they are — the options schema rejected the field and the
   launcher stripped it even when added by hand — so every camera behind the
   same NVR or Home Hub address landed on channel 0 and showed the first
-  camera repeated. Each camera entry now takes an optional `channel`
-  (Reolink counts from 0), which the launcher carries into config.json as
-  `channel_id`; stable and beta manifests both. Entries without it are
-  written byte-for-byte as before, and hand-managed config.json setups
-  (empty add-on camera list) stay untouched.
+  camera repeated. Each camera entry now takes an optional `channel_id`
+  (0–255, Reolink counts from 0; the add-on validates the range at save
+  time), carried into config.json — the key the app has always parsed; stable
+  and beta manifests both. Entries without it are written byte-for-byte as
+  before, and hand-managed config.json setups (empty add-on camera list) stay
+  untouched. An out-of-range or non-numeric `channel_id` in a hand-edited
+  config.json now fails with an error naming the camera and the legal range
+  instead of an anonymous "Failed to load config". The launcher's
+  options-to-config mapping is now exercised in CI against fixtures on every
+  build, so a mapping typo can never ship an image that crash-loops at boot.
+
+- **Router wake hints ignore everything that isn't a battery camera.** A
+  mains-powered camera calls the same Reolink push service on every event, so
+  the hint listener logged an INF "router saw ..." line for each of those
+  connections — for a camera hints can never help, since it is always awake.
+  Hints now route (and log) only for battery cameras; everything else drops
+  to debug-level.
 
 ## 0.9.6
 

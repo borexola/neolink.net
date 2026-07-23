@@ -170,7 +170,15 @@ public sealed class NeolinkConfig
                 case "onvifaddress": onvifAddress = prop.Value.GetString(); break;
                 case "uid": uid = prop.Value.GetString(); break;
                 case "stream": stream = prop.Value.GetString() ?? "both"; break;
-                case "channelid": channelId = prop.Value.GetByte(); break;
+                case "channelid":
+                    // Name the camera and the legal range: the bare GetByte() throw
+                    // surfaced as an anonymous "Failed to load config" that gave a
+                    // hand-editing NVR user nothing to go on.
+                    channelId = prop.Value.ValueKind == JsonValueKind.Number && prop.Value.TryGetByte(out var chan)
+                        ? chan
+                        : throw new FormatException(
+                            $"camera \"{name ?? "?"}\": channel_id must be a whole number from 0 to 255");
+                    break;
                 case "record": record = prop.Value.GetBoolean(); break;
                 case "alwayson": alwaysOn = prop.Value.GetBoolean(); break;
                 case "udpprobe": udpProbe = prop.Value.GetBoolean(); break;

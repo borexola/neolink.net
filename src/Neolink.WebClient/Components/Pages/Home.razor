@@ -648,21 +648,38 @@
                                WHY (battery), and what the tick does — "sleeps in
                                1:47" next to a bare checkbox answered none of those,
                                and ticking read like "make it sleep" when it means
-                               the opposite. Battery glyph = the subject is battery. *@
-                            <label class="tile-batt" title="@(batt.KeepAlive
-                                       ? "Held awake for as long as this tab watches — this spends the camera's battery. Untick to give the view a time limit again."
-                                       : $"Live view of a battery camera: this tile stops itself after {BatteryViewBudget.TotalMinutes:0} minutes so the camera can go back to sleep. Tick to keep watching (holds the camera awake and spends its battery).")"
-                                   @onclick:stopPropagation="true" @ondblclick:stopPropagation="true">
-                                <input type="checkbox" checked="@batt.KeepAlive"
-                                       @onchange="e => ToggleBatteryKeepAlive(index, (bool?)e.Value == true)" />
-                                @if (camera?.Battery is { } tileBatt)
-                                {
-                                    @UiIcon.RenderBattery(tileBatt.Percent, 10)
-                                }
-                                <span>@(batt.KeepAlive
-                                          ? "held awake — spending battery"
-                                          : $"view ends in {BattSecondsLeft(batt) / 60}:{BattSecondsLeft(batt) % 60:00} to spare battery")</span>
-                            </label>
+                               the opposite. Battery glyph = the subject is battery.
+                               Bottom-CENTER: the corners belong to the player's own
+                               controls, and the chip used to sit on top of them. *@
+                            <div class="tile-batt" @onclick:stopPropagation="true" @ondblclick:stopPropagation="true">
+                                <label class="tile-batt-keep" title="@(batt.KeepAlive
+                                           ? "Held awake for as long as this tab watches — this spends the camera's battery. Untick to give the view a time limit again."
+                                           : $"Live view of a battery camera: this tile stops itself after {BatteryViewBudget.TotalMinutes:0} minutes so the camera can go back to sleep. Tick to keep watching (holds the camera awake and spends its battery).")">
+                                    <input type="checkbox" checked="@batt.KeepAlive"
+                                           @onchange="e => ToggleBatteryKeepAlive(index, (bool?)e.Value == true)" />
+                                    @if (camera?.Battery is { } tileBatt)
+                                    {
+                                        @UiIcon.RenderBattery(tileBatt.Percent, 10)
+                                    }
+                                    @if (batt.KeepAlive)
+                                    {
+                                        <span>held awake — spending battery</span>
+                                    }
+                                    else
+                                    {
+                                        @* Ticks itself once a second; tells the wall the moment
+                                           it hits 0:00 so the release is instant, not "on the
+                                           next 10-second poll". *@
+                                        <BattCountdown AttachedUtc="@batt.AttachedUtc" Budget="@BatteryViewBudget"
+                                                       OnExpired="EvaluateBatteryTilesAsync" />
+                                    }
+                                </label>
+                                <button type="button" class="tile-batt-sleep"
+                                        title="Done watching: release the stream now and let the camera go back to sleep"
+                                        @onclick="() => SleepBatteryTileAsync(index)">
+                                    @UiIcon.Render("moon", 10)<span>sleep now</span>
+                                </button>
+                            </div>
                         }
                         @* Privacy is its own OPAQUE overlay: the player neither shows a
                            frozen last frame under it nor overwrites it (it rewrites
@@ -702,14 +719,19 @@
                                real state — including when it is AWAKE — but never pulls
                                video on its own: a battery camera wakes itself for its own
                                reasons, and attaching then would hold it awake for the
-                               whole budget. Nothing here connects until the user asks. *@
+                               whole budget. Nothing here connects until the user asks —
+                               and while the camera is ASLEEP, "asks" means the explicit
+                               button only: waking costs charge, so a stray click on the
+                               tile must not spend it. An awake camera keeps the
+                               whole-overlay click, because watching it is free. *@
                             var awake = camera is { Online: true, Asleep: false };
-                            <div class="tile-privacy tile-resting tile-privacy-resume @(awake ? "tile-awake" : "")"
-                                 role="button" tabindex="0"
+                            <div class="tile-privacy tile-resting tile-privacy-resume @(awake ? "tile-awake" : "tile-asleep")"
+                                 role="@(awake ? "button" : null)" tabindex="@(awake ? "0" : null)"
                                  title="@(awake
                                      ? $"{slot.Camera} is awake — click to watch (it is already up, so this costs no extra battery)"
-                                     : $"Click to wake {slot.Camera} and open the feed")"
-                                 @onclick="() => ResumeBatteryTileAsync(index)" @onclick:stopPropagation="true">
+                                     : null)"
+                                 @onclick="async () => { if (awake) await ResumeBatteryTileAsync(index); }"
+                                 @onclick:stopPropagation="true">
                                 <span class="tile-privacy-icon">@UiIcon.Render(awake ? "sun" : "moon", 22)</span>
                                 <span>@(awake ? "awake" : bs.Released ? "resting" : "asleep")</span>
                                 <small>@(awake
@@ -717,9 +739,13 @@
                                     : bs.Released
                                         ? "stream released to save battery"
                                         : "battery camera dozing — not woken automatically")</small>
-                                <span class="tile-resume-btn">
+                                <button type="button" class="tile-resume-btn"
+                                        title="@(awake
+                                            ? "Watch now — the camera is already up"
+                                            : $"Wake {slot.Camera} and open the feed — waking spends battery")"
+                                        @onclick="() => ResumeBatteryTileAsync(index)" @onclick:stopPropagation="true">
                                     @UiIcon.Render("play", 12) @(awake ? "Watch" : "Wake & watch")
-                                </span>
+                                </button>
                             </div>
                         }
                         else if (camera is { Online: false, Asleep: false })
@@ -5298,6 +5324,19 @@
         b.Released = false;
         b.Watching = true;
         b.AttachedUtc = DateTime.UtcNow; // a fresh budget for a deliberate look
+        await ReconcilePlayersAsync();
+        StateHasChanged();
+    }
+
+    /// <summary>"Sleep now": hand the rest of the budget back. Same release path the
+    /// clock takes at 0:00 — detach, let the camera doze. Also clears keep-awake:
+    /// pressing sleep while "held awake" can only mean "stop holding it".</summary>
+    private async Task SleepBatteryTileAsync(int slot)
+    {
+        if (Batt(slot) is not { } b) return;
+        b.KeepAlive = false;
+        b.Released = true;
+        b.Watching = false;
         await ReconcilePlayersAsync();
         StateHasChanged();
     }

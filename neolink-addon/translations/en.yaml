@@ -6,7 +6,7 @@ configuration:
       entity names), the camera's IP address, and its account. Set always_on
       for a battery camera you want streaming around the clock (it will drain
       the battery — pair it with solar/USB power). Connecting through a
-      Reolink NVR or Home Hub? Set channel to the camera's channel number,
+      Reolink NVR or Home Hub? Set channel_id to the camera's channel number,
       starting at 0 — without it, every camera behind the same NVR address
       lands on channel 0 and you see the first camera repeated. Leave the
       list empty to manage cameras directly in config.json instead.

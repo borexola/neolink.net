@@ -102,6 +102,15 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  # The launcher runs at every add-on boot for every user, and nothing else
+  # executes it before an image ships — a jq typo in its options mapping would
+  # crash-loop them all. Run it against fixtures before publishing.
+  addon-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - run: bash neolink-addon/tests/check.sh
+
   # Home Assistant add-on images: the app image plus the options/MQTT launcher
   # (see neolink-addon/). The Supervisor installs prebuilt per-arch images —
   # ghcr.io/borexola/neolink.net-addon-{arch}:<version> — where <version> must
@@ -109,14 +118,16 @@ jobs:
   # Built on release tags (:X.Y.Z), the beta branch (rolling :beta, from the
   # neolink.net:beta app image) and workflow_dispatch (:edge, from :latest).
   addon:
-    needs: [gate, build-and-push]
+    needs: [gate, build-and-push, addon-check]
     # Runs on release tags, the beta branch and manual dispatch. always() lets it
     # proceed even when build-and-push was SKIPPED (a docs-only beta push, where it
-    # rebuilds from the existing app image) — but not when that build FAILED.
+    # rebuilds from the existing app image) — but not when that build FAILED, and
+    # never when the launcher smoke test did.
     if: >-
       always()
       && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/beta' || github.event_name == 'workflow_dispatch')
       && needs.build-and-push.result != 'failure'
+      && needs.addon-check.result == 'success'
     runs-on: ubuntu-latest
     strategy:
       matrix:

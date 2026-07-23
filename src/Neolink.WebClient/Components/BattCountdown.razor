@@ -1,0 +1,57 @@
+@using System.Threading
+@implements IDisposable
+
+@* The battery chip's clock. The per-second tick lives in this leaf component so
+   only one small span re-renders each second — a 1 Hz StateHasChanged on the
+   wall page itself would rebuild the whole render tree just to advance a clock.
+   When the clock hits 0:00 it tells the parent once, so the tile releases the
+   camera immediately instead of on the next 10-second poll (which used to leave
+   a dead "0:00" on screen for up to ten seconds). *@
+<span>view ends in @(_left / 60):@($"{_left % 60:00}") to save battery</span>
+
+@code {
+    /// <summary>When the stream attached — the viewing budget runs from here.</summary>
+    [Parameter] public DateTime AttachedUtc { get; set; }
+    [Parameter] public TimeSpan Budget { get; set; }
+    /// <summary>Fires once when the clock reaches 0:00.</summary>
+    [Parameter] public EventCallback OnExpired { get; set; }
+
+    private int _left;
+    private Timer? _timer;
+    private bool _expiredFired;
+
+    protected override void OnParametersSet()
+    {
+        _left = SecondsLeft();
+        // A fresh budget (re-attach, keep-awake unticked again) revives the timer.
+        if (_left > 0)
+        {
+            _expiredFired = false;
+            _timer ??= new Timer(_ => _ = InvokeAsync(TickAsync), null, 1000, 1000);
+        }
+    }
+
+    private int SecondsLeft() =>
+        (int)Math.Max(0, (Budget - (DateTime.UtcNow - AttachedUtc)).TotalSeconds);
+
+    private async Task TickAsync()
+    {
+        var left = SecondsLeft();
+        if (left != _left)
+        {
+            _left = left;
+            StateHasChanged();
+        }
+        if (left > 0 || _expiredFired) return;
+        _expiredFired = true;
+        _timer?.Dispose();
+        _timer = null;
+        await OnExpired.InvokeAsync();
+    }
+
+    public void Dispose()
+    {
+        _timer?.Dispose();
+        _timer = null;
+    }
+}

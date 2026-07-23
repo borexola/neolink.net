@@ -594,16 +594,21 @@ if (config.WakeHints is { SyslogPort: > 0 } wakeHintCfg)
         wakeHintCfg.SyslogPort, wakeHintCfg.Bind ?? config.BindAddr,
         (ip, detail) =>
         {
+            // Battery cameras ONLY — checked per hint, not at wiring, because
+            // battery detection is learned from the camera at runtime. A mains
+            // camera calls the same push service on every event, so routing its
+            // hints spammed an INF line per connection for a camera that hints
+            // can never help (it is always awake).
             bool matched = false;
             foreach (var s in wakeHintTargets)
-                if (s.MatchesAddress(ip)) { s.NotifyWakeHint(detail); matched = true; }
+                if (s.SleepFriendly && s.MatchesAddress(ip)) { s.NotifyWakeHint(detail); matched = true; }
             // Matched hints are rare (one per camera event) and worth seeing even
-            // when the camera isn't parked. Unmatched TCP/443 lines can be every
-            // HTTPS connection of every logged LAN device — Debug only.
+            // when the camera isn't parked. Everything else — unknown LAN devices
+            // and non-battery cameras — is Debug only.
             if (matched)
                 Log.Info($"Wake hints: {detail}");
             else
-                Log.Debug($"Wake hints: {detail} — no camera with address {ip}, ignored");
+                Log.Debug($"Wake hints: {detail} — not a battery camera's address, ignored");
         });
     tasks.Add(Task.Run(async () =>
     {
