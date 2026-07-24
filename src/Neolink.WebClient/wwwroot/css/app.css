@@ -4490,6 +4490,11 @@ body.tl-colresizing, body.tl-colresizing * { cursor: col-resize !important; user
 .tl-tile-rail .tl-snap { display: none; } /* thumbnails: too small, focus first */
 .tl-tile-rail .zoom-hud { display: none !important; } /* same: zoom the focused monitor instead */
 
+/* Solo-audio speaker: sits just left of the snapshot button. Stays lit once a
+   camera is unmuted, so which monitor you are hearing is visible at a glance. */
+.tl-audio { right: 40px; }
+.tl-audio.on { opacity: 1; color: var(--accent); background: rgba(0, 0, 0, 0.78); }
+
 .event-player-foot {
     display: flex;
     align-items: center;

@@ -4,6 +4,16 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
+## 0.9.8 — unreleased
+
+### Added
+
+- **Sound on the timeline.** Recorded footage now plays its audio. Each monitor
+  has a speaker button; because a wall of cameras playing at once would be a wall
+  of noise, audio is *solo* — unmuting one monitor mutes the others, and tiles
+  still start muted so they keep autoplaying. Follows the footage under the
+  cursor, continuous recordings and event clips alike.
+
 ## 0.9.7
 
 ### Added

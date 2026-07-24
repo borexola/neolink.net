@@ -1190,7 +1190,7 @@
         tlSyncAll(entries) {
             let maxLag = 0;
             for (const e of entries || []) {
-                const lag = this.tlSync(e.id, e.url, e.offset, e.playing, e.rate);
+                const lag = this.tlSync(e.id, e.url, e.offset, e.playing, e.rate, e.muted);
                 if (lag > maxLag) maxLag = lag;
             }
             return maxLag;
@@ -1200,7 +1200,7 @@
         // timeline cursor (0 = keeping up / paused, -1 = broken media). Blazor
         // uses the worst healthy lag as feedback to slow the cursor down when
         // the server or the decoder can't sustain the chosen speed.
-        tlSync(videoId, url, offset, playing, rate) {
+        tlSync(videoId, url, offset, playing, rate, muted) {
             const v = document.getElementById(videoId);
             if (!v) return 0;
             // Busy veil: while the player has no decodable picture under the
@@ -1226,7 +1226,12 @@
                     v.addEventListener(ev, settle);
             }
             v.dataset.tlPlaying = playing ? '1' : '0';
-            v.muted = true;
+            // Solo audio: Blazor sends muted=false for the one camera the user
+            // asked to hear (undefined from older callers ⇒ stay muted). Set it
+            // every tick so a new segment inherits the choice; volume rides at
+            // full since the mute flag is what gates the sound.
+            v.muted = muted !== false;
+            if (!v.muted && v.volume !== 1) v.volume = 1;
             if (!url) {
                 busy(false);
                 delete v.dataset.tlUrl;

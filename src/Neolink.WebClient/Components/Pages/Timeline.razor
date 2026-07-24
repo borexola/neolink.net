@@ -442,6 +442,14 @@
                         <div class="tl-nofootage">no footage at @TimeText(_t)</div>
                     }
                     <div class="tl-tile-name">@cam.Name</div>
+                    @* Solo audio: this footage carries the camera's recorded sound.
+                       Only one monitor plays at a time — unmuting one mutes the
+                       rest, so a wall of cameras never becomes a wall of noise. *@
+                    <button class="tl-snap tl-audio @(IsAudio(cam.Name) ? "on" : "")"
+                            title="@(IsAudio(cam.Name) ? "Mute this camera" : "Play this camera's sound (mutes the others)")"
+                            @onclick="() => ToggleAudioAsync(cam.Name)" @onclick:stopPropagation="true">
+                        @UiIcon.Render(IsAudio(cam.Name) ? "volume" : "volume-x", 14)
+                    </button>
                     <button class="tl-snap" title="Save a still of this frame (PNG)"
                             @onclick="() => SnapshotAsync(cam.Name)" @onclick:stopPropagation="true">
                         @UiIcon.Render("camera", 14)
@@ -598,6 +606,25 @@
     // camera chips, tracks — docks at the bottom, like a video editor.
     private bool _studio;
     private string? _focusCam; // studio program monitor; null = equal grid
+
+    // Solo audio: at most one monitor plays sound at a time (null = all muted,
+    // which is the default so tiles keep autoplaying — unmuted autoplay is
+    // blocked until the user clicks a speaker). Deliberately not persisted: a
+    // fresh load has no user gesture yet, so a remembered "on" could not play
+    // anyway, and silence-by-default is the safe surprise-free start.
+    private string? _audioCam;
+
+    private bool IsAudio(string cam) => string.Equals(cam, _audioCam, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Speaker click: unmute this camera and mute every other one, or
+    /// mute it if it was already the one playing. SyncVideos pushes the new mute
+    /// state to the players on the same click (a user gesture — which is what
+    /// lets the browser start the sound).</summary>
+    private async Task ToggleAudioAsync(string cam)
+    {
+        _audioCam = IsAudio(cam) ? null : cam;
+        await SyncVideosAsync();
+    }
 
     // 0.25/0.5 are slow motion — fine review of a fast moment; the rest skim.
     private static readonly double[] SpeedOptions = { 0.25, 0.5, 1, 2, 4, 8, 16 };
@@ -1386,7 +1413,7 @@
             if (seg == null)
             {
                 _noFootage.Add(cam.Name);
-                entries.Add(new { id = VideoId(cam.Name), url = (string?)null, offset = 0d, playing = false, rate = 1 });
+                entries.Add(new { id = VideoId(cam.Name), url = (string?)null, offset = 0d, playing = false, rate = 1, muted = true });
             }
             else
             {
@@ -1398,6 +1425,7 @@
                     offset = _t - seg.Start,
                     playing = _playing,
                     rate = _speed,
+                    muted = !IsAudio(cam.Name),
                 });
             }
         }
@@ -1474,6 +1502,7 @@
         if (_included.Remove(name))
         {
             _cov.Remove(name); // free it; reselecting fetches fresh coverage
+            if (IsAudio(name)) _audioCam = null; // no tile left to mute it from
         }
         else
         {

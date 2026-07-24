@@ -11,7 +11,7 @@
          log, /api/features and the web UI. Release builds override it with the
          git tag (docker.yml passes -p:Version), so tagging vX.Y.Z is what
          increments the released version. -->
-    <Version>0.9.7</Version>
+    <Version>0.9.8</Version>
     <InvariantGlobalization>true</InvariantGlobalization>
     <ServerGarbageCollection>false</ServerGarbageCollection>
     <TieredPgo>true</TieredPgo>
