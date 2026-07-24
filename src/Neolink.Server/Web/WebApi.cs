@@ -1180,12 +1180,12 @@ public static class WebApi
                 if (merged.Enabled && merged.UsesOllama && merged.OllamaModel.Length == 0)
                     return Results.Json(new
                     {
-                        error = "Ollama needs a model name (it has no loaded-model default), e.g. llama3.2-vision",
+                        error = "Ollama needs a vision-capable model name (it has no loaded-model default)",
                     }, statusCode: 400);
                 if (merged.Enabled && merged.UsesAnthropic && merged.AnthropicModel.Length == 0)
                     return Results.Json(new
                     {
-                        error = "the Anthropic backend needs a model name, e.g. claude-haiku-4-5",
+                        error = "the Anthropic backend needs a vision-capable model name",
                     }, statusCode: 400);
                 aiStore.Save(merged, req.ApiKey, req.AnthropicApiKey); // keys write-only
                 return Results.Json(ShapeAi());

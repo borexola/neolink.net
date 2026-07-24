@@ -54,11 +54,12 @@ in the README). Paste the matching section below into the GitHub release.
   brand-new retained topic starts empty), and the timestamp is emitted as
   strict RFC3339 UTC (`…Z`, no fractional seconds) so HA never rejects it.
 
-  Three interchangeable backends: **OpenAI-style** (LM Studio, llama.cpp
-  server, hosted APIs), **Ollama** (native /api/chat, base64 images, e.g.
-  llama3.2-vision) and **Anthropic-style** (the Messages API — Claude with an
-  API key, or any proxy speaking that shape; blank endpoint means
-  api.anthropic.com, and each backend keeps its own encrypted key). All three
+  Any **vision-capable** model your backend runs will do. Three
+  interchangeable backends: **OpenAI-style** (LM Studio, llama.cpp server,
+  hosted APIs), **Ollama** (native /api/chat, base64 images) and
+  **Anthropic-style** (the Messages API — Claude with an API key, or any proxy
+  speaking that shape; blank endpoint means api.anthropic.com, and each
+  backend keeps its own encrypted key). All three
   keep their own endpoint/model settings; a Backend selector in Settings → AI
   picks which one handles events, and the test button exercises whichever is
   selected.

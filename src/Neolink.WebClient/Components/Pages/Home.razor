@@ -1850,12 +1850,18 @@
                         <div class="campanel-section">
                             <div class="campanel-section-title">@UiIcon.Render("sparkles", 13) AI EVENT DESCRIPTIONS <span class="beta-tag exp-tag">EXPERIMENTAL</span></div>
                             <div class="notice small">
-                                When a camera records a detection event, low-res frames (one per second,
-                                from the camera's own snapshot) go to an <b>OpenAI-style</b> vision model —
-                                LM Studio, Ollama, llama.cpp or a hosted API — and its description is stored
-                                in the event's metadata and written to the server log. Enable it here, then
-                                switch it on <b>per camera</b> (camera panel → Recording). The API key is
-                                <b>encrypted at rest</b>.
+                                When a camera records a detection event, low-res frames (spread across
+                                the event, from the camera's own snapshot) go to a <b>vision-capable</b>
+                                model — via LM Studio, Ollama, llama.cpp or a hosted API — and its
+                                description is stored in the event's metadata and written to the server
+                                log. Enable it here, then switch it on <b>per camera</b> (camera panel →
+                                Recording). The API key is <b>encrypted at rest</b>.
+                            </div>
+                            <div class="notice small ai-exp-note">
+                                <b>Experimental</b> — and we'd love your feedback. It won't affect
+                                recording or streaming (a slow or dead model only means an event goes
+                                undescribed), but the prompts, models and this UI are still evolving.
+                                Tell us how it goes for you and what your setup is.
                             </div>
                             <div class="control-row">
                                 <span>Describe events with AI</span>
@@ -1887,12 +1893,12 @@
                                     }
                                     <div class="control-row"><span>Model</span>
                                         <input class="notif-input @(AiOllamaModelMissing ? "input-error" : "")"
-                                               placeholder="e.g. llama3.2-vision" @bind="_ai.OllamaModel" @bind:event="oninput" /></div>
+                                               placeholder="a vision-capable model you have pulled" @bind="_ai.OllamaModel" @bind:event="oninput" /></div>
                                     @if (AiOllamaModelMissing)
                                     {
                                         <div class="field-error">
-                                            Ollama needs a model name (it has no loaded-model default) —
-                                            a vision model, e.g. llama3.2-vision or qwen2.5vl.
+                                            Ollama needs the name of a <b>vision-capable</b> model you have
+                                            pulled (it has no loaded-model default).
                                         </div>
                                     }
                                 }
@@ -1911,12 +1917,12 @@
                                     }
                                     <div class="control-row"><span>Model</span>
                                         <input class="notif-input @(AiAnthropicModelMissing ? "input-error" : "")"
-                                               placeholder="e.g. claude-haiku-4-5" @bind="_ai.AnthropicModel" @bind:event="oninput" /></div>
+                                               placeholder="a vision-capable Claude model" @bind="_ai.AnthropicModel" @bind:event="oninput" /></div>
                                     @if (AiAnthropicModelMissing)
                                     {
                                         <div class="field-error">
-                                            The Anthropic backend needs a model name — claude-haiku-4-5 is the
-                                            fast, low-cost fit for frame descriptions.
+                                            The Anthropic backend needs the name of a <b>vision-capable</b>
+                                            model (one that accepts images).
                                         </div>
                                     }
                                     <div class="control-row"><span>API key</span>

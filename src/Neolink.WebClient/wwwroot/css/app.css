@@ -5262,6 +5262,13 @@ body.tl-colresizing, body.tl-colresizing * { cursor: col-resize !important; user
     letter-spacing: 0.6px;
 }
 
+/* The experimental/feedback note in the AI settings tab: same violet as the
+   EXPERIMENTAL pill, with a left rule so it reads as a callout, not body copy. */
+.notice.ai-exp-note {
+    border-left: 3px solid color-mix(in srgb, #a98bf0 55%, transparent);
+    padding-left: 8px;
+}
+
 /* One notch below beta: works on some models, known not to on others. */
 .preview-tag {
     font-size: 9px;

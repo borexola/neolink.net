@@ -67,8 +67,8 @@ public sealed class AiSettings
     /// unless already present.</summary>
     public string OllamaEndpoint { get; set; } = "";
 
-    /// <summary>Ollama model name (required — Ollama has no "loaded model" default),
-    /// e.g. "llama3.2-vision" or "qwen2.5vl".</summary>
+    /// <summary>Ollama model name (required — Ollama has no "loaded model" default);
+    /// must be a vision-capable model.</summary>
     public string OllamaModel { get; set; } = "";
 
     /// <summary>Anthropic-style base; blank = https://api.anthropic.com (the API
@@ -76,7 +76,7 @@ public sealed class AiSettings
     /// speaks the Messages API works by pointing this at it.</summary>
     public string AnthropicEndpoint { get; set; } = "";
 
-    /// <summary>Anthropic model name (required), e.g. "claude-haiku-4-5".</summary>
+    /// <summary>Anthropic model name (required); must be a vision-capable model.</summary>
     public string AnthropicModel { get; set; } = "";
 
     /// <summary>AES-GCM token of the Anthropic API key (write-only, like the others).</summary>

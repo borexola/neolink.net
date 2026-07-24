@@ -5,11 +5,16 @@
 > carrying a box.") and a **threat classification** — GREEN, YELLOW or RED —
 > in the web UI, the event metadata, and Home Assistant.
 >
-> **Experimental**: it works end-to-end and is safe to leave on (a slow or
-> dead model can never affect recording or streaming), but prompts, models and
-> the UI around it are still evolving. Tested so far with **llama.cpp**,
-> **Ollama** and **LM Studio**; Anthropic-style APIs (Claude, or any proxy
-> speaking the Messages shape) are implemented to spec.
+> **Experimental — and your feedback is very welcome.** It works end-to-end
+> and is safe to leave on (a slow or dead model can never affect recording or
+> streaming), but the prompts, the models people run, and the UI around it are
+> all still evolving. If you try it, tell us what worked, what didn't, and what
+> your setup was — that is what shapes where this goes next. Tested so far with
+> **llama.cpp**, **Ollama** and **LM Studio**; Anthropic-style APIs (Claude, or
+> any proxy speaking the Messages shape) are implemented to spec.
+>
+> The only hard requirement on the model is that it be **vision-capable** (it
+> must accept images). Any such model your backend can run will work.
 
 ## How it works
 
@@ -61,9 +66,9 @@ Two switches, both required:
      `http://127.0.0.1:11434` for Ollama. The API path (`/v1/chat/completions`,
      `/api/chat`, `/v1/messages`) is appended automatically. For the Anthropic
      backend a blank endpoint means `https://api.anthropic.com`.
-   - **Model**: required for Ollama (e.g. `llama3.2-vision`, `qwen2.5vl`) and
-     Anthropic (e.g. `claude-haiku-4-5`); optional for OpenAI-style servers
-     that answer with their loaded model.
+   - **Model**: the name of a **vision-capable** model your backend can run.
+     Required for Ollama (it has no loaded-model default) and Anthropic;
+     optional for OpenAI-style servers that answer with their loaded model.
    - **API key**: stored encrypted, write-only — it is never sent back to the
      browser. Local servers usually need none.
    - Use **Test LLM connection** before saving — it round-trips a real request
@@ -107,12 +112,14 @@ asks it not to reason step-by-step (`<think>` blocks are stripped from
 answers either way). The **timeout** setting caps how long Neolink waits per
 event.
 
-**A known-good setup.** `gemma3:12b` gave excellent descriptions in testing —
-run through Ollama, LM Studio and llama.cpp alike — on an **RTX 5080**, with
-inference landing in **3–5 seconds even at the full 20-frame budget**. That is
-a good reference point: a 12B-class vision model on a current desktop GPU
-comfortably describes an event before the next one is likely to start, so you
-can turn the frame budget all the way up without the queue backing up.
+**A known-good setup.** A ~12B-parameter vision model gave excellent
+descriptions in testing — run through Ollama, LM Studio and llama.cpp alike —
+on an **RTX 5080**, with inference landing in **3–5 seconds even at the full
+20-frame budget**. That is a useful reference point: a mid-sized vision model
+on a current desktop GPU comfortably describes an event before the next one is
+likely to start, so you can turn the frame budget all the way up without the
+queue backing up. (Vision models move fast — pick a current one your backend
+runs well rather than any specific name here.)
 
 **Privacy.** Frames go wherever the endpoint points — with LM Studio, Ollama
 or llama.cpp on your own hardware nothing leaves your network; with a hosted

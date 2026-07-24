@@ -1031,9 +1031,11 @@ description** and **AI threat level** sensors, the automation hook for
 
 The short version:
 
-- **Enable** it globally in Settings → **AI** (backend, endpoint, model), then
-  per camera under camera ⚙ → EVENTS. Tested so far with **llama.cpp**,
-  **Ollama** and **LM Studio**; Anthropic-style APIs are implemented to spec.
+- **Enable** it globally in Settings → **AI** (backend, endpoint, model — any
+  **vision-capable** model your backend runs), then per camera under
+  camera ⚙ → EVENTS. Tested so far with **llama.cpp**, **Ollama** and
+  **LM Studio**; Anthropic-style APIs are implemented to spec. It's
+  **experimental — feedback is very welcome**.
 - Frames are sampled with the camera's own snapshot command (low-res sub
   stream, no server-side video decoding) and **spread across the whole
   event**; the model is told each frame's time offset. **More frames = a

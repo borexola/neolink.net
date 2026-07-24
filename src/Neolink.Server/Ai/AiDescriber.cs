@@ -357,8 +357,7 @@ public sealed class AiDescriber
         {
             if (string.IsNullOrWhiteSpace(cfg.AnthropicModel))
                 throw new InvalidOperationException(
-                    "the Anthropic backend needs a model name — set one in Settings → AI, " +
-                    "e.g. claude-haiku-4-5");
+                    "the Anthropic backend needs a vision-capable model name — set one in Settings → AI");
             // Messages API: system is a top-level field, images are base64 source
             // blocks, and max_tokens is REQUIRED.
             var blocks = new List<object> { new { type = "text", text = userText } };
@@ -386,8 +385,8 @@ public sealed class AiDescriber
         {
             if (string.IsNullOrWhiteSpace(cfg.OllamaModel))
                 throw new InvalidOperationException(
-                    "Ollama needs a model name (it has no \"currently loaded\" default) — " +
-                    "set one in Settings → AI, e.g. llama3.2-vision");
+                    "Ollama needs a vision-capable model name (it has no \"currently loaded\" " +
+                    "default) — set one in Settings → AI");
             // Native /api/chat: images are plain base64 strings on the user message.
             payload = new Dictionary<string, object>
             {
