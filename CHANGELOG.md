@@ -13,6 +13,14 @@ in the README). Paste the matching section below into the GitHub release.
   of noise, audio is *solo* — unmuting one monitor mutes the others, and tiles
   still start muted so they keep autoplaying. Follows the footage under the
   cursor, continuous recordings and event clips alike.
+- **Timeline bookmarks.** Save a named stretch of a day's footage — "My son's
+  first walk", 10:00–10:08 — from the new Bookmark panel (toolbar button, or
+  press B): the range prefills from the zoomed view or the cursor, exactly like
+  Export. Saved moments draw as gold ribbons on the timeline and on the day
+  overview; click one (or its row in the panel, which lists every saved moment
+  across days) to jump straight there. Stored in a `bookmarks.json` next to the
+  recordings so they travel with the footage, shared by everyone on the server —
+  no database, as ever. Scrubbing, zooming and panning are untouched.
 
 ## 0.9.7
 

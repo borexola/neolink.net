@@ -4495,6 +4495,95 @@ body.tl-colresizing, body.tl-colresizing * { cursor: col-resize !important; user
 .tl-audio { right: 40px; }
 .tl-audio.on { opacity: 1; color: var(--accent); background: rgba(0, 0, 0, 0.78); }
 
+/* ---------------------------------------------------------------- bookmarks
+   Gold ribbons in the ruler's empty top band (ticks start at 8px, so the
+   0–8px strip is theirs): a saved moment reads at a glance and clicks to
+   jump. Same gold on the day overview so a zoomed view still shows where
+   the moments are. */
+.tl-bm {
+    position: absolute;
+    top: 1px;
+    height: 6px;
+    min-width: 4px;
+    background: color-mix(in srgb, #e8c35a 55%, transparent);
+    border: 1px solid #e8c35a;
+    border-radius: 3px;
+    cursor: pointer;
+    z-index: 1;
+}
+.tl-bm:hover { background: #e8c35a; }
+
+.tl-ov-bm {
+    position: absolute;
+    top: 1px;
+    height: 3px;
+    min-width: 3px;
+    background: #e8c35a;
+    border-radius: 2px;
+    pointer-events: none;
+    opacity: 0.9;
+}
+
+/* The bookmark panel: the export panel's idiom (same title/range/preset
+   styling) plus a name field and the saved-moments list. */
+.tl-bm-name {
+    width: 100%;
+    margin: 2px 0 8px;
+    padding: 7px 10px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 13px;
+}
+.tl-bm-name:focus { outline: none; border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+
+.tl-bm-list {
+    max-height: 240px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.tl-bm-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    cursor: pointer;
+    min-width: 0;
+}
+.tl-bm-row:hover { border-color: color-mix(in srgb, #e8c35a 60%, transparent); background: color-mix(in srgb, #e8c35a 8%, transparent); }
+
+.tl-bm-row-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+}
+.tl-bm-row-name::before { content: "🔖 "; font-size: 11px; }
+
+.tl-bm-row-when {
+    flex: 0 0 auto;
+    font-size: 11px;
+    color: var(--muted);
+    white-space: nowrap;
+}
+
+.tl-bm-del { flex: 0 0 auto; }
+.tl-bm-del:hover { color: var(--err); }
+
+@media (max-width: 560px) {
+    /* Narrow phones: the when-label wraps under the name instead of crushing it. */
+    .tl-bm-row { flex-wrap: wrap; }
+    .tl-bm-row-when { order: 3; width: 100%; padding-left: 2px; }
+}
+
 .event-player-foot {
     display: flex;
     align-items: center;

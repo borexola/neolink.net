@@ -1317,6 +1317,7 @@
             const down = (e) => {
                 if (e.button !== 0 && e.pointerType === 'mouse') return;
                 if (e.target.closest('.tl-overview')) return; // the day strip pans, never scrubs
+                if (e.target.closest('.tl-bm')) return; // a bookmark ribbon click jumps (Blazor), never scrubs
                 e.preventDefault();
                 try { el.setPointerCapture(e.pointerId); } catch { }
                 send(e, false);
@@ -1585,6 +1586,7 @@
                     case '0': action = 'zoom:reset'; break;
                     case 't': case 'T': action = 'clock'; break;
                     case 's': case 'S': action = 'snap'; break;
+                    case 'b': case 'B': action = 'bookmark'; break;
                 }
                 if (!action) return;
                 e.preventDefault();

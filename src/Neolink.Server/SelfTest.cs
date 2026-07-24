@@ -491,6 +491,61 @@ public static class SelfTest
             finally { File.Delete(tmpJson); File.Delete(tmpToml); }
         });
 
+        Test("timeline bookmarks: store round-trip, validation, corrupt-file survival", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-bm-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var store = new Recording.BookmarkStore(dir);
+                var b = store.Add("2026-07-23", 36000, 36480, "  My son's first walk  ");
+                AssertEq(b.Name, "My son's first walk"); // trimmed
+                AssertEq(b.Date, "2026-07-23");
+                Assert(store.List().Count == 1, "one bookmark after add");
+
+                // Round-trip: a fresh store instance reads the same file back.
+                var reread = new Recording.BookmarkStore(dir);
+                AssertEq(reread.List().Count, 1);
+                AssertEq(reread.List()[0].Name, "My son's first walk");
+                AssertEq(reread.List()[0].From, 36000d);
+                AssertEq(reread.List()[0].To, 36480d);
+
+                // Sort: newest day first, then start time within the day.
+                store.Add("2026-07-24", 100, 200, "later day");
+                store.Add("2026-07-23", 100, 200, "same day, earlier");
+                var list = store.List();
+                AssertEq(list[0].Name, "later day");
+                AssertEq(list[1].Name, "same day, earlier");
+
+                // Remove: by id, unknown id is a clean no.
+                Assert(store.Remove(b.Id), "existing id removes");
+                Assert(!store.Remove(b.Id), "second remove -> false");
+                Assert(!store.Remove("nope"), "unknown id -> false");
+
+                // Validation: each bad input names its problem as a FormatException.
+                void Rejects(string what, Action a)
+                {
+                    try { a(); } catch (FormatException) { return; }
+                    throw new Exception($"{what}: accepted, should have been rejected");
+                }
+                Rejects("bad date", () => store.Add("23/07/2026", 0, 10, "x"));
+                Rejects("from >= to", () => store.Add("2026-07-23", 50, 50, "x"));
+                Rejects("negative from", () => store.Add("2026-07-23", -1, 10, "x"));
+                Rejects("past midnight", () => store.Add("2026-07-23", 0, 90000, "x"));
+                Rejects("NaN", () => store.Add("2026-07-23", double.NaN, 10, "x"));
+                Rejects("empty name", () => store.Add("2026-07-23", 0, 10, "   "));
+                Rejects("name too long", () => store.Add("2026-07-23", 0, 10, new string('x', 200)));
+
+                // A corrupt file is set aside, never silently clobbered.
+                File.WriteAllText(Path.Combine(dir, "bookmarks.json"), "{ not json");
+                var survived = new Recording.BookmarkStore(dir);
+                AssertEq(survived.List().Count, 0);
+                Assert(File.Exists(Path.Combine(dir, "bookmarks.json.corrupt")),
+                    "corrupt file set aside as .corrupt");
+            }
+            finally { try { Directory.Delete(dir, recursive: true); } catch { } }
+        });
+
         Test("stream hub GOP cache: new viewer primed keyframe-first, resets per keyframe", () =>
         {
             // A new viewer must receive the buffered GOP (keyframe onward) at once so

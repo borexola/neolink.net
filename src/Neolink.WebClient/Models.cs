@@ -298,6 +298,9 @@ public sealed record ApiSystemStats(ApiSystemInfo? Info, List<ApiSystemSample> S
 /// <summary>GET /api/recordings/{camera}/{date} — one continuous-recording segment.
 /// Seconds = media length (0 from servers that predate it); the timeline sizes
 /// coverage with it so a cut-short segment doesn't claim minutes it lacks.</summary>
+/// <summary>One timeline bookmark: a named [From, To] stretch (seconds of day) of one date's footage.</summary>
+public sealed record ApiBookmark(string Id, string Date, double From, double To, string Name);
+
 public sealed record ApiSegment(string File, long Size, double Seconds = 0, bool Live = false)
 {
     /// <summary>"HH-mm-ss.mp4" → "HH:mm:ss".</summary>
@@ -424,6 +427,8 @@ public static class UiIcon
             "wrench" => "<path d=\"M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z\"/>",
             "archive" => "<polyline points=\"21 8 21 21 3 21 3 8\"/><rect x=\"1\" y=\"3\" width=\"22\" height=\"5\"/><line x1=\"10\" y1=\"12\" x2=\"14\" y2=\"12\"/>",
             "bell" => "<path d=\"M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9\"/><path d=\"M13.73 21a2 2 0 0 1-3.46 0\"/>",
+            // The classic ribbon bookmark.
+            "bookmark" => "<path d=\"M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z\"/>",
             // AI features (a big and a small four-point star).
             "sparkles" => "<path d=\"M11 3l1.7 4.6L17.3 9.3l-4.6 1.7L11 15.6 9.3 11 4.7 9.3 9.3 7.6z\"/>"
                 + "<path d=\"M18.5 14l.9 2.4 2.4.9-2.4.9-.9 2.4-.9-2.4-2.4-.9 2.4-.9z\"/>",

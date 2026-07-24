@@ -195,6 +195,8 @@ public static class WebApi
     private sealed record PrivacyRequest(bool? On);
     private sealed record SuspendRequest(bool? Suspended);
     private sealed record RecordOnDemandRequest(bool Active);
+    /// <summary>Timeline bookmark: a named [From, To] range (seconds of day) on one date.</summary>
+    private sealed record BookmarkRequest(string? Date, double? From, double? To, string? Name);
     private sealed record StreamSettingsRequest(string? Stream, uint? Width, uint? Height,
         uint? Framerate, uint? Bitrate);
     private sealed record ReviewRequest(bool? Reviewed);
@@ -2492,6 +2494,57 @@ public static class WebApi
                 if (deleted > 0)
                     Log.Info($"Events: deleted {deleted} event(s) on request ({FormatBytes(freed)} freed)");
                 return Results.Json(new { deleted, freed, failed, ongoing, unknown });
+            });
+
+            // ------------------------------------------------------------ timeline bookmarks
+            //
+            // Named stretches of a day's footage ("my son's first walk",
+            // 10:00–10:08), stored in bookmarks.json IN the recordings root so
+            // they travel with the footage. Shared by every user of the server,
+            // like the recordings themselves. Web-UI sessions are validated by
+            // the middleware; RTSP-user setups need Basic auth to write (reading
+            // is as open as the events list).
+            var bookmarks = new Neolink.Recording.BookmarkStore(events.Root);
+
+            object ShapeBookmark(Neolink.Recording.Bookmark b) =>
+                new { id = b.Id, date = b.Date, from = b.From, to = b.To, name = b.Name };
+
+            IResult? CheckBookmarkWriteAuth(HttpContext ctx)
+            {
+                if (userStore.Enabled) return null; // middleware already validated the session
+                if (users.Count == 0) return null;  // open server
+                var creds = NetUtil.DecodeBasicAuth(ctx.Request.Headers.Authorization);
+                if (creds != null && users.TryGetValue(creds.Value.User, out var pw)
+                    && NetUtil.FixedTimeEquals(pw, creds.Value.Pass))
+                    return null;
+                ctx.Response.Headers.WWWAuthenticate = "Basic realm=\"neolink\"";
+                return Results.Json(new { error = "authentication required" }, statusCode: 401);
+            }
+
+            app.MapGet("/api/bookmarks", () =>
+                Results.Json(bookmarks.List().Select(ShapeBookmark)));
+
+            app.MapPost("/api/bookmarks", (BookmarkRequest req, HttpContext ctx) =>
+            {
+                if (CheckBookmarkWriteAuth(ctx) is { } denied) return denied;
+                try
+                {
+                    var b = bookmarks.Add(req.Date, req.From ?? double.NaN, req.To ?? double.NaN, req.Name);
+                    Log.Info($"Bookmark saved: \"{b.Name}\" ({b.Date})");
+                    return Results.Json(ShapeBookmark(b));
+                }
+                catch (FormatException ex)
+                {
+                    return Results.Json(new { error = ex.Message }, statusCode: 400);
+                }
+            });
+
+            app.MapDelete("/api/bookmarks/{id}", (string id, HttpContext ctx) =>
+            {
+                if (CheckBookmarkWriteAuth(ctx) is { } denied) return denied;
+                return bookmarks.Remove(id)
+                    ? Results.Json(new { ok = true })
+                    : Results.Json(new { error = "unknown bookmark" }, statusCode: 404);
             });
         }
 

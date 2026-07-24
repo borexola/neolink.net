@@ -30,6 +30,7 @@ src/Neolink/
 #   settings.json      per-camera recording/AI settings
 #   camera-state.json  per-camera suspend flags
 #   storage-trend.json disk-usage history
+#   bookmarks.json     timeline bookmarks — names of personal moments
 secret.key
 users.json
 notifications.json
@@ -37,6 +38,7 @@ ai.json
 settings.json
 camera-state.json
 storage-trend.json
+bookmarks.json
 # ...but the editor's own settings are not ours to hide.
 !.vscode/settings.json
 

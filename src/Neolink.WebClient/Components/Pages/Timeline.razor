@@ -84,6 +84,12 @@
                         title="Export footage: download a period of this day (up to the whole day) as a zip of its recordings"
                         @onclick="OpenExportAsync">@UiIcon.Render("download", 13) <span class="tool-name">Export</span></button>
             }
+            @if (_supported)
+            {
+                <button class="tool-btn tl-bm-btn @(_showBm ? "active" : "")"
+                        title="Bookmarks: save a named stretch of this day, and jump back to saved moments   —   B"
+                        @onclick="OpenBookmarks">@UiIcon.Render("bookmark", 13) <span class="tool-name">Bookmark</span></button>
+            }
             <button class="tool-btn tl-studio-btn @(_studio ? "active" : "")"
                     title="@(_studio
                         ? "Studio layout is on — click to switch back to the classic view (your choice is saved)"
@@ -152,6 +158,7 @@
                     <span>+ − 0</span><span>Zoom in / out / whole day</span>
                     <span>T</span><span>Jump to an exact time</span>
                     <span>S</span><span>Save a still (focused monitor, or a lone camera)</span>
+                    <span>B</span><span>Bookmarks — save this moment / jump to a saved one</span>
                 </div>
                 <div class="event-sub tl-keys-hint">
                     Drag the thin day strip above the lanes to move the zoomed view. Double-click the lanes to zoom back out.
@@ -265,6 +272,79 @@
         </div>
     }
 
+    @if (_showBm)
+    {
+        <div class="tl-keys-backdrop" @onclick="() => _showBm = false">
+            <div class="tl-keys-panel tl-bm-panel" @onclick:stopPropagation="true">
+                <div class="tl-keys-title">
+                    <span>BOOKMARKS</span>
+                    <button class="icon-btn" title="Close" @onclick="() => _showBm = false">✕</button>
+                </div>
+
+                <div class="tl-export-sec">Save a moment — @_date.ToString("ddd, d MMM yyyy")</div>
+                <input class="tl-bm-name" maxlength="80" spellcheck="false"
+                       placeholder="Name this moment — e.g. My son's first walk"
+                       @bind="_bmName" @bind:event="oninput" />
+                <div class="tl-export-range">
+                    <label>From <input class="tl-clock-edit" value="@_bmFrom" spellcheck="false" placeholder="HH:mm:ss"
+                                       @onchange="e => BmRangeEdited(e, from: true)" /></label>
+                    <span class="tl-export-arrow">→</span>
+                    <label>To <input class="tl-clock-edit" value="@_bmTo" spellcheck="false" placeholder="HH:mm:ss"
+                                     @onchange="e => BmRangeEdited(e, from: false)" /></label>
+                    @if (RangeValid(_bmFrom, _bmTo, out var bmF, out var bmT))
+                    {
+                        <span class="tl-export-window" title="Length of the chosen range">@SpanLabel((bmT - bmF).TotalSeconds)</span>
+                    }
+                </div>
+                <div class="tl-export-presets">
+                    @if (Zoomed)
+                    {
+                        <button class="chip" title="The stretch of the day you are zoomed into"
+                                @onclick="@(() => { _bmFrom = TimeText(_viewStart); _bmTo = TimeText(Math.Min(_viewStart + _viewSpan, DaySeconds - 1)); })">Zoomed view</button>
+                    }
+                    <button class="chip" title="Five minutes starting at the cursor"
+                            @onclick="@(() => { _bmFrom = TimeText(_t); _bmTo = TimeText(Math.Min(_t + 300, DaySeconds - 1)); })">Cursor + 5 min</button>
+                    <button class="chip" title="Half a minute either side of the cursor"
+                            @onclick="@(() => { _bmFrom = TimeText(Math.Max(0, _t - 30)); _bmTo = TimeText(Math.Min(_t + 30, DaySeconds - 1)); })">Cursor ± 30 s</button>
+                </div>
+                @if (_bmError != null)
+                {
+                    <div class="tl-export-est"><span class="tl-export-err">@_bmError</span></div>
+                }
+                <div class="tl-export-actions">
+                    <button class="chip" @onclick="() => _showBm = false">Close</button>
+                    <button class="tl-play tl-export-go" disabled="@_bmBusy" @onclick="SaveBookmarkAsync">
+                        @UiIcon.Render("bookmark", 14) Save bookmark
+                    </button>
+                </div>
+
+                @if (_bookmarks.Any())
+                {
+                    <div class="tl-export-sec">Saved — click one to jump to it</div>
+                    <div class="tl-bm-list">
+                        @foreach (var b in _bookmarks)
+                        {
+                            <div class="tl-bm-row" role="button" title="Jump to this moment"
+                                 @onclick="() => JumpToBookmarkAsync(b)" @key="b.Id">
+                                <span class="tl-bm-row-name">@b.Name</span>
+                                <span class="tl-bm-row-when">@BookmarkDay(b) · @TimeText(b.From)–@TimeText(b.To)</span>
+                                <button class="icon-btn tl-bm-del" title="Delete this bookmark (the footage stays)"
+                                        @onclick="() => DeleteBookmarkAsync(b)" @onclick:stopPropagation="true">✕</button>
+                            </div>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <div class="event-sub tl-export-hint">
+                        Nothing saved yet. Zoom or scrub to a moment worth keeping, set the range above, name it, save —
+                        it appears as a gold ribbon on the timeline from then on.
+                    </div>
+                }
+            </div>
+        </div>
+    }
+
     @if (_error != null)
     {
         <div class="notice error">@_error</div>
@@ -352,6 +432,10 @@
                                 }
                             }
                         }
+                        @foreach (var b in DayBookmarks)
+                        {
+                            <div class="tl-ov-bm" style="left:@DayPct(b.From); width:@DayPct(b.To - b.From)"></div>
+                        }
                         <div class="tl-ov-cursor" style="left:@DayPct(_t)"></div>
                         @if (Zoomed)
                         {
@@ -359,6 +443,19 @@
                         }
                     </div>
                     <div class="tl-ruler">
+                        @* Saved bookmarks: gold ribbons riding the ruler's empty top
+                           band — no extra row, so the name labels never drift off
+                           their lanes. Clicking one jumps to the moment (the scrub
+                           JS ignores pointerdowns on .tl-bm). *@
+                        @foreach (var b in DayBookmarks)
+                        {
+                            @if (InView(b.From, b.To))
+                            {
+                                <div class="tl-bm" title="@b.Name — @TimeText(b.From)–@TimeText(b.To) (click to jump there)"
+                                     style="left:@Pct(b.From); width:@WMark(b.To - b.From)"
+                                     @onclick="() => JumpToBookmarkAsync(b)" @key="b.Id"></div>
+                            }
+                        }
                         @foreach (var (t, label) in RulerTicks())
                         {
                             @if (label != null)
@@ -765,6 +862,7 @@
             await LoadCamerasAsync();
             _included.RemoveWhere(name => _cameras.All(c => !string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase)));
             await LoadDayAsync();
+            await LoadBookmarksAsync();
 
             _selfRef = DotNetObjectReference.Create(this);
             await JS.InvokeVoidAsync("neolink.tlKeysInit", _selfRef);
@@ -1167,6 +1265,9 @@
                     break;
                 case "clock":
                     OpenClockEdit();
+                    break;
+                case "bookmark":
+                    OpenBookmarks();
                     break;
                 case "snap":
                     // Unambiguous targets only: the focused monitor, or a lone camera.
@@ -1659,11 +1760,15 @@
         await ExportEstimateAsync();
     }
 
-    private bool ExportRangeValid(out TimeSpan fromT, out TimeSpan toT)
+    private bool ExportRangeValid(out TimeSpan fromT, out TimeSpan toT) =>
+        RangeValid(_exFrom, _exTo, out fromT, out toT);
+
+    /// <summary>"HH:mm[:ss]" pair → a valid in-day range (shared by export and bookmarks).</summary>
+    private static bool RangeValid(string fromText, string toText, out TimeSpan fromT, out TimeSpan toT)
     {
         toT = default;
-        return TimeSpan.TryParse(_exFrom, System.Globalization.CultureInfo.InvariantCulture, out fromT)
-            && TimeSpan.TryParse(_exTo, System.Globalization.CultureInfo.InvariantCulture, out toT)
+        return TimeSpan.TryParse(fromText, System.Globalization.CultureInfo.InvariantCulture, out fromT)
+            && TimeSpan.TryParse(toText, System.Globalization.CultureInfo.InvariantCulture, out toT)
             && fromT >= TimeSpan.Zero && toT <= TimeSpan.FromDays(1) && fromT < toT;
     }
 
@@ -1724,6 +1829,181 @@
         try { await JS.InvokeVoidAsync("neolink.download", $"{Base}{ExportQuery()}{format}{TokenQuery('&')}"); } catch { }
         _showExport = false;
     }
+
+    // ------------------------------------------------------------ bookmarks
+    //
+    // Named stretches of a day's footage ("My son's first walk", 10:00–10:08),
+    // stored server-side next to the recordings, shared by every user. Creation
+    // goes through the panel — the same range idiom as Export — so no new
+    // gesture touches the lanes and scrubbing stays exactly as it was.
+
+    private bool _showBm;
+    private string _bmName = "";
+    private string _bmFrom = "00:00:00";
+    private string _bmTo = "00:05:00";
+    private string? _bmError;
+    private bool _bmBusy;
+    private readonly List<ApiBookmark> _bookmarks = new();
+
+    /// <summary>The loaded day's bookmarks — what the lanes and overview draw.</summary>
+    private IEnumerable<ApiBookmark> DayBookmarks
+    {
+        get
+        {
+            var day = _date.ToString("yyyy-MM-dd");
+            return _bookmarks.Where(b => b.Date == day);
+        }
+    }
+
+    private async Task LoadBookmarksAsync()
+    {
+        try
+        {
+            var list = await GetJsonAsync<List<ApiBookmark>>("/api/bookmarks");
+            if (list != null)
+            {
+                _bookmarks.Clear();
+                _bookmarks.AddRange(list);
+            }
+        }
+        catch { /* bookmarks are a nicety; the timeline works without them */ }
+    }
+
+    /// <summary>Toolbar button / B key. Prefills the range from the zoomed view when
+    /// zoomed (the "zoom to the incident, press B" path), else from the cursor.</summary>
+    private void OpenBookmarks()
+    {
+        if (_showBm) { _showBm = false; return; }
+        if (Zoomed)
+        {
+            _bmFrom = TimeText(_viewStart);
+            _bmTo = TimeText(Math.Min(_viewStart + _viewSpan, DaySeconds - 1));
+        }
+        else
+        {
+            _bmFrom = TimeText(_t);
+            _bmTo = TimeText(Math.Min(_t + 300, DaySeconds - 1));
+        }
+        _bmError = null;
+        _showBm = true;
+    }
+
+    private void BmRangeEdited(ChangeEventArgs e, bool from)
+    {
+        var text = ((string?)e.Value ?? "").Trim();
+        if (from) _bmFrom = text; else _bmTo = text;
+        _bmError = null;
+    }
+
+    private async Task SaveBookmarkAsync()
+    {
+        if (_bmBusy) return;
+        if (!RangeValid(_bmFrom, _bmTo, out var f, out var t))
+        {
+            _bmError = "times must be HH:mm[:ss] with From before To";
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(_bmName))
+        {
+            _bmError = "give the moment a name";
+            return;
+        }
+        _bmBusy = true;
+        _bmError = null;
+        try
+        {
+            var req = new HttpRequestMessage(HttpMethod.Post, $"{ApiBase}/api/bookmarks");
+            if (!string.IsNullOrEmpty(_token))
+                req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _token);
+            req.Content = new StringContent(JsonSerializer.Serialize(new
+            {
+                date = _date.ToString("yyyy-MM-dd"),
+                from = f.TotalSeconds,
+                to = t.TotalSeconds,
+                name = _bmName.Trim(),
+            }), System.Text.Encoding.UTF8, "application/json");
+            using var res = await Http.SendAsync(req);
+            if (res.IsSuccessStatusCode)
+            {
+                var saved = await res.Content.ReadFromJsonAsync<ApiBookmark>();
+                if (saved != null)
+                {
+                    _bookmarks.Add(saved);
+                    SortBookmarks();
+                }
+                _bmName = ""; // panel stays open: the new row appearing under Saved IS the confirmation
+            }
+            else
+            {
+                string? msg = null;
+                try
+                {
+                    var el = await res.Content.ReadFromJsonAsync<JsonElement>();
+                    if (el.TryGetProperty("error", out var err)) msg = err.GetString();
+                }
+                catch { }
+                _bmError = msg ?? "could not save the bookmark";
+            }
+        }
+        catch
+        {
+            _bmError = "could not save — is the server reachable?";
+        }
+        finally
+        {
+            _bmBusy = false;
+        }
+    }
+
+    /// <summary>Mirror of the server's ordering: newest day first, then start time.</summary>
+    private void SortBookmarks() =>
+        _bookmarks.Sort((a, b) =>
+        {
+            int byDay = string.CompareOrdinal(b.Date, a.Date);
+            return byDay != 0 ? byDay : a.From.CompareTo(b.From);
+        });
+
+    private async Task DeleteBookmarkAsync(ApiBookmark b)
+    {
+        try
+        {
+            var req = new HttpRequestMessage(HttpMethod.Delete,
+                $"{ApiBase}/api/bookmarks/{Uri.EscapeDataString(b.Id)}");
+            if (!string.IsNullOrEmpty(_token))
+                req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _token);
+            using var res = await Http.SendAsync(req);
+            if (res.IsSuccessStatusCode || res.StatusCode == System.Net.HttpStatusCode.NotFound)
+                _bookmarks.RemoveAll(x => x.Id == b.Id); // 404 = someone else already deleted it
+        }
+        catch { /* transient: it stays in the list, deleting again works */ }
+    }
+
+    /// <summary>Click a ribbon or a Saved row: land on the moment — cursor at its
+    /// start, view zoomed to the range with air either side, playing.</summary>
+    private async Task JumpToBookmarkAsync(ApiBookmark b)
+    {
+        _showBm = false;
+        if (DateTime.TryParseExact(b.Date, "yyyy-MM-dd", null,
+                System.Globalization.DateTimeStyles.None, out var day)
+            && day.Date != _date && day.Date <= DateTime.Today)
+        {
+            _date = day.Date;
+            await LoadDayAsync(); // loads coverage; sets its own cursor, overridden below
+        }
+        _t = Math.Clamp(b.From, 0, DaySeconds - 1);
+        double len = Math.Max(b.To - b.From, 1);
+        _viewSpan = Math.Clamp(len * 1.5, MinSpan, DaySeconds);
+        _viewStart = Math.Clamp(b.From - (_viewSpan - len) / 2, 0, DaySeconds - _viewSpan);
+        _playing = true;
+        await SyncVideosAsync();
+        StateHasChanged();
+    }
+
+    private static string BookmarkDay(ApiBookmark b) =>
+        DateTime.TryParseExact(b.Date, "yyyy-MM-dd", null,
+            System.Globalization.DateTimeStyles.None, out var d)
+            ? d.ToString("ddd, d MMM yyyy")
+            : b.Date;
 
     private static string SizeText(long bytes) => bytes switch
     {
