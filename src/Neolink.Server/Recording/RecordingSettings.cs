@@ -36,7 +36,11 @@ public sealed record CameraRecordingSettings(bool Events, bool Continuous, List<
     // the camera's self-wakes to the timeline as continuous segments — a passive
     // tap of frames that are already flowing, so it costs the battery nothing.
     // Default ON; footage follows the continuous retention/archive settings.
-    bool WakeTimeline = true)
+    bool WakeTimeline = true,
+    // AI event descriptions: send this camera's event frames to the configured
+    // LLM. Strict opt-in, and inert unless the feature is also enabled globally
+    // (Settings → AI) — the global switch owns the endpoint.
+    bool AiDescribe = false)
 {
     /// <summary>Known detection labels (what the UI offers as event-type filters).</summary>
     public static readonly string[] KnownLabels =
@@ -193,7 +197,7 @@ public sealed class RecordingSettings
         bool? scheduleEnabled = null,
         bool? archiveEvents = null, bool? archiveContinuous = null,
         int? archiveRetentionDays = null, bool setArchiveRetention = false,
-        bool? wakeTimeline = null)
+        bool? wakeTimeline = null, bool? aiDescribe = null)
     {
         lock (_gate)
         {
@@ -214,7 +218,8 @@ public sealed class RecordingSettings
                 archiveEvents ?? cur.ArchiveEvents,
                 archiveContinuous ?? cur.ArchiveContinuous,
                 setArchiveRetention ? archiveRetentionDays : cur.ArchiveRetentionDays,
-                wakeTimeline ?? cur.WakeTimeline);
+                wakeTimeline ?? cur.WakeTimeline,
+                aiDescribe ?? cur.AiDescribe);
             _cameras[camera] = next;
             SaveLocked();
             return next;

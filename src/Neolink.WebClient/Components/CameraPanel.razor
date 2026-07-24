@@ -2,6 +2,7 @@
 @using System.Net.Http.Headers
 @implements IDisposable
 @inject HttpClient Http
+@inject IJSRuntime JS
 
 @* Per-camera settings/control dialog. Everything shown is discovered from the
    camera: device info, encode profiles, and the controls the camera supports.
@@ -13,8 +14,57 @@
     <div class="campanel-head">
         <span class="dot @(_caps?.Online == true ? "on" : "off")"></span>
         <span class="campanel-title">@CameraName</span>
+        @* Suspend lives here, right-aligned — one always-reachable control instead
+           of a whole section. The privacy warning moved into its confirm card. *@
+        @if (Camera?.CanSuspend == true)
+        {
+            @if (_suspendBusy)
+            {
+                <span class="chip chip-off head-suspend" aria-busy="true"><span class="btn-spinner"></span>Saving…</span>
+            }
+            else if (_suspended == true)
+            {
+                <button class="chip chip-active head-suspend" disabled="@(!CanEditRecording)"
+                        title="Suspended in Neolink.NET — click to resume (the camera itself keeps running)"
+                        @onclick="() => SetSuspendAsync(false)">@UiIcon.Render("eye-off", 11) suspended — resume</button>
+            }
+            else
+            {
+                <button class="chip chip-off head-suspend" disabled="@(!CanEditRecording)"
+                        title="Suspend in Neolink.NET — no viewing or recording here until resumed"
+                        @onclick="RequestSuspendAsync">@UiIcon.Render("eye-off", 11) suspend</button>
+            }
+        }
         <button class="icon-btn" title="Close" @onclick="CloseAsync">✕</button>
     </div>
+
+    @if (_confirmSuspend)
+    {
+        @* Pinned above the scrollable body so it is in view no matter where the
+           panel was scrolled. Confirm persists the "don't show again" choice;
+           Cancel never does. *@
+        <div class="suspend-confirm" role="alertdialog" aria-label="Suspend this camera?">
+            <div class="campanel-section-title">@UiIcon.Render("eye-off", 13) SUSPEND THIS CAMERA?</div>
+            <div class="notice small">
+                Stops <b>Neolink.NET</b> from connecting to this camera — it can't be viewed
+                or recorded here, and its Home Assistant entities go unavailable, until
+                resumed. No restart needed; the setting survives one.
+            </div>
+            <div class="notice warn small">
+                ⚠ This only stops <b>Neolink.NET</b>. The camera keeps running: its own
+                <b>SD-card / cloud recording</b> and any <b>other system</b> pulling its
+                stream directly are unaffected. It is not a privacy guarantee.
+            </div>
+            <label class="suspend-skip">
+                <input type="checkbox" @bind="_suspendSkipFuture" />
+                <span>Do not show me this again</span>
+            </label>
+            <div class="row-actions suspend-confirm-actions">
+                <button class="chip chip-danger" @onclick="ConfirmSuspendAsync">Confirm — stop Neolink.NET for this camera</button>
+                <button class="chip" @onclick="() => _confirmSuspend = false">Cancel</button>
+            </div>
+        </div>
+    }
 
     @if (_error != null)
     {
@@ -27,25 +77,15 @@
     }
     else if (_suspended == true)
     {
-        @* A suspended camera reads offline — but the resume control must stay
-           reachable, so it gets its own mini-panel instead of the offline notice. *@
+        @* A suspended camera reads offline — this mini-panel replaces the offline
+           notice and explains the state. The ONE resume control is the header
+           chip above (a second button here just duplicated it). *@
         <div class="campanel-section">
             <div class="campanel-section-title">@UiIcon.Render("eye-off", 13) SUSPENDED</div>
             <div class="notice small">
                 This camera is <b>suspended in Neolink.NET</b> — no connection is held, so it
                 isn't viewed or recorded here and its Home Assistant entities are unavailable.
-            </div>
-            <div class="control-row">
-                <span>Suspended in Neolink.NET — on</span>
-                @if (_suspendBusy)
-                {
-                    <span class="chip chip-off" aria-busy="true"><span class="btn-spinner"></span>Saving…</span>
-                }
-                else
-                {
-                    <button class="chip chip-active" disabled="@(!CanEditRecording)"
-                            @onclick="() => SetSuspendAsync(false)">suspended — click to resume</button>
-                }
+                Resume it with the button in the header above.
             </div>
             <div class="notice warn small">
                 ⚠ The camera itself keeps running: its own SD-card / cloud recording and any
@@ -574,47 +614,6 @@
         </div> @* /campanel-col (left) *@
 
         <div class="campanel-col">
-        @if (Camera?.CanSuspend == true)
-        {
-            <div class="campanel-section">
-                <div class="campanel-section-title">@UiIcon.Render("eye-off", 13) SUSPEND</div>
-                <div class="notice small">
-                    Stops <b>Neolink.NET</b> from connecting to this camera — it can't be viewed
-                    or recorded here, and its Home Assistant entities go unavailable, until
-                    resumed. No restart needed; the setting survives one.
-                </div>
-                <div class="control-row">
-                    <span>Suspended in Neolink.NET @(_suspended == true ? "— on" : "")</span>
-                    @if (_suspendBusy)
-                    {
-                        <span class="chip chip-off" aria-busy="true"><span class="btn-spinner"></span>Saving…</span>
-                    }
-                    else if (_suspended == true)
-                    {
-                        <button class="chip chip-active" disabled="@(!CanEditRecording)"
-                                @onclick="() => SetSuspendAsync(false)">suspended — click to resume</button>
-                    }
-                    else if (!_confirmSuspend)
-                    {
-                        <button class="chip chip-off" disabled="@(!CanEditRecording)"
-                                @onclick="() => _confirmSuspend = true">active</button>
-                    }
-                    else
-                    {
-                        <span class="row-actions">
-                            <button class="chip chip-danger" @onclick="() => SetSuspendAsync(true)">Confirm — stop Neolink.NET for this camera</button>
-                            <button class="chip" @onclick="() => _confirmSuspend = false">Cancel</button>
-                        </span>
-                    }
-                </div>
-                <div class="notice warn small">
-                    ⚠ This only stops <b>Neolink.NET</b>. The camera keeps running: its own
-                    <b>SD-card / cloud recording</b> and any <b>other system</b> pulling its
-                    stream directly are unaffected. It is not a privacy guarantee.
-                </div>
-            </div>
-        }
-
         @if (_http?.Volume is { } vol)
         {
             <div class="campanel-section">
@@ -924,6 +923,29 @@
                             <div class="event-sub">@ScheduleSummary</div>
                         </div>
                     }
+                    @* Per-camera AI opt-in — only offered while the feature is ON
+                       globally (Settings → AI owns the endpoint and the budget). *@
+                    @if (_recording.AiAvailable)
+                    {
+                        <div class="control-row">
+                            <span>AI descriptions <span class="beta-tag exp-tag">EXPERIMENTAL</span></span>
+                            <button class="chip @(_recording.AiDescribe ? "" : "chip-off")"
+                                    title="@(_recording.AiDescribe
+                                        ? "This camera's events are described by the configured LLM — click to stop"
+                                        : "Click to have the configured LLM describe this camera's events")"
+                                    @onclick="() => SetRecordingAsync(aiDescribe: !_recording.AiDescribe)">
+                                @(_recording.AiDescribe ? "on" : "off")
+                            </button>
+                        </div>
+                        @if (_recording.AiDescribe)
+                        {
+                            <div class="event-sub ai-sub">
+                                While an event records, low-res frames (1/sec) go to the LLM from
+                                Settings → AI; its description lands in the event's metadata and the
+                                server log.
+                            </div>
+                        }
+                    }
                 }
                 @if (_recording.ContinuousAvailable)
                 {
@@ -1131,8 +1153,10 @@
 
     /// <summary>Whether the Camera settings tab has anything to show — false for
     /// generic RTSP cameras (no Baichuan/HTTP control surface at all).</summary>
+    // Suspend moved to the panel header (always visible), so it no longer makes
+    // the Camera-settings tab exist on its own.
     private bool HasDeviceControls =>
-        _profiles is { Count: > 0 } || _http != null || Camera?.CanSuspend == true
+        _profiles is { Count: > 0 } || _http != null
         || _caps?.Features is { } f && (f.Battery || f.Ptz || f.Zoom || f.Led || f.Siren
             || f.Privacy || f.Pir || f.Reboot);
 
@@ -1162,6 +1186,14 @@
     private bool? _suspended;    // Neolink-side suspend (beta); null when unsupported
     private bool _confirmSuspend;
     private bool _suspendBusy;
+    // "Do not show me this again" for the suspend warning. With web accounts the
+    // choice lives in the per-user settings blob (/api/me/settings/confirms), so
+    // it follows the account across browsers; without accounts there is no
+    // cross-browser identity, so this browser's localStorage is the best truth.
+    private bool _suspendSkipFuture;      // the checkbox in the confirm card
+    private bool _skipSuspendWarning;     // the loaded, honored preference
+    private bool _confirmPrefsFromServer; // where the preference was read from
+    private Dictionary<string, JsonElement>? _confirmPrefs; // full blob, preserved on save
     private int _requerySeq;     // invalidates the post-resume reconnect poll
     private bool? _sirenOn;   // last known state (pushes / this panel's own actions)
     private bool? _privacyOn;
@@ -1697,7 +1729,10 @@
         _quickReplyId = 0;
         _camTab = "controls";
         _confirmReboot = _confirmSiren = _confirmPrivacy = _privacyBusy = false;
-        _confirmSuspend = _suspendBusy = false;
+        _confirmSuspend = _suspendBusy = _suspendSkipFuture = false;
+        // The suspend-warning opt-out loads in the background; until it lands the
+        // warning shows, which is the safe default.
+        _ = LoadConfirmPrefsAsync();
         // Suspend state: seeded from the camera list (reachable even while the
         // camera is offline), then confirmed against the server — the list entry
         // the parent passed in can be stale, e.g. right after resuming from this
@@ -1844,6 +1879,80 @@
         }
     }
 
+    /// <summary>The suspend click: straight to work when the user opted out of the
+    /// warning, otherwise the confirm card (checkbox always starts unticked).</summary>
+    private async Task RequestSuspendAsync()
+    {
+        if (_skipSuspendWarning)
+        {
+            await SetSuspendAsync(true);
+            return;
+        }
+        _suspendSkipFuture = false;
+        _confirmSuspend = true;
+    }
+
+    /// <summary>Confirm from the warning card: persist "don't show again" only on
+    /// this path — ticking the box and then cancelling must not stick.</summary>
+    private async Task ConfirmSuspendAsync()
+    {
+        _confirmSuspend = false;
+        if (_suspendSkipFuture && !_skipSuspendWarning)
+        {
+            _skipSuspendWarning = true;
+            await SaveConfirmPrefsAsync();
+        }
+        await SetSuspendAsync(true);
+    }
+
+    /// <summary>Reads the confirm preferences: the account blob when signed in
+    /// (follows the user across browsers), this browser's localStorage otherwise.</summary>
+    private async Task LoadConfirmPrefsAsync()
+    {
+        try
+        {
+            using var res = await Http.SendAsync(ServerRequest(HttpMethod.Get, "api/me/settings/confirms"));
+            if (res.IsSuccessStatusCode)
+            {
+                _confirmPrefs = await res.Content.ReadFromJsonAsync<Dictionary<string, JsonElement>>() ?? new();
+                _confirmPrefsFromServer = true;
+                _skipSuspendWarning = _confirmPrefs.TryGetValue("skipSuspendWarning", out var v)
+                                      && v.ValueKind == JsonValueKind.True;
+                return;
+            }
+        }
+        catch { /* fall through to the local fallback */ }
+        _confirmPrefsFromServer = false;
+        try
+        {
+            _skipSuspendWarning =
+                await JS.InvokeAsync<string?>("neolink.lsGet", "neolink.skipSuspendWarning") == "1";
+        }
+        catch { /* prerendering or JS unavailable: keep showing the warning */ }
+    }
+
+    /// <summary>Persists the choice where it was read from, keeping any other keys
+    /// in the account blob intact (read-modify-write of this page's own blob).</summary>
+    private async Task SaveConfirmPrefsAsync()
+    {
+        if (_confirmPrefsFromServer)
+        {
+            try
+            {
+                _confirmPrefs ??= new();
+                _confirmPrefs["skipSuspendWarning"] =
+                    JsonSerializer.SerializeToElement(_skipSuspendWarning);
+                var req = ServerRequest(HttpMethod.Put, "api/me/settings/confirms");
+                req.Content = JsonContent.Create(_confirmPrefs);
+                using var res = await Http.SendAsync(req);
+                if (res.IsSuccessStatusCode) return;
+            }
+            catch { /* fall through: at least this browser remembers */ }
+        }
+        try { await JS.InvokeVoidAsync("neolink.lsSet", "neolink.skipSuspendWarning", _skipSuspendWarning ? "1" : ""); }
+        catch { }
+    }
+
     /// <summary>Suspends/resumes the camera in Neolink (server-side; persisted). No
     /// camera write — this only drops/keeps Neolink's own connection.</summary>
     private async Task SetSuspendAsync(bool suspend)
@@ -1956,13 +2065,13 @@
         List<string>? scheduleDays = null, string? scheduleStart = null, string? scheduleEnd = null,
         bool? scheduleEnabled = null,
         bool? archiveEvents = null, bool? archiveContinuous = null, int? archiveRetentionDays = null,
-        bool? wakeTimeline = null)
+        bool? wakeTimeline = null, bool? aiDescribe = null)
     {
         object body = new
         {
             events, continuous, eventTypes, eventRetentionDays, continuousRetentionDays, recordStream,
             scheduleDays, scheduleStart, scheduleEnd, scheduleEnabled,
-            archiveEvents, archiveContinuous, archiveRetentionDays, wakeTimeline,
+            archiveEvents, archiveContinuous, archiveRetentionDays, wakeTimeline, aiDescribe,
         };
         if (await PostAsync("recording", body))
             _recording = await GetAsync<ApiRecordingSettings>("recording");
@@ -2182,11 +2291,14 @@
 
     // ------------------------------------------------------------ HTTP helpers
 
-    private string BaseUrl => $"{Server.TrimEnd('/')}/api/cameras/{Uri.EscapeDataString(CameraName)}";
+    private HttpRequestMessage NewRequest(HttpMethod method, string path) =>
+        ServerRequest(method, $"api/cameras/{Uri.EscapeDataString(CameraName)}/{path}");
 
-    private HttpRequestMessage NewRequest(HttpMethod method, string path)
+    /// <summary>An authenticated request against the server root (not this camera) —
+    /// the per-user settings endpoints live there.</summary>
+    private HttpRequestMessage ServerRequest(HttpMethod method, string path)
     {
-        var req = new HttpRequestMessage(method, $"{BaseUrl}/{path}");
+        var req = new HttpRequestMessage(method, $"{Server.TrimEnd('/')}/{path}");
         if (!string.IsNullOrEmpty(Token))
         {
             req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", Token);

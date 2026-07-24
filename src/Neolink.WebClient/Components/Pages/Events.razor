@@ -255,7 +255,16 @@
                                     }
                                 </div>
                                 <div class="event-row-main">
-                                    <span class="event-title">@ev.Icon @ev.Title</span>
+                                    <span class="event-title">
+                                        @ev.Icon @ev.Title
+                                        @if (ev.AiLevel != null)
+                                        {
+                                            @* The AI threat verdict at a glance; cameras without AI
+                                               descriptions simply have no dot. *@
+                                            <span class="ai-dot ai-@ev.AiLevel"
+                                                  title="@("AI threat level: " + ev.AiLevel.ToUpperInvariant() + (ev.AiDescription == null ? "" : " — " + ev.AiDescription))"></span>
+                                        }
+                                    </span>
                                     <span class="event-sub">@ev.Camera · @ev.Start.ToLocalTime().ToString("HH:mm:ss") · @Ago(ev.Start)</span>
                                 </div>
                                 @if (!ev.Reviewed)
@@ -283,6 +292,28 @@
                             @UiIcon.Render("activity", 13) Go live
                         </a>
                     </div>
+
+                    @if (sel.AiDescription != null || sel.AiLevel != null)
+                    {
+                        @* What the LLM saw (AI event descriptions) — only rendered for
+                           events that actually have one; cameras with the feature off
+                           never show an empty shell. *@
+                        <div class="event-ai ai-@(sel.AiLevel ?? "none")">
+                            @if (sel.AiLevel != null)
+                            {
+                                <span class="ai-level-chip ai-@sel.AiLevel">@sel.AiLevel.ToUpperInvariant()</span>
+                            }
+                            <span class="event-ai-text">@(sel.AiDescription ?? "classified without a description")</span>
+                            <span class="beta-tag exp-tag" title="AI event descriptions are experimental — prompts, models and this UI are still changing">EXPERIMENTAL</span>
+                        </div>
+                    }
+                    else if (sel.AiPending)
+                    {
+                        <div class="event-ai ai-none">
+                            <span class="event-ai-text event-ai-pending">🧠 AI is describing this event — refresh in a moment to see the text…</span>
+                            <span class="beta-tag exp-tag" title="AI event descriptions are experimental — prompts, models and this UI are still changing">EXPERIMENTAL</span>
+                        </div>
+                    }
 
                     @if (sel.HasClip)
                     {

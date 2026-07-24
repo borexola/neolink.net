@@ -981,7 +981,15 @@ video[data-live="1"] ~ .tile-waking { display: none; }
 
 .tile-privacy-icon { font-size: 26px; }
 
-/* A suspended overlay is a resume button: it must take clicks (the base overlay
+/* Suspended: informational like the asleep overlay — it absorbs clicks (so a
+   stray tap neither resumes nor falls through to the tile) and only the
+   explicit Resume button acts. */
+.tile-privacy.tile-suspended {
+    pointer-events: auto;
+    cursor: default;
+}
+
+/* A resume-capable overlay is a button: it must take clicks (the base overlay
    is click-through) and read as interactive. */
 .tile-privacy-resume {
     pointer-events: auto;
@@ -1984,6 +1992,47 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     padding: 6px 0;
 }
 
+/* Suspend chip in the panel header: the head is bold/spaced for its title —
+   the chip must not inherit that voice. */
+.campanel-head .head-suspend {
+    font-weight: 400;
+    letter-spacing: normal;
+    font-size: 11px;
+    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+/* The suspend confirmation card: sits between the pinned header and the
+   scrollable body, so it is in view wherever the panel was scrolled. */
+.suspend-confirm {
+    border: 1px solid var(--warn, #d9a441);
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin: 4px 0 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    background: var(--panel-2, var(--panel));
+}
+
+.suspend-skip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.suspend-confirm-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    justify-content: flex-end;
+}
+
 .campanel-title {
     flex: 1;
     overflow: hidden;
@@ -2221,8 +2270,12 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
    The HEIGHT is fixed (not content-driven): switching tabs must not resize the
    dialog — the body scrolls inside instead. */
 .settings-panel.settings-wide {
-    /* wide enough for all seven tabs on one line on a desktop screen */
-    width: min(880px, 96vw);
+    /* Wide enough for all NINE tabs on one line on a desktop screen — 880px fit
+       seven, then Notifications and AI arrived and wrapped to a second row.
+       980px fits them with only ~9px to spare, which another system's font
+       metrics would eat, so leave a real margin. Tabs still wrap gracefully
+       below this width; they just shouldn't have to on a desktop. */
+    width: min(1020px, 96vw);
     height: min(700px, 90vh);
 }
 
@@ -2851,6 +2904,65 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     overflow: hidden;
     text-overflow: ellipsis;
 }
+
+/* ---- AI event descriptions: the threat verdict and what the LLM saw. ----
+   Cameras without the feature never render these, so there is no empty shell. */
+.ai-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-left: 5px;
+    vertical-align: baseline;
+    flex: 0 0 auto;
+}
+
+.ai-green { background: var(--ok); }
+.ai-yellow { background: var(--warn, #d9a441); }
+.ai-red { background: var(--err); }
+
+/* The description banner in the event players (Events page + quick view):
+   a quiet card with the verdict chip leading the sentence. */
+.event-ai {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 8px 10px;
+    margin: 6px 0;
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--line);
+    border-radius: 6px;
+    background: var(--panel-2, var(--panel));
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+.event-ai.ai-green { border-left-color: var(--ok); }
+.event-ai.ai-yellow { border-left-color: var(--warn, #d9a441); }
+.event-ai.ai-red { border-left-color: var(--err); }
+
+.ai-level-chip {
+    flex: 0 0 auto;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    padding: 1px 7px;
+    border-radius: 9px;
+    color: var(--bg);
+    margin-top: 1px;
+}
+
+.ai-level-chip.ai-green { background: var(--ok); }
+.ai-level-chip.ai-yellow { background: var(--warn, #d9a441); }
+.ai-level-chip.ai-red { background: var(--err); }
+
+.event-ai-text { color: var(--text); flex: 1; }
+
+/* Model still working: quieter voice than a finished description. */
+.event-ai-pending { color: var(--muted); font-style: italic; }
+
+/* The PREVIEW tag rides the banner's right edge without stretching the row. */
+.event-ai .beta-tag { flex: 0 0 auto; align-self: flex-start; white-space: nowrap; }
 
 .event-dismiss {
     position: absolute;
@@ -5140,6 +5252,16 @@ body.tl-colresizing, body.tl-colresizing * { cursor: col-resize !important; user
     vertical-align: 1px;
 }
 
+/* Experimental (AI descriptions): further out than beta — the feature works, but
+   prompts, models and its UI are still moving. Violet keeps it visibly distinct
+   from the amber BETA pills so the two statuses never read as the same promise.
+   Slightly tighter tracking because the word is long. */
+.exp-tag {
+    color: #a98bf0;
+    border-color: color-mix(in srgb, #a98bf0 50%, transparent);
+    letter-spacing: 0.6px;
+}
+
 /* One notch below beta: works on some models, known not to on others. */
 .preview-tag {
     font-size: 9px;
@@ -5275,6 +5397,19 @@ select.input-pending {
 .notif-input:focus { border-color: var(--accent); }
 .notif-input::placeholder { color: var(--muted); }
 
+/* The AI system-prompt editor: full-width block (the label sits on its own row
+   above), user-resizable downward only — sideways would break the panel. */
+textarea.ai-prompt {
+    width: 100%;
+    max-width: 100%;
+    min-height: 90px;
+    resize: vertical;
+    font: inherit;
+    font-size: 12px;
+    line-height: 1.45;
+    box-sizing: border-box;
+}
+
 /* Per-camera offline overrides: scroll within a bounded box so a long camera
    list never pushes the (now footer-pinned) save/test actions out of view. */
 .cam-override-list {
@@ -5289,11 +5424,36 @@ select.input-pending {
 .admin-field input.input-error { border-color: var(--err); }
 .notif-input.input-error:focus { border-color: var(--err); }
 
+/* Inline field problem. The block hugs the control column (margin-left auto)
+   but the TEXT inside reads left-aligned — long messages used to be laid out
+   ragged-left across the whole row width, which read as a jumble. Width is
+   capped at the widest input so the message visually belongs to its field. */
 .field-error {
     color: var(--err);
     font-size: 11px;
-    margin: -2px 0 4px;
-    text-align: right;
+    line-height: 1.45;
+    margin: 2px 0 6px auto;
+    width: fit-content;
+    max-width: min(100%, 340px);
+    text-align: left;
+}
+
+/* In the server-settings panel the inputs sit in a label/control grid, left
+   justified in the control column — mirror that grid (same fixed tracks, so
+   they resolve identically) and let ::before occupy the label track, putting
+   the message exactly under its input's left edge. */
+.settings-panel .settings-body .field-error {
+    display: grid;
+    grid-template-columns: minmax(170px, 280px) 1fr;
+    column-gap: 14px;
+    width: auto;
+    max-width: none;
+    margin: 2px 0 6px;
+}
+.settings-panel .settings-body .field-error::before { content: ""; }
+@media (max-width: 640px) {
+    /* Phones drop the label track (fields are flex rows) — full-width text. */
+    .settings-panel .settings-body .field-error { display: block; }
 }
 
 /* Battery keep-alive drain warning: same voice as .field-error but cautionary,
@@ -5371,6 +5531,13 @@ select.input-pending {
    (the base .event-sub is single-line) so it reads on narrow/mobile widths. */
 .sched .event-sub {
     text-align: right;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+}
+
+/* The AI-description note is explanatory prose too — wrap, don't ellipsize. */
+.event-sub.ai-sub {
     white-space: normal;
     overflow: visible;
     text-overflow: clip;

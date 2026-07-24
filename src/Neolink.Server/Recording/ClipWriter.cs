@@ -308,7 +308,16 @@ public sealed class ClipWriter : IDisposable
             }
         }
 
-        if (!failed)
+        if (!failed && !samples.Any(s => s.Track == 1))
+        {
+            // Only the init segment landed — a writer opened against a stream that
+            // never sent a frame (seen live: a wake event's preview writer against
+            // the parked sub stream). There is nothing to finalize or index, and
+            // nothing to warn about — the recorder's own "stream not ready" and
+            // discard paths already tell that story at the event level.
+            Log.Debug($"{_path}: no video arrived — leaving the empty capture unfinalized");
+        }
+        else if (!failed)
         {
             try
             {

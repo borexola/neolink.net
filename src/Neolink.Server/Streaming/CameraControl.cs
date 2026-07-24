@@ -853,6 +853,21 @@ public sealed class CameraControl : ICameraControl
             {
                 _httpUnreachableWarned = true;
                 _httpWarnCooldownUntil = DateTime.UtcNow + TimeSpan.FromMinutes(30);
+                if (_sources.Any(s => s.SleepFriendly))
+                {
+                    // A battery model (Argus family) usually exposes no HTTP API at
+                    // all — for it, silence is the normal state, not an outage, and
+                    // the overload/firewall advice below would just mislead. Say it
+                    // once per run, informationally, and stop asking the model to
+                    // be something it isn't.
+                    _httpWarnCooldownUntil = DateTime.MaxValue;
+                    Log.Info($"{CameraName}: no HTTP API answered ({reason}) — battery models usually " +
+                             "don't have one, so this is expected. Picture settings, volume, Wi-Fi " +
+                             "detail and scaled snapshots stay unavailable; streams, events, PIR and " +
+                             "battery readings (Baichuan) are unaffected. If this model does expose " +
+                             "HTTP, set 'http_address' explicitly.");
+                    return default;
+                }
                 Log.Warn($"{CameraName}: the camera's HTTP API is not answering ({reason}). " +
                          "Picture settings, volume, Wi-Fi signal, PTZ presets and scaled snapshots are " +
                          "unavailable until it does. " + (slow
@@ -879,6 +894,11 @@ public sealed class CameraControl : ICameraControl
         _httpRetryAt = default;
         _httpLoginWarned = false;
         _httpFailStreak = 0;
+        // An answer proves this camera HAS an HTTP API — undo the "battery models
+        // don't have one" PERMANENT quiet, so a real later outage warns properly.
+        // The ordinary 30-minute flap cooldown stays: a marginal Wi-Fi camera
+        // bouncing between working and stalled must not re-warn on every flap.
+        if (_httpWarnCooldownUntil == DateTime.MaxValue) _httpWarnCooldownUntil = default;
         if (_httpUnreachableWarned)
         {
             _httpUnreachableWarned = false;

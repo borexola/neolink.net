@@ -212,9 +212,10 @@
                     }
                     @if (cam.Suspended)
                     {
-                        <span class="cam-doze-badge cam-doze-resume" role="button" tabindex="0"
-                              title="Suspended in Neolink.NET — click to resume (not viewed or recorded here until then; the camera itself keeps running)"
-                              @onclick="() => ResumeCameraAsync(cam.Name)" @onclick:stopPropagation="true">
+                        @* Status only — resuming is always an explicit button press
+                           (the tile overlay's Resume, or the camera panel header). *@
+                        <span class="cam-doze-badge"
+                              title="Suspended in Neolink.NET — not viewed or recorded here; resume from the tile or the camera panel (the camera itself keeps running)">
                             @UiIcon.Render("eye-off", 10) suspended
                         </span>
                     }
@@ -397,7 +398,14 @@
                                         @onclick="() => DismissAsync(ev)" @onclick:stopPropagation="true">✕</button>
                             </div>
                             <div class="event-meta">
-                                <span class="event-title">@ev.Icon @ev.Title</span>
+                                <span class="event-title">
+                                    @ev.Icon @ev.Title
+                                    @if (ev.AiLevel != null)
+                                    {
+                                        <span class="ai-dot ai-@ev.AiLevel"
+                                              title="@("AI threat level: " + ev.AiLevel.ToUpperInvariant() + (ev.AiDescription == null ? "" : " — " + ev.AiDescription))"></span>
+                                    }
+                                </span>
                                 <span class="event-sub">@ev.Camera · @Ago(ev.Start)</span>
                             </div>
                         </div>
@@ -686,12 +694,17 @@
                            .tile-status with its own connecting/reconnect text). *@
                         @if (camera is { Suspended: true })
                         {
-                            <div class="tile-privacy tile-privacy-resume" role="button"
-                                 title="Suspended — click to resume in Neolink.NET"
-                                 @onclick="() => ResumeCameraAsync(camera.Name)" @onclick:stopPropagation="true">
+                            @* Informational overlay: a stray click must never resume
+                               (same contract as the asleep tile) — only the button does. *@
+                            <div class="tile-privacy tile-suspended" @onclick:stopPropagation="true">
                                 <span class="tile-privacy-icon">@UiIcon.Render("eye-off", 22)</span>
                                 <span>suspended</span>
-                                <small>not viewed or recorded — click to resume</small>
+                                <small>not viewed or recorded here</small>
+                                <button type="button" class="tile-resume-btn"
+                                        title="Resume @camera.Name in Neolink.NET — viewing and recording start again"
+                                        @onclick="() => ResumeCameraAsync(camera.Name)" @onclick:stopPropagation="true">
+                                    @UiIcon.Render("play", 12) Resume
+                                </button>
                             </div>
                         }
                         else if (camera is { Privacy: true })
@@ -938,12 +951,15 @@
                 <div class="tile-status">connecting…</div>
                 @if (_cameras.FirstOrDefault(c => c.Name == qv.Camera) is { Suspended: true })
                 {
-                    <div class="tile-privacy tile-privacy-resume" role="button"
-                         title="Suspended — click to resume in Neolink.NET"
-                         @onclick="() => ResumeCameraAsync(qv.Camera!)" @onclick:stopPropagation="true">
+                    <div class="tile-privacy tile-suspended" @onclick:stopPropagation="true">
                         <span class="tile-privacy-icon">@UiIcon.Render("eye-off", 22)</span>
                         <span>suspended</span>
-                        <small>not viewed or recorded — click to resume</small>
+                        <small>not viewed or recorded here</small>
+                        <button type="button" class="tile-resume-btn"
+                                title="Resume @qv.Camera in Neolink.NET — viewing and recording start again"
+                                @onclick="() => ResumeCameraAsync(qv.Camera!)" @onclick:stopPropagation="true">
+                            @UiIcon.Render("play", 12) Resume
+                        </button>
                     </div>
                 }
                 else if (_cameras.FirstOrDefault(c => c.Name == qv.Camera) is { Privacy: true })
@@ -1136,6 +1152,17 @@
                                 @onclick='() => _settingsTab = "notifications"'>
                             @UiIcon.Render("bell", 13) Notifications
                             @if (NotifDirty)
+                            {
+                                <span class="tab-dot" title="Unsaved changes">●</span>
+                            }
+                        </button>
+                    }
+                    @if (_ai != null)
+                    {
+                        <button class="settings-tab @(_settingsTab == "ai" ? "active" : "")" role="tab"
+                                @onclick='() => _settingsTab = "ai"'>
+                            @UiIcon.Render("sparkles", 13) AI
+                            @if (AiDirty)
                             {
                                 <span class="tab-dot" title="Unsaved changes">●</span>
                             }
@@ -1357,7 +1384,7 @@
                         }
                     }
 
-                    @if (_adminConfig != null && _settingsTab is not ("notifications" or "connection" or "users" or "alerts"))
+                    @if (_adminConfig != null && _settingsTab is not ("notifications" or "ai" or "connection" or "users" or "alerts"))
                     {
                         <div class="notice small">
                             Editing <code>@_adminConfigPath</code>.
@@ -1373,16 +1400,35 @@
                     {
                     <div class="campanel-section">
                         <div class="campanel-section-title">NETWORK</div>
-                        @AdminField("Bind address", "bind", "text")
-                        @AdminField("RTSP port", "bindPort", "number")
-                        @AdminField("Web port", "webPort", "number")
-                        @AdminField("Web bind (blank = same as bind)", "webBind", "text")
+                        @AdminField("Bind address", "bind", "text", AdminIpError("bind", required: true))
+                        @AdminField("RTSP port", "bindPort", "number", AdminIntError("bindPort", 1, 65535) ?? AdminPortsClashError())
+                        @AdminField("Web port", "webPort", "number", AdminIntError("webPort", 1, 65535))
+                        @AdminField("Web bind (blank = same as bind)", "webBind", "text", AdminWebBindError())
                         @AdminToggle("Serve the web UI", "webUi")
                     </div>
 
                     <div class="campanel-section">
+                        <div class="campanel-section-title">WAKE HINTS (BATTERY CAMERAS) <span class="beta-tag">BETA</span></div>
+                        <div class="notice small">
+                            Instant wake signals from the moment a battery camera calls Reolink's
+                            push service for a PIR event — recipes in <code>docs/battery-cameras.md</code>.
+                            <b>Syslog</b>: an OPNsense/pfSense router forwards its firewall log here.
+                            <b>Push decoy</b>: a DNS override on any router points
+                            <code>pushx.reolink.com</code> at this host and the camera's own push is
+                            the signal (Reolink app notifications stop for those cameras). Blank
+                            ports leave a source off.
+                        </div>
+                        @AdminField("Router syslog UDP port (0 = off)", "wakeHints.syslogPort", "number",
+                            AdminIntError("wakeHints.syslogPort", 1, 65535, alsoAllowed: 0))
+                        @AdminField("Push decoy TCP ports (e.g. 443, 53 — blank = off)", "wakeHints.pushPorts", "text",
+                            AdminPushPortsError())
+                        @AdminField("Listener bind (blank = server bind)", "wakeHints.bind", "text",
+                            AdminIpError("wakeHints.bind"))
+                    </div>
+
+                    <div class="campanel-section">
                         <div class="campanel-section-title">WEB UI</div>
-                        @AdminField("Preview playback speed (×)", "ui.trickleSpeed", "number")
+                        @AdminField("Preview playback speed (×)", "ui.trickleSpeed", "number", AdminTrickleError())
                         @AdminField("State directory (accounts/settings)", "ui.stateDir", "text")
                         @AdminToggle("Allow admin-password reset on login", "ui.resetAdminPassword")
                         <div class="control-row">
@@ -1598,13 +1644,29 @@
                         <div class="campanel-section">
                             <div class="campanel-section-title">RECORDING</div>
                             @AdminField("Storage path", "recording.path", "text")
-                            @AdminField("Event retention (days, 0 = forever)", "recording.retentionDays", "number")
-                            @AdminField("Pre-roll (seconds)", "recording.preSeconds", "number")
-                            @AdminField("Post-roll (seconds)", "recording.postSeconds", "number")
-                            @AdminField("Max clip length (seconds)", "recording.maxClipSeconds", "number")
+                            @AdminField("Fast tier for event clips (blank = storage path)", "recording.clipsPath", "text")
+                            @AdminField("Archive tier for aged footage (blank = delete when expired)", "recording.archivePath", "text")
+                            <div class="notice small">
+                                Optional tiers: point the <b>fast tier</b> at an SSD to speed up event
+                                review (24/7 footage stays on the storage path); point the
+                                <b>archive tier</b> at a different drive and cameras with the Archive
+                                switch on get their expired footage <b>moved</b> there instead of deleted.
+                            </div>
+                            @AdminField("Event retention (days, 0 = forever)", "recording.retentionDays", "number",
+                                AdminIntError("recording.retentionDays", 0, 36500))
+                            @AdminField("Pre-roll (seconds)", "recording.preSeconds", "number",
+                                AdminIntError("recording.preSeconds", 0, 30))
+                            @AdminField("Post-roll (seconds)", "recording.postSeconds", "number",
+                                AdminIntError("recording.postSeconds", 1, 120))
+                            @AdminField("Max clip length (seconds)", "recording.maxClipSeconds", "number",
+                                AdminIntError("recording.maxClipSeconds", 10, 3600))
                             @AdminSelect("Record stream", "recording.stream", "auto", "mainStream", "subStream", "externStream")
-                            @AdminField("Segment length (minutes)", "recording.segmentMinutes", "number")
-                            @AdminField("Continuous retention (days, blank = event value)", "recording.continuousRetentionDays", "number")
+                            @AdminField("Segment length (minutes)", "recording.segmentMinutes", "number",
+                                AdminIntError("recording.segmentMinutes", 1, 120))
+                            @AdminField("Segment size cap (MB)", "recording.maxSegmentSizeMb", "number",
+                                AdminIntError("recording.maxSegmentSizeMb", 8, 8192))
+                            @AdminField("Continuous retention (days, blank = event value)", "recording.continuousRetentionDays", "number",
+                                AdminIntError("recording.continuousRetentionDays", 0, 36500))
                             <div class="campanel-divider"></div>
                             @AdminToggle("Encrypt footage", "recording.encrypt", beta: true)
                             <div class="notice small">
@@ -1653,12 +1715,45 @@
                     {
                         <div class="campanel-section">
                             <div class="campanel-section-title">MQTT / HOME ASSISTANT</div>
-                            @AdminField("Server health interval (seconds, 0 = off)", "mqtt.statsInterval", "number")
+                            @AdminField("Broker host", "mqtt.broker", "text", AdminMqttBrokerError())
+                            @AdminField("Broker port", "mqtt.port", "number", AdminIntError("mqtt.port", 1, 65535))
+                            @AdminToggle("TLS (broker port is usually 8883)", "mqtt.tls")
+                            @AdminField("Username (blank = anonymous)", "mqtt.username", "text")
+                            <label class="admin-field @(AdminValue("mqtt.password").Length > 0 ? "edited" : "")">
+                                <span>Password</span>
+                                <input type="password" autocomplete="new-password"
+                                       placeholder="@(AdminBool("mqtt.hasPassword") ? "•••• stored — blank keeps it" : "broker password")"
+                                       value="@AdminValue("mqtt.password")"
+                                       @oninput='e => _adminEdits["mqtt.password"] = e.Value?.ToString() ?? ""' />
+                            </label>
+                            <div class="notice small">
+                                The password is write-only: it is never shown here, and leaving the
+                                field blank keeps the stored one.
+                            </div>
+                            <div class="campanel-divider"></div>
+                            @AdminToggle("Home Assistant MQTT discovery", "mqtt.discovery")
+                            @AdminField("Discovery prefix", "mqtt.discoveryPrefix", "text")
+                            @AdminField("Base topic", "mqtt.baseTopic", "text")
+                            @AdminField("Client id", "mqtt.clientId", "text")
+                            @AdminField("Keep-alive (seconds)", "mqtt.keepAlive", "number",
+                                AdminIntError("mqtt.keepAlive", 5, 3600))
+                            @AdminField("Max packet size (bytes)", "mqtt.maxPacketBytes", "number",
+                                AdminIntError("mqtt.maxPacketBytes", 1024, 268_435_455))
+                            <div class="notice small">
+                                Mosquitto 2.1+ rejects packets over its own limit (2 MB default) —
+                                raise this here <b>and</b> on the broker for bigger payloads such as
+                                4K snapshots. Discovery prefix must match Home Assistant's MQTT
+                                integration setting (<code>homeassistant</code> unless changed).
+                            </div>
+                            <div class="campanel-divider"></div>
+                            @AdminField("Server health interval (seconds, 0 = off)", "mqtt.statsInterval", "number",
+                                AdminIntError("mqtt.statsInterval", 5, 86400, alsoAllowed: 0))
                             <div class="notice small">
                                 How often the server publishes its own health — CPU, memory, disk,
                                 recording rate, viewers — as a <b>Neolink.NET Server</b> device in
                                 Home Assistant. 60 s suits dashboards; lower it for near-live gauges
-                                (minimum 5). Broker details are edited in the file directly.
+                                (minimum 5). To disable MQTT entirely, remove the <code>mqtt</code>
+                                section from the file.
                             </div>
                         </div>
                     }
@@ -1750,7 +1845,134 @@
                         </div>
                     }
 
-                    @if (_adminConfig != null && _settingsTab is not ("notifications" or "connection" or "users" or "alerts")
+                    @if (_settingsTab == "ai" && _ai != null)
+                    {
+                        <div class="campanel-section">
+                            <div class="campanel-section-title">@UiIcon.Render("sparkles", 13) AI EVENT DESCRIPTIONS <span class="beta-tag exp-tag">EXPERIMENTAL</span></div>
+                            <div class="notice small">
+                                When a camera records a detection event, low-res frames (one per second,
+                                from the camera's own snapshot) go to an <b>OpenAI-style</b> vision model —
+                                LM Studio, Ollama, llama.cpp or a hosted API — and its description is stored
+                                in the event's metadata and written to the server log. Enable it here, then
+                                switch it on <b>per camera</b> (camera panel → Recording). The API key is
+                                <b>encrypted at rest</b>.
+                            </div>
+                            <div class="control-row">
+                                <span>Describe events with AI</span>
+                                <button class="chip @(_ai.Enabled ? "" : "chip-off")"
+                                        @onclick="() => _ai.Enabled = !_ai.Enabled">@(_ai.Enabled ? "on" : "off")</button>
+                            </div>
+                            @if (_ai.Enabled)
+                            {
+                                <div class="campanel-subtitle">LLM SERVER</div>
+                                <div class="control-row"><span>Backend</span>
+                                    <select class="event-filter" @bind="_ai.Provider"
+                                            title="Every backend keeps its own endpoint, model and key — switching loses nothing. The selected one handles every event.">
+                                        <option value="openai">OpenAI-style (LM Studio, llama.cpp, hosted)</option>
+                                        <option value="ollama">Ollama (native API)</option>
+                                        <option value="anthropic">Anthropic-style (Claude)</option>
+                                    </select></div>
+                                @if (_ai.Provider == "ollama")
+                                {
+                                    <div class="control-row"><span>Ollama endpoint</span>
+                                        <input class="notif-input @(AiEndpointInvalid ? "input-error" : "")"
+                                               placeholder="http://127.0.0.1:11434"
+                                               @bind="_ai.OllamaEndpoint" @bind:event="oninput" /></div>
+                                    @if (AiEndpointInvalid)
+                                    {
+                                        <div class="field-error">
+                                            Enter the Ollama base URL, e.g. http://127.0.0.1:11434 —
+                                            /api/chat is appended automatically.
+                                        </div>
+                                    }
+                                    <div class="control-row"><span>Model</span>
+                                        <input class="notif-input @(AiOllamaModelMissing ? "input-error" : "")"
+                                               placeholder="e.g. llama3.2-vision" @bind="_ai.OllamaModel" @bind:event="oninput" /></div>
+                                    @if (AiOllamaModelMissing)
+                                    {
+                                        <div class="field-error">
+                                            Ollama needs a model name (it has no loaded-model default) —
+                                            a vision model, e.g. llama3.2-vision or qwen2.5vl.
+                                        </div>
+                                    }
+                                }
+                                else if (_ai.Provider == "anthropic")
+                                {
+                                    <div class="control-row"><span>Endpoint (blank = api.anthropic.com)</span>
+                                        <input class="notif-input @(AiEndpointInvalid ? "input-error" : "")"
+                                               placeholder="blank = https://api.anthropic.com"
+                                               @bind="_ai.AnthropicEndpoint" @bind:event="oninput" /></div>
+                                    @if (AiEndpointInvalid)
+                                    {
+                                        <div class="field-error">
+                                            Enter an http(s) URL (a proxy that speaks the Messages API),
+                                            or leave blank for https://api.anthropic.com.
+                                        </div>
+                                    }
+                                    <div class="control-row"><span>Model</span>
+                                        <input class="notif-input @(AiAnthropicModelMissing ? "input-error" : "")"
+                                               placeholder="e.g. claude-haiku-4-5" @bind="_ai.AnthropicModel" @bind:event="oninput" /></div>
+                                    @if (AiAnthropicModelMissing)
+                                    {
+                                        <div class="field-error">
+                                            The Anthropic backend needs a model name — claude-haiku-4-5 is the
+                                            fast, low-cost fit for frame descriptions.
+                                        </div>
+                                    }
+                                    <div class="control-row"><span>API key</span>
+                                        <input class="notif-input" type="password" autocomplete="new-password"
+                                               placeholder="@(_ai.HasAnthropicKey ? "•••• stored — blank keeps it" : "sk-ant-…")"
+                                               @bind="_aiAnthropicKey" /></div>
+                                }
+                                else
+                                {
+                                    <div class="control-row"><span>Endpoint</span>
+                                        <input class="notif-input @(AiEndpointInvalid ? "input-error" : "")"
+                                               placeholder="http://127.0.0.1:1234/v1"
+                                               @bind="_ai.Endpoint" @bind:event="oninput" /></div>
+                                    @if (AiEndpointInvalid)
+                                    {
+                                        <div class="field-error">
+                                            Enter the API base URL, e.g. http://127.0.0.1:1234/v1 (LM Studio) —
+                                            /chat/completions is appended automatically.
+                                        </div>
+                                    }
+                                    <div class="control-row"><span>Model</span>
+                                        <input class="notif-input" placeholder="blank = the server's loaded model"
+                                               @bind="_ai.Model" /></div>
+                                    <div class="control-row"><span>API key</span>
+                                        <input class="notif-input" type="password" autocomplete="new-password"
+                                               placeholder="@(_ai.HasApiKey ? "•••• stored — blank keeps it" : "usually none for local servers")"
+                                               @bind="_aiApiKey" /></div>
+                                }
+                                <div class="campanel-divider"></div>
+                                <div class="campanel-subtitle">BEHAVIOR</div>
+                                <div class="control-row"><span>Frames per event (spread across it)</span>
+                                    <input class="ret-input" type="number" min="1" max="@_ai.MaxCaptureSeconds"
+                                           title="Sampling starts at 1 frame/second and thins as the event runs, so the frames always span the whole event (max @_ai.MaxCaptureSeconds). More frames = better answers but bigger, slower requests."
+                                           @bind="_ai.CaptureSeconds" /></div>
+                                <div class="control-row"><span>Skip model “thinking”</span>
+                                    <button class="chip @(_ai.NoThink ? "" : "chip-off")"
+                                            title="Asks reasoning models to answer directly (the /no_think convention) — much faster on local hardware. Think-blocks are stripped from answers either way."
+                                            @onclick="() => _ai.NoThink = !_ai.NoThink">@(_ai.NoThink ? "on" : "off")</button></div>
+                                <div class="control-row"><span>Answer timeout (seconds)</span>
+                                    <input class="ret-input" type="number" min="5" max="600"
+                                           title="How long one description may take before it is abandoned — local models on modest hardware can genuinely need minutes."
+                                           @bind="_ai.TimeoutSeconds" /></div>
+                                <div class="control-row"><span>Instruction (system prompt)</span></div>
+                                <textarea class="notif-input ai-prompt" rows="5"
+                                          placeholder="@_ai.DefaultPrompt" @bind="_ai.Prompt"></textarea>
+                                <div class="notice small">
+                                    Blank uses the built-in instruction (shown greyed above). Descriptions are
+                                    processed one at a time in the background — a slow model never delays
+                                    recording or streaming; if it can't keep up, extra events are skipped
+                                    (and say so in the log).
+                                </div>
+                            }
+                        </div>
+                    }
+
+                    @if (_adminConfig != null && _settingsTab is not ("notifications" or "ai" or "connection" or "users" or "alerts")
                          && !(_settingsTab == "cameras" && _camEdit != null))
                     {
                         @* Hidden while the camera editor is open — its footer replaces the
@@ -1784,6 +2006,28 @@
                             <span class="tile-spacer"></span>
                             <button class="chip @(NotifDirty ? "chip-active" : "")" disabled="@(_notifBusy || NotifHasErrors)" @onclick="SaveNotificationsAsync">
                                 @(_notifSaving ? "Saving…" : (_notif.Enabled ? "Save notifications" : "Save"))</button>
+                        </div>
+                    }
+                    else if (_settingsTab == "ai" && _ai != null)
+                    {
+                        @* AI settings save to ai.json (applied immediately, no restart). *@
+                        @if (_aiStatus != null)
+                        {
+                            <div class="notice small @(_aiError ? "error" : "")">@_aiStatus</div>
+                        }
+                        @if (AiDirty)
+                        {
+                            <div class="notice pending">Unsaved changes — click <b>@(_ai.Enabled ? "Save AI settings" : "Save")</b> to apply them.</div>
+                        }
+                        <div class="settings-foot-btns">
+                            @if (_ai.Enabled)
+                            {
+                                <button class="chip" disabled="@(_aiBusy || AiHasErrors)" @onclick="TestAiAsync">
+                                    @(_aiTesting ? "Testing…" : "Test LLM connection")</button>
+                            }
+                            <span class="tile-spacer"></span>
+                            <button class="chip @(AiDirty ? "chip-active" : "")" disabled="@(_aiBusy || AiHasErrors)" @onclick="SaveAiAsync">
+                                @(_aiSaving ? "Saving…" : (_ai.Enabled ? "Save AI settings" : "Save"))</button>
                         </div>
                     }
                     else if (_settingsTab is "connection" or "users" or "alerts")
@@ -1850,12 +2094,17 @@
                                 Closing this panel discards them.
                             </div>
                         }
+                        @if (AdminPendingCount > 0 && AdminSettingsError is { } settingsInvalid)
+                        {
+                            <div class="notice error">@settingsInvalid</div>
+                        }
                         <div class="settings-foot-btns">
                             @if (_settingsTab != "cameras")
                             {
                                 @* Cameras save themselves (their own Save button above);
                                    this button only writes the field edits. *@
-                                <button class="chip @(AdminPendingCount > 0 ? "chip-active" : "")" disabled="@(!_adminWritable)"
+                                <button class="chip @(AdminPendingCount > 0 ? "chip-active" : "")"
+                                        disabled="@(!_adminWritable || AdminSettingsError != null)"
                                         @onclick="SaveServerSettingsAsync">Save to config.json</button>
                                 @if (AdminPendingCount > 0)
                                 {
@@ -1898,6 +2147,30 @@
                 </div>
                 <button class="icon-btn" title="Close" @onclick="ClosePlayerAsync">✕</button>
             </div>
+            @if (_playEvent.AiDescription != null || _playEvent.AiLevel != null)
+            {
+                @* What the LLM saw — only for events that have a description, so
+                   cameras without AI descriptions show nothing extra. *@
+                <div class="event-ai ai-@(_playEvent.AiLevel ?? "none")">
+                    @if (_playEvent.AiLevel != null)
+                    {
+                        <span class="ai-level-chip ai-@_playEvent.AiLevel">@_playEvent.AiLevel.ToUpperInvariant()</span>
+                    }
+                    <span class="event-ai-text">@(_playEvent.AiDescription ?? "classified without a description")</span>
+                    <span class="beta-tag exp-tag" title="AI event descriptions are experimental — prompts, models and this UI are still changing">EXPERIMENTAL</span>
+                </div>
+            }
+            else if (_playEvent.AiPending)
+            {
+                @* The model is still working: an eager click right after the event
+                   used to show nothing here (the text seemed to exist only on the
+                   Events page, which is opened later) — say what is happening; the
+                   10 s poll swaps in the finished description. *@
+                <div class="event-ai ai-none">
+                    <span class="event-ai-text event-ai-pending">🧠 AI is describing this event — the text appears here when the model answers…</span>
+                    <span class="beta-tag exp-tag" title="AI event descriptions are experimental — prompts, models and this UI are still changing">EXPERIMENTAL</span>
+                </div>
+            }
             @if (_playEvent.HasClip)
             {
                 @* @key forces a fresh <video> when navigating between events.
@@ -2242,6 +2515,122 @@
         }
         catch (Exception ex) { _notifError = true; _notifStatus = "Test failed: " + ex.Message; }
         finally { _notifTesting = false; }
+    }
+
+    // AI event descriptions (loaded with the server-settings panel; saved separately).
+    private ApiAiSettings? _ai;
+    private string _aiApiKey = "";
+    private string _aiAnthropicKey = "";
+    private string? _aiStatus;
+    private bool _aiError, _aiSaving, _aiTesting;
+    private bool _aiBusy => _aiSaving || _aiTesting;
+
+    // Unsaved-change tracking, exactly like the notifications tab.
+    private string _aiSignature = "";
+    private string AiSig() => _ai == null ? "" : System.Text.Json.JsonSerializer.Serialize(AiBody());
+    private bool AiDirty => _ai != null && AiSig() != _aiSignature;
+
+    private string AiActiveEndpoint => _ai!.Provider switch
+    {
+        "ollama" => _ai.OllamaEndpoint,
+        "anthropic" => _ai.AnthropicEndpoint,
+        _ => _ai.Endpoint,
+    };
+    private bool AiEndpointInvalid => _ai is { Enabled: true }
+        // Anthropic blank = the well-known https://api.anthropic.com default.
+        && !(_ai.Provider == "anthropic" && string.IsNullOrWhiteSpace(_ai.AnthropicEndpoint))
+        && (!Uri.TryCreate(AiActiveEndpoint.Trim(), UriKind.Absolute, out var u)
+            || u.Scheme is not ("http" or "https"));
+    private bool AiOllamaModelMissing => _ai is { Enabled: true, Provider: "ollama" }
+        && string.IsNullOrWhiteSpace(_ai.OllamaModel);
+    private bool AiAnthropicModelMissing => _ai is { Enabled: true, Provider: "anthropic" }
+        && string.IsNullOrWhiteSpace(_ai.AnthropicModel);
+    private bool AiHasErrors => AiEndpointInvalid || AiOllamaModelMissing || AiAnthropicModelMissing;
+
+    private object AiBody() => new
+    {
+        enabled = _ai!.Enabled,
+        provider = _ai.Provider,
+        endpoint = _ai.Endpoint,
+        model = _ai.Model,
+        ollamaEndpoint = _ai.OllamaEndpoint,
+        ollamaModel = _ai.OllamaModel,
+        anthropicEndpoint = _ai.AnthropicEndpoint,
+        anthropicModel = _ai.AnthropicModel,
+        // Write-only: send the typed value, else null to keep the stored one.
+        apiKey = string.IsNullOrEmpty(_aiApiKey) ? null : _aiApiKey,
+        anthropicApiKey = string.IsNullOrEmpty(_aiAnthropicKey) ? null : _aiAnthropicKey,
+        prompt = _ai.Prompt,
+        noThink = _ai.NoThink,
+        captureSeconds = _ai.CaptureSeconds,
+        timeoutSeconds = _ai.TimeoutSeconds,
+    };
+
+    private async Task SaveAiAsync()
+    {
+        if (_ai == null || _aiBusy) return;
+        if (_ai.Enabled && AiHasErrors)
+        {
+            _aiError = true; _aiStatus = "Fix the highlighted endpoint first.";
+            return;
+        }
+        _aiSaving = true; _aiStatus = null;
+        try
+        {
+            var req = ApiRequest(HttpMethod.Put, "/api/admin/ai");
+            req.Content = JsonContent.Create(AiBody());
+            using var res = await Http.SendAsync(req);
+            if (res.IsSuccessStatusCode)
+            {
+                _ai = await res.Content.ReadFromJsonAsync<ApiAiSettings>();
+                _aiApiKey = "";
+                _aiAnthropicKey = "";
+                _aiSignature = AiSig(); // saved state is the new baseline
+                _aiError = false;
+                _aiStatus = "AI settings saved — they apply to the next event.";
+            }
+            else
+            {
+                _aiError = true;
+                _aiStatus = "Save failed (" + (int)res.StatusCode + ").";
+            }
+        }
+        catch (Exception ex) { _aiError = true; _aiStatus = ex.Message; }
+        finally { _aiSaving = false; }
+    }
+
+    private async Task TestAiAsync()
+    {
+        if (_ai == null || _aiBusy) return;
+        if (_ai.Enabled && AiHasErrors)
+        {
+            _aiError = true; _aiStatus = "Fix the highlighted endpoint first.";
+            return;
+        }
+        _aiTesting = true; _aiStatus = null;
+        StateHasChanged();
+        try
+        {
+            // Tests the posted (possibly unsaved) settings, like the email test.
+            var req = ApiRequest(HttpMethod.Post, "/api/admin/ai/test");
+            req.Content = JsonContent.Create(AiBody());
+            using var res = await Http.SendAsync(req);
+            var body = await res.Content.ReadFromJsonAsync<JsonElement>();
+            if (res.IsSuccessStatusCode)
+            {
+                _aiError = false;
+                _aiStatus = "LLM reachable — " +
+                    (body.TryGetProperty("detail", out var d) ? d.GetString() : "it answered.");
+            }
+            else
+            {
+                _aiError = true;
+                _aiStatus = "Test failed: " +
+                    (body.TryGetProperty("error", out var e) ? e.GetString() : "the LLM server rejected it.");
+            }
+        }
+        catch (Exception ex) { _aiError = true; _aiStatus = "Test failed: " + ex.Message; }
+        finally { _aiTesting = false; }
     }
 
     // Web-UI authentication (enabled once the first account exists server-side)
@@ -2824,6 +3213,7 @@
         _adminEdits.Clear();
         _adminCams = null; _camEdit = null; _camTestResult = null; _camDeleteConfirm = null;
         _notif = null; _notifStatus = null; _notifPassword = "";
+        _ai = null; _aiStatus = null; _aiApiKey = ""; _aiAnthropicKey = "";
         // Non-admins (and open installs) get the Connection tab; the admin-only
         // tabs and their loads are skipped entirely.
         if (!_authAdmin)
@@ -2842,6 +3232,16 @@
             }
         }
         catch { /* notifications section just stays hidden */ }
+        try
+        {
+            using var ares = await Http.SendAsync(ApiRequest(HttpMethod.Get, "/api/admin/ai"));
+            if (ares.IsSuccessStatusCode)
+            {
+                _ai = await ares.Content.ReadFromJsonAsync<ApiAiSettings>();
+                _aiSignature = AiSig(); // baseline for the unsaved-change signal
+            }
+        }
+        catch { /* AI tab just stays hidden */ }
         try
         {
             using var res = await Http.SendAsync(ApiRequest(HttpMethod.Get, "/api/admin/config"));
@@ -3219,7 +3619,98 @@
     private bool AdminBool(string path) =>
         _adminEdits.TryGetValue(path, out var e) ? e == "true" : AdminValue(path) == "true";
 
-    private RenderFragment AdminField(string label, string path, string type) => builder =>
+    // ---- client-side validation of the staged config edits. Everything is
+    // re-checked server-side (loader + API); these exist so mistakes surface at
+    // the field, before a save round-trip. Blank generally means "not sending
+    // anything" (the save mapping skips unparsable numbers), so only fields
+    // whose blank value would actually be sent report it as an error.
+
+    private static bool IsIp(string s) => System.Net.IPAddress.TryParse(s, out _);
+
+    private string? AdminIpError(string path, bool required = false)
+    {
+        var v = AdminValue(path).Trim();
+        if (v.Length == 0) return required ? "An IP address is required (e.g. 0.0.0.0)." : null;
+        return IsIp(v) ? null : $"\"{v}\" is not an IP address.";
+    }
+
+    private string? AdminWebBindError()
+    {
+        var v = AdminValue("webBind").Trim();
+        if (v.Length == 0 || v is "localhost" or "*" or "+" || IsIp(v)) return null;
+        return "Use an IP address, localhost, * or +.";
+    }
+
+    /// <summary>Range check for a numeric field; blank never errors (blank = keep).
+    /// <paramref name="alsoAllowed"/> admits a special value outside the range (e.g. 0 = off).</summary>
+    private string? AdminIntError(string path, int min, int max, int? alsoAllowed = null)
+    {
+        var v = AdminValue(path).Trim();
+        if (v.Length == 0) return null;
+        if (!int.TryParse(v, out var i)) return "Enter a whole number.";
+        if (alsoAllowed is { } aa && i == aa) return null;
+        return i < min || i > max
+            ? $"Must be {min}–{max}{(alsoAllowed is { } a ? $" (or {a})" : "")}." : null;
+    }
+
+    private string? AdminPortsClashError()
+    {
+        if (int.TryParse(AdminValue("bindPort"), out var rtsp)
+            && int.TryParse(AdminValue("webPort"), out var web) && rtsp == web)
+            return "RTSP port and web port must differ.";
+        return null;
+    }
+
+    private string? AdminPushPortsError()
+    {
+        var v = AdminValue("wakeHints.pushPorts");
+        var seen = 0;
+        foreach (var tok in v.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (!int.TryParse(tok, out var p) || p is < 1 or > 65535)
+                return $"\"{tok}\" is not a valid port (1–65535).";
+            seen++;
+        }
+        return seen > 16 ? "At most 16 ports." : null;
+    }
+
+    private string? AdminTrickleError()
+    {
+        var v = AdminValue("ui.trickleSpeed").Trim();
+        if (v.Length == 0) return null;
+        if (!double.TryParse(v, out var d)) return "Enter a number.";
+        return d is < 0.25 or > 16 ? "Must be 0.25–16." : null;
+    }
+
+    private string? AdminMqttBrokerError()
+    {
+        // Only meaningful while the mqtt section exists: blanking the broker
+        // would be sent and rejected, so flag it at the field.
+        if (!_adminHasMqtt) return null;
+        return AdminValue("mqtt.broker").Trim().Length == 0 ? "A broker host is required." : null;
+    }
+
+    /// <summary>First validation problem across every staged-editable field, or
+    /// null. Blocks Save / Save &amp; restart while non-null.</summary>
+    private string? AdminSettingsError =>
+        AdminIpError("bind", required: true) ?? AdminIntError("bindPort", 1, 65535)
+        ?? AdminIntError("webPort", 1, 65535) ?? AdminPortsClashError() ?? AdminWebBindError()
+        ?? AdminTrickleError()
+        ?? AdminIntError("wakeHints.syslogPort", 1, 65535, alsoAllowed: 0)
+        ?? AdminPushPortsError() ?? AdminIpError("wakeHints.bind")
+        ?? AdminIntError("recording.retentionDays", 0, 36500)
+        ?? AdminIntError("recording.preSeconds", 0, 30)
+        ?? AdminIntError("recording.postSeconds", 1, 120)
+        ?? AdminIntError("recording.maxClipSeconds", 10, 3600)
+        ?? AdminIntError("recording.segmentMinutes", 1, 120)
+        ?? AdminIntError("recording.maxSegmentSizeMb", 8, 8192)
+        ?? AdminIntError("recording.continuousRetentionDays", 0, 36500)
+        ?? AdminMqttBrokerError() ?? AdminIntError("mqtt.port", 1, 65535)
+        ?? AdminIntError("mqtt.keepAlive", 5, 3600)
+        ?? AdminIntError("mqtt.maxPacketBytes", 1024, 268_435_455)
+        ?? AdminIntError("mqtt.statsInterval", 5, 86400, alsoAllowed: 0);
+
+    private RenderFragment AdminField(string label, string path, string type, string? error = null) => builder =>
     {
         // "edited" once the field differs from the saved file: highlights the input
         // and (via AdminPendingCount) drives the header badge + footer note live.
@@ -3231,12 +3722,20 @@
         builder.CloseElement();
         builder.OpenElement(4, "input");
         builder.AddAttribute(5, "type", type);
-        builder.AddAttribute(6, "value", AdminValue(path));
+        builder.AddAttribute(6, "class", error != null ? "input-error" : null);
+        builder.AddAttribute(7, "value", AdminValue(path));
         // oninput (not onchange) so the unsaved signal appears as you type, not on blur.
-        builder.AddAttribute(7, "oninput",
+        builder.AddAttribute(8, "oninput",
             EventCallback.Factory.Create<ChangeEventArgs>(this, e => _adminEdits[path] = e.Value?.ToString() ?? ""));
         builder.CloseElement();
         builder.CloseElement();
+        if (error != null)
+        {
+            builder.OpenElement(9, "div");
+            builder.AddAttribute(10, "class", "field-error");
+            builder.AddContent(11, error);
+            builder.CloseElement();
+        }
     };
 
     private RenderFragment AdminToggle(string label, string path, bool beta = false) => builder =>
@@ -3302,10 +3801,16 @@
     private async Task<bool> SaveServerSettingsCoreAsync()
     {
         _adminError = _adminStatus = null;
+        if (AdminSettingsError is { } invalid)
+        {
+            _adminError = invalid;
+            return false;
+        }
         var payload = new Dictionary<string, object?>();
         var ui = new Dictionary<string, object?>();
         var rec = new Dictionary<string, object?>();
         var mqtt = new Dictionary<string, object?>();
+        var wake = new Dictionary<string, object?>();
 
         object? Num(string p) => double.TryParse(AdminValue(p), out var d) ? d : null;
         int? Int(string p) => int.TryParse(AdminValue(p), out var i) ? i : (int?)null;
@@ -3333,12 +3838,31 @@
                 case "recording.segmentMinutes": rec["segmentMinutes"] = Int(path); break;
                 case "recording.continuousRetentionDays": rec["continuousRetentionDays"] = Int(path); break;
                 case "recording.encrypt": rec["encrypt"] = AdminBool(path); break;
+                case "recording.clipsPath": rec["clipsPath"] = AdminValue(path); break;
+                case "recording.archivePath": rec["archivePath"] = AdminValue(path); break;
+                case "recording.maxSegmentSizeMb": rec["maxSegmentSizeMb"] = Int(path); break;
                 case "mqtt.statsInterval": mqtt["statsInterval"] = Int(path); break;
+                case "mqtt.broker": mqtt["broker"] = AdminValue(path); break;
+                case "mqtt.port": mqtt["port"] = Int(path); break;
+                case "mqtt.tls": mqtt["tls"] = AdminBool(path); break;
+                case "mqtt.username": mqtt["username"] = AdminValue(path); break;
+                // Write-only: blank is "keep the stored password", so never sent.
+                case "mqtt.password" when AdminValue(path).Length > 0: mqtt["password"] = AdminValue(path); break;
+                case "mqtt.clientId": mqtt["clientId"] = AdminValue(path); break;
+                case "mqtt.baseTopic": mqtt["baseTopic"] = AdminValue(path); break;
+                case "mqtt.discovery": mqtt["discovery"] = AdminBool(path); break;
+                case "mqtt.discoveryPrefix": mqtt["discoveryPrefix"] = AdminValue(path); break;
+                case "mqtt.keepAlive": mqtt["keepAlive"] = Int(path); break;
+                case "mqtt.maxPacketBytes": mqtt["maxPacketBytes"] = Int(path); break;
+                case "wakeHints.syslogPort": wake["syslogPort"] = Int(path); break;
+                case "wakeHints.pushPorts": wake["pushPorts"] = AdminValue(path); break;
+                case "wakeHints.bind": wake["bind"] = AdminValue(path); break;
             }
         }
         if (ui.Count > 0) payload["ui"] = ui;
         if (rec.Count > 0) payload["recording"] = rec;
         if (mqtt.Count > 0) payload["mqtt"] = mqtt;
+        if (wake.Count > 0) payload["wakeHints"] = wake;
         if (payload.Count == 0) { _adminStatus = "No changes to save."; return true; }
 
         try

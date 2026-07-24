@@ -8,6 +8,102 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Added
 
+- **AI event descriptions (opt-in).** Point Neolink.NET at any OpenAI-style
+  vision model — LM Studio, Ollama, llama.cpp server or a hosted API — and it
+  narrates your detections: while an event records, the camera's own snapshot
+  command is sampled (low-res, sub-stream — no server-side video decoding) with
+  the frames **spread across the whole event**: sampling starts at one frame
+  per second and thins as the event runs, so a subject leaving 30 seconds in is
+  in the story too, and the model is told each frame's real time offset. When
+  the event closes the frames go to the model, whose
+  description lands in the event's metadata (`aiDescription` in event.json and
+  `/api/events`) and in the server log. Enable and configure it in Settings →
+  **AI** (endpoint, model, API key — encrypted at rest — instruction prompt,
+  seconds sampled per event with a hard cap of 20, answer timeout, and a
+  "skip model thinking" switch for reasoning models; `<think>` blocks are
+  stripped from answers either way), then opt in **per camera** in the camera
+  panel's recording section — the camera toggle only exists while the global
+  switch is on. Descriptions are processed one at a time on a bounded
+  background queue, so a slow or dead model can never delay recording,
+  streaming or anything else; if it can't keep up, extra events are skipped
+  and say so in the log. A "Test LLM connection" button verifies the endpoint
+  before saving. Battery-friendly by design: tentative self-wake recordings
+  are never sampled — frames only flow once a real detection confirms the
+  event.
+
+  The model also **classifies every event**: GREEN (routine), YELLOW
+  (suspicious — someone lingering, checking car handles, a concealed face) or
+  RED (danger — a visible weapon, fighting, a break-in attempt, fire). The
+  classification contract rides alongside your custom prompt, so editing the
+  instruction can't break it. Descriptions and the verdict show in the web UI —
+  a colored dot on event list rows and review-strip cards, and a banner with
+  the verdict chip in the event players — only for events that have one, so
+  cameras without the feature look exactly as before. Home Assistant gets two
+  new sensors per camera: **Last AI description** (full text and metadata in
+  attributes) and **AI threat level** (green/yellow/red — the automation hook),
+  retained across restarts.
+
+- **A "Last event time" sensor per camera in Home Assistant.** The moment a
+  detection event starts, its start time is published as a proper
+  timestamp-class sensor (retained, next to the existing Last-event id
+  sensor) — HA shows it as "n minutes ago" out of the box, and automations
+  like "no event for 24 hours" compare it directly instead of templating the
+  time out of the id sensor's attributes.
+
+  Three interchangeable backends: **OpenAI-style** (LM Studio, llama.cpp
+  server, hosted APIs), **Ollama** (native /api/chat, base64 images, e.g.
+  llama3.2-vision) and **Anthropic-style** (the Messages API — Claude with an
+  API key, or any proxy speaking that shape; blank endpoint means
+  api.anthropic.com, and each backend keeps its own encrypted key). All three
+  keep their own endpoint/model settings; a Backend selector in Settings → AI
+  picks which one handles events, and the test button exercises whichever is
+  selected.
+
+  The feature is labelled **EXPERIMENTAL** wherever it appears (Settings → AI,
+  the per-camera toggle, the description banner) — in its own violet pill, so
+  it never reads as the same promise as the amber BETA tags. There is now a
+  full guide:
+  [docs/ai-descriptions.md](docs/ai-descriptions.md) — how the frame sampling
+  and classification work, how to enable both switches, and how to get good
+  answers (more frames = a better description; tune the prompt to your
+  property). Opening an event while its description is still being generated
+  now says so — "AI is describing this event…" — instead of showing nothing
+  until the text quietly appeared later.
+
+- **The server-settings dialog is wider** (1020px) so all nine tabs sit on one
+  line again — Notifications and AI had pushed the row to wrap.
+
+- **Server settings grew up: more of config.json is editable from the UI, and
+  everything is validated.** Newly surfaced — **wake hints** (syslog port, the
+  push-decoy TCP ports and the listener bind) in Settings → General; the
+  recording **fast tier** (`clips_path`), **archive tier** (`archive_path`)
+  and **segment size cap**; and the full **MQTT connection**: broker, port,
+  TLS, username, a write-only password (never sent back to the browser, blank
+  keeps the stored one), discovery + prefix, base topic, client id,
+  keep-alive and max packet size — MQTT can now be set up from the UI, not
+  just tuned. Every field validates as you type (bad entries flag the field,
+  explain the allowed range and disable saving) and the server re-checks
+  everything: ports must be 1–65535, the RTSP and web ports must differ, bind
+  addresses must be real IPs, the web port can no longer be zeroed from the
+  UI it serves, and the whole candidate config still passes the normal loader
+  before it replaces the file. The loader itself now validates `wake_hints`
+  too, so a hand-edited bad port or bind fails at startup with a clear
+  message instead of a listener crash-loop.
+
+- **Wake hints without a logging firewall: the DNS-override push decoy.** The
+  router wake-hint feature no longer requires OPNsense/pfSense: set
+  `wake_hints.push_ports` (e.g. `[443, 53]`) and Neolink itself plays the
+  Reolink push service — add a DNS override on any router or DNS server that
+  supports one (OpenWRT, Pi-hole, AdGuard Home, dnsmasq, …) pointing
+  `pushx.reolink.com` at the Neolink host, and the camera's own event push
+  lands on Neolink and becomes the instant wake signal. The connection alone
+  is the trigger (nothing is decrypted or answered), retry bursts are
+  throttled to one hint, and both hint sources can run side by side. The
+  trade-off is honest and documented: pushes redirected to the decoy never
+  reach Reolink, so app notifications stop for those cameras — Home
+  Assistant, fed by Neolink over MQTT, takes over as the notification
+  channel. Full recipe in docs/battery-cameras.md (option B).
+
 - **A "sleep now" button on the battery-camera chip.** Done watching before the
   budget runs out? One click releases the stream and lets the camera doze off,
   instead of leaving it awake for the rest of the viewing window. Pressing it
@@ -18,6 +114,23 @@ in the README). Paste the matching section below into the GitHub release.
   instant, not up to ten seconds later — and it says "to save battery".
 
 ### Changed
+
+- **Suspend moved into the camera dialog's header.** Instead of its own section,
+  suspend is now a compact right-aligned button in the camera-settings dialog's
+  title bar — always in reach, wherever the panel is scrolled. Clicking it shows
+  the same privacy warning as before (suspend only stops Neolink.NET; the
+  camera's own SD/cloud recording keeps running) as a confirm card, now with a
+  **"Do not show me this again"** option. The choice is honored everywhere:
+  with web sign-in it is stored on your account, so it follows you across
+  browsers and devices; without accounts it is remembered per browser. Ticking
+  the box and then cancelling does not store anything — only confirming does.
+  Resuming got the same discipline: the header button is the panel's one
+  resume control (the SUSPENDED section is informational now, not a second
+  button), and a suspended tile no longer resumes on a stray click anywhere —
+  its overlay carries an explicit **Resume** button, exactly like the battery
+  tile's "Wake & watch". Inline validation messages across the settings
+  dialogs were also restyled: left-aligned under their own field instead of
+  ragged right-aligned text across the whole row.
 
 - **A single click no longer wakes a sleeping battery camera.** Waking costs
   charge, so it now takes the explicit "Wake & watch" button — a stray click
@@ -42,6 +155,29 @@ in the README). Paste the matching section below into the GitHub release.
   instead of an anonymous "Failed to load config". The launcher's
   options-to-config mapping is now exercised in CI against fixtures on every
   build, so a mapping typo can never ship an image that crash-loops at boot.
+
+- **No more "classic finalize failed (no video samples)" warnings for empty
+  captures.** A wake event's preview writer can open against the parked sub
+  stream and never receive a frame; finalizing that init-only file then warned
+  about footage that was about to be discarded anyway. A capture with no video
+  now skips finalization quietly — the event-level log lines already tell the
+  story.
+
+- **Battery cameras no longer get the scary HTTP-API warning.** Argus-family
+  battery models usually expose no HTTP API at all, but the "not answering —
+  overload or firewall?" warning treated that normal state as an outage (and
+  repeated every half hour). For sleep-friendly battery cameras it is now a
+  single informational line saying the silence is expected and what still
+  works; the full warning remains for mains cameras, and returns even for a
+  battery model if its HTTP API is ever seen answering.
+
+- **Discarded detections say why, instead of vanishing.** A detection push the
+  recorder dropped — outside the capture schedule, every label unticked in the
+  camera's event types, or unable to confirm a tentative wake recording — was
+  discarded in complete silence, making "my person detection never got picked
+  up" undiagnosable. Each discard now logs one line naming the push's labels
+  and the exact reason (throttled to one per reason per minute; events-off
+  stays at debug since that state is deliberate).
 
 - **Router wake hints ignore everything that isn't a battery camera.** A
   mains-powered camera calls the same Reolink push service on every event, so
@@ -405,6 +541,9 @@ in the README). Paste the matching section below into the GitHub release.
   Baichuan round-trips — now run once a minute instead; changes made through
   HA or the web UI still publish immediately, so the minute is only the ceiling
   for changes made in the Reolink app.
+
+- **UDP battery cameras: acks now name exactly which packets are missing, so
+  the camera resends only those — selective repeat, as the protocol
   provides for.** After a packet went missing on Wi-Fi, our cumulative-only ack
   left the camera blind to everything we already held past the hole, inviting it
   to retransmit its whole send window. The ack's truth table (one byte per

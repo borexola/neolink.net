@@ -416,6 +416,81 @@ public static class SelfTest
                 "truncated filterlog CSV -> ignored");
         });
 
+        Test("wake hints: push decoy throttle + push_ports config parse", () =>
+        {
+            // The decoy push service (DNS-override mode): a camera whose push
+            // delivery dies at the TLS handshake retries within seconds, so one
+            // PIR event is a burst of connections — one hint per source per 10 s.
+            var last = new Dictionary<System.Net.IPAddress, DateTime>();
+            var cam = System.Net.IPAddress.Parse("10.1.0.13");
+            var other = System.Net.IPAddress.Parse("10.1.0.14");
+            var t0 = new DateTime(2026, 7, 23, 12, 0, 0, DateTimeKind.Utc);
+            Assert(Streaming.PushSinkListener.ShouldHint(last, cam, t0), "first connection hints");
+            Assert(!Streaming.PushSinkListener.ShouldHint(last, cam, t0.AddSeconds(3)),
+                "retry 3 s later (TLS-failure retry) -> suppressed");
+            Assert(Streaming.PushSinkListener.ShouldHint(last, other, t0.AddSeconds(3)),
+                "a different camera is throttled independently");
+            Assert(!Streaming.PushSinkListener.ShouldHint(last, cam, t0.AddSeconds(9.9)),
+                "still inside the 10 s window -> suppressed");
+            Assert(Streaming.PushSinkListener.ShouldHint(last, cam, t0.AddSeconds(11)),
+                "past the window (a genuinely later push) -> hints again");
+
+            // The settings-UI port-list parser: display text in, strict ports out.
+            AssertEq(string.Join(",", Config.ConfigEditor.ParsePortList("443, 53")), "443,53");
+            AssertEq(string.Join(",", Config.ConfigEditor.ParsePortList(" 443;53 443 ")), "443,53"); // dupes collapse
+            AssertEq(Config.ConfigEditor.ParsePortList("").Count, 0);
+            bool rejected = false;
+            try { Config.ConfigEditor.ParsePortList("443, http"); } catch (FormatException) { rejected = true; }
+            Assert(rejected, "junk in the port list -> FormatException");
+            rejected = false;
+            try { Config.ConfigEditor.ParsePortList("70000"); } catch (FormatException) { rejected = true; }
+            Assert(rejected, "out-of-range port -> FormatException");
+
+            // The loader validates wake_hints now — a bad saved config fails at
+            // load (and therefore at ConfigEditor.Apply), not at listener start.
+            var tmpBad = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}.json");
+            File.WriteAllText(tmpBad, """
+                { "wake_hints": { "push_ports": [443, 99999] }, "cameras": [] }
+                """);
+            rejected = false;
+            try { NeolinkConfig.Load(tmpBad); } catch (FormatException) { rejected = true; }
+            Assert(rejected, "push_ports out of range -> config rejected");
+            File.WriteAllText(tmpBad, """
+                { "wake_hints": { "bind": "not-an-ip" }, "cameras": [] }
+                """);
+            rejected = false;
+            try { NeolinkConfig.Load(tmpBad); } catch (FormatException) { rejected = true; }
+            Assert(rejected, "wake_hints.bind must be an IP -> config rejected");
+            File.Delete(tmpBad);
+
+            // push_ports parses from both config dialects, list or single spelling.
+            var tmpJson = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}.json");
+            var tmpToml = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}.toml");
+            File.WriteAllText(tmpJson, """
+                { "wake_hints": { "syslog_port": 0, "push_ports": [443, 53] },
+                  "cameras": [ { "name": "c", "username": "u", "password": "p", "address": "1.2.3.4" } ] }
+                """);
+            File.WriteAllText(tmpToml, """
+                [wake_hints]
+                push_port = 443
+                [[cameras]]
+                name = "c"
+                username = "u"
+                password = "p"
+                address = "1.2.3.4"
+                """);
+            try
+            {
+                var wh = NeolinkConfig.Load(tmpJson).WakeHints!;
+                AssertEq(wh.SyslogPort, 0); // syslog half off, decoy-only setup
+                AssertEq(string.Join(",", wh.PushPorts), "443,53");
+                var whToml = NeolinkConfig.Load(tmpToml).WakeHints!;
+                AssertEq(whToml.SyslogPort, 5140); // untouched default
+                AssertEq(string.Join(",", whToml.PushPorts), "443");
+            }
+            finally { File.Delete(tmpJson); File.Delete(tmpToml); }
+        });
+
         Test("stream hub GOP cache: new viewer primed keyframe-first, resets per keyframe", () =>
         {
             // A new viewer must receive the buffered GOP (keyframe onward) at once so
@@ -4031,6 +4106,104 @@ public static class SelfTest
             Assert(!test.IsNewer("v0.8.4"), "release older than a test build's base is not an update");
             Assert(!test.IsNewer("v0.8.5"), "the test build's own base release is not an update");
             Assert(test.IsNewer("v0.8.6"), "a genuinely newer release still is");
+        });
+
+        Test("ai describe: endpoint normalization + think-block stripping", () =>
+        {
+            static string? Url(string e) =>
+                new Neolink.Ai.AiSettings { Endpoint = e }.CompletionsUrl()?.ToString();
+            // The user pastes an API base (LM Studio shows ".../v1"), a bare host
+            // or the full path — all must land on one /chat/completions URL.
+            AssertEq(Url("http://127.0.0.1:1234/v1") ?? "", "http://127.0.0.1:1234/v1/chat/completions");
+            AssertEq(Url("http://127.0.0.1:1234/v1/") ?? "", "http://127.0.0.1:1234/v1/chat/completions");
+            AssertEq(Url("http://127.0.0.1:1234/v1/chat/completions") ?? "", "http://127.0.0.1:1234/v1/chat/completions");
+            // A bare host gets the OpenAI-convention /v1 — LM Studio answers the
+            // unprefixed path with a 200 that isn't a completion (seen live).
+            AssertEq(Url("http://127.0.0.1:1234") ?? "", "http://127.0.0.1:1234/v1/chat/completions");
+            AssertEq(Url("https://api.example.com") ?? "", "https://api.example.com/v1/chat/completions");
+            // An explicit non-/v1 path (proxy, gateway) is respected as typed.
+            AssertEq(Url("http://gw.local:8080/openai") ?? "", "http://gw.local:8080/openai/chat/completions");
+            Assert(Url("") == null, "blank endpoint is unusable");
+            Assert(Url("ftp://x") == null, "non-http scheme rejected");
+            Assert(Url("not a url") == null, "junk rejected");
+
+            // Reasoning models leak <think> blocks; answers must come out clean —
+            // including an unterminated block from a truncated response.
+            AssertEq(Neolink.Ai.AiDescriber.CleanAnswer(
+                "<think>hmm, a person\nmaybe two</think>A person walks to the door.") ?? "",
+                "A person walks to the door.");
+            AssertEq(Neolink.Ai.AiDescriber.CleanAnswer("  plain answer ") ?? "", "plain answer");
+            Assert(Neolink.Ai.AiDescriber.CleanAnswer("<think>only thoughts") == null,
+                "an unterminated think block with no answer yields null");
+            Assert(Neolink.Ai.AiDescriber.CleanAnswer(null) == null, "null in, null out");
+
+            // Threat-level split: the first line carries GREEN/YELLOW/RED per the
+            // protocol; markdown litter and same-line continuations must not break it.
+            static string LevelOf(string s) => Neolink.Ai.AiDescriber.SplitLevel(s).Level ?? "-";
+            static string TextOf(string s) => Neolink.Ai.AiDescriber.SplitLevel(s).Text ?? "-";
+            AssertEq(LevelOf("GREEN\nA cat walks by."), "green");
+            AssertEq(TextOf("GREEN\nA cat walks by."), "A cat walks by.");
+            AssertEq(LevelOf("**RED** — a person is carrying a weapon."), "red");
+            AssertEq(TextOf("**RED** — a person is carrying a weapon."), "a person is carrying a weapon.");
+            AssertEq(LevelOf("Yellow: someone loiters by the car"), "yellow");
+            AssertEq(LevelOf("A person walks to the door."), "-"); // no level line: text stays whole
+            AssertEq(TextOf("A person walks to the door."), "A person walks to the door.");
+            AssertEq(LevelOf("RED"), "red"); // level-only answer: no description
+            AssertEq(TextOf("RED"), "-");
+            // "Greenhouse" must not read as a GREEN verdict (word boundary).
+            AssertEq(LevelOf("Greenhouse door left open."), "-");
+            // The "Threat level: X" spelling some models insist on — prefix only.
+            AssertEq(LevelOf("Threat level: YELLOW\nSomeone is loitering."), "yellow");
+            AssertEq(TextOf("Threat level: YELLOW\nSomeone is loitering."), "Someone is loitering.");
+            AssertEq(LevelOf("A man in a red jacket walks by."), "-"); // mid-sentence color ≠ verdict
+
+            // Ollama endpoint normalization (native /api/chat).
+            static string? OUrl(string e) =>
+                new Neolink.Ai.AiSettings { OllamaEndpoint = e }.OllamaUrl()?.ToString();
+            AssertEq(OUrl("http://127.0.0.1:11434") ?? "", "http://127.0.0.1:11434/api/chat");
+            AssertEq(OUrl("http://127.0.0.1:11434/") ?? "", "http://127.0.0.1:11434/api/chat");
+            AssertEq(OUrl("http://127.0.0.1:11434/api/chat") ?? "", "http://127.0.0.1:11434/api/chat");
+            Assert(OUrl("") == null, "blank ollama endpoint is unusable");
+            // The provider picks which URL is active.
+            var prov = new Neolink.Ai.AiSettings
+            {
+                Provider = "ollama",
+                Endpoint = "http://a:1234/v1",
+                OllamaEndpoint = "http://b:11434",
+            };
+            AssertEq(prov.ActiveUrl()?.ToString() ?? "", "http://b:11434/api/chat");
+            prov.Provider = "openai";
+            AssertEq(prov.ActiveUrl()?.ToString() ?? "", "http://a:1234/v1/chat/completions");
+
+            // Anthropic-style: blank endpoint means the real API; /v1/messages is
+            // appended for bases and /v1 stems; explicit full paths pass through.
+            static string? AUrl(string e) =>
+                new Neolink.Ai.AiSettings { AnthropicEndpoint = e }.AnthropicUrl()?.ToString();
+            AssertEq(AUrl("") ?? "", "https://api.anthropic.com/v1/messages");
+            AssertEq(AUrl("http://proxy:4000") ?? "", "http://proxy:4000/v1/messages");
+            AssertEq(AUrl("http://proxy:4000/v1") ?? "", "http://proxy:4000/v1/messages");
+            AssertEq(AUrl("http://proxy:4000/v1/messages") ?? "", "http://proxy:4000/v1/messages");
+            prov.Provider = "anthropic";
+            AssertEq(prov.ActiveUrl()?.ToString() ?? "", "https://api.anthropic.com/v1/messages");
+
+            // The per-camera opt-in defaults OFF and round-trips through Update.
+            var dir = Path.Combine(Path.GetTempPath(), "neolink-selftest-ai-" + Guid.NewGuid().ToString("n"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var settings = new Recording.RecordingSettings(dir);
+                Assert(!settings.Get("cam").AiDescribe, "AI describe is a strict opt-in (default off)");
+                settings.Update("cam", events: null, continuous: null, eventTypes: null,
+                    setEventTypes: false, aiDescribe: true);
+                Assert(settings.Get("cam").AiDescribe, "opt-in persists");
+                settings.Update("cam", events: false, continuous: null, eventTypes: null,
+                    setEventTypes: false);
+                Assert(settings.Get("cam").AiDescribe, "unrelated updates leave the opt-in alone");
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
         });
 
         Test("camera control: zoom/siren/floodlight wire formats", () =>

@@ -271,6 +271,13 @@ public sealed class NeolinkConfig
             switch (Key(prop.Name))
             {
                 case "syslogport" or "port": wh.SyslogPort = prop.Value.GetInt32(); break;
+                case "pushports" or "pushport":
+                    // A list or a single number, whichever the user reached for.
+                    if (prop.Value.ValueKind == JsonValueKind.Array)
+                        foreach (var p in prop.Value.EnumerateArray()) wh.PushPorts.Add(p.GetInt32());
+                    else
+                        wh.PushPorts.Add(prop.Value.GetInt32());
+                    break;
                 case "bind": wh.Bind = prop.Value.GetString(); break;
                 default:
                     Log.Warn($"Config: ignoring unknown wake_hints option '{prop.Name}'");
@@ -332,6 +339,10 @@ public sealed class NeolinkConfig
                 SyslogPort = (int)(MiniToml.GetInt(wh, "syslog_port") ?? MiniToml.GetInt(wh, "port") ?? 5140),
                 Bind = MiniToml.GetString(wh, "bind"),
             };
+            foreach (var p in MiniToml.GetStringList(wh, "push_ports") ?? new List<string>())
+                if (int.TryParse(p, out var port)) config.WakeHints.PushPorts.Add(port);
+            if (MiniToml.GetInt(wh, "push_port") is { } single)
+                config.WakeHints.PushPorts.Add((int)single);
         }
 
         if (MiniToml.GetTable(root, "mqtt") is { } mqtt)
@@ -577,6 +588,20 @@ public sealed class NeolinkConfig
             if (Mqtt.StatsIntervalSeconds is not 0 and (< 5 or > 86400))
                 throw new FormatException("mqtt.stats_interval must be 0 (off) or 5..86400 seconds");
         }
+
+        if (WakeHints != null)
+        {
+            if (WakeHints.SyslogPort is < 0 or > 65535)
+                throw new FormatException("wake_hints.syslog_port must be 0 (off) .. 65535");
+            foreach (var p in WakeHints.PushPorts)
+                if (p is < 1 or > 65535)
+                    throw new FormatException($"wake_hints.push_ports: {p} is not a valid port (1-65535)");
+            if (WakeHints.PushPorts.Count > 16)
+                throw new FormatException("wake_hints.push_ports: at most 16 ports");
+            // The listeners do IPAddress.Parse on this — fail at load, not at runtime.
+            if (WakeHints.Bind is { } whb && !System.Net.IPAddress.TryParse(whb, out _))
+                throw new FormatException($"wake_hints.bind must be an IP address, not \"{whb}\"");
+        }
     }
 
     private static (string host, int port) SplitHostPort(string address)
@@ -664,16 +689,24 @@ public sealed class MqttConfig
     public int StatsIntervalSeconds { get; set; } = 60;
 }
 
-/// <summary>Router wake-hint settings ("wake_hints" in the config): a UDP syslog
-/// listener that turns the router's "this camera just called the Reolink push
-/// service" firewall log line into an instant wake signal for battery cameras.
-/// See docs/battery-cameras.md for the OPNsense recipe.</summary>
+/// <summary>Router wake-hint settings ("wake_hints" in the config): instant wake
+/// signals for battery cameras from the camera's own "call the Reolink push
+/// service" moment. Two independent sources, either or both: a UDP syslog
+/// listener for OPNsense/pfSense firewall logs, and a decoy push service the
+/// camera is steered to with a router DNS override. See docs/battery-cameras.md
+/// for both recipes.</summary>
 public sealed class WakeHintConfig
 {
     /// <summary>UDP port to receive the router's remote syslog (filterlog) on.
-    /// 5140 by convention — 514 needs elevated privileges on most systems.</summary>
+    /// 5140 by convention — 514 needs elevated privileges on most systems.
+    /// 0 turns the syslog listener off (push_ports may still run).</summary>
     public int SyslogPort { get; set; } = 5140;
-    /// <summary>Bind address for the listener; defaults to the server bind address.</summary>
+    /// <summary>TCP ports for the decoy push service (DNS-override mode): a DNS
+    /// override on the router points pushx.reolink.com at this host, and the
+    /// camera's own event push lands here. Empty = disabled. 443 is what the
+    /// captured firmware uses; some firmwares reportedly call out on 53.</summary>
+    public List<int> PushPorts { get; } = new();
+    /// <summary>Bind address for the listeners; defaults to the server bind address.</summary>
     public string? Bind { get; set; }
 }
 

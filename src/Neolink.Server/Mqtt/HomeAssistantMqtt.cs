@@ -202,6 +202,14 @@ public sealed class HomeAssistantMqtt
             cam.OnStatus(push);
     }
 
+    /// <summary>An AI description (and threat level) landed on a finished event —
+    /// mirror it onto the camera's "AI description"/"AI threat level" sensors.</summary>
+    public void OnAiDescribed(Neolink.Recording.EventRecord rec)
+    {
+        if (_cameras.TryGetValue(Sanitize(rec.Camera), out var cam))
+            cam.OnAiDescribed(rec);
+    }
+
     // ------------------------------------------------------------------ MQTT plumbing
 
     /// <summary>Test seam: observe every string publish without standing up a broker.</summary>
@@ -578,6 +586,13 @@ internal sealed class CameraBridge
             await _hub.PublishAsync(StateTopic("last_event/attr"),
                 JsonSerializer.Serialize(new { labels = ev.Labels, started = ev.StartUtc }),
                 CancellationToken.None).ConfigureAwait(false);
+            // The start moment again as its own timestamp sensor ("O" keeps the
+            // trailing Z the timestamp device class requires) — HA renders it as
+            // "n minutes ago" and automations can compare it without templating
+            // the attribute out of the id sensor.
+            await _hub.PublishAsync(StateTopic("last_event_time"),
+                DateTime.SpecifyKind(ev.StartUtc, DateTimeKind.Utc).ToString("O"),
+                CancellationToken.None).ConfigureAwait(false);
         }
         catch
         {
@@ -692,9 +707,16 @@ internal sealed class CameraBridge
             // automation (this pauses recording; it does not silence the sensors).
             await AnnounceEntityAsync("switch", "detect", DetectSwitchConfig(), ct).ConfigureAwait(false);
             await PublishDetectStateAsync(ct).ConfigureAwait(false);
-            // Last event id: state is retained, so HA has the most recent id even
-            // across restarts — no state publish needed here.
+            // Last event id + start time: states are retained, so HA has the most
+            // recent event even across restarts — no state publish needed here.
             await AnnounceEntityAsync("sensor", "last_event", LastEventConfig(), ct).ConfigureAwait(false);
+            await AnnounceEntityAsync("sensor", "last_event_time", LastEventTimeConfig(), ct).ConfigureAwait(false);
+            // AI event descriptions: announced for every recording camera whether
+            // or not the feature is on for it (entities are never pruned by
+            // enablement — that filtering is web-UI only). Cameras with AI off
+            // simply keep an unknown state; both topics are retained.
+            await AnnounceEntityAsync("sensor", "ai_description", AiDescriptionConfig(), ct).ConfigureAwait(false);
+            await AnnounceEntityAsync("sensor", "ai_threat", AiThreatConfig(), ct).ConfigureAwait(false);
         }
 
         // Recording status: is footage for this camera being written right now
@@ -1222,6 +1244,78 @@ internal sealed class CameraBridge
         availability = Availability(),
         availability_mode = "all",
     };
+
+    /// <summary>When the camera's most recent detection event started, as a
+    /// timestamp-class sensor: HA shows it as "n minutes ago" out of the box and
+    /// automations can compare it directly (e.g. "no event for 24 h").</summary>
+    private object LastEventTimeConfig() => new
+    {
+        name = "Last event time",
+        unique_id = $"neolink_{Id}_last_event_time",
+        state_topic = StateTopic("last_event_time"),
+        device_class = "timestamp",
+        entity_category = "diagnostic",
+        device = Device(),
+        availability = Availability(),
+        availability_mode = "all",
+    };
+
+    /// <summary>The LLM's description of the camera's most recent detection event
+    /// (AI event descriptions, opt-in per camera). HA caps a state at 255 chars,
+    /// so the state is truncated; the full text and the metadata ride attributes.</summary>
+    private object AiDescriptionConfig() => new
+    {
+        name = "Last AI description",
+        unique_id = $"neolink_{Id}_ai_description",
+        state_topic = StateTopic("ai_description"),
+        json_attributes_topic = StateTopic("ai_description/attr"),
+        icon = "mdi:message-text-outline",
+        entity_category = "diagnostic",
+        device = Device(),
+        availability = Availability(),
+        availability_mode = "all",
+    };
+
+    /// <summary>The LLM's threat classification of that event: green (routine),
+    /// yellow (suspicious) or red (danger) — the automation hook ("when red, …").</summary>
+    private object AiThreatConfig() => new
+    {
+        name = "AI threat level",
+        unique_id = $"neolink_{Id}_ai_threat",
+        state_topic = StateTopic("ai_threat"),
+        icon = "mdi:shield-alert-outline",
+        device = Device(),
+        availability = Availability(),
+        availability_mode = "all",
+    };
+
+    public void OnAiDescribed(EventRecord rec) => _ = PublishAiDescribedAsync(rec);
+
+    private async Task PublishAiDescribedAsync(EventRecord rec)
+    {
+        try
+        {
+            var desc = rec.AiDescription ?? "";
+            await _hub.PublishAsync(StateTopic("ai_description"),
+                desc.Length <= 255 ? desc : desc[..252] + "…", CancellationToken.None).ConfigureAwait(false);
+            await _hub.PublishAsync(StateTopic("ai_description/attr"),
+                JsonSerializer.Serialize(new
+                {
+                    description = desc,
+                    level = rec.AiLevel,
+                    @event = rec.Id,
+                    labels = rec.Labels,
+                    started = rec.StartUtc,
+                    model = rec.AiModel,
+                }), CancellationToken.None).ConfigureAwait(false);
+            await _hub.PublishAsync(StateTopic("ai_threat"), rec.AiLevel ?? "unknown", CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch
+        {
+            // Broker unreachable — the topics are retained; the next description republishes.
+        }
+    }
 
     private object RecordingSensorConfig() => new
     {

@@ -246,10 +246,36 @@ public sealed record ApiRecordingSettings(bool Events, bool Continuous,
     // server vetoes it (no always_on) — the panel disables the toggle and says why.
     // WakeTimeline is the replacement offered there: passively tape self-wakes
     // to the timeline (zero battery cost — the frames are already flowing).
-    bool ContinuousBlockedBySleep = false, bool WakeTimeline = true)
+    bool ContinuousBlockedBySleep = false, bool WakeTimeline = true,
+    // AI descriptions: AiAvailable mirrors the GLOBAL switch (Settings → AI) —
+    // the per-camera opt-in only renders while it is on.
+    bool AiAvailable = false, bool AiDescribe = false)
 {
     /// <summary>null EventTypes = every detection type is recorded.</summary>
     public bool TypeEnabled(string label) => EventTypes == null || EventTypes.Contains(label);
+}
+
+/// <summary>GET/PUT /api/admin/ai — AI event-description settings (admin only).
+/// The API key is write-only; HasApiKey just says one is stored.</summary>
+public sealed class ApiAiSettings
+{
+    public bool Enabled { get; set; }
+    /// <summary>The active backend: "openai" or "ollama" (both keep their settings).</summary>
+    public string Provider { get; set; } = "openai";
+    public string Endpoint { get; set; } = "";
+    public string Model { get; set; } = "";
+    public string OllamaEndpoint { get; set; } = "";
+    public string OllamaModel { get; set; } = "";
+    public string AnthropicEndpoint { get; set; } = "";
+    public string AnthropicModel { get; set; } = "";
+    public bool HasAnthropicKey { get; set; }
+    public bool HasApiKey { get; set; }
+    public string Prompt { get; set; } = "";
+    public string DefaultPrompt { get; set; } = "";
+    public bool NoThink { get; set; } = true;
+    public int CaptureSeconds { get; set; } = 10;
+    public int MaxCaptureSeconds { get; set; } = 20;
+    public int TimeoutSeconds { get; set; } = 120;
 }
 
 /// <summary>GET /api/system/stats — static facts about the server process/host.</summary>
@@ -286,7 +312,8 @@ public sealed record ApiSegment(string File, long Size, double Seconds = 0, bool
 /// <summary>GET /api/events — one recorded detection event.</summary>
 public sealed record ApiEvent(string Id, string Camera, DateTime Start, DateTime End,
     List<string> Labels, bool Reviewed, bool Ongoing, bool HasClip, bool HasThumb,
-    bool HasPreview = false)
+    bool HasPreview = false, string? AiDescription = null, string? AiLevel = null,
+    bool AiPending = false)
 {
     private static readonly (string Label, string Icon, string Name)[] Known =
     {
@@ -394,6 +421,9 @@ public static class UiIcon
             "wrench" => "<path d=\"M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z\"/>",
             "archive" => "<polyline points=\"21 8 21 21 3 21 3 8\"/><rect x=\"1\" y=\"3\" width=\"22\" height=\"5\"/><line x1=\"10\" y1=\"12\" x2=\"14\" y2=\"12\"/>",
             "bell" => "<path d=\"M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9\"/><path d=\"M13.73 21a2 2 0 0 1-3.46 0\"/>",
+            // AI features (a big and a small four-point star).
+            "sparkles" => "<path d=\"M11 3l1.7 4.6L17.3 9.3l-4.6 1.7L11 15.6 9.3 11 4.7 9.3 9.3 7.6z\"/>"
+                + "<path d=\"M18.5 14l.9 2.4 2.4.9-2.4.9-.9 2.4-.9-2.4-2.4-.9 2.4-.9z\"/>",
             _ => "",
         };
         return new MarkupString(

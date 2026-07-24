@@ -90,13 +90,20 @@
   //                                    // (0 = off, minimum 5; editable in the web UI)
   // },
 
-  // Optional: router wake hints for battery cameras (OPNsense/pfSense).
-  // The router forwards its firewall log (remote syslog, filterlog) here; when a
-  // battery camera opens a TCP/443 connection to Reolink's push service — which
-  // it does the instant a PIR event fires — Neolink connects immediately instead
-  // of waiting for the ping-pattern scan. Full recipe: docs/battery-cameras.md.
+  // Optional: router wake hints for battery cameras. On a PIR event the camera
+  // calls Reolink's push service; catch that moment and Neolink connects
+  // immediately instead of waiting for the ping-pattern scan. Two independent
+  // sources, either or both — full recipes: docs/battery-cameras.md.
+  //  - syslog_port: OPNsense/pfSense forward their firewall log (remote syslog,
+  //    filterlog) here; the camera's TCP/443 call is the signal. 0 = off.
+  //  - push_ports: Neolink itself plays the push service — add a DNS override on
+  //    the router (pushx.reolink.com -> this host, that hostname ONLY) and the
+  //    camera's own push lands here. Works on any router with DNS overrides
+  //    (OpenWRT, Pi-hole, AdGuard, ...), but Reolink app notifications stop for
+  //    cameras behind the override — Home Assistant via Neolink takes over.
   // "wake_hints": {
-  //   "syslog_port": 5140              // UDP port to receive the router's syslog on
+  //   "syslog_port": 5140,             // UDP port to receive the router's syslog on
+  //   "push_ports": [443, 53]          // decoy push service (DNS-override mode)
   // },
 
   // Optional: password-protect the RTSP server. Remove entries for open access.

@@ -46,10 +46,25 @@ infrastructure, but it is inference — very short wakes can be missed.
 ## 3. On battery, with a capable router: wake hints (best)
 
 Keep `wake_capture` on and add the router. On a PIR event the camera calls
-Reolink's push service; the router sees it instantly and tells Neolink, which
-connects at once — faster and more reliable than the ping scan, and it also
-catches events the scan is blind to (e.g. a second trigger right after a
-wake).
+Reolink's push service; catch that moment and Neolink connects at once —
+faster and more reliable than the ping scan, and it also catches events the
+scan is blind to (e.g. a second trigger right after a wake).
+
+Both variants are configured in the `wake_hints` section of the config —
+editable from the web UI too (Settings → General → Wake hints) — and there
+are two ways to catch the moment; use either (or both):
+
+- **Option A — firewall log** (OPNsense/pfSense): the router logs the
+  camera's push call and forwards its firewall log to Neolink. Reolink app
+  notifications on your phone keep working (with a pass rule).
+- **Option B — DNS override** (any router or DNS server with overrides:
+  OpenWRT, Pi-hole, AdGuard Home, …): `pushx.reolink.com` is pointed at
+  Neolink itself, so the camera delivers its push *to Neolink* — the
+  connection is the signal. No firewall logging or syslog involved, but
+  **Reolink app notifications stop** for cameras behind the override (the
+  push never reaches Reolink). Home Assistant, fed by Neolink over MQTT,
+  becomes your notification channel. Order matters: **enable push in the
+  Reolink app first, change DNS second** — see the steps below.
 
 **Know the limitations before you set this up:**
 
@@ -62,16 +77,19 @@ wake).
   and this recipe becomes unnecessary.
 - **Requires push notifications enabled** for the camera in the Reolink
   app — that is what makes it call the push service at all. You don't have
-  to *receive* them: silence them on your phone, or **block** the traffic at
-  the firewall — the logged attempt is still the signal (pass+log is the
-  tested setup; whether firmware keeps attempting forever under a long-term
-  block is untested). With push disabled the camera produces **no
+  to *receive* them: silence them on your phone, or (option A) **block** the
+  traffic at the firewall — the logged attempt is still the signal (pass+log
+  is the tested setup; whether firmware keeps attempting forever under a
+  long-term block is untested — option B's permanently failing delivery has
+  the same open question). With push disabled the camera produces **no
   distinguishable event traffic at all** (its remaining cloud chatter also
   occurs periodically without any event, verified in router logs), so there
   are no hints and the ping scan carries on alone.
 - A hint-opened session records for a full **30 seconds** (extended by
   further pushes or ongoing motion), so short events still yield usable
   footage.
+
+### Option A: firewall log (OPNsense/pfSense)
 
 In Neolink's config (server level, next to `cameras`):
 
@@ -81,7 +99,7 @@ In Neolink's config (server level, next to `cameras`):
 }
 ```
 
-### OPNsense
+#### OPNsense
 
 1. Give the camera a **static DHCP lease**.
 2. Firewall → Aliases → add: type *Host(s)*, content `pushx.reolink.com`.
@@ -104,13 +122,13 @@ In Neolink's config (server level, next to `cameras`):
 
    ![OPNsense remote logging destination](opnsense-logPush.png)
 
-### pfSense
+#### pfSense
 
 Steps 1–3 as above, then Status → System Logs → **Settings**: check
 **Enable Remote Logging**, remote log server `<neolink-host>:5140`, contents:
 **Firewall Events**. Same log format — Neolink parses both.
 
-### Verify
+#### Verify
 
 Watch Neolink's log: `Wake hints: listening …` at startup, `receiving syslog
 from … — the pipe works` on the first datagram, `Wake hints: router saw
@@ -118,9 +136,81 @@ from … — the pipe works` on the first datagram, `Wake hints: router saw
 UDP 5140 isn't reaching the container.
 
 Neolink only reacts to new **TCP/443** connections from a configured camera's
-IP; everything else in the log stream is ignored. Anything else that knows
-the camera is up (a Home Assistant automation, an external PIR) can feed the
-same path: `POST /api/cameras/{name}/wake-hint`.
+IP; everything else in the log stream is ignored.
+
+### Option B: DNS override — Neolink plays the push service
+
+No firewall logging needed: a DNS override makes `pushx.reolink.com` resolve
+to the Neolink host, so the camera delivers its event push *to Neolink*. The
+TCP connection itself is the wake signal — Neolink accepts it, notes the
+camera's IP, and closes; it never speaks the push protocol.
+
+**If you don't mind losing Reolink app notifications, follow these steps.**
+That is the trade-off, stated plainly: notifications stop for every camera
+behind the override, because its push can no longer reach Reolink's real
+service. Home Assistant takes over as your notification channel — Neolink
+publishes every event over MQTT (with the AI description and threat level if
+enabled), and an HA automation turns that into a phone notification.
+
+> ⚠ **Turn push notifications ON first — before touching DNS.** Push must
+> already be enabled for the camera in the Reolink app when the override goes
+> live: it is what makes the camera call the push host at all, and enabling or
+> re-registering push talks to the very service the override takes away — with
+> the override already in place, flipping the toggle on may simply fail. The
+> order matters: **app first, DNS second.**
+
+Step by step:
+
+1. **Reolink app**: enable **push notifications** for the camera, and trip a
+   test event to confirm a push actually reaches your phone — that proves the
+   camera is calling the push service. (Don't bother silencing them; they stop
+   on their own after step 5.)
+2. Give the camera a **static DHCP lease**.
+3. In Neolink's config (server level, next to `cameras`) — or in the web UI
+   under Settings → General → Wake hints:
+
+   ```json
+   "wake_hints": {
+     "syslog_port": 0,
+     "push_ports": [443, 53]
+   }
+   ```
+
+   (`syslog_port: 0` just turns option A's listener off; leave it at 5140 if
+   you run both. 443 is the port the captured firmware pushes to; some
+   firmwares reportedly use 53 — listening on both costs nothing, and a port
+   that can't be bound is skipped with a log line.)
+4. Make the ports reachable: in Docker, publish them
+   (`-p 443:443 -p 53:53/tcp`); the ports must be free on the host. Running
+   bare on Linux, ports below 1024 need `CAP_NET_BIND_SERVICE` or root.
+   If the same host runs a DNS server, TCP 53 will already be taken — the
+   decoy logs that and carries on with 443. Restart Neolink and check the
+   log for `Wake hints: decoy push service on tcp://…`.
+5. **Now** add the DNS override, on whatever answers the camera's DNS
+   queries — OpenWRT (Network → Hostnames), Pi-hole (Local DNS Records),
+   AdGuard Home (DNS rewrites), dnsmasq
+   (`address=/pushx.reolink.com/<neolink-ip>`), … :
+   `pushx.reolink.com` → the Neolink host's IP. **That hostname only** —
+   never a wildcard over `reolink.com`, which would drag the camera's
+   routine p2p chatter (and firmware updates) onto Neolink too.
+6. **Power-cycle the camera** once so it drops any cached DNS answer and
+   resolves `pushx.reolink.com` to Neolink from now on.
+
+#### Verify
+
+Watch Neolink's log: `Wake hints: decoy push service on tcp://…` at startup,
+`push decoy contacted by <camera-ip> … — the DNS override works` when the
+camera first calls in (trigger its PIR, or just wait — the first event
+proves it), then `Wake hints: <camera-ip> called the decoy push service …`
+per event. Nothing at all → the override isn't answering the camera's DNS
+(check it from another LAN device: `nslookup pushx.reolink.com <router>`),
+the ports aren't reachable, or the camera still holds the real address —
+repeat the power-cycle.
+
+---
+
+Anything else that knows the camera is up (a Home Assistant automation, an
+external PIR) can feed the same path: `POST /api/cameras/{name}/wake-hint`.
 
 ## Settings reference
 
@@ -133,7 +223,8 @@ same path: `POST /api/cameras/{name}/wake-hint`.
 | `udp` | `false` | Baichuan-over-UDP transport for models that never listen on TCP (beta). Requires `uid`. |
 | `udp_probe` | `false` | Diagnostic: probe UDP discovery while unreachable over TCP and log the exchange — tells you whether a stubborn camera is a UDP-only model. |
 | `record` | `true` | Seed for the event-recording switch (the web UI switch wins afterwards). |
-| `wake_hints` (server level) | off | `{ "syslog_port": 5140 }` — receive router firewall logs as instant wake signals (setup above). |
+| `wake_hints.syslog_port` (server level) | off | `5140` — receive router firewall logs (OPNsense/pfSense) as instant wake signals (option A above). `0` = off. |
+| `wake_hints.push_ports` (server level) | off | `[443, 53]` — decoy push service: a router DNS override points `pushx.reolink.com` here and the camera's own event push is the wake signal (option B above; app notifications stop). |
 
 ## What to expect
 
@@ -176,7 +267,8 @@ ending in `UDP: SILENCE`). Compose/run snippets: README →
 | Repeated `[wake-diag] INCONCLUSIVE` + "it was already up" | The scan misread an idle-awake camera as asleep. Self-heals — watch for the "being more skeptical" line. |
 | Events missed while armed | Event-type selection excludes what the camera reports (keep **Motion** ticked). `brief fast-ping blip` lines near the miss = wake too short for the scan (router hints fix this); no lines at all = the camera's own PIR never fired. |
 | A second event right after a wake is missed | The scan re-arms only after the camera sleeps again (~40–65 s blind). Router wake hints close exactly this gap. |
-| Wake hints configured but nothing happens | No `pipe works` line: wrong port / UDP 5140 not reaching the container. Pipe works but no hints: the pushx rule isn't logging, or the camera IP doesn't match the config. |
+| Wake hints (option A) configured but nothing happens | No `pipe works` line: wrong port / UDP 5140 not reaching the container. Pipe works but no hints: the pushx rule isn't logging, or the camera IP doesn't match the config. |
+| Push decoy (option B) configured but nothing happens | No `the DNS override works` line: the override isn't answering the camera's DNS (`nslookup pushx.reolink.com <router>` from another device), the ports aren't published to the container, or the camera cached the real address — power-cycle it. Contact line but no hints: the source IP doesn't match a configured battery camera. |
 | Choppy stream on every client incl. the app | The camera's radio ceiling, not Neolink (logged as a saturation self-diagnosis). |
 | First 1–2 s of an event missing | Inherent: the camera must wake and accept a connection first. |
 | Battery drains fast | Something holds it awake — the hourly `held awake by` line and the tile chip name it. |
@@ -238,7 +330,8 @@ leave behind lives on the Timeline.
 | `held awake by …` (hourly) | Something is spending battery; this names it. |
 | `that self-wake connect caught nothing (N in a row) — being more skeptical…` | Self-healing against misread sleep patterns. A real catch resets. |
 | `brief fast-ping blip (N sample(s)) ended before the 3-sample wake confirmation` | The radio went flat too briefly to be a confirmed wake. Frequent blips near a miss = wakes too short for the scan; none = the PIR never fired. |
-| `wake hint (router saw …) — the camera is calling home for an event` | Router-fed instant wake; connecting at once. |
+| `wake hint (router saw …) — the camera is calling home for an event` | Router-fed instant wake (option A); connecting at once. |
+| `wake hint (… called the decoy push service …)` | DNS-override instant wake (option B); connecting at once. |
 | `[wake-diag] REAL self-wake / LIKELY OUR PROBE / SUSPECT FALSE ASLEEP / HINT MISFIRE / INCONCLUSIVE` | Post-mortem of each wake with evidence. Paste this into issues. |
 
 ### Timings
@@ -253,7 +346,8 @@ leave behind lives on the Timeline.
 | Idle release after last demand | ~10 s |
 | Wake confirmation window (event kept vs discarded) | ~30 s |
 | Wake-opened session held for the late detection push | 30 s. Scan-opened: ends early on the first detection. Hint-opened: records the full window; a fresh hint restarts it |
-| Router wake hint → connect | immediate; misfire cooldown 15/30/60 s |
+| Wake hint (either source) → connect | immediate; misfire cooldown 15/30/60 s |
+| Push decoy: repeat connections from one camera | coalesced to one hint per 10 s (failed-delivery retries) |
 | Hint trust window (scan edges without a hint = housekeeping, skipped) | 2 h since the last hint; expires back to scan-only behavior |
 | Keep-alive maximum | 24 h |
 

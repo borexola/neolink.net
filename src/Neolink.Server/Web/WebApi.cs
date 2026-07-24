@@ -107,6 +107,12 @@ public sealed class WebApiOptions
     public Neolink.Recording.RecordingHealth? RecordingHealth { get; init; }
     /// <summary>Email-notification service (config store + test send); admin only.</summary>
     public Neolink.Notifications.Notifier? Notifier { get; init; }
+    /// <summary>AI event descriptions: the global settings store (admin only).
+    /// Its Enabled switch also gates the per-camera opt-in.</summary>
+    public Neolink.Ai.AiStore? Ai { get; init; }
+    /// <summary>Is this event's AI description queued or in flight right now?
+    /// (AiDescriber.IsPending — lets the UI say "describing…" instead of nothing.)</summary>
+    public Func<string, bool>? AiPending { get; init; }
     /// <summary>Captured server log lines for the UI's live log stream (admin only).</summary>
     public LogBuffer? Logs { get; init; }
     /// <summary>Gracefully stops the process; the supervisor (docker/systemd) restarts it.</summary>
@@ -210,7 +216,14 @@ public static class WebApi
         List<string>? ScheduleDays = null, string? ScheduleStart = null, string? ScheduleEnd = null,
         bool? ScheduleEnabled = null,
         bool? ArchiveEvents = null, bool? ArchiveContinuous = null, int? ArchiveRetentionDays = null,
-        bool? WakeTimeline = null);
+        bool? WakeTimeline = null, bool? AiDescribe = null);
+    /// <summary>AI-description settings update. ApiKey is WRITE-ONLY: null keeps the
+    /// stored one, "" clears it, a value sets it. It is never returned by GET.</summary>
+    private sealed record AiSettingsRequest(bool? Enabled, string? Provider,
+        string? Endpoint, string? Model, string? ApiKey,
+        string? OllamaEndpoint, string? OllamaModel,
+        string? AnthropicEndpoint, string? AnthropicModel, string? AnthropicApiKey,
+        string? Prompt, bool? NoThink, int? CaptureSeconds, int? TimeoutSeconds);
     private sealed record CredentialsRequest(string? Username, string? Password);
 
     /// <summary>
@@ -241,12 +254,18 @@ public static class WebApi
         bool? Talk = null, bool? ShowBackgroundTasks = null);
     private sealed record AdminRecordingSettings(string? Path, int? RetentionDays, int? PreSeconds,
         int? PostSeconds, int? MaxClipSeconds, string? Stream, int? SegmentMinutes, int? ContinuousRetentionDays,
-        bool? Encrypt = null);
-    /// <summary>Only the cadence is UI-editable; broker/credentials stay file-only.</summary>
-    private sealed record AdminMqttSettings(int? StatsInterval);
+        bool? Encrypt = null, string? ClipsPath = null, string? ArchivePath = null, int? MaxSegmentSizeMb = null);
+    /// <summary>Password is write-only: null keeps the stored one, a value sets it,
+    /// "" removes it. Broker may create the section (that's how MQTT is enabled).</summary>
+    private sealed record AdminMqttSettings(int? StatsInterval, string? Broker = null, int? Port = null,
+        bool? Tls = null, string? Username = null, string? Password = null, string? ClientId = null,
+        string? BaseTopic = null, bool? Discovery = null, string? DiscoveryPrefix = null,
+        int? KeepAlive = null, int? MaxPacketBytes = null);
+    /// <summary>PushPorts arrives as the text the user typed ("443, 53"); parsed strictly.</summary>
+    private sealed record AdminWakeHintSettings(int? SyslogPort, string? PushPorts, string? Bind);
     private sealed record AdminConfigRequest(string? Bind, int? BindPort, int? WebPort, string? WebBind,
         bool? WebUi, AdminUiSettings? Ui, AdminRecordingSettings? Recording, bool? RemoveRecording,
-        AdminMqttSettings? Mqtt = null);
+        AdminMqttSettings? Mqtt = null, AdminWakeHintSettings? WakeHints = null);
 
     public static async Task RunAsync(WebApiOptions o, CancellationToken ct)
     {
@@ -514,6 +533,23 @@ public static class WebApi
             if (AdminOnly(ctx) is { } denied) return denied;
             try
             {
+                // Checks the loader can't make (it must keep accepting historic
+                // configs) but the editor should: they only bite what the UI writes.
+                if (req.Bind is { } b && !System.Net.IPAddress.TryParse(b, out _))
+                    throw new FormatException($"bind must be an IP address (e.g. 0.0.0.0), not \"{b}\"");
+                if (req.WebBind is { Length: > 0 } wb && wb is not ("localhost" or "*" or "+")
+                    && !System.Net.IPAddress.TryParse(wb, out _))
+                    throw new FormatException($"web bind must be an IP address, localhost, * or +, not \"{wb}\"");
+                if (req.BindPort is { } bp && bp is < 1 or > 65535)
+                    throw new FormatException("RTSP port must be 1-65535");
+                // 0 legally disables the web API — but never from the web UI,
+                // which would saw off the branch it sits on.
+                if (req.WebPort is { } wp && wp is < 1 or > 65535)
+                    throw new FormatException("web port must be 1-65535 (disable the web API in the file, not from the UI it serves)");
+                var current = NeolinkConfig.Load(o.ConfigPath);
+                if ((req.BindPort ?? current.BindPort) == (req.WebPort ?? current.WebPort))
+                    throw new FormatException("RTSP port and web port must differ");
+
                 ConfigEditor.Apply(o.ConfigPath, root =>
                 {
                     if (req.Bind != null) ConfigEditor.Set(root, "bind", req.Bind);
@@ -552,20 +588,65 @@ public static class WebApi
                         if (r.MaxClipSeconds != null) ConfigEditor.Set(rec, "max_clip_seconds", r.MaxClipSeconds);
                         if (r.Stream != null) ConfigEditor.Set(rec, "stream", r.Stream);
                         if (r.SegmentMinutes != null) ConfigEditor.Set(rec, "segment_minutes", r.SegmentMinutes);
+                        if (r.MaxSegmentSizeMb != null) ConfigEditor.Set(rec, "max_segment_size_mb", r.MaxSegmentSizeMb);
                         if (r.ContinuousRetentionDays != null)
                             ConfigEditor.Set(rec, "continuous_retention_days", r.ContinuousRetentionDays);
+                        // Optional tiers: blank means "no such tier" — drop the key
+                        // rather than storing an empty string.
+                        if (r.ClipsPath != null)
+                            ConfigEditor.Set(rec, "clips_path", r.ClipsPath.Length == 0 ? null : r.ClipsPath);
+                        if (r.ArchivePath != null)
+                            ConfigEditor.Set(rec, "archive_path", r.ArchivePath.Length == 0 ? null : r.ArchivePath);
                         if (r.Encrypt != null) ConfigEditor.Set(rec, "encrypt", r.Encrypt);
                     }
 
-                    if (req.Mqtt is { StatsInterval: { } statsInterval })
+                    if (req.Mqtt is { } m)
                     {
-                        // Never conjure a broker-less mqtt section; the knob only
-                        // exists once MQTT is configured in the file.
-                        if (ConfigEditor.TryGetSection(root, "mqtt") is { } mq)
-                            ConfigEditor.Set(mq, "stats_interval", statsInterval);
-                        else
-                            throw new FormatException(
-                                "mqtt is not configured — add the mqtt section (broker etc.) to config.json first");
+                        // Never conjure a broker-less mqtt section — but a broker
+                        // arriving IS how MQTT gets enabled from the UI.
+                        var mq = ConfigEditor.TryGetSection(root, "mqtt");
+                        if (mq == null)
+                        {
+                            if (string.IsNullOrWhiteSpace(m.Broker))
+                                throw new FormatException(
+                                    "mqtt is not configured — enter a broker to enable it");
+                            mq = ConfigEditor.Section(root, "mqtt");
+                        }
+                        if (m.Broker != null) ConfigEditor.Set(mq, "broker", m.Broker);
+                        if (m.Port != null) ConfigEditor.Set(mq, "port", m.Port);
+                        if (m.Tls != null) ConfigEditor.Set(mq, "tls", m.Tls);
+                        if (m.Username != null)
+                            ConfigEditor.Set(mq, "username", m.Username.Length == 0 ? null : m.Username);
+                        // Write-only: null keeps, "" removes, a value replaces.
+                        if (m.Password != null)
+                            ConfigEditor.Set(mq, "password", m.Password.Length == 0 ? null : m.Password);
+                        if (m.ClientId != null) ConfigEditor.Set(mq, "client_id", m.ClientId);
+                        if (m.BaseTopic != null) ConfigEditor.Set(mq, "base_topic", m.BaseTopic);
+                        if (m.Discovery != null) ConfigEditor.Set(mq, "discovery", m.Discovery);
+                        if (m.DiscoveryPrefix != null) ConfigEditor.Set(mq, "discovery_prefix", m.DiscoveryPrefix);
+                        if (m.KeepAlive != null) ConfigEditor.Set(mq, "keepalive", m.KeepAlive);
+                        if (m.MaxPacketBytes != null) ConfigEditor.Set(mq, "max_packet_size", m.MaxPacketBytes);
+                        if (m.StatsInterval != null) ConfigEditor.Set(mq, "stats_interval", m.StatsInterval);
+                    }
+
+                    if (req.WakeHints is { } w &&
+                        (w.SyslogPort != null || w.PushPorts != null || w.Bind != null))
+                    {
+                        var wh = ConfigEditor.Section(root, "wake_hints");
+                        if (w.SyslogPort != null) ConfigEditor.Set(wh, "syslog_port", w.SyslogPort);
+                        if (w.PushPorts != null)
+                        {
+                            var ports = ConfigEditor.ParsePortList(w.PushPorts);
+                            ConfigEditor.Set(wh, "push_ports", ports.Count == 0
+                                ? null
+                                : new System.Text.Json.Nodes.JsonArray(
+                                    ports.Select(p => (System.Text.Json.Nodes.JsonNode)p).ToArray()));
+                        }
+                        if (w.Bind != null)
+                            ConfigEditor.Set(wh, "bind", w.Bind.Length == 0 ? null : w.Bind);
+                        // An empty section would quietly enable the syslog default
+                        // (5140); an all-cleared edit means "no wake hints" instead.
+                        if (wh.Count == 0) ConfigEditor.Set(root, "wake_hints", null);
                     }
                 });
                 Log.Warn($"config.json updated via the web UI by '{SessionName(ctx)}' — restart to apply");
@@ -1024,6 +1105,106 @@ public static class WebApi
                 var error = await notifier.SendTestAsync(MergedFrom(req), req.Password, ctx.RequestAborted);
                 return error == null
                     ? Results.Json(new { ok = true })
+                    : Results.Json(new { error }, statusCode: 502);
+            });
+        }
+
+        // AI event descriptions (admin only) — same contract as notifications:
+        // the API key is never returned, GET reports only whether one is stored.
+        if (o.Ai is { } aiStore)
+        {
+            object ShapeAi()
+            {
+                var s = aiStore.Snapshot();
+                return new
+                {
+                    enabled = s.Enabled,
+                    provider = s.Provider,
+                    endpoint = s.Endpoint,
+                    model = s.Model,
+                    hasApiKey = aiStore.HasApiKey,
+                    ollamaEndpoint = s.OllamaEndpoint,
+                    ollamaModel = s.OllamaModel,
+                    anthropicEndpoint = s.AnthropicEndpoint,
+                    anthropicModel = s.AnthropicModel,
+                    hasAnthropicKey = aiStore.HasAnthropicKey,
+                    prompt = s.Prompt,
+                    defaultPrompt = Neolink.Ai.AiSettings.DefaultPrompt,
+                    noThink = s.NoThink,
+                    captureSeconds = s.CaptureSeconds,
+                    maxCaptureSeconds = Neolink.Ai.AiSettings.MaxCaptureSeconds,
+                    timeoutSeconds = s.TimeoutSeconds,
+                };
+            }
+
+            Neolink.Ai.AiSettings MergedAi(AiSettingsRequest req)
+            {
+                var cur = aiStore.Snapshot();
+                return new Neolink.Ai.AiSettings
+                {
+                    Enabled = req.Enabled ?? cur.Enabled,
+                    Provider = (req.Provider ?? cur.Provider).ToLowerInvariant() switch
+                    {
+                        "ollama" => "ollama",
+                        "anthropic" => "anthropic",
+                        _ => "openai",
+                    },
+                    Endpoint = (req.Endpoint ?? cur.Endpoint).Trim(),
+                    Model = (req.Model ?? cur.Model).Trim(),
+                    OllamaEndpoint = (req.OllamaEndpoint ?? cur.OllamaEndpoint).Trim(),
+                    OllamaModel = (req.OllamaModel ?? cur.OllamaModel).Trim(),
+                    AnthropicEndpoint = (req.AnthropicEndpoint ?? cur.AnthropicEndpoint).Trim(),
+                    AnthropicModel = (req.AnthropicModel ?? cur.AnthropicModel).Trim(),
+                    Prompt = req.Prompt ?? cur.Prompt,
+                    NoThink = req.NoThink ?? cur.NoThink,
+                    CaptureSeconds = Math.Clamp(req.CaptureSeconds ?? cur.CaptureSeconds,
+                        1, Neolink.Ai.AiSettings.MaxCaptureSeconds),
+                    TimeoutSeconds = Math.Clamp(req.TimeoutSeconds ?? cur.TimeoutSeconds, 5, 600),
+                };
+            }
+
+            app.MapGet("/api/admin/ai", (HttpContext ctx) =>
+                AdminOnly(ctx) ?? Results.Json(ShapeAi()));
+
+            app.MapPut("/api/admin/ai", (AiSettingsRequest req, HttpContext ctx) =>
+            {
+                if (AdminOnly(ctx) is { } denied) return denied;
+                var merged = MergedAi(req);
+                if (merged.Enabled && merged.ActiveUrl() == null)
+                    return Results.Json(new
+                    {
+                        error = merged.UsesOllama
+                            ? "the Ollama endpoint must be an http(s) URL, e.g. http://127.0.0.1:11434"
+                            : "endpoint must be an http(s) URL, e.g. http://127.0.0.1:1234/v1",
+                    }, statusCode: 400);
+                if (merged.Enabled && merged.UsesOllama && merged.OllamaModel.Length == 0)
+                    return Results.Json(new
+                    {
+                        error = "Ollama needs a model name (it has no loaded-model default), e.g. llama3.2-vision",
+                    }, statusCode: 400);
+                if (merged.Enabled && merged.UsesAnthropic && merged.AnthropicModel.Length == 0)
+                    return Results.Json(new
+                    {
+                        error = "the Anthropic backend needs a model name, e.g. claude-haiku-4-5",
+                    }, statusCode: 400);
+                aiStore.Save(merged, req.ApiKey, req.AnthropicApiKey); // keys write-only
+                return Results.Json(ShapeAi());
+            });
+
+            app.MapPost("/api/admin/ai/test", async (AiSettingsRequest req, HttpContext ctx) =>
+            {
+                if (AdminOnly(ctx) is { } denied) return denied;
+                // Test with the posted (possibly unsaved) settings so the user can
+                // verify before saving; key null = use the stored one — whichever
+                // key belongs to the backend being tested.
+                var mergedForTest = MergedAi(req);
+                var testKey = mergedForTest.UsesAnthropic
+                    ? req.AnthropicApiKey ?? aiStore.AnthropicApiKey()
+                    : req.ApiKey ?? aiStore.ApiKey();
+                var (error, detail) = await Neolink.Ai.AiDescriber.TestAsync(mergedForTest,
+                    testKey, ctx.RequestAborted);
+                return error == null
+                    ? Results.Json(new { ok = true, detail })
                     : Results.Json(new { error }, statusCode: 502);
             });
         }
@@ -2152,6 +2333,9 @@ public static class WebApi
                 hasClip = r.HasClip,
                 hasThumb = r.HasThumb,
                 hasPreview = r.HasPreview,
+                aiDescription = r.AiDescription,
+                aiLevel = r.AiLevel,
+                aiPending = r.AiDescription == null && o.AiPending?.Invoke(r.Id) == true,
             };
 
             app.MapGet("/api/events", (string? camera, bool? reviewed, int? limit, string? date) =>
@@ -2375,6 +2559,10 @@ public static class WebApi
                 archiveEvents = s.ArchiveEvents,
                 archiveContinuous = s.ArchiveContinuous,
                 archiveRetentionDays = s.ArchiveRetentionDays,
+                // AI descriptions: the per-camera opt-in only shows (and only
+                // acts) while the feature is enabled globally in Settings → AI.
+                aiAvailable = o.Ai?.Enabled == true,
+                aiDescribe = s.AiDescribe,
             };
 
             app.MapGet("/api/cameras/{name}/recording", (string name, HttpContext ctx) =>
@@ -2453,6 +2641,16 @@ public static class WebApi
                         error = "archiving requires \"archive_path\" in the server recording config " +
                                 "(ideally a different drive — in Docker, map a second volume)",
                     }, statusCode: 409);
+                // The camera opt-in can only be switched ON while the feature is
+                // globally enabled (an endpoint exists to send to). Switching OFF
+                // is always allowed; a stored ON goes quiet if the global switch
+                // later turns off.
+                if (req.AiDescribe == true && o.Ai?.Enabled != true)
+                    return Results.Json(new
+                    {
+                        error = "enable AI event descriptions globally first " +
+                                "(Settings → AI) — that's where the LLM endpoint lives",
+                    }, statusCode: 409);
                 var updated = recordingSettings.Update(cam.Name, req.Events, continuous,
                     types, setEventTypes: req.EventTypes != null,
                     eventRetentionDays: Retention(req.EventRetentionDays),
@@ -2469,7 +2667,8 @@ public static class WebApi
                     archiveContinuous: archiveContinuous,
                     archiveRetentionDays: Retention(req.ArchiveRetentionDays),
                     setArchiveRetention: req.ArchiveRetentionDays != null,
-                    wakeTimeline: req.WakeTimeline);
+                    wakeTimeline: req.WakeTimeline,
+                    aiDescribe: req.AiDescribe);
                 NudgeHa(cam.Name);
                 return Results.Json(ShapeSettings(cam, updated));
             });

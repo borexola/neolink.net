@@ -57,8 +57,10 @@ public sealed class EventRecorder
     public EventRecorder(string camera, IStreamHub hub, ICameraControl control,
         EventStore store, RecordingConfig cfg, RecordingSettings settings,
         IStreamHub? previewHub = null, IReadOnlyDictionary<string, IStreamHub>? hubsByKind = null,
-        Func<bool>? hasRoom = null, Action<string>? onWriteError = null)
+        Func<bool>? hasRoom = null, Action<string>? onWriteError = null,
+        Neolink.Ai.AiDescriber? ai = null)
     {
+        _ai = ai;
         _camera = camera;
         _hub = hub;
         _previewHub = previewHub;
@@ -75,6 +77,12 @@ public sealed class EventRecorder
     private readonly Func<bool>? _hasRoom;
     private readonly Action<string>? _onWriteError;
     private bool _fullLogged;
+
+    /// <summary>AI event descriptions (opt-in per camera AND globally); null = feature absent.
+    /// Strictly fire-and-forget: captures sample the camera's own snapshot command
+    /// and jobs queue on the describer's bounded channel, so nothing here can
+    /// block or fail the event lifecycle.</summary>
+    private readonly Neolink.Ai.AiDescriber? _ai;
 
     /// <summary>The hub clips are cut from right now: the user's per-camera stream
     /// choice when set (and served), otherwise the configured default.</summary>
@@ -467,11 +475,19 @@ public sealed class EventRecorder
 
             // Runtime switches (web UI): events off, outside the camera's capture
             // schedule, or every label of this push filtered out by the camera's
-            // event-type selection → discard silently. External pushes (the HA
-            // "Record" switch) are explicit user intent: only the master events
-            // switch can veto them — no schedule, no type filter.
+            // event-type selection → discard, SAYING SO (a detection that vanishes
+            // without a trace is undiagnosable — asked live: "person detection
+            // never got picked up", and the log had nothing to show for it).
+            // External pushes (the HA "Record" switch) are explicit user intent:
+            // only the master events switch can veto them — no schedule, no filter.
             var settings = _settings.Get(_camera);
-            if (!settings.Events) continue;
+            if (!settings.Events)
+            {
+                // Deliberately off is a quiet state — visible at debug only.
+                Log.Debug($"{_camera}: detection push ({string.Join("+", LabelsOf(push))}) ignored — " +
+                          "the camera's Detection events switch is off");
+                continue;
+            }
             // The synthetic self-wake (wake-capture) is neither a detection nor a
             // user command: it starts a PROVISIONAL recording that is kept only if
             // a detection this camera is configured to record confirms it — the
@@ -490,9 +506,17 @@ public sealed class EventRecorder
             }
             else
             {
-                if (!settings.ScheduleAllows(DateTime.Now)) continue; // schedules are wall-clock local
+                if (!settings.ScheduleAllows(DateTime.Now)) // schedules are wall-clock local
+                {
+                    NoteDiscarded(push, "outside this camera's capture schedule");
+                    continue;
+                }
                 labels = LabelsOf(push).Where(settings.AllowsLabel).ToList();
-                if (labels.Count == 0) continue;
+                if (labels.Count == 0)
+                {
+                    NoteDiscarded(push, "every label is unticked in this camera's event types");
+                    continue;
+                }
             }
 
             try
@@ -504,6 +528,21 @@ public sealed class EventRecorder
                 Log.Error($"{_camera}: event handling failed: {Log.Flatten(ex)}");
             }
         }
+    }
+
+    // One INF per distinct discard reason per minute: cameras re-push ongoing
+    // motion every few seconds, and the point is a visible breadcrumb, not a flood.
+    private string? _lastDiscardReason;
+    private DateTime _lastDiscardLog;
+
+    private void NoteDiscarded(MotionPush push, string reason)
+    {
+        var now = DateTime.UtcNow;
+        if (reason == _lastDiscardReason && now - _lastDiscardLog < TimeSpan.FromSeconds(60))
+            return;
+        _lastDiscardReason = reason;
+        _lastDiscardLog = now;
+        Log.Info($"{_camera}: detection push ({string.Join("+", LabelsOf(push))}) NOT recorded — {reason}");
     }
 
     private async Task RunEventAsync(List<string> initialLabels, bool provisional, CancellationToken ct)
@@ -540,6 +579,11 @@ public sealed class EventRecorder
     {
         StartClip(rec);
         var thumbTask = CaptureThumbAsync(rec, ct);
+        // The AI frame burst rides the event: one low-res frame per second via the
+        // camera's own snapshot command. A tentative self-wake captures nothing
+        // until promoted — its footage usually gets discarded, and every shot
+        // would cost the battery camera awake-time for nothing.
+        var aiCapture = provisional ? null : _ai?.TryBeginCapture(_camera, _control, ct);
 
         var hardStop = DateTime.UtcNow.AddSeconds(_cfg.MaxClipSeconds);
         var quietUntil = DateTime.UtcNow.AddSeconds(_cfg.PostSeconds);
@@ -579,7 +623,17 @@ public sealed class EventRecorder
                 var allowed = push.External
                     ? LabelsOf(push)
                     : LabelsOf(push).Where(_settings.Get(_camera).AllowsLabel).ToList();
-                if (allowed.Count == 0) continue;
+                if (allowed.Count == 0)
+                {
+                    // Inside a TENTATIVE wake recording this is the line that
+                    // explains a "vanished" detection: the push arrived, but a
+                    // filtered label cannot confirm the wake, so the footage
+                    // gets discarded as if nothing happened.
+                    NoteDiscarded(push, provisional
+                        ? "every label is unticked in this camera's event types, so it cannot confirm the wake recording"
+                        : "every label is unticked in this camera's event types (event not extended)");
+                    continue;
+                }
                 active = true;
                 var fresh = allowed.Where(l => !rec.Labels.Contains(l)).ToList();
                 if (fresh.Count > 0)
@@ -597,6 +651,7 @@ public sealed class EventRecorder
                     // ("Human detected", never "Wake") — wakes as such belong to
                     // the timeline, not the events list.
                     provisional = false;
+                    aiCapture ??= _ai?.TryBeginCapture(_camera, _control, ct);
                     if (rec.Labels.Remove("wake")) _store.Save(rec);
                     Log.Info($"{_camera}: ⚡ event started ({string.Join("+", rec.Labels)} — " +
                              "confirmed self-wake, footage from the wake onward)");
@@ -635,6 +690,7 @@ public sealed class EventRecorder
             // selection decides what becomes a stored video, and a bare wake is
             // not on the list. (The thumbnail task must finish before the tree
             // goes, or its write recreates the directory.)
+            aiCapture?.Cancel(); // nothing to describe about a discarded recording
             try { await thumbTask.ConfigureAwait(false); } catch { }
             _store.DeleteEvent(rec.Id);
             Log.Info($"{_camera}: self-wake ended with no matching detection " +
@@ -644,6 +700,7 @@ public sealed class EventRecorder
         }
 
         _store.Save(rec);
+        if (aiCapture != null) _ai!.Submit(aiCapture, rec); // queue only; never blocks
         try { await thumbTask.ConfigureAwait(false); } catch { }
         Log.Info($"{_camera}: event ended ({string.Join("+", rec.Labels)}, " +
                  $"{(rec.EndUtc - rec.StartUtc).TotalSeconds:0}s{(rec.HasClip ? ", clip saved" : "")})");

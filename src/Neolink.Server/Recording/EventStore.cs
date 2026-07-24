@@ -22,6 +22,15 @@ public sealed class EventRecord
     public bool HasThumb { get; set; }
     /// <summary>A low-res sub-stream twin of the clip exists (preview.mp4), for strip previews.</summary>
     public bool HasPreview { get; set; }
+    /// <summary>What an LLM said it saw (AI event descriptions, opt-in) — written
+    /// after the event closes, once the model answers; null until/unless it does.</summary>
+    public string? AiDescription { get; set; }
+    /// <summary>The model's threat classification: "green" (routine), "yellow"
+    /// (suspicious) or "red" (danger — weapon, fighting, break-in, fire).</summary>
+    public string? AiLevel { get; set; }
+    /// <summary>The model that produced <see cref="AiDescription"/>, as the server reported it.</summary>
+    public string? AiModel { get; set; }
+    public DateTime? AiDescribedUtc { get; set; }
 }
 
 /// <summary>

@@ -133,6 +133,11 @@ in exchange you get an integration light enough to leave running forever.
   models list recordings but their firmware cannot serve the files over HTTP at
   all (Video Doorbell WiFi — a firmware bug; those clips only play in the
   Reolink app, and the player says so)
+- **AI event descriptions (EXPERIMENTAL)**: point Neolink at a vision LLM
+  (llama.cpp, Ollama, LM Studio, or an Anthropic-style API) and detection
+  events get a written description plus a GREEN/YELLOW/RED threat level — in
+  the UI, the event metadata and Home Assistant — see
+  [AI event descriptions](#ai-event-descriptions--experimental)
 - **Battery cameras** (Argus etc., BETA — in active development) are
   auto-detected: charge badge in the sidebar, sleep-friendly by default (the
   camera dozes while nobody watches), `always_on` per camera to hold it
@@ -1013,6 +1018,35 @@ against someone who already has full read access to the server's files (they'd
 have both the key and the ciphertext). That trade-off is unavoidable for any
 self-hosted app that sends its own authenticated email.
 
+## AI event descriptions — EXPERIMENTAL
+
+> ### 📖 Full guide: **[docs/ai-descriptions.md](docs/ai-descriptions.md)**
+
+Point Neolink.NET at a vision-capable LLM and every detection event gets a
+written description and a **GREEN / YELLOW / RED threat classification** — in
+the web UI (banner in the event players, colored dots on event rows), in the
+event metadata (`/api/events`), and in Home Assistant (per-camera **Last AI
+description** and **AI threat level** sensors, the automation hook for
+"notify loudly on RED").
+
+The short version:
+
+- **Enable** it globally in Settings → **AI** (backend, endpoint, model), then
+  per camera under camera ⚙ → EVENTS. Tested so far with **llama.cpp**,
+  **Ollama** and **LM Studio**; Anthropic-style APIs are implemented to spec.
+- Frames are sampled with the camera's own snapshot command (low-res sub
+  stream, no server-side video decoding) and **spread across the whole
+  event**; the model is told each frame's time offset. **More frames = a
+  better description** — the frame budget in Settings → AI is the quality
+  lever, paid for in answer latency.
+- **Tune the instruction prompt** to your property (what the scene is, what's
+  normal, what counts as suspicious) — it is the biggest quality win, and the
+  classification contract is appended automatically so your edits can't break
+  it.
+- Descriptions run on an isolated background queue: a slow or dead model can
+  never delay recording or streaming — at worst an event goes undescribed
+  with a log line.
+
 ## Using with Frigate
 
 ```yaml
@@ -1053,8 +1087,13 @@ The short version:
   exactly like a wired one (permanent connection, 24/7 recording, live
   events).
 - On battery, `"wake_capture": true` catches motion events while it sleeps,
-  and an OPNsense/pfSense router can feed **instant wake hints**
-  (`wake_hints` in the config).
+  and your network can feed **instant wake hints** (`wake_hints` in the
+  config): OPNsense/pfSense forward their firewall log, or — on any router
+  with DNS overrides (OpenWRT, Pi-hole, AdGuard, …) — point
+  `pushx.reolink.com` at Neolink itself and the camera's own event push
+  becomes the signal. The DNS route costs you Reolink app notifications
+  (Home Assistant takes over), and push must be turned **on** in the app
+  *before* the DNS change — step-by-step in the guide.
 - A sleeping camera **cannot be woken from the network** — it wakes itself
   on PIR — and it always keeps recording events to its own SD card.
 

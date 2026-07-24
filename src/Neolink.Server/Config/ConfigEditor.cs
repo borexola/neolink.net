@@ -63,22 +63,62 @@ public static class ConfigEditor
                 recording = cfg.Recording == null ? null : new
                 {
                     path = cfg.Recording.Path,
+                    clipsPath = cfg.Recording.ClipsPath,
+                    archivePath = cfg.Recording.ArchivePath,
                     retentionDays = cfg.Recording.RetentionDays,
                     preSeconds = cfg.Recording.PreSeconds,
                     postSeconds = cfg.Recording.PostSeconds,
                     maxClipSeconds = cfg.Recording.MaxClipSeconds,
                     stream = cfg.Recording.Stream,
                     segmentMinutes = cfg.Recording.SegmentMinutes,
+                    maxSegmentSizeMb = cfg.Recording.MaxSegmentSizeMb,
                     continuousRetentionDays = cfg.Recording.ContinuousRetentionDays,
                     encrypt = cfg.Recording.Encrypt,
                 },
-                // Broker/credentials stay file-only; the UI adjusts the cadence.
+                // Passwords never leave the server; hasPassword drives the
+                // "stored — blank keeps it" placeholder client-side.
                 mqtt = cfg.Mqtt == null ? null : new
                 {
+                    broker = cfg.Mqtt.Broker,
+                    port = cfg.Mqtt.Port,
+                    tls = cfg.Mqtt.Tls,
+                    username = cfg.Mqtt.Username,
+                    hasPassword = !string.IsNullOrEmpty(cfg.Mqtt.Password),
+                    clientId = cfg.Mqtt.ClientId,
+                    baseTopic = cfg.Mqtt.BaseTopic,
+                    discovery = cfg.Mqtt.Discovery,
+                    discoveryPrefix = cfg.Mqtt.DiscoveryPrefix,
+                    keepAlive = cfg.Mqtt.KeepAliveSeconds,
+                    maxPacketBytes = cfg.Mqtt.MaxPacketBytes,
                     statsInterval = cfg.Mqtt.StatsIntervalSeconds,
+                },
+                // The push-port list travels as display text ("443, 53") — the
+                // editor is a text field and the API parses it back strictly.
+                wakeHints = cfg.WakeHints == null ? null : new
+                {
+                    syslogPort = cfg.WakeHints.SyslogPort,
+                    pushPorts = string.Join(", ", cfg.WakeHints.PushPorts),
+                    bind = cfg.WakeHints.Bind,
                 },
             },
         };
+    }
+
+    /// <summary>Parses a user-typed port list ("443, 53" — commas/spaces/semicolons).
+    /// Empty text is an empty list. Throws <see cref="FormatException"/> on junk or
+    /// out-of-range entries; duplicates collapse, order is kept, 16 ports max.</summary>
+    public static List<int> ParsePortList(string text)
+    {
+        var ports = new List<int>();
+        foreach (var tok in text.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (!int.TryParse(tok, out var p) || p is < 1 or > 65535)
+                throw new FormatException($"\"{tok}\" is not a valid port (1-65535)");
+            if (!ports.Contains(p)) ports.Add(p);
+        }
+        if (ports.Count > 16)
+            throw new FormatException("at most 16 ports");
+        return ports;
     }
 
     /// <summary>

@@ -16,21 +16,35 @@ src/Neolink.Server/config.json
 .claude/
 src/Neolink/
 
-/src/Neolink.Server/users.json
-/src/Neolink.Server/settings.json
-
-# Notification subsystem runtime state — the AES key must NEVER be committed
-# (it decrypts the stored SMTP password); notifications.json holds that encrypted
-# secret. Ignored anywhere in the tree in case the server is run from the repo.
+# ---------------------------------------------------------------- runtime state
+# Everything the server writes into its state directory. The state dir DEFAULTS
+# to the config file's own directory, so running a dev build from the repo drops
+# these anywhere in the tree — every entry is therefore unanchored on purpose.
+# Rule for anything added here later: if a file can hold credentials, keys,
+# tokens, hashes, camera identity or anyone's personal setup, it is ignored
+# BEFORE the feature that writes it ships. Never commit one "just as an example".
+#   secret.key         AES key — decrypts every other stored secret
+#   users.json         web-UI accounts: password hashes, session tokens
+#   notifications.json SMTP settings incl. the encrypted password
+#   ai.json            LLM endpoints + encrypted API keys, instruction prompt
+#   settings.json      per-camera recording/AI settings
+#   camera-state.json  per-camera suspend flags
+#   storage-trend.json disk-usage history
 secret.key
+users.json
 notifications.json
+ai.json
+settings.json
+camera-state.json
+storage-trend.json
+# ...but the editor's own settings are not ours to hide.
+!.vscode/settings.json
 
 # local docker test images (docker save output)
 neolink-*.tar
 
 # editor/backup leftovers
 *.bak
-storage-trend.json
 
 # Local dev tools, not shipped
 /devtools/

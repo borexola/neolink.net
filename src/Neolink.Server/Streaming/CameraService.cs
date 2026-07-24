@@ -30,6 +30,11 @@ public interface ILiveCameraSource
     /// keeps the camera's radio out of power-save — seen live as ping-flat runs
     /// that faked wake edges. Default: never quiet.</summary>
     bool NetworkQuiet => false;
+
+    /// <summary>The camera's standing sleep policy (battery-powered, no always_on).
+    /// Consumers use it to tailor messaging — e.g. "no HTTP API" is the normal
+    /// state of a battery model, not an outage. Default: mains-like.</summary>
+    bool SleepFriendly => false;
 }
 
 /// <summary>

@@ -260,6 +260,22 @@ var notifier = new Neolink.Notifications.Notifier(notificationStore, Environment
 var recordingHealth = new Neolink.Recording.RecordingHealth();
 tasks.Add(Task.Run(() => notifier.RunAsync(shutdown.Token)));
 
+// AI event descriptions (opt-in, configured in the web UI): completed detection
+// events send a 1 fps low-res frame burst to an OpenAI-style LLM (LM Studio and
+// friends) and store its answer on the event. Isolated exactly like the notifier
+// — a bounded queue and one worker task, so a slow or dead model can never
+// affect recording, streaming or MQTT. The API key is encrypted at rest.
+var aiStore = new Neolink.Ai.AiStore(stateDir, secretProtector);
+Neolink.Ai.AiDescriber? aiDescriber = null;
+if (eventStore != null && recordingSettings != null)
+{
+    var recSettingsForAi = recordingSettings;
+    aiDescriber = new Neolink.Ai.AiDescriber(aiStore, eventStore,
+        cam => recSettingsForAi.Get(cam).AiDescribe);
+    var describer = aiDescriber;
+    tasks.Add(Task.Run(() => describer.RunAsync(shutdown.Token)));
+}
+
 // Footage encryption (beta, opt-in via recording.encrypt): new clips, segments
 // and thumbnails are written as chunked AES-256-GCM. The vault gets the key
 // whenever recording exists AT ALL — even with the switch off — so footage
@@ -436,7 +452,8 @@ foreach (var cam in config.Cameras)
                 var recorder = new EventRecorder(cam.Name, recordStream.Hub, control, eventStore,
                     config.Recording, recordingSettings, previewStream?.Hub, hubsByKind,
                     hasRoom: storage == null ? null : () => storage.HasRoom(StorageRole.Clips),
-                    onWriteError: recordingHealth.MarkWriteError);
+                    onWriteError: recordingHealth.MarkWriteError,
+                    ai: aiDescriber);
                 recorderSink = recorder.OnMotion;
                 eventRecorder = recorder;
                 tasks.Add(Task.Run(() => recorder.RunAsync(shutdown.Token)));
@@ -584,47 +601,73 @@ foreach (var cam in config.Cameras)
         motionTargets.Add((camServices, cam.Name, recorderSink));
 }
 
-// Router wake hints: OPNsense/pfSense remote syslog → instant, event-grade wake
-// signal for battery cameras (the router sees the camera itself call the Reolink
-// push service — see WakeHintListener). Restarts itself on unexpected errors so
-// a transient socket failure can't silently kill the feature.
-if (config.WakeHints is { SyslogPort: > 0 } wakeHintCfg)
+// Router wake hints: instant, event-grade wake signals for battery cameras from
+// the camera's own "call the Reolink push service" moment. Two independent
+// sources share one dispatcher — OPNsense/pfSense remote syslog (the router sees
+// the call — WakeHintListener) and the decoy push service (a DNS override steers
+// the call to us — PushSinkListener). Each restarts itself on unexpected errors
+// so a transient socket failure can't silently kill the feature.
+if (config.WakeHints is { } wakeHintCfg &&
+    (wakeHintCfg.SyslogPort > 0 || wakeHintCfg.PushPorts.Count > 0))
 {
-    var hintListener = new WakeHintListener(
-        wakeHintCfg.SyslogPort, wakeHintCfg.Bind ?? config.BindAddr,
-        (ip, detail) =>
-        {
-            // Battery cameras ONLY — checked per hint, not at wiring, because
-            // battery detection is learned from the camera at runtime. A mains
-            // camera calls the same push service on every event, so routing its
-            // hints spammed an INF line per connection for a camera that hints
-            // can never help (it is always awake).
-            bool matched = false;
-            foreach (var s in wakeHintTargets)
-                if (s.SleepFriendly && s.MatchesAddress(ip)) { s.NotifyWakeHint(detail); matched = true; }
-            // Matched hints are rare (one per camera event) and worth seeing even
-            // when the camera isn't parked. Everything else — unknown LAN devices
-            // and non-battery cameras — is Debug only.
-            if (matched)
-                Log.Info($"Wake hints: {detail}");
-            else
-                Log.Debug($"Wake hints: {detail} — not a battery camera's address, ignored");
-        });
-    tasks.Add(Task.Run(async () =>
+    Action<System.Net.IPAddress, string> dispatchHint = (ip, detail) =>
     {
-        while (!shutdown.Token.IsCancellationRequested)
+        // Battery cameras ONLY — checked per hint, not at wiring, because
+        // battery detection is learned from the camera at runtime. A mains
+        // camera calls the same push service on every event, so routing its
+        // hints spammed an INF line per connection for a camera that hints
+        // can never help (it is always awake).
+        bool matched = false;
+        foreach (var s in wakeHintTargets)
+            if (s.SleepFriendly && s.MatchesAddress(ip)) { s.NotifyWakeHint(detail); matched = true; }
+        // Matched hints are rare (one per camera event) and worth seeing even
+        // when the camera isn't parked. Everything else — unknown LAN devices
+        // and non-battery cameras — is Debug only.
+        if (matched)
+            Log.Info($"Wake hints: {detail}");
+        else
+            Log.Debug($"Wake hints: {detail} — not a battery camera's address, ignored");
+    };
+    if (wakeHintCfg.SyslogPort > 0)
+    {
+        var hintListener = new WakeHintListener(
+            wakeHintCfg.SyslogPort, wakeHintCfg.Bind ?? config.BindAddr, dispatchHint);
+        tasks.Add(Task.Run(async () =>
         {
-            try { await hintListener.RunAsync(shutdown.Token); return; }
-            catch (OperationCanceledException) { return; }
-            catch (Exception e)
+            while (!shutdown.Token.IsCancellationRequested)
             {
-                Log.Error($"Wake hints: listener failed ({e.Message}); retrying in 30s. " +
-                          $"If another service owns udp:{wakeHintCfg.SyslogPort}, change wake_hints.syslog_port.");
-                try { await Task.Delay(TimeSpan.FromSeconds(30), shutdown.Token); }
+                try { await hintListener.RunAsync(shutdown.Token); return; }
                 catch (OperationCanceledException) { return; }
+                catch (Exception e)
+                {
+                    Log.Error($"Wake hints: listener failed ({e.Message}); retrying in 30s. " +
+                              $"If another service owns udp:{wakeHintCfg.SyslogPort}, change wake_hints.syslog_port.");
+                    try { await Task.Delay(TimeSpan.FromSeconds(30), shutdown.Token); }
+                    catch (OperationCanceledException) { return; }
+                }
             }
-        }
-    }));
+        }));
+    }
+    var pushPorts = wakeHintCfg.PushPorts.Where(p => p is > 0 and < 65536).Distinct().ToList();
+    if (pushPorts.Count > 0)
+    {
+        var pushSink = new PushSinkListener(pushPorts, wakeHintCfg.Bind ?? config.BindAddr, dispatchHint);
+        tasks.Add(Task.Run(async () =>
+        {
+            while (!shutdown.Token.IsCancellationRequested)
+            {
+                try { await pushSink.RunAsync(shutdown.Token); return; }
+                catch (OperationCanceledException) { return; }
+                catch (Exception e)
+                {
+                    Log.Error($"Wake hints: push decoy failed ({e.Message}); retrying in 30s. " +
+                              "If another service owns the port(s), change wake_hints.push_ports.");
+                    try { await Task.Delay(TimeSpan.FromSeconds(30), shutdown.Token); }
+                    catch (OperationCanceledException) { return; }
+                }
+            }
+        }));
+    }
 }
 
 // Resource sampler: feeds the UI's monitor page AND the server's own Home
@@ -704,6 +747,10 @@ foreach (var (services, name, recorderSink) in motionTargets)
 }
 // The reverse direction — HA's "Record" switch starting an on-demand recording —
 // needs no wiring here: the bridge reaches the recorder via WebCameraInfo.
+// AI descriptions land AFTER the event closes, on the describer's own worker —
+// mirror them onto the camera's HA sensors as they arrive.
+if (aiDescriber != null && mqtt is { } aiBridge)
+    aiDescriber.Described += rec => aiBridge.OnAiDescribed(rec);
 if (mqtt is { } bridgeToRun)
     tasks.Add(Task.Run(() => bridgeToRun.RunAsync(shutdown.Token)));
 
@@ -749,6 +796,8 @@ if (config.WebPort > 0)
         Monitor = monitor,
         RecordingHealth = recordingHealth,
         Notifier = notifier,
+        Ai = aiStore,
+        AiPending = aiDescriber != null ? aiDescriber.IsPending : null,
         Logs = logBuffer,
         // Graceful shutdown; docker's restart policy (or systemd) starts us again.
         RestartRequested = () =>
