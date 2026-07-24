@@ -4,7 +4,7 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
-## 0.9.7 — unreleased
+## 0.9.7
 
 ### Added
 
