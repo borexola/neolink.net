@@ -107,6 +107,13 @@ asks it not to reason step-by-step (`<think>` blocks are stripped from
 answers either way). The **timeout** setting caps how long Neolink waits per
 event.
 
+**A known-good setup.** `gemma3:12b` gave excellent descriptions in testing —
+run through Ollama, LM Studio and llama.cpp alike — on an **RTX 5080**, with
+inference landing in **3–5 seconds even at the full 20-frame budget**. That is
+a good reference point: a 12B-class vision model on a current desktop GPU
+comfortably describes an event before the next one is likely to start, so you
+can turn the frame budget all the way up without the queue backing up.
+
 **Privacy.** Frames go wherever the endpoint points — with LM Studio, Ollama
 or llama.cpp on your own hardware nothing leaves your network; with a hosted
 API, event frames are sent to that provider. Choose accordingly.

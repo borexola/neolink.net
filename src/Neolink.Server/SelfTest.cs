@@ -2762,6 +2762,23 @@ public static class SelfTest
                 $"asleep sensor availability must be bridge-only, got: {asleepJson}");
         });
 
+        Test("mqtt: last-event-time is RFC3339 UTC with Z and no fractional seconds", () =>
+        {
+            // HA's timestamp device class rejects a value without timezone info or
+            // with an unexpected shape — a rejected value leaves the sensor at
+            // "unknown", which is exactly the bug this format guards against.
+            var utc = Mqtt.CameraBridge.FormatEventTime(
+                new DateTime(2026, 7, 23, 12, 5, 9, DateTimeKind.Utc));
+            AssertEq(utc, "2026-07-23T12:05:09Z");
+            // A StartUtc that deserialized as Unspecified must STILL get a Z, not be
+            // treated as local — SpecifyKind(Utc) is what forces that.
+            var unspecified = Mqtt.CameraBridge.FormatEventTime(
+                new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Unspecified));
+            AssertEq(unspecified, "2026-01-02T03:04:05Z");
+            Assert(unspecified.EndsWith("Z", StringComparison.Ordinal) && !unspecified.Contains('.'),
+                "must end in Z and carry no fractional seconds");
+        });
+
         Test("battery tiles: only the user starts a stream, never the camera waking", () =>
         {
             // Attaching a tile's stream is what makes the server connect, and connecting

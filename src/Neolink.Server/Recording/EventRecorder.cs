@@ -115,6 +115,12 @@ public sealed class EventRecorder
     /// the same trigger can deep-link to the exact clip (/events?event={id}).</summary>
     public event Action<EventRecord>? EventStarted;
 
+    /// <summary>This camera's most recent stored detection event, or null if it has
+    /// none. Lets the MQTT bridge backfill the retained "last event" sensors at
+    /// startup so a newly-added sensor isn't stuck at "unknown" until the next
+    /// detection (its topic was never published, so nothing was retained).</summary>
+    public EventRecord? MostRecentEvent() => _store.List(_camera, limit: 1).FirstOrDefault();
+
     // ------------------------------------------------------------------ on-demand recording
 
     /// <summary>A running user-commanded recording (web UI record button / HA Record switch).</summary>

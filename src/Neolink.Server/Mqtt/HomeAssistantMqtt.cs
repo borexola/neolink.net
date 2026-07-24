@@ -577,22 +577,28 @@ internal sealed class CameraBridge
     /// <summary>The new event's id lands (retained) the instant the event starts —
     /// together with the motion trigger — so an automation can build a link to the
     /// exact clip: {web-ui}/events?event={{ states('sensor.X_last_event') }}.</summary>
-    private async Task PublishLastEventAsync(EventRecord ev)
+    /// <summary>An event start time as HA's timestamp device class wants it: RFC3339
+    /// UTC with a trailing Z and NO fractional seconds. SpecifyKind guards a
+    /// StartUtc that deserialized as Unspecified (without a forced Z, HA rejects
+    /// the value and the sensor sticks at "unknown").</summary>
+    internal static string FormatEventTime(DateTime startUtc) =>
+        DateTime.SpecifyKind(startUtc, DateTimeKind.Utc).ToString("yyyy-MM-ddTHH:mm:ssZ");
+
+    private Task PublishLastEventAsync(EventRecord ev) => PublishLastEventAsync(ev, CancellationToken.None);
+
+    private async Task PublishLastEventAsync(EventRecord ev, CancellationToken ct)
     {
         try
         {
-            await _hub.PublishAsync(StateTopic("last_event"), ev.Id, CancellationToken.None)
-                .ConfigureAwait(false);
+            await _hub.PublishAsync(StateTopic("last_event"), ev.Id, ct).ConfigureAwait(false);
             await _hub.PublishAsync(StateTopic("last_event/attr"),
-                JsonSerializer.Serialize(new { labels = ev.Labels, started = ev.StartUtc }),
-                CancellationToken.None).ConfigureAwait(false);
-            // The start moment again as its own timestamp sensor ("O" keeps the
-            // trailing Z the timestamp device class requires) — HA renders it as
-            // "n minutes ago" and automations can compare it without templating
-            // the attribute out of the id sensor.
-            await _hub.PublishAsync(StateTopic("last_event_time"),
-                DateTime.SpecifyKind(ev.StartUtc, DateTimeKind.Utc).ToString("O"),
-                CancellationToken.None).ConfigureAwait(false);
+                JsonSerializer.Serialize(new { labels = ev.Labels, started = ev.StartUtc }), ct)
+                .ConfigureAwait(false);
+            // The start moment again as its own timestamp sensor — HA renders it as
+            // "n minutes ago" and automations compare it without templating the id
+            // sensor's attribute out. See FormatEventTime for the format contract.
+            await _hub.PublishAsync(StateTopic("last_event_time"), FormatEventTime(ev.StartUtc), ct)
+                .ConfigureAwait(false);
         }
         catch
         {
@@ -707,10 +713,15 @@ internal sealed class CameraBridge
             // automation (this pauses recording; it does not silence the sensors).
             await AnnounceEntityAsync("switch", "detect", DetectSwitchConfig(), ct).ConfigureAwait(false);
             await PublishDetectStateAsync(ct).ConfigureAwait(false);
-            // Last event id + start time: states are retained, so HA has the most
-            // recent event even across restarts — no state publish needed here.
+            // Last event id + start time. The retained topics normally carry the
+            // newest event across restarts, but a NEWLY-ADDED sensor has never been
+            // published, so its topic holds nothing and HA shows "unknown" until the
+            // next detection. Backfill from the most recent stored event so both
+            // sensors are populated the moment they appear.
             await AnnounceEntityAsync("sensor", "last_event", LastEventConfig(), ct).ConfigureAwait(false);
             await AnnounceEntityAsync("sensor", "last_event_time", LastEventTimeConfig(), ct).ConfigureAwait(false);
+            if (recorder.MostRecentEvent() is { } lastEvent)
+                await PublishLastEventAsync(lastEvent, ct).ConfigureAwait(false);
             // AI event descriptions: announced for every recording camera whether
             // or not the feature is on for it (entities are never pruned by
             // enablement — that filtering is web-UI only). Cameras with AI off

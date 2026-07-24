@@ -48,7 +48,11 @@ in the README). Paste the matching section below into the GitHub release.
   timestamp-class sensor (retained, next to the existing Last-event id
   sensor) — HA shows it as "n minutes ago" out of the box, and automations
   like "no event for 24 hours" compare it directly instead of templating the
-  time out of the id sensor's attributes.
+  time out of the id sensor's attributes. The sensor is **backfilled from the
+  most recent stored event** when it is announced, so it shows a time
+  immediately instead of sitting at "unknown" until the next detection (a
+  brand-new retained topic starts empty), and the timestamp is emitted as
+  strict RFC3339 UTC (`…Z`, no fractional seconds) so HA never rejects it.
 
   Three interchangeable backends: **OpenAI-style** (LM Studio, llama.cpp
   server, hosted APIs), **Ollama** (native /api/chat, base64 images, e.g.
