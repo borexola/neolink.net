@@ -449,7 +449,7 @@
         long dayCutoff = now - 24L * 3600 * 1000;
         long fineCutoff = now - 3600L * 1000;
         var kept = new List<T>(list.Count);
-        long lastKept = long.MinValue;
+        long lastKept = 0; // not long.MinValue: t - lastKept must not overflow
         foreach (var item in list)
         {
             long t = time(item);

@@ -22,6 +22,15 @@ in the README). Paste the matching section below into the GitHub release.
   recordings so they travel with the footage, shared by everyone on the server —
   no database, as ever. Scrubbing, zooming and panning are untouched.
 
+### Fixed
+
+- **Monitor 6h/24h charts no longer look empty.** An integer overflow in the
+  page's history-thinning pass discarded every sample older than one hour the
+  moment the 24-hour backfill arrived, so the 6h and 24h windows only ever
+  showed the last hour of data squeezed against the right edge. The full
+  history (2-second detail for the last hour, one-minute averages beyond)
+  now survives and the wide windows fill as intended.
+
 ## 0.9.7
 
 ### Added
