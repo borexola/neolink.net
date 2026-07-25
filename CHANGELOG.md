@@ -47,22 +47,36 @@ in the README). Paste the matching section below into the GitHub release.
     landed, and the stated per-frame time offsets now agree with the prompt.
   - **The frame budget's ceiling (20) is gone.** Set as many frames as you
     like: an event can only ever yield about one frame per second of its
-    length plus the opening burst, so a big budget simply means every
-    captured frame is sent with none thinned away — the event's own duration
-    is the natural limit. An invalid value (below 1) now turns the field red
-    and disables save, instead of being silently clamped back on save
-    ("it just reverts").
-  - **Fast subjects are caught more often.** The first few snapshots now go
-    back-to-back as fast as the camera answers before settling to one per
-    second: a car passing at the moment of detection is often gone within
-    seconds, and (snapshots being live-only) the clip's pre-roll can never be
-    re-sampled — the opening burst is the one chance to still see it. The
-    "describing event" log line now also reports coverage ("12 frames over
-    14s of the 15s event"), so a puzzling description can be checked against
-    what the model was actually shown.
+    length, so a big budget simply means every captured frame is sent with
+    none thinned away — the event's own duration is the natural limit. An
+    invalid value (below 1) now turns the field red and disables save,
+    instead of being silently clamped back on save ("it just reverts").
+  - **Fast subjects are caught more often.** The event's first five seconds
+    get one frame per second, and those frames are protected — however long
+    the event runs, thinning only ever touches the later frames, so the
+    moment that triggered the event stays at full density: a car passing at
+    detection is often gone within seconds, and (snapshots being live-only)
+    the clip's pre-roll can never be re-sampled, making the opening seconds
+    the one chance to still see it. A snapshot the camera fails to answer is
+    just that second's missing frame — the remaining slots proceed
+    regardless. The "describing event" log line now also reports coverage
+    ("12 frames over 14s of the 15s event"), so a puzzling description can
+    be checked against what the model was actually shown.
 
 ### Fixed
 
+- **AI descriptions no longer come up empty on events with a busy start.**
+  Frame capture used to stop asking for the rest of the event after three
+  failed snapshots — and its per-shot deadline (5s) was shorter than the
+  camera's own snapshot fallback chain, so at event start (the camera at its
+  busiest, spinning up the recording streams) the three strikes could land in
+  the first seconds and a minutes-long event ended with "no frames captured".
+  Failed snapshots now retry for the whole event with a growing pause (4, 8,
+  16, then 30s), the deadline widens after a miss so the slow-but-healthy
+  path can actually answer, and the skip line reports how many attempts
+  failed and the last error instead of a generic shrug. A camera with no
+  snapshot support at all costs one failed command per ~30s, only while an
+  event records.
 - **Stale stylesheets after updates.** The web UI's stylesheet and script URLs
   now carry the app version, so browsers fetch fresh assets exactly once per
   update. Previously a phone could keep serving a cached stylesheet from

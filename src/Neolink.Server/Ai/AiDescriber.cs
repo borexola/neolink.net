@@ -15,11 +15,14 @@ namespace Neolink.Ai;
 /// <summary>
 /// One event's frame set: while the event records, the camera's own JPEG
 /// snapshot command is sampled — the Baichuan snap serves the low-res
-/// sub-stream image, so no server-side video decoding is ever needed. Sampling
-/// SPREADS across the whole event, however long it runs: it starts at one frame
-/// per second, and whenever the frame budget fills, every other stored frame is
-/// dropped and the interval doubles. The final set always spans the entire
-/// event (a person leaving 30s in tells a different story than the first 10s),
+/// sub-stream image, so no server-side video decoding is ever needed. The
+/// event's OPENING seconds get one paced shot per second, and those frames are
+/// kept at full density however long the event runs — the subject that
+/// triggered the event is in them. The rest of the budget SPREADS across the
+/// remainder: sampling continues at one frame per second, and whenever the
+/// budget fills, every other stored tail frame is dropped and the interval
+/// doubles. The final set is the dense opening plus frames spanning the entire
+/// tail (a person leaving 30s in tells a different story than the first 10s),
 /// stays within budget, and each frame remembers when it was taken so the model
 /// can be told the real offsets. Frames live in memory only and die with the
 /// capture unless the event completes and the job is submitted.
@@ -71,52 +74,74 @@ public sealed class AiCapture
             _stop, TaskScheduler.Default);
     }
 
-    /// <summary>The first shots go back-to-back, as fast as the camera answers.
-    /// The subject that triggered the event is often FAST (a car passing takes
-    /// 2-3 seconds) and the pre-roll footage it appears in cannot be sampled
-    /// after the fact — snapshots only see the present. By the time the push has
-    /// arrived and the first snapshot answers, seconds are already gone; the
-    /// opening burst is the only chance to still catch a fast mover.</summary>
-    private const int BurstShots = 4;
+    /// <summary>The event's first seconds get one PACED shot per second, and
+    /// frames landed in this window are exempt from decimation — the subject
+    /// that triggered the event is often FAST (a car passing takes 2-3 seconds)
+    /// and the pre-roll footage it appears in cannot be sampled after the fact,
+    /// so the opening seconds are the best look at it and stay at full density
+    /// however long the event then runs. One shot per second, hit or miss: a
+    /// failed second is one missing frame, never a reason to stop or slow the
+    /// slots that remain.</summary>
+    private const int OpeningSeconds = 5;
 
     private async Task RunAsync()
     {
-        int failures = 0;
-        int shots = 0;
+        int failures = 0; // consecutive misses; any good frame resets
+        int locked = 0;   // opening-window frames, exempt from decimation
+        var launched = DateTime.UtcNow;
         var interval = TimeSpan.FromSeconds(1); // doubles at every decimation
+        // The spread phase keeps at least two budget slots — decimation needs
+        // headroom to halve (the Math.Max(2, budget) floor, same reason).
+        int maxLocked = Math.Clamp(_budget - 2, 0, OpeningSeconds);
         try
         {
             while (!_stop.IsCancellationRequested)
             {
                 var t0 = DateTime.UtcNow;
+                bool opening = locked < maxLocked
+                    && t0 - launched < TimeSpan.FromSeconds(OpeningSeconds);
+                bool got = false;
                 try
                 {
                     // Per-shot deadline so one hung command can't silently eat the
                     // whole window; SnapshotSmall is the size-limited variant (the
                     // HTTP API scales server-side, Baichuan answers sub-stream).
+                    // Opening slots stay tight — miss one second, try the next.
+                    // Afterwards the deadline WIDENS with consecutive misses: the
+                    // fallback chain behind SnapshotSmall allows ~20s per HTTP
+                    // tier before the Baichuan snap, and a camera busy starting
+                    // the event's streams needs one patient attempt, not another
+                    // hasty one.
                     using var shot = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);
-                    shot.CancelAfter(TimeSpan.FromSeconds(5));
+                    shot.CancelAfter(TimeSpan.FromSeconds(
+                        opening || failures == 0 ? 5 : failures == 1 ? 20 : 45));
+                    Interlocked.Increment(ref _attempts);
                     var jpeg = await _control.SnapshotSmallAsync(shot.Token).ConfigureAwait(false);
                     if (jpeg is { Length: > 100 } && jpeg[0] == 0xFF && jpeg[1] == 0xD8)
                     {
                         lock (Frames)
                         {
-                            // Budget full: keep every other frame (the survivors
-                            // still span the whole event so far) and sample half
-                            // as often from here on.
-                            if (Frames.Count >= _budget)
+                            if (opening)
                             {
-                                for (int k = Frames.Count - 1; k > 0; k -= 2)
-                                    Frames.RemoveAt(k);
+                                locked++;
+                            }
+                            else if (Frames.Count >= _budget)
+                            {
+                                // Budget full: thin the tail, never the opening.
+                                ThinTail(Frames, locked);
                                 interval += interval;
                             }
                             Frames.Add((t0, jpeg));
                         }
                         failures = 0;
+                        got = true;
                     }
-                    else if (++failures >= 3)
+                    else
                     {
-                        break; // camera has no snapshots — stop asking
+                        failures++;
+                        _lastMiss = jpeg == null
+                            ? "the camera answered the snapshot command with nothing"
+                            : $"the camera answered {jpeg.Length} bytes that are not a JPEG";
                     }
                 }
                 catch (OperationCanceledException) when (_stop.IsCancellationRequested)
@@ -125,16 +150,25 @@ public sealed class AiCapture
                 }
                 catch (Exception ex)
                 {
-                    Log.Debug($"{Camera}: AI frame capture miss: {Log.Flatten(ex)}");
-                    if (++failures >= 3) break;
+                    failures++;
+                    _lastMiss = Log.Flatten(ex);
+                    Log.Debug($"{Camera}: AI frame capture miss: {_lastMiss}");
                 }
-                // Pace to the current interval; a slow snapshot yields fewer
-                // frames. The opening burst skips the pause entirely (see
-                // BurstShots) — decimation reconciles the budget later.
+                // Pacing. The opening window ticks at one shot per second, hit
+                // or miss. After it, successes pace to the current interval and
+                // misses BACK OFF instead of giving up: events run minutes, and
+                // a camera too busy to answer while its streams spin up usually
+                // answers fine moments later — walking away after three early
+                // strikes cost every frame of a 4-minute event (live 2026-07-25).
+                // A camera with no snapshot support at all costs one failed
+                // command per ~30s, and only while an event records.
                 var spent = DateTime.UtcNow - t0;
-                if (++shots >= BurstShots && spent < interval)
+                var slot = opening ? TimeSpan.FromSeconds(1)
+                         : got ? interval
+                         : RetryPause(failures);
+                if (slot > spent)
                 {
-                    try { await Task.Delay(interval - spent, _stop.Token).ConfigureAwait(false); }
+                    try { await Task.Delay(slot - spent, _stop.Token).ConfigureAwait(false); }
                     catch (OperationCanceledException) { break; }
                 }
             }
@@ -146,6 +180,29 @@ public sealed class AiCapture
             Log.Debug($"{Camera}: AI frame capture aborted: {Log.Flatten(ex)}");
         }
     }
+
+    /// <summary>Budget full: drop every other frame BEYOND the protected opening
+    /// prefix (<paramref name="locked"/> frames). The survivors still span the
+    /// whole tail so far; the opening keeps its full one-per-second density.</summary>
+    internal static void ThinTail(List<(DateTime Utc, byte[] Jpeg)> frames, int locked)
+    {
+        for (int k = frames.Count - 1; k > locked; k -= 2)
+            frames.RemoveAt(k);
+    }
+
+    /// <summary>Pause before the next attempt after N consecutive misses:
+    /// 4, 8, 16, then 30s flat — patient enough to ride out a busy event start,
+    /// cheap enough to run for the life of a long event.</summary>
+    internal static TimeSpan RetryPause(int failures) =>
+        TimeSpan.FromSeconds(Math.Min(30, 1 << Math.Min(failures + 1, 5)));
+
+    private int _attempts;
+    private volatile string? _lastMiss;
+
+    /// <summary>Snapshot attempts made (successful or not) — for the skip log.</summary>
+    internal int Attempts => _attempts;
+    /// <summary>What the last failed attempt said — the skip log's diagnosis.</summary>
+    internal string? LastMiss => _lastMiss;
 
 }
 
@@ -261,8 +318,11 @@ public sealed class AiDescriber
         lock (job.Capture.Frames) frames = job.Capture.Frames.ToList();
         if (frames.Count == 0)
         {
-            Log.Info($"{job.Capture.Camera}: AI describe skipped — no frames captured " +
-                     "(camera answered no snapshots during the event)");
+            Log.Warn($"{job.Capture.Camera}: AI describe skipped — no frames captured (" +
+                     (job.Capture.Attempts == 0
+                         ? "the event ended before a snapshot could be asked for"
+                         : $"all {job.Capture.Attempts} snapshot attempt(s) failed; " +
+                           $"last: {job.Capture.LastMiss ?? "no detail"}") + ")");
             return;
         }
         if (cfg.ActiveUrl() is not { } url)

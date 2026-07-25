@@ -4247,6 +4247,30 @@ public static class SelfTest
             prov.Provider = "openai";
             AssertEq(prov.ActiveUrl()?.ToString() ?? "", "http://a:1234/v1/chat/completions");
 
+            // Frame-capture misses back off (4, 8, 16, 30s flat) instead of giving
+            // up: three quick failures at a busy event start used to zero out the
+            // whole event's frames (live 2026-07-25).
+            AssertEq(Neolink.Ai.AiCapture.RetryPause(1).TotalSeconds.ToString("0"), "4");
+            AssertEq(Neolink.Ai.AiCapture.RetryPause(2).TotalSeconds.ToString("0"), "8");
+            AssertEq(Neolink.Ai.AiCapture.RetryPause(3).TotalSeconds.ToString("0"), "16");
+            AssertEq(Neolink.Ai.AiCapture.RetryPause(4).TotalSeconds.ToString("0"), "30");
+            AssertEq(Neolink.Ai.AiCapture.RetryPause(50).TotalSeconds.ToString("0"), "30");
+
+            // Decimation never touches the protected opening window (the event's
+            // first seconds at 1 fps): only the tail halves.
+            var thin = Enumerable.Range(0, 12)
+                .Select(i => (Utc: new DateTime(2026, 1, 1).AddSeconds(i), Jpeg: new[] { (byte)i }))
+                .ToList();
+            Neolink.Ai.AiCapture.ThinTail(thin, 5);
+            AssertEq(string.Join(",", thin.Select(f => f.Jpeg[0])), "0,1,2,3,4,5,6,8,10");
+            // No opening frames (tiny budget, or the camera missed all five
+            // slots): classic every-other halving, first frame always kept.
+            var classic = Enumerable.Range(0, 8)
+                .Select(i => (Utc: new DateTime(2026, 1, 1).AddSeconds(i), Jpeg: new[] { (byte)i }))
+                .ToList();
+            Neolink.Ai.AiCapture.ThinTail(classic, 0);
+            AssertEq(string.Join(",", classic.Select(f => f.Jpeg[0])), "0,2,4,6");
+
             // The embedded vision-test image must stay a decodable JPEG (SOI…EOI) —
             // a corrupted constant would make every connection test fail confusingly.
             var testJpeg = Neolink.Ai.AiDescriber.TestJpeg();

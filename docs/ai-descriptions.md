@@ -22,13 +22,17 @@
    detection, as always). The event records exactly as before.
 2. **While the event records**, Neolink samples low-resolution frames using
    the camera's *own JPEG snapshot command* on the sub stream — no video
-   decoding, no ffmpeg, no GPU use on the server. The first few shots go
-   **back-to-back, as fast as the camera answers** — the subject that
-   triggered the event is often fast (a passing car is gone in seconds), and
-   the opening burst is the best chance to catch it. Sampling then settles to
-   one frame per second; when the frame budget fills, the set is thinned and
-   the interval doubles, so the kept frames always **span the whole event** —
-   a subject that appears 30 seconds in is part of the story, not cropped out.
+   decoding, no ffmpeg, no GPU use on the server. The event's **first five
+   seconds get one frame per second, and those frames are kept at full
+   density no matter how long the event runs** — the subject that triggered
+   the event is often fast (a passing car is gone in seconds), and the
+   opening seconds are the best look at it. A snapshot the camera fails to
+   answer is simply that second's missing frame; the next second gets its own
+   attempt. The rest of the frame budget **spreads across the remainder**:
+   sampling continues at one frame per second, and when the budget fills, the
+   tail is thinned and the interval doubles, so the kept frames always
+   **span the whole event** — a subject that appears 30 seconds in is part of
+   the story, not cropped out.
    One honest limit: snapshots only see the *present*. The clip's pre-roll
    (the seconds before the detection reached the server) cannot be sampled
    after the fact, so a very fast subject can appear in the recorded clip yet
@@ -97,9 +101,8 @@ with 3 frames it sees three disconnected moments, with 10–15 it sees a
 sequence — direction of movement, what changed, what the subject did. The
 **Frames per event** setting (Settings → AI) is the budget that gets spread
 across the event, and it has **no upper limit** — an event can only ever
-yield about one frame per second of its length (plus the opening burst), so
-a budget larger than that simply means *every* captured frame is kept and
-sent, none thinned away. Raise it if descriptions feel like guesses; the
+yield about one frame per second of its length, so a budget larger than that
+simply means *every* captured frame is kept and sent, none thinned away. Raise it if descriptions feel like guesses; the
 cost is a bigger payload and a slower answer per event (each frame is extra
 tokens through the model), so find the balance your hardware sustains.
 

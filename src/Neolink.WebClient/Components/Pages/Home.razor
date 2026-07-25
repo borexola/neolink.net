@@ -1956,7 +1956,7 @@
                                 <div class="control-row"><span>Frames per event (spread across it)</span>
                                     <input class="ret-input @(AiFramesInvalid ? "input-error" : "")"
                                            type="number" min="1"
-                                           title="Sampling starts at 1 frame/second (opening shots back-to-back) and thins as the event runs, so the frames always span the whole event. No upper limit — an event can only yield about one frame per second of its length, so a big budget just means every frame is kept. More frames = better answers but bigger, slower requests."
+                                           title="Sampling runs at 1 frame/second. The event's first 5 seconds are kept at full density; only later frames thin as the event runs, so the set is the dense opening plus frames spanning the rest. No upper limit — an event can only yield about one frame per second of its length, so a big budget just means every frame is kept. More frames = better answers but bigger, slower requests."
                                            @bind="_ai.CaptureSeconds" @bind:event="oninput" /></div>
                                 @if (AiFramesInvalid)
                                 {
