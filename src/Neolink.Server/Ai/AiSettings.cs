@@ -17,15 +17,17 @@ namespace Neolink.Ai;
 /// </summary>
 public sealed class AiSettings
 {
-    /// <summary>The frame budget's hard ceiling — one frame per second, so this
-    /// also caps how long an event is sampled. Payload size and prompt-processing
-    /// time grow with every frame; 20 low-res images is already a big ask for a
-    /// local vision model.</summary>
-    public const int MaxCaptureSeconds = 20;
+    /// <summary>The frame budget's hard ceiling. Payload size and prompt-processing
+    /// time grow with every frame — but a current mid-sized vision model on a
+    /// desktop GPU handles 20 low-res images in seconds, so the ceiling leaves
+    /// real headroom (raised from 20 on user request; the setting's default stays
+    /// conservative).</summary>
+    public const int MaxCaptureSeconds = 40;
 
     public const string DefaultPrompt =
         "You are the eyes of a home security system. You receive frames from one " +
-        "surveillance camera, captured one second apart during a detection event, oldest first. " +
+        "surveillance camera, captured during a detection event, oldest first; each frame's " +
+        "time offset from the event start is stated. " +
         "In 1-3 short sentences, describe what happens across the frames: who or what is " +
         "visible, what they are doing, and anything unusual. Be concrete and factual, do not " +
         "speculate beyond what the images show, and answer with the description only.";

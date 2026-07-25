@@ -275,9 +275,27 @@ public sealed class AiDescriber
 
         List<(DateTime Utc, byte[] Jpeg)> frames;
         lock (job.Capture.Frames) frames = job.Capture.Frames.ToList();
+        var userText = BuildUserText(rec, frames);
+        var jpegs = frames.Select(f => f.Jpeg).ToList();
         var sw = Stopwatch.StartNew();
-        var (raw, model, usage) = await CompleteAsync(cfg, _store.ActiveApiKey(cfg), BuildUserText(rec, frames),
-            frames.Select(f => f.Jpeg).ToList(), classify: true, ct).ConfigureAwait(false);
+        (string? raw, string? model, long? usage) reply;
+        try
+        {
+            reply = await CompleteAsync(cfg, _store.ActiveApiKey(cfg), userText, jpegs,
+                classify: true, ct).ConfigureAwait(false);
+        }
+        catch (HttpRequestException ex)
+        {
+            // Connection-level failure only (refused, reset, DNS) — the server is
+            // probably restarting or swapping models; one delayed retry rescues the
+            // description. Slow answers (timeouts) are NOT retried: doubling the
+            // wait on a struggling model would only dig the queue deeper.
+            Log.Info($"{rec.Camera}: AI endpoint unreachable ({Log.Flatten(ex)}) — retrying once in 10s");
+            await Task.Delay(TimeSpan.FromSeconds(10), ct).ConfigureAwait(false);
+            reply = await CompleteAsync(cfg, _store.ActiveApiKey(cfg), userText, jpegs,
+                classify: true, ct).ConfigureAwait(false);
+        }
+        var (raw, model, usage) = reply;
         sw.Stop();
 
         var (level, text) = SplitLevel(raw);
@@ -553,8 +571,28 @@ public sealed class AiDescriber
     private static string Excerpt(string s, int max = 300) =>
         s.Length <= max ? s : s[..max] + "…";
 
-    /// <summary>Connectivity test for the settings UI: a tiny text-only completion
-    /// against (possibly unsaved) settings. Null = OK; otherwise the error text.</summary>
+    /// <summary>A tiny embedded JPEG (64×48, an amber circle on dark blue, ~0.9 KB)
+    /// attached to the connectivity test so it exercises the same vision path real
+    /// events use — a text-only model fails at the Test button, not on the first
+    /// event. Trivial token cost even against a hosted API.</summary>
+    internal static byte[] TestJpeg() => Convert.FromBase64String(
+        "/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDABIMDhAOCxIQDxAUExIVGy0dGxkZGzcoKiEtQjpFREA6Pz5IUWhYSE1iTj4/WntcYmtvdHZ0RleAiX9xiGhydHD/" +
+        "2wBDARMUFBsYGzUdHTVwSz9LcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHD/wAARCAAwAEADASIAAhEBAxEB/8QA" +
+        "HwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkK" +
+        "FhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXG" +
+        "x8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAEC" +
+        "AxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOE" +
+        "hYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDl6KKK1ICi" +
+        "nwxSTyrFEpd2OABXRQeHIRGPPmkL99mAB+YrOpVjT+IuMHLY5qiunk8OWxQiOaVW7FsEflgVz13bS2k7QzLhh0PYj1FKnWhU0iEoSjuQ0UUVqQFFFFAHS+Fo" +
+        "UFtNPj5y+zPoAAf6/oK3KxvC8oaxkiLEsj5wewI4/UGtmvIxF/aO520/hQVl+I4Uk0tpGHzREFT9SAR+v6CtSs3xC6ppEiscFyqr7nOf5A1NG/tFbuOfws5C" +
+        "iiivZOEKKKKAJrS5ltJ1mhbDDqOxHoa6eDXrKSMNI7RN3UqT+orkqKxqUY1Ny41HHY6+TXdPRCyys5H8Kocn88Vzeo30t/P5knCjhEHRR/nvVSiinQhTd0OV" +
+        "SUtGFFFFbGZ//9k=");
+
+    /// <summary>Connectivity test for the settings UI: one tiny completion WITH a
+    /// test image, against (possibly unsaved) settings — so a text-only model fails
+    /// here instead of on the first real event. When the vision request fails for
+    /// any reason other than a timeout, a text-only probe tells apart "server
+    /// unreachable" from "model rejects images". Null = OK; otherwise the error.</summary>
     public static async Task<(string? Error, string? Detail)> TestAsync(
         AiSettings cfg, string apiKey, CancellationToken ct)
     {
@@ -564,18 +602,34 @@ public sealed class AiDescriber
                 : cfg.UsesAnthropic
                     ? "The Anthropic-style endpoint is not a usable http(s) URL — blank means https://api.anthropic.com"
                     : "The endpoint is not a usable http(s) URL. Expected something like http://127.0.0.1:1234/v1", null);
+        const string probe = "Connectivity test. Reply with the single word: READY";
         try
         {
             var sw = Stopwatch.StartNew();
             var (text, model, _) = await CompleteAsync(cfg, apiKey,
-                "Connectivity test. Reply with the single word: READY", Array.Empty<byte[]>(),
+                probe, new[] { TestJpeg() },
                 classify: false, ct).ConfigureAwait(false);
             return text == null
                 ? ("The server answered, but with an empty completion.", null)
-                : (null, $"{model ?? "model"} answered in {sw.Elapsed.TotalSeconds:0.0}s: \"{Excerpt(text, 120)}\"");
+                : (null, $"{model ?? "model"} answered the vision test in {sw.Elapsed.TotalSeconds:0.0}s: \"{Excerpt(text, 120)}\"");
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
+            // The request carried an image; find out whether THAT was the problem —
+            // except after a timeout, where a second full wait would help nobody.
+            if (ex is not TimeoutException)
+            {
+                try
+                {
+                    _ = await CompleteAsync(cfg, apiKey, probe, Array.Empty<byte[]>(),
+                        classify: false, ct).ConfigureAwait(false);
+                    return ("The server is reachable and answers a text-only request, but " +
+                            "rejected it once an image was attached — the model is probably " +
+                            "not vision-capable. Event descriptions need a model that accepts " +
+                            $"images. The server said: {Log.Flatten(ex)}", null);
+                }
+                catch { /* text fails too: the original error names the real problem */ }
+            }
             return (Log.Flatten(ex), null);
         }
     }

@@ -21,9 +21,43 @@ in the README). Paste the matching section below into the GitHub release.
   across days) to jump straight there. Stored in a `bookmarks.json` next to the
   recordings so they travel with the footage, shared by everyone on the server —
   no database, as ever. Scrubbing, zooming and panning are untouched.
+- **Threat-level filter on the Events page.** The point of the AI threat level
+  is "show me what matters": a new filter (any / yellow + red / green / yellow /
+  red) next to the camera filter cuts the list down to just the flagged events.
+  It only appears once described events actually exist, so setups without AI
+  descriptions see nothing new.
+
+### Changed
+
+- **AI event descriptions are now BETA.** The EXPERIMENTAL labels come off —
+  the feature has proven itself end-to-end (llama.cpp, Ollama, LM Studio, and
+  the Anthropic Messages shape) and is safe to leave on; feedback stays very
+  welcome. Promotion came with a review pass:
+  - **Test LLM connection now proves vision.** The test attaches a small
+    embedded image, exercising the same request path real events use — a
+    text-only model now fails at the Test button with a message that says
+    exactly that ("rejected it once an image was attached"), instead of
+    failing on your first real event.
+  - **A transient connection failure no longer loses the description.** If the
+    LLM server is unreachable when an event completes (restarting, swapping
+    models), the job retries once after 10 seconds. Slow answers are still not
+    retried — doubling the wait on a struggling model helps nobody.
+  - **The default instruction no longer claims frames are "one second apart"** —
+    sampling has spread frames across the whole event since the budget system
+    landed, and the stated per-frame time offsets now agree with the prompt.
+  - **The frame budget's ceiling is raised from 20 to 40** — current mid-sized
+    vision models on desktop GPUs handle it comfortably — and an out-of-range
+    value now turns the field red and disables save with an explanation,
+    instead of being silently clamped back on save ("it just reverts").
 
 ### Fixed
 
+- **Stale stylesheets after updates.** The web UI's stylesheet and script URLs
+  now carry the app version, so browsers fetch fresh assets exactly once per
+  update. Previously a phone could keep serving a cached stylesheet from
+  releases ago — seen as the settings dialog's tab row clipping to a single
+  line with most tabs unreachable, a layout bug fixed back in 0.8.9. If your
+  phone still shows it after this update, one manual reload clears it for good.
 - **Monitor 6h/24h charts no longer look empty.** An integer overflow in the
   page's history-thinning pass discarded every sample older than one hour the
   moment the 24-hour backfill arrived, so the 6h and 24h windows only ever

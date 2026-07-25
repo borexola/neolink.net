@@ -133,11 +133,11 @@ in exchange you get an integration light enough to leave running forever.
   models list recordings but their firmware cannot serve the files over HTTP at
   all (Video Doorbell WiFi — a firmware bug; those clips only play in the
   Reolink app, and the player says so)
-- **AI event descriptions (EXPERIMENTAL)**: point Neolink at a vision LLM
+- **AI event descriptions (BETA)**: point Neolink at a vision LLM
   (llama.cpp, Ollama, LM Studio, or an Anthropic-style API) and detection
   events get a written description plus a GREEN/YELLOW/RED threat level — in
   the UI, the event metadata and Home Assistant — see
-  [AI event descriptions](#ai-event-descriptions--experimental)
+  [AI event descriptions](#ai-event-descriptions--beta)
 - **Battery cameras** (Argus etc., BETA — in active development) are
   auto-detected: charge badge in the sidebar, sleep-friendly by default (the
   camera dozes while nobody watches), `always_on` per camera to hold it
@@ -1018,7 +1018,7 @@ against someone who already has full read access to the server's files (they'd
 have both the key and the ciphertext). That trade-off is unavoidable for any
 self-hosted app that sends its own authenticated email.
 
-## AI event descriptions — EXPERIMENTAL
+## AI event descriptions — BETA
 
 > ### 📖 Full guide: **[docs/ai-descriptions.md](docs/ai-descriptions.md)**
 
@@ -1033,9 +1033,9 @@ The short version:
 
 - **Enable** it globally in Settings → **AI** (backend, endpoint, model — any
   **vision-capable** model your backend runs), then per camera under
-  camera ⚙ → EVENTS. Tested so far with **llama.cpp**, **Ollama** and
+  camera ⚙ → EVENTS. Tested with **llama.cpp**, **Ollama** and
   **LM Studio**; Anthropic-style APIs are implemented to spec. It's
-  **experimental — feedback is very welcome**.
+  **beta — feedback is very welcome**.
 - Frames are sampled with the camera's own snapshot command (low-res sub
   stream, no server-side video decoding) and **spread across the whole
   event**; the model is told each frame's time offset. **More frames = a

@@ -4247,6 +4247,13 @@ public static class SelfTest
             prov.Provider = "openai";
             AssertEq(prov.ActiveUrl()?.ToString() ?? "", "http://a:1234/v1/chat/completions");
 
+            // The embedded vision-test image must stay a decodable JPEG (SOI…EOI) —
+            // a corrupted constant would make every connection test fail confusingly.
+            var testJpeg = Neolink.Ai.AiDescriber.TestJpeg();
+            Assert(testJpeg.Length > 100 && testJpeg[0] == 0xFF && testJpeg[1] == 0xD8
+                && testJpeg[^2] == 0xFF && testJpeg[^1] == 0xD9,
+                "embedded AI test image is a valid JPEG");
+
             // Anthropic-style: blank endpoint means the real API; /v1/messages is
             // appended for bases and /v1 stems; explicit full paths pass through.
             static string? AUrl(string e) =>

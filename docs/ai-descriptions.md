@@ -1,17 +1,17 @@
-# AI event descriptions (EXPERIMENTAL)
+# AI event descriptions (BETA)
 
 > Point Neolink.NET at a vision-capable LLM and every detection event gets a
 > short written description ("A person in a red jacket walks up the driveway
 > carrying a box.") and a **threat classification** — GREEN, YELLOW or RED —
 > in the web UI, the event metadata, and Home Assistant.
 >
-> **Experimental — and your feedback is very welcome.** It works end-to-end
-> and is safe to leave on (a slow or dead model can never affect recording or
-> streaming), but the prompts, the models people run, and the UI around it are
-> all still evolving. If you try it, tell us what worked, what didn't, and what
-> your setup was — that is what shapes where this goes next. Tested so far with
-> **llama.cpp**, **Ollama** and **LM Studio**; Anthropic-style APIs (Claude, or
-> any proxy speaking the Messages shape) are implemented to spec.
+> **Beta — and your feedback is very welcome.** It works end-to-end and is
+> safe to leave on (a slow or dead model can never affect recording or
+> streaming). Prompts and the models people run keep improving — if you try
+> it, tell us what worked, what didn't, and what your setup was; that is what
+> shapes where this goes next. Tested with **llama.cpp**, **Ollama** and
+> **LM Studio**; Anthropic-style APIs (Claude, or any proxy speaking the
+> Messages shape) are implemented to spec.
 >
 > The only hard requirement on the model is that it be **vision-capable** (it
 > must accept images). Any such model your backend can run will work.
@@ -72,7 +72,9 @@ Two switches, both required:
    - **API key**: stored encrypted, write-only — it is never sent back to the
      browser. Local servers usually need none.
    - Use **Test LLM connection** before saving — it round-trips a real request
-     and tells you exactly what answered.
+     **with a small test image attached**, so a model that cannot accept
+     images fails right here (and the error says exactly that) instead of on
+     your first real event.
 2. **Per camera** — camera ⚙ → EVENTS → **AI descriptions**. The toggle only
    exists while the global switch is on, and only cameras you opt in send
    frames anywhere.
@@ -85,7 +87,7 @@ attach to recorded events.
 **More frames = a better story.** The model can only describe what it sees:
 with 3 frames it sees three disconnected moments, with 10–15 it sees a
 sequence — direction of movement, what changed, what the subject did. The
-**Frames per event** setting (Settings → AI, capped at 20) is the budget that
+**Frames per event** setting (Settings → AI, capped at 40) is the budget that
 gets spread across the event. Raise it if descriptions feel like guesses;
 the cost is a bigger payload and a slower answer per event (each frame is
 extra tokens through the model), so find the balance your hardware sustains.
@@ -114,7 +116,7 @@ event.
 
 **A known-good setup.** A ~12B-parameter vision model gave excellent
 descriptions in testing — run through Ollama, LM Studio and llama.cpp alike —
-on an **RTX 5080**, with inference landing in **3–5 seconds even at the full
+on an **RTX 5080**, with inference landing in **3–5 seconds even at a
 20-frame budget**. That is a useful reference point: a mid-sized vision model
 on a current desktop GPU comfortably describes an event before the next one is
 likely to start, so you can turn the frame budget all the way up without the

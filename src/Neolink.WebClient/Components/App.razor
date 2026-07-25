@@ -6,7 +6,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Neolink.NET</title>
     <base href="@BaseHref" />
-    <link rel="stylesheet" href="_content/Neolink.WebClient/css/app.css" />
+    @* ?v= cache-buster: without it, phones especially would serve a STALE cached
+       stylesheet/script long after a server update (heuristic caching skips
+       revalidation) — seen live as the settings dialog rendering with layout
+       bugs fixed releases ago. The version changes every release/beta, so each
+       update fetches fresh assets exactly once. *@
+    <link rel="stylesheet" href="_content/Neolink.WebClient/css/app.css?v=@AssetVersion" />
     @* App icon: SVG for modern browsers, PNG for Safari/iOS and the home-screen
        shortcut. Relative hrefs resolve against <base href="/"> so they work on
        every route (like the stylesheet above). *@
@@ -54,12 +59,21 @@
     </div>
 
     <script src="_framework/blazor.web.js"></script>
-    <script src="_content/Neolink.WebClient/js/neolink.js"></script>
+    <script src="_content/Neolink.WebClient/js/neolink.js?v=@AssetVersion"></script>
 </body>
 
 </html>
 
 @code {
+    // The entry assembly's informational version (e.g. "0.9.8" or "0.9.8-beta.3")
+    // — the same value -p:Version stamps at release/beta build time, so asset
+    // URLs change exactly when the shipped assets can have.
+    private static readonly string AssetVersion = Uri.EscapeDataString(
+        System.Reflection.Assembly.GetEntryAssembly()
+            ?.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+            .OfType<System.Reflection.AssemblyInformationalVersionAttribute>()
+            .FirstOrDefault()?.InformationalVersion ?? "0");
+
     // A reverse proxy that serves the UI under a path prefix (notably Home Assistant
     // ingress, which puts a per-session token in the path) sends that prefix in
     // X-Ingress-Path. The <base href> must carry it so every relative asset, the

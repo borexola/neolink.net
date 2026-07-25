@@ -1848,7 +1848,7 @@
                     @if (_settingsTab == "ai" && _ai != null)
                     {
                         <div class="campanel-section">
-                            <div class="campanel-section-title">@UiIcon.Render("sparkles", 13) AI EVENT DESCRIPTIONS <span class="beta-tag exp-tag">EXPERIMENTAL</span></div>
+                            <div class="campanel-section-title">@UiIcon.Render("sparkles", 13) AI EVENT DESCRIPTIONS <span class="beta-tag">BETA</span></div>
                             <div class="notice small">
                                 When a camera records a detection event, low-res frames (spread across
                                 the event, from the camera's own snapshot) go to a <b>vision-capable</b>
@@ -1857,11 +1857,11 @@
                                 log. Enable it here, then switch it on <b>per camera</b> (camera panel →
                                 Recording). The API key is <b>encrypted at rest</b>.
                             </div>
-                            <div class="notice small ai-exp-note">
-                                <b>Experimental</b> — and we'd love your feedback. It won't affect
-                                recording or streaming (a slow or dead model only means an event goes
-                                undescribed), but the prompts, models and this UI are still evolving.
-                                Tell us how it goes for you and what your setup is.
+                            <div class="notice small ai-beta-note">
+                                <b>Beta</b> — and we'd love your feedback. It won't affect
+                                recording or streaming (a slow or dead model only means an event
+                                goes undescribed). Tell us how it goes for you and what your
+                                setup is.
                             </div>
                             <div class="control-row">
                                 <span>Describe events with AI</span>
@@ -1954,9 +1954,17 @@
                                 <div class="campanel-divider"></div>
                                 <div class="campanel-subtitle">BEHAVIOR</div>
                                 <div class="control-row"><span>Frames per event (spread across it)</span>
-                                    <input class="ret-input" type="number" min="1" max="@_ai.MaxCaptureSeconds"
+                                    <input class="ret-input @(AiFramesInvalid ? "input-error" : "")"
+                                           type="number" min="1" max="@_ai.MaxCaptureSeconds"
                                            title="Sampling starts at 1 frame/second and thins as the event runs, so the frames always span the whole event (max @_ai.MaxCaptureSeconds). More frames = better answers but bigger, slower requests."
-                                           @bind="_ai.CaptureSeconds" /></div>
+                                           @bind="_ai.CaptureSeconds" @bind:event="oninput" /></div>
+                                @if (AiFramesInvalid)
+                                {
+                                    <div class="field-error">
+                                        Between 1 and @_ai.MaxCaptureSeconds frames — the ceiling keeps
+                                        one event's request payload within what vision models handle well.
+                                    </div>
+                                }
                                 <div class="control-row"><span>Skip model “thinking”</span>
                                     <button class="chip @(_ai.NoThink ? "" : "chip-off")"
                                             title="Asks reasoning models to answer directly (the /no_think convention) — much faster on local hardware. Think-blocks are stripped from answers either way."
@@ -2163,7 +2171,7 @@
                         <span class="ai-level-chip ai-@_playEvent.AiLevel">@_playEvent.AiLevel.ToUpperInvariant()</span>
                     }
                     <span class="event-ai-text">@(_playEvent.AiDescription ?? "classified without a description")</span>
-                    <span class="beta-tag exp-tag" title="AI event descriptions are experimental — prompts, models and this UI are still changing">EXPERIMENTAL</span>
+                    <span class="beta-tag" title="AI event descriptions are in beta — feedback is very welcome">BETA</span>
                 </div>
             }
             else if (_playEvent.AiPending)
@@ -2174,7 +2182,7 @@
                    10 s poll swaps in the finished description. *@
                 <div class="event-ai ai-none">
                     <span class="event-ai-text event-ai-pending">🧠 AI is describing this event — the text appears here when the model answers…</span>
-                    <span class="beta-tag exp-tag" title="AI event descriptions are experimental — prompts, models and this UI are still changing">EXPERIMENTAL</span>
+                    <span class="beta-tag" title="AI event descriptions are in beta — feedback is very welcome">BETA</span>
                 </div>
             }
             @if (_playEvent.HasClip)
@@ -2551,7 +2559,12 @@
         && string.IsNullOrWhiteSpace(_ai.OllamaModel);
     private bool AiAnthropicModelMissing => _ai is { Enabled: true, Provider: "anthropic" }
         && string.IsNullOrWhiteSpace(_ai.AnthropicModel);
-    private bool AiHasErrors => AiEndpointInvalid || AiOllamaModelMissing || AiAnthropicModelMissing;
+    // Out-of-range frame budgets used to be clamped silently on save — the field
+    // seemed to "just revert". Now the input goes red and save is disabled instead.
+    private bool AiFramesInvalid => _ai is { Enabled: true }
+        && (_ai.CaptureSeconds < 1 || _ai.CaptureSeconds > _ai.MaxCaptureSeconds);
+    private bool AiHasErrors => AiEndpointInvalid || AiOllamaModelMissing || AiAnthropicModelMissing
+        || AiFramesInvalid;
 
     private object AiBody() => new
     {
@@ -2577,7 +2590,7 @@
         if (_ai == null || _aiBusy) return;
         if (_ai.Enabled && AiHasErrors)
         {
-            _aiError = true; _aiStatus = "Fix the highlighted endpoint first.";
+            _aiError = true; _aiStatus = "Fix the highlighted fields first.";
             return;
         }
         _aiSaving = true; _aiStatus = null;
@@ -2610,7 +2623,7 @@
         if (_ai == null || _aiBusy) return;
         if (_ai.Enabled && AiHasErrors)
         {
-            _aiError = true; _aiStatus = "Fix the highlighted endpoint first.";
+            _aiError = true; _aiStatus = "Fix the highlighted fields first.";
             return;
         }
         _aiTesting = true; _aiStatus = null;

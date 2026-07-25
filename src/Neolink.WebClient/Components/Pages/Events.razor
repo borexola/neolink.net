@@ -53,6 +53,20 @@
             <button class="chip @(_unreviewedOnly ? "chip-active" : "chip-off")"
                     title="@(_unreviewedOnly ? "Showing only events you haven't opened yet — click to show all" : "Show only events you haven't opened yet")"
                     @onclick="() => _unreviewedOnly = !_unreviewedOnly">unreviewed only</button>
+            @if (AnyAiLevels)
+            {
+                @* AI threat filter — the point of the threat level is "show me what
+                   matters"; only offered once described events actually exist, so
+                   setups without AI descriptions never see the extra control. *@
+                <select class="event-filter" @bind="_levelFilter"
+                        title="Show only events with a given AI threat level">
+                    <option value="">any threat</option>
+                    <option value="flagged">yellow + red</option>
+                    <option value="green">green</option>
+                    <option value="yellow">yellow</option>
+                    <option value="red">red</option>
+                </select>
+            }
             <span class="tool-label">DAY</span>
             <input class="event-filter event-date-input" type="date"
                    title="Show one day's events (blank = the rolling last 24 hours)"
@@ -218,7 +232,8 @@
                 else if (!Filtered.Any())
                 {
                     <div class="notice">
-                        @(_unreviewedOnly ? "Nothing awaiting review — all clear."
+                        @(_levelFilter.Length > 0 ? "No events match the threat filter."
+                            : _unreviewedOnly ? "Nothing awaiting review — all clear."
                             : _date != null ? "No events on this day."
                             : "No events in the last 24 hours.")
                     </div>
@@ -304,14 +319,14 @@
                                 <span class="ai-level-chip ai-@sel.AiLevel">@sel.AiLevel.ToUpperInvariant()</span>
                             }
                             <span class="event-ai-text">@(sel.AiDescription ?? "classified without a description")</span>
-                            <span class="beta-tag exp-tag" title="AI event descriptions are experimental — prompts, models and this UI are still changing">EXPERIMENTAL</span>
+                            <span class="beta-tag" title="AI event descriptions are in beta — feedback is very welcome">BETA</span>
                         </div>
                     }
                     else if (sel.AiPending)
                     {
                         <div class="event-ai ai-none">
                             <span class="event-ai-text event-ai-pending">🧠 AI is describing this event — refresh in a moment to see the text…</span>
-                            <span class="beta-tag exp-tag" title="AI event descriptions are experimental — prompts, models and this UI are still changing">EXPERIMENTAL</span>
+                            <span class="beta-tag" title="AI event descriptions are in beta — feedback is very welcome">BETA</span>
                         </div>
                     }
 
@@ -452,6 +467,7 @@
 
     private string _cameraFilter = "";
     private bool _unreviewedOnly;
+    private string _levelFilter = "";
     private DateTime? _date;
     private bool _supported = true;
     private bool _loading = true;
@@ -789,7 +805,14 @@
         Source()
             .Where(e => _cameraFilter.Length == 0 || string.Equals(e.Camera, _cameraFilter, StringComparison.OrdinalIgnoreCase))
             .Where(e => !_unreviewedOnly || !e.Reviewed)
+            .Where(e => _levelFilter.Length == 0
+                || (_levelFilter == "flagged" ? e.AiLevel is "yellow" or "red" : e.AiLevel == _levelFilter))
             .OrderByDescending(e => e.Start);
+
+    /// <summary>True once any loaded event carries an AI threat level — the gate
+    /// for showing the threat filter at all.</summary>
+    private bool AnyAiLevels =>
+        _events.Any(e => e.AiLevel != null) || _eventsForDate.Any(e => e.AiLevel != null);
 
     private string Artifact(ApiEvent ev, string kind) =>
         $"{Base}/api/events/{Uri.EscapeDataString(ev.Id)}/{kind}{TokenQuery('?')}";

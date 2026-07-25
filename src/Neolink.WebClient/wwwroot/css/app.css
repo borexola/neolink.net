@@ -5346,20 +5346,10 @@ body.tl-colresizing, body.tl-colresizing * { cursor: col-resize !important; user
     vertical-align: 1px;
 }
 
-/* Experimental (AI descriptions): further out than beta — the feature works, but
-   prompts, models and its UI are still moving. Violet keeps it visibly distinct
-   from the amber BETA pills so the two statuses never read as the same promise.
-   Slightly tighter tracking because the word is long. */
-.exp-tag {
-    color: #a98bf0;
-    border-color: color-mix(in srgb, #a98bf0 50%, transparent);
-    letter-spacing: 0.6px;
-}
-
-/* The experimental/feedback note in the AI settings tab: same violet as the
-   EXPERIMENTAL pill, with a left rule so it reads as a callout, not body copy. */
-.notice.ai-exp-note {
-    border-left: 3px solid color-mix(in srgb, #a98bf0 55%, transparent);
+/* The beta/feedback note in the AI settings tab: same amber as the BETA pill,
+   with a left rule so it reads as a callout, not body copy. */
+.notice.ai-beta-note {
+    border-left: 3px solid color-mix(in srgb, #e8b054 55%, transparent);
     padding-left: 8px;
 }
 
