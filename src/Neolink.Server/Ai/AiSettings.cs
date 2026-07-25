@@ -17,13 +17,6 @@ namespace Neolink.Ai;
 /// </summary>
 public sealed class AiSettings
 {
-    /// <summary>The frame budget's hard ceiling. Payload size and prompt-processing
-    /// time grow with every frame — but a current mid-sized vision model on a
-    /// desktop GPU handles 20 low-res images in seconds, so the ceiling leaves
-    /// real headroom (raised from 20 on user request; the setting's default stays
-    /// conservative).</summary>
-    public const int MaxCaptureSeconds = 40;
-
     public const string DefaultPrompt =
         "You are the eyes of a home security system. You receive frames from one " +
         "surveillance camera, captured during a detection event, oldest first; each frame's " +
@@ -96,11 +89,14 @@ public sealed class AiSettings
     /// &lt;think&gt; blocks stripped either way; this saves the time they take.</summary>
     public bool NoThink { get; set; } = true;
 
-    /// <summary>The frame budget per event (1..<see cref="MaxCaptureSeconds"/>).
-    /// Sampling starts at one frame per second and spreads: whenever the budget
-    /// fills, every other frame is dropped and the interval doubles, so the set
-    /// always spans the WHOLE event, however long it runs. (The JSON name is
-    /// historic — it began life as "seconds sampled".)</summary>
+    /// <summary>The frame budget per event, uncapped (≥ 1). Sampling starts at
+    /// one frame per second and spreads: whenever the budget fills, every other
+    /// frame is dropped and the interval doubles, so the set always spans the
+    /// WHOLE event, however long it runs. No artificial ceiling: an event can
+    /// only ever yield about one frame per second of its length (plus the
+    /// opening burst), so a big budget simply means "keep every frame" — the
+    /// event's own duration (bounded by recording.max_clip_seconds) is the real
+    /// limit. (The JSON name is historic — it began life as "seconds sampled".)</summary>
     public int CaptureSeconds { get; set; } = 10;
 
     /// <summary>How long one completion may take before the job is abandoned.
@@ -282,7 +278,7 @@ public sealed class AiStore
             };
             incoming.Provider = incoming.UsesOllama ? "ollama"
                 : incoming.UsesAnthropic ? "anthropic" : "openai"; // normalize unknowns
-            incoming.CaptureSeconds = Math.Clamp(incoming.CaptureSeconds, 1, AiSettings.MaxCaptureSeconds);
+            incoming.CaptureSeconds = Math.Max(1, incoming.CaptureSeconds);
             incoming.TimeoutSeconds = Math.Clamp(incoming.TimeoutSeconds, 5, 600);
             _settings = incoming;
             SaveLocked();

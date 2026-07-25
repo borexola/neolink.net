@@ -1134,7 +1134,6 @@ public static class WebApi
                     defaultPrompt = Neolink.Ai.AiSettings.DefaultPrompt,
                     noThink = s.NoThink,
                     captureSeconds = s.CaptureSeconds,
-                    maxCaptureSeconds = Neolink.Ai.AiSettings.MaxCaptureSeconds,
                     timeoutSeconds = s.TimeoutSeconds,
                 };
             }
@@ -1159,8 +1158,7 @@ public static class WebApi
                     AnthropicModel = (req.AnthropicModel ?? cur.AnthropicModel).Trim(),
                     Prompt = req.Prompt ?? cur.Prompt,
                     NoThink = req.NoThink ?? cur.NoThink,
-                    CaptureSeconds = Math.Clamp(req.CaptureSeconds ?? cur.CaptureSeconds,
-                        1, Neolink.Ai.AiSettings.MaxCaptureSeconds),
+                    CaptureSeconds = Math.Max(1, req.CaptureSeconds ?? cur.CaptureSeconds),
                     TimeoutSeconds = Math.Clamp(req.TimeoutSeconds ?? cur.TimeoutSeconds, 5, 600),
                 };
             }

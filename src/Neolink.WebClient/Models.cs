@@ -274,7 +274,6 @@ public sealed class ApiAiSettings
     public string DefaultPrompt { get; set; } = "";
     public bool NoThink { get; set; } = true;
     public int CaptureSeconds { get; set; } = 10;
-    public int MaxCaptureSeconds { get; set; } = 20;
     public int TimeoutSeconds { get; set; } = 120;
 }
 

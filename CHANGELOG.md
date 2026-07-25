@@ -45,10 +45,21 @@ in the README). Paste the matching section below into the GitHub release.
   - **The default instruction no longer claims frames are "one second apart"** —
     sampling has spread frames across the whole event since the budget system
     landed, and the stated per-frame time offsets now agree with the prompt.
-  - **The frame budget's ceiling is raised from 20 to 40** — current mid-sized
-    vision models on desktop GPUs handle it comfortably — and an out-of-range
-    value now turns the field red and disables save with an explanation,
-    instead of being silently clamped back on save ("it just reverts").
+  - **The frame budget's ceiling (20) is gone.** Set as many frames as you
+    like: an event can only ever yield about one frame per second of its
+    length plus the opening burst, so a big budget simply means every
+    captured frame is sent with none thinned away — the event's own duration
+    is the natural limit. An invalid value (below 1) now turns the field red
+    and disables save, instead of being silently clamped back on save
+    ("it just reverts").
+  - **Fast subjects are caught more often.** The first few snapshots now go
+    back-to-back as fast as the camera answers before settling to one per
+    second: a car passing at the moment of detection is often gone within
+    seconds, and (snapshots being live-only) the clip's pre-roll can never be
+    re-sampled — the opening burst is the one chance to still see it. The
+    "describing event" log line now also reports coverage ("12 frames over
+    14s of the 15s event"), so a puzzling description can be checked against
+    what the model was actually shown.
 
 ### Fixed
 
@@ -58,6 +69,9 @@ in the README). Paste the matching section below into the GitHub release.
   releases ago — seen as the settings dialog's tab row clipping to a single
   line with most tabs unreachable, a layout bug fixed back in 0.8.9. If your
   phone still shows it after this update, one manual reload clears it for good.
+- **"View release" goes to the releases page.** The update banner's button
+  landed on the repository front page; it now opens the releases list, where
+  the announced version and its notes actually are.
 - **Monitor 6h/24h charts no longer look empty.** An integer overflow in the
   page's history-thinning pass discarded every sample older than one hour the
   moment the 24-hour backfill arrived, so the 6h and 24h windows only ever

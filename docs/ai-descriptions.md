@@ -22,10 +22,18 @@
    detection, as always). The event records exactly as before.
 2. **While the event records**, Neolink samples low-resolution frames using
    the camera's *own JPEG snapshot command* on the sub stream — no video
-   decoding, no ffmpeg, no GPU use on the server. Sampling starts at one
-   frame per second; when the frame budget fills, the set is thinned and the
-   interval doubles, so the kept frames always **span the whole event** — a
-   subject that appears 30 seconds in is part of the story, not cropped out.
+   decoding, no ffmpeg, no GPU use on the server. The first few shots go
+   **back-to-back, as fast as the camera answers** — the subject that
+   triggered the event is often fast (a passing car is gone in seconds), and
+   the opening burst is the best chance to catch it. Sampling then settles to
+   one frame per second; when the frame budget fills, the set is thinned and
+   the interval doubles, so the kept frames always **span the whole event** —
+   a subject that appears 30 seconds in is part of the story, not cropped out.
+   One honest limit: snapshots only see the *present*. The clip's pre-roll
+   (the seconds before the detection reached the server) cannot be sampled
+   after the fact, so a very fast subject can appear in the recorded clip yet
+   miss every sampled frame — the log's coverage line ("N frames over Xs of
+   the Ys event") shows exactly what the model was given.
 3. **When the event closes**, the frames (each stamped with its real time
    offset) go to your configured model with the instruction prompt. Jobs are
    processed **one at a time on a bounded background queue**: the event
@@ -87,10 +95,13 @@ attach to recorded events.
 **More frames = a better story.** The model can only describe what it sees:
 with 3 frames it sees three disconnected moments, with 10–15 it sees a
 sequence — direction of movement, what changed, what the subject did. The
-**Frames per event** setting (Settings → AI, capped at 40) is the budget that
-gets spread across the event. Raise it if descriptions feel like guesses;
-the cost is a bigger payload and a slower answer per event (each frame is
-extra tokens through the model), so find the balance your hardware sustains.
+**Frames per event** setting (Settings → AI) is the budget that gets spread
+across the event, and it has **no upper limit** — an event can only ever
+yield about one frame per second of its length (plus the opening burst), so
+a budget larger than that simply means *every* captured frame is kept and
+sent, none thinned away. Raise it if descriptions feel like guesses; the
+cost is a bigger payload and a slower answer per event (each frame is extra
+tokens through the model), so find the balance your hardware sustains.
 
 **Fine-tune the instructions — please.** The default prompt is a generic
 security narrator; the field in Settings → AI is *yours*, and tailoring it to

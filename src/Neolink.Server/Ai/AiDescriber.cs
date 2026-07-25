@@ -71,9 +71,18 @@ public sealed class AiCapture
             _stop, TaskScheduler.Default);
     }
 
+    /// <summary>The first shots go back-to-back, as fast as the camera answers.
+    /// The subject that triggered the event is often FAST (a car passing takes
+    /// 2-3 seconds) and the pre-roll footage it appears in cannot be sampled
+    /// after the fact — snapshots only see the present. By the time the push has
+    /// arrived and the first snapshot answers, seconds are already gone; the
+    /// opening burst is the only chance to still catch a fast mover.</summary>
+    private const int BurstShots = 4;
+
     private async Task RunAsync()
     {
         int failures = 0;
+        int shots = 0;
         var interval = TimeSpan.FromSeconds(1); // doubles at every decimation
         try
         {
@@ -119,9 +128,11 @@ public sealed class AiCapture
                     Log.Debug($"{Camera}: AI frame capture miss: {Log.Flatten(ex)}");
                     if (++failures >= 3) break;
                 }
-                // Pace to the current interval; a slow snapshot yields fewer frames.
+                // Pace to the current interval; a slow snapshot yields fewer
+                // frames. The opening burst skips the pause entirely (see
+                // BurstShots) — decimation reconciles the budget later.
                 var spent = DateTime.UtcNow - t0;
-                if (spent < interval)
+                if (++shots >= BurstShots && spent < interval)
                 {
                     try { await Task.Delay(interval - spent, _stop.Token).ConfigureAwait(false); }
                     catch (OperationCanceledException) { break; }
@@ -136,10 +147,6 @@ public sealed class AiCapture
         }
     }
 
-    internal (int Count, long Bytes) Stats()
-    {
-        lock (Frames) return (Frames.Count, Frames.Sum(f => (long)f.Jpeg.Length));
-    }
 }
 
 /// <summary>
@@ -190,8 +197,7 @@ public sealed class AiDescriber
     {
         if (!WantsCapture(camera)) return null;
         var cfg = _store.Snapshot();
-        return new AiCapture(camera, control,
-            Math.Clamp(cfg.CaptureSeconds, 1, AiSettings.MaxCaptureSeconds), ct);
+        return new AiCapture(camera, control, Math.Max(1, cfg.CaptureSeconds), ct);
     }
 
     /// <summary>Event closed and saved: stop sampling and queue the description
@@ -251,8 +257,9 @@ public sealed class AiDescriber
 
         var cfg = _store.Snapshot();
         if (!cfg.Enabled || job.Capture.Discarded) return; // switched off since capture
-        var (count, bytes) = job.Capture.Stats();
-        if (count == 0)
+        List<(DateTime Utc, byte[] Jpeg)> frames;
+        lock (job.Capture.Frames) frames = job.Capture.Frames.ToList();
+        if (frames.Count == 0)
         {
             Log.Info($"{job.Capture.Camera}: AI describe skipped — no frames captured " +
                      "(camera answered no snapshots during the event)");
@@ -269,12 +276,15 @@ public sealed class AiDescriber
 
         var rec = job.Record;
         var modelName = cfg.UsesOllama ? cfg.OllamaModel : cfg.UsesAnthropic ? cfg.AnthropicModel : cfg.Model;
-        Log.Info($"{rec.Camera}: 🧠 describing event ({count} frame(s), {bytes / 1024} KB " +
+        // Coverage up front: "12 frames over 14s of the 15s event" answers the
+        // first question a puzzling description raises — what did the model see?
+        long bytes = frames.Sum(f => (long)f.Jpeg.Length);
+        int coveredSecs = (int)(frames[^1].Utc - frames[0].Utc).TotalSeconds;
+        int eventSecs = Math.Max(1, (int)(rec.EndUtc - rec.StartUtc).TotalSeconds);
+        Log.Info($"{rec.Camera}: 🧠 describing event ({frames.Count} frame(s) over " +
+                 $"{coveredSecs}s of the {eventSecs}s event, {bytes / 1024} KB " +
                  $"→ {url.GetLeftPart(UriPartial.Authority)}" +
                  $"{(string.IsNullOrWhiteSpace(modelName) ? "" : $", model {modelName}")})");
-
-        List<(DateTime Utc, byte[] Jpeg)> frames;
-        lock (job.Capture.Frames) frames = job.Capture.Frames.ToList();
         var userText = BuildUserText(rec, frames);
         var jpegs = frames.Select(f => f.Jpeg).ToList();
         var sw = Stopwatch.StartNew();

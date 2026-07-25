@@ -117,7 +117,7 @@
             <div class="update-banner">
                 <span class="update-banner-text">🎉 Neolink.NET @_latestVersion is available (you have @_version).</span>
                 <div class="sec-banner-actions">
-                    <a class="chip" href="@_repoUrl" target="_blank" rel="noopener">View release</a>
+                    <a class="chip" href="@($"{_repoUrl.TrimEnd('/')}/releases")" target="_blank" rel="noopener">View release</a>
                     <button class="icon-btn" title="Dismiss" @onclick="DismissUpdateAsync">✕</button>
                 </div>
             </div>
@@ -1955,15 +1955,12 @@
                                 <div class="campanel-subtitle">BEHAVIOR</div>
                                 <div class="control-row"><span>Frames per event (spread across it)</span>
                                     <input class="ret-input @(AiFramesInvalid ? "input-error" : "")"
-                                           type="number" min="1" max="@_ai.MaxCaptureSeconds"
-                                           title="Sampling starts at 1 frame/second and thins as the event runs, so the frames always span the whole event (max @_ai.MaxCaptureSeconds). More frames = better answers but bigger, slower requests."
+                                           type="number" min="1"
+                                           title="Sampling starts at 1 frame/second (opening shots back-to-back) and thins as the event runs, so the frames always span the whole event. No upper limit — an event can only yield about one frame per second of its length, so a big budget just means every frame is kept. More frames = better answers but bigger, slower requests."
                                            @bind="_ai.CaptureSeconds" @bind:event="oninput" /></div>
                                 @if (AiFramesInvalid)
                                 {
-                                    <div class="field-error">
-                                        Between 1 and @_ai.MaxCaptureSeconds frames — the ceiling keeps
-                                        one event's request payload within what vision models handle well.
-                                    </div>
+                                    <div class="field-error">At least 1 frame.</div>
                                 }
                                 <div class="control-row"><span>Skip model “thinking”</span>
                                     <button class="chip @(_ai.NoThink ? "" : "chip-off")"
@@ -2559,10 +2556,10 @@
         && string.IsNullOrWhiteSpace(_ai.OllamaModel);
     private bool AiAnthropicModelMissing => _ai is { Enabled: true, Provider: "anthropic" }
         && string.IsNullOrWhiteSpace(_ai.AnthropicModel);
-    // Out-of-range frame budgets used to be clamped silently on save — the field
-    // seemed to "just revert". Now the input goes red and save is disabled instead.
-    private bool AiFramesInvalid => _ai is { Enabled: true }
-        && (_ai.CaptureSeconds < 1 || _ai.CaptureSeconds > _ai.MaxCaptureSeconds);
+    // A bad frame budget used to be clamped silently on save — the field seemed
+    // to "just revert". Now the input goes red and save is disabled instead.
+    // No upper bound: the event's own length is the natural frame limit.
+    private bool AiFramesInvalid => _ai is { Enabled: true } && _ai.CaptureSeconds < 1;
     private bool AiHasErrors => AiEndpointInvalid || AiOllamaModelMissing || AiAnthropicModelMissing
         || AiFramesInvalid;
 
