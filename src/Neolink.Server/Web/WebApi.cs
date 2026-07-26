@@ -1825,48 +1825,47 @@ public static class WebApi
         // The camera's own service-port table (Baichuan msg 37). Queried LIVE on
         // every request — the answer is the camera's actual state right now,
         // never a stored value, which is the whole point of the PORTS tab.
+        // ADMIN ONLY, read included: the table is the camera's network surface.
+        static IEnumerable<object> ShapeServices(IReadOnlyList<ServicePortState> ports) =>
+            ports.Select(object (s) => new
+            {
+                service = s.Service,
+                port = s.Port,
+                enabled = s.Enabled,          // null = firmware exposes no toggle
+                canToggle = s.Enabled != null && s.Service != "server",
+            });
+
         app.MapGet("/api/cameras/{name}/services", (string name, HttpContext ctx) =>
-            ExecAsync(name, ctx, mutating: false, async (control, reqCt) =>
+            AdminOnly(ctx) is { } denied ? Task.FromResult(denied)
+            : ExecAsync(name, ctx, mutating: true, async (control, reqCt) =>
             {
                 var ports = await control.GetServicePortsAsync(reqCt);
                 if (ports == null)
                     return Results.Json(new { error = "the camera did not answer the service query " +
                         "(older firmware, or no Baichuan channel)" }, statusCode: 404);
-                return Results.Json(new
-                {
-                    services = ports.Select(s => new
-                    {
-                        service = s.Service,
-                        port = s.Port,
-                        enabled = s.Enabled,          // null = firmware exposes no toggle
-                        canEnable = s.Enabled == false && s.Service != "server",
-                    }),
-                });
+                return Results.Json(new { services = ShapeServices(ports) });
             }));
 
-        // Enables one service on the camera itself (msg 36, read-modify-write —
-        // what the app's Port Settings screen does). Explicit user action only;
-        // the Baichuan port is refused outright, and the reply carries the fresh
-        // table so the UI reflects what the camera now actually reports.
-        app.MapPost("/api/cameras/{name}/services/{service}/enable", (string name, string service, HttpContext ctx) =>
-            ExecAsync(name, ctx, mutating: true, async (control, reqCt) =>
+        // Turns one service on or off on the camera itself (msg 36,
+        // read-modify-write — what the app's Port Settings screen does). Explicit
+        // admin action only; the Baichuan port is refused outright, and the reply
+        // carries the fresh table so the UI reflects what the camera now reports.
+        app.MapPost("/api/cameras/{name}/services/{service}/{action}", (string name, string service, string action, HttpContext ctx) =>
+            AdminOnly(ctx) is { } denied ? Task.FromResult(denied)
+            : ExecAsync(name, ctx, mutating: true, async (control, reqCt) =>
             {
                 service = service.ToLowerInvariant();
                 if (service is not ("http" or "https" or "onvif" or "rtsp" or "rtmp"))
                     return Results.Json(new { error = "service must be http, https, onvif, rtsp or rtmp" },
                         statusCode: 400);
-                await control.EnableServicePortAsync(service, reqCt);
+                if (action is not ("enable" or "disable"))
+                    return Results.Json(new { error = "action must be enable or disable" }, statusCode: 400);
+                await control.SetServicePortEnabledAsync(service, action == "enable", reqCt);
                 var ports = await control.GetServicePortsAsync(reqCt);
                 return Results.Json(new
                 {
                     ok = true,
-                    services = ports?.Select(s => new
-                    {
-                        service = s.Service,
-                        port = s.Port,
-                        enabled = s.Enabled,
-                        canEnable = s.Enabled == false && s.Service != "server",
-                    }),
+                    services = ports == null ? null : ShapeServices(ports),
                 });
             }));
 

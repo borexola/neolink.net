@@ -910,6 +910,7 @@
                      Camera="_cameras.FirstOrDefault(c => c.Name == _panelCamera)"
                      User="@_user" Pass="@_pass" Token="@_authToken"
                      CanEditRecording="@(!_authEnabled || _authAdmin)"
+                     IsAdmin="@(!_authEnabled || _authAdmin)"
                      OnClose="() => _panelCamera = null" />
     }
 

@@ -9,13 +9,15 @@ in the README). Paste the matching section below into the GitHub release.
 ### Added
 
 - **PORTS tab: the camera's own service switches, live.** Each camera's
-  settings dialog gains a Ports tab showing what the camera itself reports —
-  Baichuan, HTTP, HTTPS, RTSP, RTMP, ONVIF, each with its port and on/off
-  state — queried from the camera on every visit (Baichuan msg 37), never a
-  saved value. A disabled service can be enabled right there (msg 36, the
-  same switch as the Reolink app's Port Settings screen) behind an explicit
-  confirm; the Baichuan port itself is off limits, and the result shown is
-  always a fresh re-read of what the camera now actually reports. On connect,
+  settings dialog gains a Ports tab (admins only — in the UI and at the API)
+  showing what the camera itself reports — Baichuan, HTTP, HTTPS, RTSP, RTMP,
+  ONVIF, each with its port and on/off state — queried from the camera on
+  every visit (Baichuan msg 37), never a saved value. Services can be enabled
+  AND disabled right there (msg 36, the same switch as the Reolink app's Port
+  Settings screen), each behind an explicit confirm that names what stops
+  working; the Baichuan port (9000) can never be touched — it carries the
+  very connection — and the result shown is always a fresh re-read of what
+  the camera now actually reports. On connect,
   Neolink also audits the table once and says when a disabled service limits
   what it can do for that camera — HTTP off means no picture settings, no
   scaled AI snapshots (dual-lens models then answer the fallback snap with
@@ -71,6 +73,22 @@ in the README). Paste the matching section below into the GitHub release.
   - **The default instruction no longer claims frames are "one second apart"** —
     sampling has spread frames across the whole event since the budget system
     landed, and the stated per-frame time offsets now agree with the prompt.
+  - **Grounded narration.** Seen live: a person who walked away and never
+    returned was described as "turning to walk back toward the house" — the
+    model completing a familiar story rather than reading the frames. Each
+    image now travels with its own inline label ("Frame 3 of 12 — +4s into
+    the event:") right before it, so its timing cannot detach from the
+    picture (on Ollama's flat-array API the labels join the text as a
+    numbered list instead), and firm grounding rules ride every event
+    request: state movement only when consecutive frames show it, say "left
+    the view" instead of inventing a return, and trust the camera's own
+    burned-in timestamp when one is visible.
+  - **Very long events are described in parts.** Past 100 frames (a
+    half-hour clip at a fixed rate) the frames go to the model in ordered
+    windows of up to 100, each told what the previous part already saw so
+    the narration continues instead of restarting; the answers append to
+    the same event and the threat level is the most severe any part
+    reported. A later part failing keeps what the earlier parts said.
   - **The frame budget's ceiling (20) is gone.** Set as many frames as you
     like: an event can only ever yield about one frame per second of its
     length, so a big budget simply means every captured frame is sent with

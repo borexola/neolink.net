@@ -169,9 +169,13 @@
                     }
                 </button>
                 @* Live view of the camera's own service ports (msg 37) — always
-                   read from the camera when opened, never a stored value. *@
-                <button class="settings-tab @(_camTab == "ports" ? "active" : "")" role="tab"
-                        @onclick="OpenPortsTabAsync">@UiIcon.Render("lan", 13) Ports</button>
+                   read from the camera when opened, never a stored value.
+                   ADMIN ONLY: the table is the camera's network surface. *@
+                @if (IsAdmin)
+                {
+                    <button class="settings-tab @(_camTab == "ports" ? "active" : "")" role="tab"
+                            @onclick="OpenPortsTabAsync">@UiIcon.Render("lan", 13) Ports</button>
+                }
             }
         </div>
 
@@ -191,9 +195,10 @@
         }
 
         @* PORTS: the camera's own service table, queried live on every visit.
-           Enabling is an explicit two-step (confirm card) — it flips the same
-           switch as the Reolink app's Port Settings screen. *@
-        @if (_camTab == "ports")
+           Toggling is an explicit two-step (confirm card) — it flips the same
+           switch as the Reolink app's Port Settings screen. Admin-gated here
+           AND at the API; the Baichuan port is never toggleable anywhere. *@
+        @if (_camTab == "ports" && IsAdmin)
         {
         <div class="campanel-col">
             <div class="campanel-section">
@@ -220,33 +225,41 @@
                             <span title="@ServiceHint(p.Service)">@ServiceLabel(p.Service)@(p.Port is { } port ? $" · port {port}" : "")</span>
                             @if (p.Service == "server")
                             {
-                                <span class="chip" title="The Baichuan channel this very connection runs on — Neolink never touches it.">on — this connection</span>
-                            }
-                            else if (p.Enabled == true)
-                            {
-                                <span class="chip">enabled</span>
+                                @* Port 9000 is the branch this whole app sits on:
+                                   never a toggle, in the UI or anywhere below it. *@
+                                <span class="chip" title="The Baichuan channel this very connection runs on — it can never be disabled from here.">on — this connection</span>
                             }
                             else if (p.Enabled == null)
                             {
                                 <span class="chip" title="The firmware reports no on/off switch for this service.">fixed on</span>
                             }
-                            else if (_enablingService == p.Service)
+                            else if (_togglingService == p.Service)
                             {
-                                <span class="btn-spinner" title="Enabling…"></span>
+                                <span class="btn-spinner" title="Applying…"></span>
                             }
-                            else if (_confirmEnableService != p.Service)
+                            else if (p.Enabled == true)
                             {
-                                <button class="chip chip-off" @onclick="() => _confirmEnableService = p.Service">disabled — enable…</button>
+                                <span class="chip">enabled</span>
+                                @if (_confirmService != p.Service)
+                                {
+                                    <button class="chip" @onclick="() => { _confirmService = p.Service; _confirmOn = false; }">disable…</button>
+                                }
+                            }
+                            else if (_confirmService != p.Service)
+                            {
+                                <button class="chip chip-off" @onclick="() => { _confirmService = p.Service; _confirmOn = true; }">disabled — enable…</button>
                             }
                         </div>
-                        @if (_confirmEnableService == p.Service && _enablingService == null)
+                        @if (_confirmService == p.Service && _togglingService == null)
                         {
-                            <div class="notice small">This changes the camera's own network settings —
-                                the same switch as the Reolink app's Port Settings screen. The service
-                                opens on your LAN and stays on until turned off again in the app.</div>
+                            <div class="notice small">
+                                @(_confirmOn
+                                    ? "This changes the camera's own network settings — the same switch as the Reolink app's Port Settings screen. The service opens on your LAN and stays on until turned off again."
+                                    : $"This turns {ServiceLabel(p.Service)} off on the camera itself — the same switch as the Reolink app's Port Settings screen.{DisableConsequence(p.Service)} It stays off until re-enabled.")
+                            </div>
                             <div class="row-actions">
-                                <button class="chip chip-danger" @onclick="() => EnableServiceAsync(p.Service)">Confirm — enable @ServiceLabel(p.Service)</button>
-                                <button class="chip" @onclick="() => _confirmEnableService = null">Cancel</button>
+                                <button class="chip chip-danger" @onclick="() => ToggleServiceAsync(p.Service, _confirmOn)">Confirm — @(_confirmOn ? "enable" : "disable") @ServiceLabel(p.Service)</button>
+                                <button class="chip" @onclick="() => _confirmService = null">Cancel</button>
                             </div>
                         }
                     }
@@ -1204,6 +1217,11 @@
     /// <summary>Recording settings persist server-side, so only admins may change
     /// them once accounts exist (mirrors the API's gate); false renders them read-only.</summary>
     [Parameter] public bool CanEditRecording { get; set; } = true;
+
+    /// <summary>Whether the signed-in user is an admin (or auth is off). Gates the
+    /// Ports tab — the camera's network surface is admin territory; the API
+    /// enforces the same rule server-side.</summary>
+    [Parameter] public bool IsAdmin { get; set; }
     [Parameter] public EventCallback OnClose { get; set; }
 
     private ApiCapabilities? _caps;
@@ -1263,14 +1281,25 @@
         public string Service { get; set; } = "";
         public int? Port { get; set; }
         public bool? Enabled { get; set; }   // null = firmware exposes no toggle
-        public bool CanEnable { get; set; }
+        public bool CanToggle { get; set; }
     }
     private sealed class ApiServicesReply { public List<ApiServicePort>? Services { get; set; } }
     private List<ApiServicePort>? _ports;
     private bool _portsLoading;
     private string? _portsError;
-    private string? _confirmEnableService;
-    private string? _enablingService;
+    private string? _confirmService;  // confirm card open for this service…
+    private bool _confirmOn;          // …asking to enable (true) or disable (false)
+    private string? _togglingService;
+
+    /// <summary>What breaks when this service goes off — shown in the disable
+    /// confirm card so the choice is made with open eyes.</summary>
+    private static string DisableConsequence(string service) => service switch
+    {
+        "http" or "https" => " Neolink.NET loses picture settings, scaled snapshots (small AI frames) and firmware checks over it.",
+        "onvif" => " Neolink.NET loses the ONVIF imaging fallback for HTTP-less models.",
+        "rtsp" => " Anything streaming RTSP directly from the camera stops (Neolink.NET itself is unaffected).",
+        _ => "",
+    };
 
     private static string ServiceLabel(string service) => service switch
     {
@@ -1307,7 +1336,7 @@
     {
         _portsLoading = true;
         _portsError = null;
-        _confirmEnableService = null;
+        _confirmService = null;
         StateHasChanged();
         try
         {
@@ -1339,19 +1368,19 @@
         }
     }
 
-    private async Task EnableServiceAsync(string service)
+    private async Task ToggleServiceAsync(string service, bool on)
     {
-        _confirmEnableService = null;
-        _enablingService = service;
+        _confirmService = null;
+        _togglingService = service;
         StateHasChanged();
         try
         {
-            if (await PostAsync($"services/{Uri.EscapeDataString(service)}/enable", new { }))
-                ShowToast($"{ServiceLabel(service)} enabled on the camera.");
+            if (await PostAsync($"services/{Uri.EscapeDataString(service)}/{(on ? "enable" : "disable")}", new { }))
+                ShowToast($"{ServiceLabel(service)} {(on ? "enabled" : "disabled")} on the camera.");
         }
         finally
         {
-            _enablingService = null;
+            _togglingService = null;
         }
         await LoadPortsAsync(); // success or not, show what the camera NOW reports
     }

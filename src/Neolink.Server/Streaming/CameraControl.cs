@@ -206,11 +206,12 @@ public interface ICameraControl
     Task<IReadOnlyList<ServicePortState>?> GetServicePortsAsync(CancellationToken ct)
         => Task.FromResult<IReadOnlyList<ServicePortState>?>(null);
 
-    /// <summary>Enables one camera-side service ("http", "https", "onvif", "rtsp",
-    /// "rtmp") via Baichuan msg 36 — the same read-modify-write the Reolink app's
-    /// Port Settings screen performs. Never touches the Baichuan server port
-    /// itself (that would saw off the branch this command arrives on).</summary>
-    Task EnableServicePortAsync(string service, CancellationToken ct)
+    /// <summary>Turns one camera-side service ("http", "https", "onvif", "rtsp",
+    /// "rtmp") on or off via Baichuan msg 36 — the same read-modify-write the
+    /// Reolink app's Port Settings screen performs. NEVER touches the Baichuan
+    /// server port itself (port 9000 carries this very connection); that request
+    /// is refused no matter who asks.</summary>
+    Task SetServicePortEnabledAsync(string service, bool on, CancellationToken ct)
         => Task.FromException(new NotSupportedException("this camera has no Baichuan channel"));
 
     /// <summary>Raw &lt;PtzZoomFocus&gt; XML (zoom/focus positions + ranges), or null if unsupported.</summary>
@@ -646,12 +647,16 @@ public sealed class CameraControl : ICameraControl
         return list;
     }
 
-    public Task EnableServicePortAsync(string service, CancellationToken ct) =>
+    public Task SetServicePortEnabledAsync(string service, bool on, CancellationToken ct) =>
         WithCameraAsync<object?>(async camera =>
         {
+            // NON-NEGOTIABLE: the Baichuan port (9000) carries this very
+            // connection — it is never enabled, disabled or changed from here,
+            // regardless of what any caller asks for.
             if (service.Equals("server", StringComparison.OrdinalIgnoreCase))
                 throw new NotSupportedException(
                     "refusing to touch the Baichuan port — it carries this very connection");
+            string verb = on ? "enabl" : "disabl";
             var els = await camera.GetServicePortsAsync(ct: ct).ConfigureAwait(false)
                 ?? throw new NotSupportedException($"{CameraName} did not answer the service-port query");
             var el = els.FirstOrDefault(e =>
@@ -660,26 +665,29 @@ public sealed class CameraControl : ICameraControl
             var enable = el.Element("enable")
                 ?? throw new NotSupportedException(
                     $"{CameraName}'s firmware does not allow toggling {service}");
-            if (enable.Value == "1") return null; // already on — nothing to write
-            Log.Info($"{CameraName}: enabling the {service} service on the camera " +
-                     "(user request — the same switch as the app's Port Settings)");
-            enable.Value = "1";
+            string want = on ? "1" : "0";
+            if (enable.Value == want) return null; // already there — nothing to write
+            Log.Info($"{CameraName}: {verb}ing the {service} service on the camera " +
+                     "(admin request — the same switch as the app's Port Settings)");
+            enable.Value = want;
             await camera.SetServicePortAsync(el, ct).ConfigureAwait(false);
             // Some firmwares accept the set silently — the re-read is the truth,
             // and it keeps the UI honest about the camera's ACTUAL state.
             var after = await camera.GetServicePortsAsync(ct: ct).ConfigureAwait(false);
             var check = after?.FirstOrDefault(e =>
                 e.Name.LocalName.Equals(service + "Port", StringComparison.OrdinalIgnoreCase));
-            if (check?.Element("enable")?.Value != "1")
+            if (check?.Element("enable")?.Value != want)
             {
-                Log.Warn($"{CameraName}: the {service} enable was sent but the camera still " +
-                         "reports it disabled — firmware may not accept msg 36 from third-party " +
-                         "clients; use the Reolink app's Port Settings screen instead");
+                Log.Warn($"{CameraName}: the {service} {verb}e was sent but the camera still " +
+                         $"reports it {(on ? "disabled" : "enabled")} — firmware may not accept " +
+                         "msg 36 from third-party clients; use the Reolink app's Port Settings " +
+                         "screen instead");
                 throw new InvalidOperationException(
-                    $"{CameraName} did not accept enabling {service} (it still reads disabled)");
+                    $"{CameraName} did not accept {verb}ing {service} " +
+                    $"(it still reads {(on ? "disabled" : "enabled")})");
             }
             var state = MapServicePorts(new[] { check }).FirstOrDefault();
-            Log.Info($"{CameraName}: {service} service ENABLED on the camera" +
+            Log.Info($"{CameraName}: {service} service {(on ? "ENABLED" : "DISABLED")} on the camera" +
                      $"{(state?.Port is { } port ? $" (port {port})" : "")}");
             return null;
         }, ct);
