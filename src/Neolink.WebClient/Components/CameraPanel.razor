@@ -227,27 +227,25 @@
                             {
                                 @* Port 9000 is the branch this whole app sits on:
                                    never a toggle, in the UI or anywhere below it. *@
-                                <span class="chip" title="The Baichuan channel this very connection runs on — it can never be disabled from here.">on — this connection</span>
+                                <button class="chip" disabled
+                                        title="The Baichuan channel this very connection runs on — it can never be disabled from here.">on</button>
                             }
                             else if (p.Enabled == null)
                             {
-                                <span class="chip" title="The firmware reports no on/off switch for this service.">fixed on</span>
+                                <button class="chip" disabled
+                                        title="The firmware reports no on/off switch for this service.">on</button>
                             }
                             else if (_togglingService == p.Service)
                             {
                                 <span class="btn-spinner" title="Applying…"></span>
                             }
-                            else if (p.Enabled == true)
+                            else
                             {
-                                <span class="chip">enabled</span>
-                                @if (_confirmService != p.Service)
-                                {
-                                    <button class="chip" @onclick="() => { _confirmService = p.Service; _confirmOn = false; }">disable…</button>
-                                }
-                            }
-                            else if (_confirmService != p.Service)
-                            {
-                                <button class="chip chip-off" @onclick="() => { _confirmService = p.Service; _confirmOn = true; }">disabled — enable…</button>
+                                @* The same on/off toggle chip as every other row —
+                                   clicking opens the confirm card below the row. *@
+                                <button class="chip @(p.Enabled == true ? "" : "chip-off")"
+                                        @onclick="() => { _confirmService = p.Service; _confirmOn = p.Enabled != true; }">
+                                    @(p.Enabled == true ? "on" : "off")</button>
                             }
                         </div>
                         @if (_confirmService == p.Service && _togglingService == null)
