@@ -225,7 +225,8 @@ public static class WebApi
         string? Endpoint, string? Model, string? ApiKey,
         string? OllamaEndpoint, string? OllamaModel,
         string? AnthropicEndpoint, string? AnthropicModel, string? AnthropicApiKey,
-        string? Prompt, bool? NoThink, int? CaptureSeconds, int? TimeoutSeconds);
+        string? Prompt, bool? NoThink, int? CaptureSeconds, int? TimeoutSeconds,
+        string? SampleMode = null, int? SampleEverySeconds = null, bool? KeepFrames = null);
     private sealed record CredentialsRequest(string? Username, string? Password);
 
     /// <summary>
@@ -1133,6 +1134,9 @@ public static class WebApi
                     prompt = s.Prompt,
                     defaultPrompt = Neolink.Ai.AiSettings.DefaultPrompt,
                     noThink = s.NoThink,
+                    sampleMode = s.SampleMode,
+                    sampleEverySeconds = s.SampleEverySeconds,
+                    keepFrames = s.KeepFrames,
                     captureSeconds = s.CaptureSeconds,
                     timeoutSeconds = s.TimeoutSeconds,
                 };
@@ -1158,6 +1162,10 @@ public static class WebApi
                     AnthropicModel = (req.AnthropicModel ?? cur.AnthropicModel).Trim(),
                     Prompt = req.Prompt ?? cur.Prompt,
                     NoThink = req.NoThink ?? cur.NoThink,
+                    SampleMode = (req.SampleMode ?? cur.SampleMode).ToLowerInvariant() == "interval"
+                        ? "interval" : "budget",
+                    SampleEverySeconds = Math.Clamp(req.SampleEverySeconds ?? cur.SampleEverySeconds, 1, 600),
+                    KeepFrames = req.KeepFrames ?? cur.KeepFrames,
                     CaptureSeconds = Math.Max(1, req.CaptureSeconds ?? cur.CaptureSeconds),
                     TimeoutSeconds = Math.Clamp(req.TimeoutSeconds ?? cur.TimeoutSeconds, 5, 600),
                 };

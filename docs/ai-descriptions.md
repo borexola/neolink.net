@@ -99,12 +99,32 @@ attach to recorded events.
 **More frames = a better story.** The model can only describe what it sees:
 with 3 frames it sees three disconnected moments, with 10–15 it sees a
 sequence — direction of movement, what changed, what the subject did. The
-**Frames per event** setting (Settings → AI) is the budget that gets spread
-across the event, and it has **no upper limit** — an event can only ever
-yield about one frame per second of its length, so a budget larger than that
-simply means *every* captured frame is kept and sent, none thinned away. Raise it if descriptions feel like guesses; the
-cost is a bigger payload and a slower answer per event (each frame is extra
-tokens through the model), so find the balance your hardware sustains.
+**Frame sampling** setting (Settings → AI) offers two ways to control this:
+
+- **Frame budget per event** (the default): you set the total number of
+  frames and they spread across the event however long it runs — a
+  predictable payload per event. **No upper limit** — an event can only ever
+  yield about one frame per second of its length, so a budget larger than
+  that simply means *every* captured frame is kept and sent, none thinned
+  away.
+- **Fixed rate**: you set a rhythm — one frame every N seconds — and it
+  holds for the whole event, so longer events send more frames and detail
+  scales with duration. `1` is maximum detail; `5–10` suits long, slow
+  scenes. (Runaway protection: past 600 frames the set thins like budget
+  mode — at one frame per second that takes a 10-minute event.)
+
+Either way the event's first five seconds are sampled every second. Raise
+the numbers if descriptions feel like guesses; the cost is a bigger payload
+and a slower answer per event (each frame is extra tokens through the
+model), so find the balance your hardware sustains.
+
+**Review what the model saw.** Turn on **Keep sent frames on disk** and the
+exact JPEGs sent with each event are stored in the event's folder
+(`ai-frames/`, one file per frame with its time offset in the name), right
+next to the clip. They are plain, unencrypted files *by design* — they exist
+to be opened — even when footage encryption is on, and they are deleted
+together with the event. When a description surprises you, this folder is
+the answer to "what did it actually see?".
 
 **Fine-tune the instructions — please.** The default prompt is a generic
 security narrator; the field in Settings → AI is *yours*, and tailoring it to

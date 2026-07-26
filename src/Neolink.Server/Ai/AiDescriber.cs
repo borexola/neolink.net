@@ -31,19 +31,29 @@ public sealed class AiCapture
 {
     private readonly ICameraControl _control;
     private readonly int _budget;
+    private readonly TimeSpan _startInterval;
     private readonly CancellationTokenSource _stop;
     private volatile bool _discarded;
     private int _disposeArmed;
+
+    /// <summary>Fixed-rate mode's frame ceiling — a memory/payload safety valve,
+    /// not a target. At one frame per second it takes a 10-minute event to hit;
+    /// past it the same thin-and-double machinery as budget mode takes over, so
+    /// even a pathological event stays bounded and still spans end to end.</summary>
+    internal const int IntervalSafetyBudget = 600;
 
     internal string Camera { get; }
     internal List<(DateTime Utc, byte[] Jpeg)> Frames { get; } = new();
     internal Task Completion { get; }
 
-    internal AiCapture(string camera, ICameraControl control, int budget, CancellationToken ct)
+    internal AiCapture(string camera, ICameraControl control, int budget,
+        TimeSpan startInterval, CancellationToken ct)
     {
         Camera = camera;
         _control = control;
         _budget = Math.Max(2, budget); // decimation needs headroom to halve
+        _startInterval = startInterval < TimeSpan.FromSeconds(1)
+            ? TimeSpan.FromSeconds(1) : startInterval;
         _stop = CancellationTokenSource.CreateLinkedTokenSource(ct);
         Completion = Task.Run(RunAsync, CancellationToken.None);
     }
@@ -89,7 +99,7 @@ public sealed class AiCapture
         int failures = 0; // consecutive misses; any good frame resets
         int locked = 0;   // opening-window frames, exempt from decimation
         var launched = DateTime.UtcNow;
-        var interval = TimeSpan.FromSeconds(1); // doubles at every decimation
+        var interval = _startInterval; // doubles at every decimation
         // The spread phase keeps at least two budget slots — decimation needs
         // headroom to halve (the Math.Max(2, budget) floor, same reason).
         int maxLocked = Math.Clamp(_budget - 2, 0, OpeningSeconds);
@@ -254,7 +264,15 @@ public sealed class AiDescriber
     {
         if (!WantsCapture(camera)) return null;
         var cfg = _store.Snapshot();
-        return new AiCapture(camera, control, Math.Max(1, cfg.CaptureSeconds), ct);
+        // Fixed-rate mode is the same machine with a different starting gait:
+        // the chosen interval instead of 1s, and a roomy safety ceiling instead
+        // of a user budget — the rate holds until an absurdly long event forces
+        // the same thin-and-double valve budget mode lives by.
+        return cfg.UsesInterval
+            ? new AiCapture(camera, control, AiCapture.IntervalSafetyBudget,
+                TimeSpan.FromSeconds(Math.Clamp(cfg.SampleEverySeconds, 1, 600)), ct)
+            : new AiCapture(camera, control, Math.Max(1, cfg.CaptureSeconds),
+                TimeSpan.FromSeconds(1), ct);
     }
 
     /// <summary>Event closed and saved: stop sampling and queue the description
@@ -345,6 +363,8 @@ public sealed class AiDescriber
                  $"{coveredSecs}s of the {eventSecs}s event, {bytes / 1024} KB " +
                  $"→ {url.GetLeftPart(UriPartial.Authority)}" +
                  $"{(string.IsNullOrWhiteSpace(modelName) ? "" : $", model {modelName}")})");
+        if (cfg.KeepFrames)
+            await KeepFramesAsync(rec, frames, ct).ConfigureAwait(false); // before the call: reviewable even if the model fails
         var userText = BuildUserText(rec, frames);
         var jpegs = frames.Select(f => f.Jpeg).ToList();
         var sw = Stopwatch.StartNew();
@@ -391,6 +411,34 @@ public sealed class AiDescriber
                  $"{(level == null ? "" : $" [{level.ToUpperInvariant()}]")}" +
                  $"{(usage == null ? "" : $" ({usage} tokens)")}: \"{text ?? "(no description)"}\"");
         Described?.Invoke(rec);
+    }
+
+    /// <summary>Stores the exact JPEGs going to the model in the event's folder
+    /// (ai-frames/, one file per frame with its time offset in the name) so a
+    /// puzzling description can be checked against what the model saw. PLAIN
+    /// files on purpose — they exist to be opened, so the footage vault is
+    /// deliberately not used (the clip beside them stays encrypted when the
+    /// vault is on). They are deleted together with the event.</summary>
+    private async Task KeepFramesAsync(EventRecord rec,
+        IReadOnlyList<(DateTime Utc, byte[] Jpeg)> frames, CancellationToken ct)
+    {
+        try
+        {
+            var dir = Path.Combine(_events.EventDir(rec), "ai-frames");
+            Directory.CreateDirectory(dir);
+            for (int i = 0; i < frames.Count; i++)
+            {
+                int off = Math.Max(0, (int)(frames[i].Utc - rec.StartUtc).TotalSeconds);
+                await File.WriteAllBytesAsync(Path.Combine(dir, $"{i + 1:000}-{off}s.jpg"),
+                    frames[i].Jpeg, ct).ConfigureAwait(false);
+            }
+            Log.Info($"{rec.Camera}: kept the {frames.Count} frame(s) sent to the model in {dir}");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Review copies are best-effort; the description must still happen.
+            Log.Debug($"{rec.Camera}: could not keep the AI frames: {Log.Flatten(ex)}");
+        }
     }
 
     /// <summary>

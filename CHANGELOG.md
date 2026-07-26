@@ -26,6 +26,19 @@ in the README). Paste the matching section below into the GitHub release.
   red) next to the camera filter cuts the list down to just the flagged events.
   It only appears once described events actually exist, so setups without AI
   descriptions see nothing new.
+- **Fixed-rate AI frame sampling.** A second way to feed the model, alongside
+  the frame budget: pick a rhythm — one frame every N seconds — and it holds
+  for the whole event, so longer events send more frames and detail scales
+  with duration (1 = a frame every second, 5–10 for long slow scenes). The
+  budget mode stays the default; both keep the event's first five seconds at
+  one frame per second, and a 600-frame safety valve keeps a pathological
+  event from swallowing memory.
+- **Keep sent AI frames on disk.** An opt-in switch (Settings → AI) that
+  stores the exact JPEGs sent to the model in the event's folder
+  (`ai-frames/`, each named with its time offset) so "what did it actually
+  see?" has an answer you can open. Plain unencrypted files by design, even
+  when footage encryption is on; they are written before the model call (so
+  a failed description still leaves its evidence) and deleted with the event.
 
 ### Changed
 

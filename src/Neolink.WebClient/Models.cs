@@ -273,6 +273,11 @@ public sealed class ApiAiSettings
     public string Prompt { get; set; } = "";
     public string DefaultPrompt { get; set; } = "";
     public bool NoThink { get; set; } = true;
+    /// <summary>"budget" (frames per event) or "interval" (one frame every N seconds).</summary>
+    public string SampleMode { get; set; } = "budget";
+    public int SampleEverySeconds { get; set; } = 2;
+    /// <summary>Save the JPEGs sent to the model into the event folder for review.</summary>
+    public bool KeepFrames { get; set; }
     public int CaptureSeconds { get; set; } = 10;
     public int TimeoutSeconds { get; set; } = 120;
 }

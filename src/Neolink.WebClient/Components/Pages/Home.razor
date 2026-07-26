@@ -1953,15 +1953,40 @@
                                 }
                                 <div class="campanel-divider"></div>
                                 <div class="campanel-subtitle">BEHAVIOR</div>
-                                <div class="control-row"><span>Frames per event (spread across it)</span>
-                                    <input class="ret-input @(AiFramesInvalid ? "input-error" : "")"
-                                           type="number" min="1"
-                                           title="Sampling runs at 1 frame/second. The event's first 5 seconds are kept at full density; only later frames thin as the event runs, so the set is the dense opening plus frames spanning the rest. No upper limit — an event can only yield about one frame per second of its length, so a big budget just means every frame is kept. More frames = better answers but bigger, slower requests."
-                                           @bind="_ai.CaptureSeconds" @bind:event="oninput" /></div>
-                                @if (AiFramesInvalid)
+                                <div class="control-row"><span>Frame sampling</span>
+                                    <select class="event-filter" @bind="_ai.SampleMode"
+                                            title="Budget: you set the total number of frames per event and they spread across it, however long it runs — a predictable payload. Fixed rate: you set a rhythm (one frame every N seconds) that holds for the whole event, so longer events send more frames — detail scales with duration. Both keep the event's first 5 seconds at one frame per second.">
+                                        <option value="budget">frame budget per event</option>
+                                        <option value="interval">fixed rate</option>
+                                    </select></div>
+                                @if (_ai.SampleMode == "interval")
                                 {
-                                    <div class="field-error">At least 1 frame.</div>
+                                    <div class="control-row"><span>One frame every … seconds</span>
+                                        <input class="ret-input @(AiIntervalInvalid ? "input-error" : "")"
+                                               type="number" min="1" max="600"
+                                               title="The rhythm holds for the whole event: 1 = a frame every second (maximum detail), 5–10 suits long, slow scenes. The first 5 seconds are always sampled every second regardless. Runaway protection: past 600 frames the set thins to stay bounded — at one frame per second that takes a 10-minute event."
+                                               @bind="_ai.SampleEverySeconds" @bind:event="oninput" /></div>
+                                    @if (AiIntervalInvalid)
+                                    {
+                                        <div class="field-error">Between 1 and 600 seconds.</div>
+                                    }
                                 }
+                                else
+                                {
+                                    <div class="control-row"><span>Frames per event (spread across it)</span>
+                                        <input class="ret-input @(AiFramesInvalid ? "input-error" : "")"
+                                               type="number" min="1"
+                                               title="Sampling runs at 1 frame/second. The event's first 5 seconds are kept at full density; only later frames thin as the event runs, so the set is the dense opening plus frames spanning the rest. No upper limit — an event can only yield about one frame per second of its length, so a big budget just means every frame is kept. More frames = better answers but bigger, slower requests."
+                                               @bind="_ai.CaptureSeconds" @bind:event="oninput" /></div>
+                                    @if (AiFramesInvalid)
+                                    {
+                                        <div class="field-error">At least 1 frame.</div>
+                                    }
+                                }
+                                <div class="control-row"><span>Keep sent frames on disk</span>
+                                    <button class="chip @(_ai.KeepFrames ? "" : "chip-off")"
+                                            title="Saves the exact JPEGs sent to the model into the event's folder (ai-frames/) so you can review what the model actually saw. Plain, unencrypted files — deliberately, so they open anywhere — even when footage encryption is on; they are deleted together with the event."
+                                            @onclick="() => _ai.KeepFrames = !_ai.KeepFrames">@(_ai.KeepFrames ? "on" : "off")</button></div>
                                 <div class="control-row"><span>Skip model “thinking”</span>
                                     <button class="chip @(_ai.NoThink ? "" : "chip-off")"
                                             title="Asks reasoning models to answer directly (the /no_think convention) — much faster on local hardware. Think-blocks are stripped from answers either way."
@@ -2559,9 +2584,12 @@
     // A bad frame budget used to be clamped silently on save — the field seemed
     // to "just revert". Now the input goes red and save is disabled instead.
     // No upper bound: the event's own length is the natural frame limit.
-    private bool AiFramesInvalid => _ai is { Enabled: true } && _ai.CaptureSeconds < 1;
+    private bool AiFramesInvalid => _ai is { Enabled: true } && _ai.SampleMode != "interval"
+        && _ai.CaptureSeconds < 1;
+    private bool AiIntervalInvalid => _ai is { Enabled: true, SampleMode: "interval" }
+        && _ai.SampleEverySeconds is < 1 or > 600;
     private bool AiHasErrors => AiEndpointInvalid || AiOllamaModelMissing || AiAnthropicModelMissing
-        || AiFramesInvalid;
+        || AiFramesInvalid || AiIntervalInvalid;
 
     private object AiBody() => new
     {
@@ -2578,6 +2606,9 @@
         anthropicApiKey = string.IsNullOrEmpty(_aiAnthropicKey) ? null : _aiAnthropicKey,
         prompt = _ai.Prompt,
         noThink = _ai.NoThink,
+        sampleMode = _ai.SampleMode,
+        sampleEverySeconds = _ai.SampleEverySeconds,
+        keepFrames = _ai.KeepFrames,
         captureSeconds = _ai.CaptureSeconds,
         timeoutSeconds = _ai.TimeoutSeconds,
     };
