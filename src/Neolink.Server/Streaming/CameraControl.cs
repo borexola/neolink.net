@@ -28,6 +28,12 @@ public sealed record WhiteLedState(int Bright, bool On, int Mode);
 /// <summary>One stream's current encode selection (Baichuan stream naming).</summary>
 public sealed record StreamEncSetting(string Stream, uint Width, uint Height, uint Framerate, uint Bitrate);
 
+/// <summary>One camera-side service from the live port table (Baichuan msg 37).
+/// Service is "server" (Baichuan itself), "http", "https", "rtsp", "rtmp" or
+/// "onvif"; Enabled is null when the firmware reports no enable flag for it
+/// (it cannot be toggled — typically it is simply always on).</summary>
+public sealed record ServicePortState(string Service, int? Port, bool? Enabled);
+
 /// <summary>Picture settings read over the HTTP API. The five adjustments are
 /// 0-255 (128 = neutral); a null field means the camera doesn't report it.
 /// DayNight is "Auto"|"Color"|"Black&amp;White", AntiFlicker one of
@@ -191,6 +197,21 @@ public interface ICameraControl
     Task SetPirEnabledAsync(bool enabled, CancellationToken ct);
     Task PtzAsync(string command, float speed, CancellationToken ct);
     Task RebootAsync(CancellationToken ct);
+
+    /// <summary>The camera's own service-port table — Baichuan, HTTP, HTTPS, RTSP,
+    /// RTMP, ONVIF — asked of the camera LIVE (Baichuan msg 37) on every call.
+    /// Deliberately never cached: the UI shows the camera's actual state, not a
+    /// remembered one. Null when the camera has no Baichuan channel (generic
+    /// RTSP) or doesn't answer the query.</summary>
+    Task<IReadOnlyList<ServicePortState>?> GetServicePortsAsync(CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<ServicePortState>?>(null);
+
+    /// <summary>Enables one camera-side service ("http", "https", "onvif", "rtsp",
+    /// "rtmp") via Baichuan msg 36 — the same read-modify-write the Reolink app's
+    /// Port Settings screen performs. Never touches the Baichuan server port
+    /// itself (that would saw off the branch this command arrives on).</summary>
+    Task EnableServicePortAsync(string service, CancellationToken ct)
+        => Task.FromException(new NotSupportedException("this camera has no Baichuan channel"));
 
     /// <summary>Raw &lt;PtzZoomFocus&gt; XML (zoom/focus positions + ranges), or null if unsupported.</summary>
     Task<XElement?> GetZoomFocusAsync(CancellationToken ct);
@@ -598,6 +619,70 @@ public sealed class CameraControl : ICameraControl
 
     public Task<XElement?> GetBatteryInfoAsync(CancellationToken ct) =>
         WithCameraAsync(camera => camera.GetBatteryInfoAsync(ct: ct), ct);
+
+    public Task<IReadOnlyList<ServicePortState>?> GetServicePortsAsync(CancellationToken ct) =>
+        WithCameraAsync<IReadOnlyList<ServicePortState>?>(async camera =>
+        {
+            var els = await camera.GetServicePortsAsync(ct: ct).ConfigureAwait(false);
+            return els == null ? null : MapServicePorts(els);
+        }, ct);
+
+    /// <summary>Raw msg-37 elements → states. "HttpPort" carries its number in a
+    /// camelCase child of the same name ("httpPort") plus an optional "enable".</summary>
+    internal static List<ServicePortState> MapServicePorts(IEnumerable<XElement> elements)
+    {
+        var list = new List<ServicePortState>();
+        foreach (var el in elements)
+        {
+            var name = el.Name.LocalName;
+            if (!name.EndsWith("Port", StringComparison.Ordinal)) continue;
+            var portEl = el.Elements().FirstOrDefault(c =>
+                c.Name.LocalName.Equals(name, StringComparison.OrdinalIgnoreCase));
+            list.Add(new ServicePortState(
+                name[..^4].ToLowerInvariant(),
+                int.TryParse(portEl?.Value, out var p) ? p : null,
+                el.Element("enable")?.Value switch { "1" => true, "0" => false, _ => null }));
+        }
+        return list;
+    }
+
+    public Task EnableServicePortAsync(string service, CancellationToken ct) =>
+        WithCameraAsync<object?>(async camera =>
+        {
+            if (service.Equals("server", StringComparison.OrdinalIgnoreCase))
+                throw new NotSupportedException(
+                    "refusing to touch the Baichuan port — it carries this very connection");
+            var els = await camera.GetServicePortsAsync(ct: ct).ConfigureAwait(false)
+                ?? throw new NotSupportedException($"{CameraName} did not answer the service-port query");
+            var el = els.FirstOrDefault(e =>
+                    e.Name.LocalName.Equals(service + "Port", StringComparison.OrdinalIgnoreCase))
+                ?? throw new NotSupportedException($"{CameraName} does not report a {service} service");
+            var enable = el.Element("enable")
+                ?? throw new NotSupportedException(
+                    $"{CameraName}'s firmware does not allow toggling {service}");
+            if (enable.Value == "1") return null; // already on — nothing to write
+            Log.Info($"{CameraName}: enabling the {service} service on the camera " +
+                     "(user request — the same switch as the app's Port Settings)");
+            enable.Value = "1";
+            await camera.SetServicePortAsync(el, ct).ConfigureAwait(false);
+            // Some firmwares accept the set silently — the re-read is the truth,
+            // and it keeps the UI honest about the camera's ACTUAL state.
+            var after = await camera.GetServicePortsAsync(ct: ct).ConfigureAwait(false);
+            var check = after?.FirstOrDefault(e =>
+                e.Name.LocalName.Equals(service + "Port", StringComparison.OrdinalIgnoreCase));
+            if (check?.Element("enable")?.Value != "1")
+            {
+                Log.Warn($"{CameraName}: the {service} enable was sent but the camera still " +
+                         "reports it disabled — firmware may not accept msg 36 from third-party " +
+                         "clients; use the Reolink app's Port Settings screen instead");
+                throw new InvalidOperationException(
+                    $"{CameraName} did not accept enabling {service} (it still reads disabled)");
+            }
+            var state = MapServicePorts(new[] { check }).FirstOrDefault();
+            Log.Info($"{CameraName}: {service} service ENABLED on the camera" +
+                     $"{(state?.Port is { } port ? $" (port {port})" : "")}");
+            return null;
+        }, ct);
 
     public Task<byte[]?> SnapshotAsync(CancellationToken ct) =>
         WithCameraAsync(camera => camera.SnapAsync(ct), ct);

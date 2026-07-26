@@ -23,6 +23,8 @@ public static class BcConstants
     public const uint MsgIdPtzPreset = 19;
     public const uint MsgIdReboot = 23;
     public const uint MsgIdMotionRequest = 31;
+    public const uint MsgIdSetServicePorts = 36;   // write ONE modified element back (Port Settings)
+    public const uint MsgIdGetServicePorts = 37;   // reply: ServerPort/HttpPort/HttpsPort/RtspPort/RtmpPort/OnvifPort
     public const uint MsgIdMotion = 33;
     public const uint MsgIdGetAbilitySupport = 58;
     public const uint MsgIdVersion = 80;

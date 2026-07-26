@@ -80,6 +80,29 @@ public static class BcCameraCommands
             replyTimeout: TimeSpan.FromMilliseconds(800), tolerateNoReply: true, ct: ct).ConfigureAwait(false);
     }
 
+    /// <summary>The camera's own service-port table (msg 37): raw ServerPort,
+    /// HttpPort, HttpsPort, RtspPort, RtmpPort and OnvifPort elements, each with
+    /// a port number and an "enable" flag (absent on services the firmware can't
+    /// toggle). Always asked of the camera live — never a cached value.</summary>
+    public static async Task<List<XElement>?> GetServicePortsAsync(this IBcCamera cam,
+        TimeSpan? timeout = null, CancellationToken ct = default)
+    {
+        var reply = await cam.SendCommandAsync(BcConstants.MsgIdGetServicePorts, extension: ChannelExt(cam),
+            replyTimeout: timeout, ct: ct).ConfigureAwait(false);
+        var ports = reply?.Xml?.Raw
+            .Where(e => e.Name.LocalName.EndsWith("Port", StringComparison.Ordinal)).ToList();
+        return ports is { Count: > 0 } ? ports : null;
+    }
+
+    /// <summary>Writes back one (modified) service element obtained from
+    /// <see cref="GetServicePortsAsync"/> (msg 36) — the same read-modify-write
+    /// the app's Port Settings screen performs. Some firmwares never acknowledge
+    /// a successful set, so a missing reply is tolerated; callers re-read the
+    /// table to verify.</summary>
+    public static Task SetServicePortAsync(this IBcCamera cam, XElement service, CancellationToken ct = default) =>
+        cam.SendCommandAsync(BcConstants.MsgIdSetServicePorts, BcXmlBody.FromRaw(service), ChannelExt(cam),
+            replyTimeout: TimeSpan.FromMilliseconds(800), tolerateNoReply: true, ct: ct);
+
     /// <summary>Raw &lt;RfAlarmCfg&gt; XML (PIR motion sensor settings), or null if unsupported.</summary>
     public static async Task<XElement?> GetPirStateAsync(this IBcCamera cam, TimeSpan? timeout = null, CancellationToken ct = default)
     {

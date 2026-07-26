@@ -8,6 +8,19 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Added
 
+- **PORTS tab: the camera's own service switches, live.** Each camera's
+  settings dialog gains a Ports tab showing what the camera itself reports —
+  Baichuan, HTTP, HTTPS, RTSP, RTMP, ONVIF, each with its port and on/off
+  state — queried from the camera on every visit (Baichuan msg 37), never a
+  saved value. A disabled service can be enabled right there (msg 36, the
+  same switch as the Reolink app's Port Settings screen) behind an explicit
+  confirm; the Baichuan port itself is off limits, and the result shown is
+  always a fresh re-read of what the camera now actually reports. On connect,
+  Neolink also audits the table once and says when a disabled service limits
+  what it can do for that camera — HTTP off means no picture settings, no
+  scaled AI snapshots (dual-lens models then answer the fallback snap with
+  multi-megabyte panoramas) and no firmware checks; a camera with HTTP on
+  but no `http_address` configured gets a hint to add one.
 - **Sound on the timeline.** Recorded footage now plays its audio. Each monitor
   has a speaker button; because a wall of cameras playing at once would be a wall
   of noise, audio is *solo* — unmuting one monitor mutes the others, and tiles

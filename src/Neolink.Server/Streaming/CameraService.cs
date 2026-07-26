@@ -984,6 +984,8 @@ public sealed class CameraService : ILiveCameraSource
         _lastHoldLog = default;
         _heldSince = default;
         _wakeClipStarted = false;
+        if (!_servicesAudited)
+            _ = Task.Run(() => AuditServicePortsAsync(camera, linked.Token), CancellationToken.None);
         Task? videoTask = null;
         Task? motionTask = MotionSink is { } sink
             ? Task.Run(() => WatchMotionGuardedAsync(camera, sink, linked.Token), CancellationToken.None)
@@ -1401,6 +1403,49 @@ public sealed class CameraService : ILiveCameraSource
             // happened. A real battery camera heals on its first msg-252 push.
             Log.Debug($"{Tag}: battery query unanswered within 3s ({ex.GetType().Name}) — " +
                       "treating as mains unless the camera pushes a battery reading");
+        }
+    }
+
+    /// <summary>Ran the service-port audit for this camera (once per process; a
+    /// failed query retries on the next session).</summary>
+    private bool _servicesAudited;
+
+    /// <summary>
+    /// One-shot audit: ask the camera ITSELF (msg 37) which services are enabled
+    /// and warn when a disabled one limits what Neolink can do for it — the live
+    /// truth from the camera, never a config assumption. Detached, so catching a
+    /// wake-capture event is never delayed by a diagnostic.
+    /// </summary>
+    private async Task AuditServicePortsAsync(IBcCamera camera, CancellationToken ct)
+    {
+        try
+        {
+            var els = await camera.GetServicePortsAsync(TimeSpan.FromSeconds(5), ct).ConfigureAwait(false);
+            if (els == null) return; // firmware without msg 37 — retry next session
+            var ports = CameraControl.MapServicePorts(els);
+            if (ports.Count == 0) return;
+            _servicesAudited = true;
+            Log.Info($"{Tag}: camera services (live): " + string.Join(" · ", ports.Select(s =>
+                $"{s.Service} {s.Port?.ToString() ?? "?"}{(s.Enabled == false ? " OFF" : "")}")));
+            // Missing block or no enable flag = not provably off — never warn on those.
+            bool Off(string svc) => ports.FirstOrDefault(s => s.Service == svc)?.Enabled == false;
+            bool httpUsable = !Off("http") || !Off("https");
+            if (Off("http") && Off("https"))
+                Log.Warn($"{Tag}: HTTP and HTTPS are DISABLED on the camera — picture settings, " +
+                         "scaled snapshots (small AI frames) and firmware checks cannot work, and " +
+                         "dual-lens models answer the fallback snap with multi-megabyte panoramas. " +
+                         "The PORTS tab in this camera's settings can enable HTTP.");
+            else if (string.IsNullOrWhiteSpace(_config.HttpAddress))
+                Log.Info($"{Tag}: the camera has HTTP(S) enabled but no http_address is configured " +
+                         "for it in Neolink — add one in the camera's settings to unlock picture " +
+                         "settings and small snapshots");
+            if (Off("onvif") && !httpUsable)
+                Log.Info($"{Tag}: ONVIF is also disabled — the ONVIF imaging fallback for " +
+                         "HTTP-less models is unavailable");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Log.Debug($"{Tag}: service-port audit failed: {Log.Flatten(ex)}");
         }
     }
 

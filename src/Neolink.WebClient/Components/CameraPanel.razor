@@ -168,6 +168,10 @@
                         <span class="tab-dot" title="Unsaved changes">●</span>
                     }
                 </button>
+                @* Live view of the camera's own service ports (msg 37) — always
+                   read from the camera when opened, never a stored value. *@
+                <button class="settings-tab @(_camTab == "ports" ? "active" : "")" role="tab"
+                        @onclick="OpenPortsTabAsync">@UiIcon.Render("lan", 13) Ports</button>
             }
         </div>
 
@@ -184,6 +188,74 @@
             <div class="notice small campanel-probing">
                 <span class="btn-spinner"></span> Querying the camera — device info and controls appear in a moment.
             </div>
+        }
+
+        @* PORTS: the camera's own service table, queried live on every visit.
+           Enabling is an explicit two-step (confirm card) — it flips the same
+           switch as the Reolink app's Port Settings screen. *@
+        @if (_camTab == "ports")
+        {
+        <div class="campanel-col">
+            <div class="campanel-section">
+                <div class="campanel-subtitle">NETWORK SERVICES</div>
+                <div class="notice small">Read from the camera itself each time this tab opens —
+                    its actual state right now, never a saved value. Disabled services limit what
+                    Neolink.NET can do: HTTP powers picture settings, small AI snapshots and
+                    firmware checks; ONVIF is the imaging fallback for HTTP-less models.</div>
+                @if (_portsLoading)
+                {
+                    <div class="notice small campanel-probing">
+                        <span class="btn-spinner"></span> Asking the camera…
+                    </div>
+                }
+                else if (_portsError != null)
+                {
+                    <div class="notice">@_portsError</div>
+                }
+                else if (_ports != null)
+                {
+                    @foreach (var p in _ports)
+                    {
+                        <div class="control-row">
+                            <span title="@ServiceHint(p.Service)">@ServiceLabel(p.Service)@(p.Port is { } port ? $" · port {port}" : "")</span>
+                            @if (p.Service == "server")
+                            {
+                                <span class="chip" title="The Baichuan channel this very connection runs on — Neolink never touches it.">on — this connection</span>
+                            }
+                            else if (p.Enabled == true)
+                            {
+                                <span class="chip">enabled</span>
+                            }
+                            else if (p.Enabled == null)
+                            {
+                                <span class="chip" title="The firmware reports no on/off switch for this service.">fixed on</span>
+                            }
+                            else if (_enablingService == p.Service)
+                            {
+                                <span class="btn-spinner" title="Enabling…"></span>
+                            }
+                            else if (_confirmEnableService != p.Service)
+                            {
+                                <button class="chip chip-off" @onclick="() => _confirmEnableService = p.Service">disabled — enable…</button>
+                            }
+                        </div>
+                        @if (_confirmEnableService == p.Service && _enablingService == null)
+                        {
+                            <div class="notice small">This changes the camera's own network settings —
+                                the same switch as the Reolink app's Port Settings screen. The service
+                                opens on your LAN and stays on until turned off again in the app.</div>
+                            <div class="row-actions">
+                                <button class="chip chip-danger" @onclick="() => EnableServiceAsync(p.Service)">Confirm — enable @ServiceLabel(p.Service)</button>
+                                <button class="chip" @onclick="() => _confirmEnableService = null">Cancel</button>
+                            </div>
+                        }
+                    }
+                    <div class="row-actions">
+                        <button class="chip" @onclick="LoadPortsAsync">@UiIcon.Render("refresh", 12) Re-read from camera</button>
+                    </div>
+                }
+            </div>
+        </div>
         }
 
         @* The controls body reads capabilities/features, so it only renders once
@@ -1182,6 +1254,107 @@
     private bool _confirmReboot;
     private bool _confirmSiren;
     private bool _confirmPrivacy;
+
+    // ---------------------------------------------------------------- ports tab
+    // The list is fetched from the camera LIVE whenever the tab is opened or
+    // refreshed and is deliberately not persisted anywhere.
+    private sealed class ApiServicePort
+    {
+        public string Service { get; set; } = "";
+        public int? Port { get; set; }
+        public bool? Enabled { get; set; }   // null = firmware exposes no toggle
+        public bool CanEnable { get; set; }
+    }
+    private sealed class ApiServicesReply { public List<ApiServicePort>? Services { get; set; } }
+    private List<ApiServicePort>? _ports;
+    private bool _portsLoading;
+    private string? _portsError;
+    private string? _confirmEnableService;
+    private string? _enablingService;
+
+    private static string ServiceLabel(string service) => service switch
+    {
+        "server" => "Baichuan",
+        "http" => "HTTP",
+        "https" => "HTTPS",
+        "rtsp" => "RTSP",
+        "rtmp" => "RTMP",
+        "onvif" => "ONVIF",
+        _ => service.ToUpperInvariant(),
+    };
+
+    private static string ServiceHint(string service) => service switch
+    {
+        "server" => "The protocol Neolink.NET speaks to this camera (port 9000 by default).",
+        "http" => "The camera's web API — Neolink.NET uses it for picture settings, scaled snapshots (small AI frames) and firmware checks.",
+        "https" => "The camera's web API over TLS — same features as HTTP.",
+        "rtsp" => "Direct RTSP streaming from the camera (not needed by Neolink.NET, which restreams itself).",
+        "rtmp" => "Legacy RTMP streaming from the camera (not used by Neolink.NET).",
+        "onvif" => "Standards-based control — Neolink.NET's imaging fallback for models without the HTTP API.",
+        _ => "",
+    };
+
+    private async Task OpenPortsTabAsync()
+    {
+        _camTab = "ports";
+        // Re-query on EVERY visit to the tab, not just the first: the promise of
+        // this tab is the camera's actual state right now, never a cached list.
+        if (!_portsLoading)
+            await LoadPortsAsync();
+    }
+
+    private async Task LoadPortsAsync()
+    {
+        _portsLoading = true;
+        _portsError = null;
+        _confirmEnableService = null;
+        StateHasChanged();
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            using var res = await Http.SendAsync(NewRequest(HttpMethod.Get, "services"), cts.Token);
+            if (res.IsSuccessStatusCode)
+            {
+                var reply = await res.Content.ReadFromJsonAsync<ApiServicesReply>(cancellationToken: cts.Token);
+                _ports = reply?.Services;
+                if (_ports is not { Count: > 0 })
+                    _portsError = "The camera answered without a service table.";
+            }
+            else
+            {
+                _portsError = await ReadErrorAsync(res) ?? $"Query failed ({(int)res.StatusCode}).";
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            _portsError = "The camera did not answer in time — it may be asleep or busy. Try re-reading.";
+        }
+        catch (Exception ex)
+        {
+            _portsError = $"Cannot reach {Server}: {ex.Message}";
+        }
+        finally
+        {
+            _portsLoading = false;
+        }
+    }
+
+    private async Task EnableServiceAsync(string service)
+    {
+        _confirmEnableService = null;
+        _enablingService = service;
+        StateHasChanged();
+        try
+        {
+            if (await PostAsync($"services/{Uri.EscapeDataString(service)}/enable", new { }))
+                ShowToast($"{ServiceLabel(service)} enabled on the camera.");
+        }
+        finally
+        {
+            _enablingService = null;
+        }
+        await LoadPortsAsync(); // success or not, show what the camera NOW reports
+    }
     private bool _privacyBusy;   // a privacy-mode write is in flight (spinner shown)
     private bool? _suspended;    // Neolink-side suspend (beta); null when unsupported
     private bool _confirmSuspend;
@@ -1793,8 +1966,8 @@
         _probing = false;
         // The tab was offered during the probe; if the answer is "this camera has
         // no controls" (generic RTSP) it now disappears — don't strand the reader
-        // on a tab that no longer exists.
-        if (_camTab == "controls" && !ShowControlsTab && _recording != null)
+        // on a tab that no longer exists. Ports rides the same visibility.
+        if (_camTab is "controls" or "ports" && !ShowControlsTab && _recording != null)
             _camTab = "recording";
     }
 

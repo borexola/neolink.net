@@ -4349,6 +4349,22 @@ public static class SelfTest
             AssertEq((long?)manual.Element("onOff") ?? -1, 1L);
             AssertEq((long?)Protocol.BcCameraCommands.BuildAudioAlarmManual(0, on: false).Element("onOff") ?? -1, 0L);
 
+            // Service-port table (msg 37): each element carries its number in a
+            // camelCase child of its own name, plus an optional enable flag —
+            // missing enable means the firmware exposes no toggle (null).
+            var svc = Streaming.CameraControl.MapServicePorts(new[]
+            {
+                System.Xml.Linq.XElement.Parse(
+                    "<ServerPort version=\"1.1\"><serverPort>9000</serverPort></ServerPort>"),
+                System.Xml.Linq.XElement.Parse(
+                    "<HttpPort version=\"1.1\"><httpPort>80</httpPort><enable>0</enable></HttpPort>"),
+                System.Xml.Linq.XElement.Parse(
+                    "<OnvifPort version=\"1.1\"><onvifPort>8000</onvifPort><enable>1</enable></OnvifPort>"),
+                System.Xml.Linq.XElement.Parse("<NotAService><x>1</x></NotAService>"),
+            });
+            AssertEq(string.Join(";", svc.Select(s => $"{s.Service}:{s.Port}:{s.Enabled?.ToString() ?? "null"}")),
+                "server:9000:null;http:80:False;onvif:8000:True");
+
             // Privacy-mode write body (msg 623): operate 2 = set, sleep 0/1.
             var sleep = Protocol.BcCameraCommands.BuildSleepState(on: true);
             AssertEq(sleep.Name.LocalName, "sleepState");

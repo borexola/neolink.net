@@ -1491,6 +1491,12 @@ public static class WebApi
             {
                 return Results.Json(new { error = ex.Message }, statusCode: 502);
             }
+            catch (InvalidOperationException ex)
+            {
+                // The camera answered but didn't do what was asked (e.g. a service
+                // enable that still reads disabled on the verify re-read).
+                return Results.Json(new { error = ex.Message }, statusCode: 502);
+            }
             catch (ReolinkApiException ex)
             {
                 // Also logged: HTTP-API rejections (wrong payload shape, unsupported
@@ -1814,6 +1820,54 @@ public static class WebApi
             {
                 await control.RebootAsync(reqCt);
                 return Results.Json(new { ok = true });
+            }));
+
+        // The camera's own service-port table (Baichuan msg 37). Queried LIVE on
+        // every request — the answer is the camera's actual state right now,
+        // never a stored value, which is the whole point of the PORTS tab.
+        app.MapGet("/api/cameras/{name}/services", (string name, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: false, async (control, reqCt) =>
+            {
+                var ports = await control.GetServicePortsAsync(reqCt);
+                if (ports == null)
+                    return Results.Json(new { error = "the camera did not answer the service query " +
+                        "(older firmware, or no Baichuan channel)" }, statusCode: 404);
+                return Results.Json(new
+                {
+                    services = ports.Select(s => new
+                    {
+                        service = s.Service,
+                        port = s.Port,
+                        enabled = s.Enabled,          // null = firmware exposes no toggle
+                        canEnable = s.Enabled == false && s.Service != "server",
+                    }),
+                });
+            }));
+
+        // Enables one service on the camera itself (msg 36, read-modify-write —
+        // what the app's Port Settings screen does). Explicit user action only;
+        // the Baichuan port is refused outright, and the reply carries the fresh
+        // table so the UI reflects what the camera now actually reports.
+        app.MapPost("/api/cameras/{name}/services/{service}/enable", (string name, string service, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: true, async (control, reqCt) =>
+            {
+                service = service.ToLowerInvariant();
+                if (service is not ("http" or "https" or "onvif" or "rtsp" or "rtmp"))
+                    return Results.Json(new { error = "service must be http, https, onvif, rtsp or rtmp" },
+                        statusCode: 400);
+                await control.EnableServicePortAsync(service, reqCt);
+                var ports = await control.GetServicePortsAsync(reqCt);
+                return Results.Json(new
+                {
+                    ok = true,
+                    services = ports?.Select(s => new
+                    {
+                        service = s.Service,
+                        port = s.Port,
+                        enabled = s.Enabled,
+                        canEnable = s.Enabled == false && s.Service != "server",
+                    }),
+                });
             }));
 
         // Optical zoom & focus (zoom-lens cameras): absolute positions with ranges.
