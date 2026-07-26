@@ -365,30 +365,77 @@ public sealed class AiDescriber
                  $"{(string.IsNullOrWhiteSpace(modelName) ? "" : $", model {modelName}")})");
         if (cfg.KeepFrames)
             await KeepFramesAsync(rec, frames, ct).ConfigureAwait(false); // before the call: reviewable even if the model fails
-        var userText = BuildUserText(rec, frames);
-        var jpegs = frames.Select(f => f.Jpeg).ToList();
-        var sw = Stopwatch.StartNew();
-        (string? raw, string? model, long? usage) reply;
-        try
-        {
-            reply = await CompleteAsync(cfg, _store.ActiveApiKey(cfg), userText, jpegs,
-                classify: true, ct).ConfigureAwait(false);
-        }
-        catch (HttpRequestException ex)
-        {
-            // Connection-level failure only (refused, reset, DNS) — the server is
-            // probably restarting or swapping models; one delayed retry rescues the
-            // description. Slow answers (timeouts) are NOT retried: doubling the
-            // wait on a struggling model would only dig the queue deeper.
-            Log.Info($"{rec.Camera}: AI endpoint unreachable ({Log.Flatten(ex)}) — retrying once in 10s");
-            await Task.Delay(TimeSpan.FromSeconds(10), ct).ConfigureAwait(false);
-            reply = await CompleteAsync(cfg, _store.ActiveApiKey(cfg), userText, jpegs,
-                classify: true, ct).ConfigureAwait(false);
-        }
-        var (raw, model, usage) = reply;
-        sw.Stop();
 
-        var (level, text) = SplitLevel(raw);
+        // Very long events (fixed-rate mode especially) can outgrow a single
+        // request: past MaxFramesPerRequest the frames are sent in ORDERED parts,
+        // each part told what came before it, and the answers append to the same
+        // event. The final threat level is the most severe any part reported.
+        var chunks = Chunk(frames, MaxFramesPerRequest);
+        if (chunks.Count > 1)
+            Log.Info($"{rec.Camera}: long event — describing in {chunks.Count} parts " +
+                     $"of up to {MaxFramesPerRequest} frames each");
+
+        var sw = Stopwatch.StartNew();
+        string? model = null;
+        long usageSum = 0;
+        string? level = null;
+        var parts = new List<string>();
+        for (int c = 0; c < chunks.Count; c++)
+        {
+            var chunk = chunks[c];
+            var userText = BuildUserText(rec, chunk, c + 1, chunks.Count,
+                prevSummary: parts.Count > 0 ? parts[^1] : null);
+            // Every image travels with its own inline label ("Frame 3 of 12 —
+            // +4s…") so the timestamp sits ADJACENT to its picture on backends
+            // that allow interleaving — a single offsets list up front provably
+            // smears: the model loses which image is which and starts narrating.
+            var jpegs = chunk.Select((f, i) => (f.Jpeg, (string?)FrameLabel(i, chunk.Count,
+                Math.Max(0, (int)(f.Utc - rec.StartUtc).TotalSeconds)))).ToList();
+            (string? raw, string? model, long? usage) reply;
+            try
+            {
+                try
+                {
+                    reply = await CompleteAsync(cfg, _store.ActiveApiKey(cfg), userText, jpegs,
+                        classify: true, ct).ConfigureAwait(false);
+                }
+                catch (HttpRequestException ex)
+                {
+                    // Connection-level failure only (refused, reset, DNS) — the
+                    // server is probably restarting or swapping models; one delayed
+                    // retry rescues the description. Slow answers (timeouts) are NOT
+                    // retried: doubling the wait on a struggling model would only
+                    // dig the queue deeper.
+                    Log.Info($"{rec.Camera}: AI endpoint unreachable ({Log.Flatten(ex)}) — retrying once in 10s");
+                    await Task.Delay(TimeSpan.FromSeconds(10), ct).ConfigureAwait(false);
+                    reply = await CompleteAsync(cfg, _store.ActiveApiKey(cfg), userText, jpegs,
+                        classify: true, ct).ConfigureAwait(false);
+                }
+            }
+            catch (Exception) when (parts.Count > 0 && !ct.IsCancellationRequested)
+            {
+                // A later part failing must not throw away the parts that already
+                // answered — save what the model DID say and note the cut.
+                Log.Warn($"{rec.Camera}: part {c + 1} of {chunks.Count} failed — saving the " +
+                         $"description of the first {c} part(s)");
+                break;
+            }
+            var (raw, replyModel, chunkUsage) = reply;
+            model ??= replyModel;
+            usageSum += chunkUsage ?? 0;
+            var (chunkLevel, chunkText) = SplitLevel(raw);
+            if (!string.IsNullOrWhiteSpace(chunkText)) parts.Add(chunkText!);
+            level = MoreSevere(level, chunkLevel);
+        }
+        sw.Stop();
+        string? text = parts.Count switch
+        {
+            0 => null,
+            1 => parts[0],
+            _ => string.Join("\n\n", parts),
+        };
+        long? usage = usageSum > 0 ? usageSum : null;
+
         if (level == null && string.IsNullOrWhiteSpace(text))
         {
             Log.Warn($"{rec.Camera}: AI describe returned an empty answer after {sw.Elapsed.TotalSeconds:0.0}s");
@@ -460,7 +507,39 @@ public sealed class AiDescriber
         return (m.Groups[1].Value.ToLowerInvariant(), rest.Length == 0 ? null : rest);
     }
 
-    private static string BuildUserText(EventRecord rec, IReadOnlyList<(DateTime Utc, byte[] Jpeg)> frames)
+    /// <summary>The inline label sent immediately before each image, binding the
+    /// picture to its place and time — "Frame 3 of 12 — +4s into the event:".</summary>
+    internal static string FrameLabel(int index, int count, int offsetSeconds) =>
+        $"Frame {index + 1} of {count} — +{offsetSeconds}s into the event:";
+
+    /// <summary>No more than this many frames ride one model request. A very long
+    /// event (fixed-rate sampling on a half-hour clip) is described in ordered
+    /// parts instead of one context-blowing payload — each part is told what the
+    /// previous part saw, and the answers append to the same event.</summary>
+    internal const int MaxFramesPerRequest = 100;
+
+    /// <summary>The frame list in ordered slices of at most <paramref name="size"/>.</summary>
+    internal static List<List<T>> Chunk<T>(IReadOnlyList<T> items, int size)
+    {
+        var result = new List<List<T>>();
+        for (int i = 0; i < items.Count; i += size)
+            result.Add(items.Skip(i).Take(size).ToList());
+        return result;
+    }
+
+    /// <summary>The more severe of two threat levels (red > yellow > green): a
+    /// long event's final level is the worst any of its parts reported.</summary>
+    internal static string? MoreSevere(string? a, string? b)
+    {
+        static int Rank(string? l) => l switch
+        {
+            "red" => 3, "yellow" => 2, "green" => 1, _ => 0,
+        };
+        return Rank(a) >= Rank(b) ? a ?? b : b;
+    }
+
+    private static string BuildUserText(EventRecord rec, IReadOnlyList<(DateTime Utc, byte[] Jpeg)> frames,
+        int part, int parts, string? prevSummary)
     {
         var local = rec.StartUtc.ToLocalTime();
         // Real per-frame offsets: sampling spreads across the whole event (the
@@ -468,25 +547,45 @@ public sealed class AiDescriber
         // sits lets it narrate "at first … then 30 seconds later …" truthfully.
         var offsets = string.Join(", ",
             frames.Select(f => $"+{Math.Max(0, (int)(f.Utc - rec.StartUtc).TotalSeconds)}s"));
-        return $"Camera \"{rec.Camera}\" reported: {string.Join(", ", rec.Labels)}. " +
-               $"Event started {local:yyyy-MM-dd HH:mm:ss} (local) and lasted " +
-               $"{Math.Max(1, (int)(rec.EndUtc - rec.StartUtc).TotalSeconds)}s. " +
-               $"The {frames.Count} frame(s) below span the event, oldest first, " +
-               $"taken at {offsets} after its start.";
+        var text = $"Camera \"{rec.Camera}\" reported: {string.Join(", ", rec.Labels)}. " +
+                   $"Event started {local:yyyy-MM-dd HH:mm:ss} (local) and lasted " +
+                   $"{Math.Max(1, (int)(rec.EndUtc - rec.StartUtc).TotalSeconds)}s. ";
+        if (parts > 1)
+        {
+            // A long event arrives in ordered slices: the model must know it is
+            // seeing a WINDOW of the event (and what happened before it), or the
+            // first and last frames of every part would read as beginnings and
+            // endings that never happened.
+            text += $"This request covers part {part} of {parts} of that event. ";
+            if (prevSummary != null)
+                text += $"What the earlier frames showed (already described): {prevSummary} ";
+            text += $"The {frames.Count} frame(s) below are the next window, oldest first, " +
+                    $"taken at {offsets} after the event's start. Continue the description " +
+                    "from where the earlier part left off; describe only this window.";
+        }
+        else
+        {
+            text += $"The {frames.Count} frame(s) below span the event, oldest first, " +
+                    $"taken at {offsets} after its start.";
+        }
+        return text;
     }
 
     /// <summary>One chat request against the active backend (OpenAI-style or
     /// Ollama native). Returns the cleaned answer (level line still attached — the
     /// caller splits it), the model the server says it used, and a token count.</summary>
     private static async Task<(string? Text, string? Model, long? Tokens)> CompleteAsync(
-        AiSettings cfg, string apiKey, string userText, IReadOnlyList<byte[]> frames,
+        AiSettings cfg, string apiKey, string userText, IReadOnlyList<(byte[] Jpeg, string? Label)> frames,
         bool classify, CancellationToken ct)
     {
         // NoThink rides the prompt ("/no_think", the Qwen-family convention, which
         // Ollama templates honor too); <think> blocks are stripped either way.
         // Claude models don't use the marker — it would just be prompt noise.
+        // Grounding rules ride event requests only (classify) — the Test button's
+        // probe stays a bare connectivity check.
         var system = cfg.EffectivePrompt
-                     + (classify ? "\n\n" + AiSettings.LevelProtocol : "")
+                     + (classify ? "\n\n" + AiSettings.GroundingProtocol
+                                 + "\n\n" + AiSettings.LevelProtocol : "")
                      + (cfg.NoThink && !cfg.UsesAnthropic ? " /no_think" : "");
         object payload;
         if (cfg.UsesAnthropic)
@@ -495,9 +594,13 @@ public sealed class AiDescriber
                 throw new InvalidOperationException(
                     "the Anthropic backend needs a vision-capable model name — set one in Settings → AI");
             // Messages API: system is a top-level field, images are base64 source
-            // blocks, and max_tokens is REQUIRED.
+            // blocks, and max_tokens is REQUIRED. Each image is PRECEDED by its
+            // own label block, so its timestamp cannot detach from the picture
+            // (a single offsets list up front provably smears — see FrameLabel).
             var blocks = new List<object> { new { type = "text", text = userText } };
-            foreach (var jpeg in frames)
+            foreach (var (jpeg, label) in frames)
+            {
+                if (label != null) blocks.Add(new { type = "text", text = label });
                 blocks.Add(new
                 {
                     type = "image",
@@ -508,6 +611,7 @@ public sealed class AiDescriber
                         data = Convert.ToBase64String(jpeg),
                     },
                 });
+            }
             payload = new Dictionary<string, object>
             {
                 ["model"] = cfg.AnthropicModel.Trim(),
@@ -523,7 +627,10 @@ public sealed class AiDescriber
                 throw new InvalidOperationException(
                     "Ollama needs a vision-capable model name (it has no \"currently loaded\" " +
                     "default) — set one in Settings → AI");
-            // Native /api/chat: images are plain base64 strings on the user message.
+            // Native /api/chat: images are a flat base64 array on the user message
+            // — no interleaving possible, so the per-frame labels join the text as
+            // a numbered list instead (in the same order as the images array).
+            var labels = frames.Where(f => f.Label != null).Select(f => f.Label!).ToList();
             payload = new Dictionary<string, object>
             {
                 ["model"] = cfg.OllamaModel.Trim(),
@@ -533,8 +640,11 @@ public sealed class AiDescriber
                     new
                     {
                         role = "user",
-                        content = userText,
-                        images = frames.Select(Convert.ToBase64String).ToArray(),
+                        content = labels.Count == 0
+                            ? userText
+                            : userText + "\nThe images are attached in this order:\n"
+                              + string.Join("\n", labels),
+                        images = frames.Select(f => Convert.ToBase64String(f.Jpeg)).ToArray(),
                     },
                 },
                 ["stream"] = false,
@@ -543,8 +653,11 @@ public sealed class AiDescriber
         }
         else
         {
+            // Interleaved like the Anthropic path: label block, then its image.
             var content = new List<object> { new { type = "text", text = userText } };
-            foreach (var jpeg in frames)
+            foreach (var (jpeg, label) in frames)
+            {
+                if (label != null) content.Add(new { type = "text", text = label });
                 content.Add(new
                 {
                     type = "image_url",
@@ -554,6 +667,7 @@ public sealed class AiDescriber
                         detail = "low",
                     },
                 });
+            }
             // Only fields every OpenAI-compatible server understands — vendor
             // extensions get 400s from strict ones.
             var oai = new Dictionary<string, object>
@@ -725,7 +839,7 @@ public sealed class AiDescriber
         {
             var sw = Stopwatch.StartNew();
             var (text, model, _) = await CompleteAsync(cfg, apiKey,
-                probe, new[] { TestJpeg() },
+                probe, new[] { (TestJpeg(), (string?)null) },
                 classify: false, ct).ConfigureAwait(false);
             return text == null
                 ? ("The server answered, but with an empty completion.", null)
@@ -739,7 +853,7 @@ public sealed class AiDescriber
             {
                 try
                 {
-                    _ = await CompleteAsync(cfg, apiKey, probe, Array.Empty<byte[]>(),
+                    _ = await CompleteAsync(cfg, apiKey, probe, Array.Empty<(byte[], string?)>(),
                         classify: false, ct).ConfigureAwait(false);
                     return ("The server is reachable and answers a text-only request, but " +
                             "rejected it once an image was attached — the model is probably " +

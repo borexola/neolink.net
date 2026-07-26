@@ -38,8 +38,13 @@
    after the fact, so a very fast subject can appear in the recorded clip yet
    miss every sampled frame — the log's coverage line ("N frames over Xs of
    the Ys event") shows exactly what the model was given.
-3. **When the event closes**, the frames (each stamped with its real time
-   offset) go to your configured model with the instruction prompt. Jobs are
+3. **When the event closes**, the frames go to your configured model with the
+   instruction prompt — each image introduced by its own inline label ("Frame
+   3 of 12 — +4s into the event:") so its timing cannot detach from the
+   picture, plus grounding rules that forbid narrating anything the frames
+   don't show (a subject that leaves the view "left the view" — the model may
+   not invent a return) and tell the model to trust the camera's own
+   burned-in timestamp when one is visible. Jobs are
    processed **one at a time on a bounded background queue**: the event
    pipeline never waits for the model, and if the model can't keep up, extra
    events are skipped with a log line — never delayed.

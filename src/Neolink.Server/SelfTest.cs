@@ -4247,6 +4247,25 @@ public static class SelfTest
             prov.Provider = "openai";
             AssertEq(prov.ActiveUrl()?.ToString() ?? "", "http://a:1234/v1/chat/completions");
 
+            // Per-frame labels bind each image to its time (interleaved on the
+            // OpenAI/Anthropic paths, a numbered list on Ollama's flat array),
+            // and the grounding rules pin the two clauses that matter: never
+            // invent a return, trust a burned-in camera timestamp.
+            AssertEq(Neolink.Ai.AiDescriber.FrameLabel(2, 12, 4), "Frame 3 of 12 — +4s into the event:");
+            Assert(Neolink.Ai.AiSettings.GroundingProtocol.Contains("left the view")
+                && Neolink.Ai.AiSettings.GroundingProtocol.Contains("timestamp"),
+                "grounding rules cover the no-invented-return and camera-timestamp clauses");
+
+            // Long events go to the model in ordered parts of at most
+            // MaxFramesPerRequest frames; the final level is the worst reported.
+            var chunked = Neolink.Ai.AiDescriber.Chunk(Enumerable.Range(0, 250).ToList(), 100);
+            AssertEq(string.Join(",", chunked.Select(c => c.Count)), "100,100,50");
+            AssertEq(chunked[2][0], 200); // order preserved across the slices
+            AssertEq(Neolink.Ai.AiDescriber.MoreSevere(null, "green") ?? "-", "green");
+            AssertEq(Neolink.Ai.AiDescriber.MoreSevere("yellow", "red") ?? "-", "red");
+            AssertEq(Neolink.Ai.AiDescriber.MoreSevere("red", null) ?? "-", "red");
+            AssertEq(Neolink.Ai.AiDescriber.MoreSevere("green", "yellow") ?? "-", "yellow");
+
             // Frame-capture misses back off (4, 8, 16, 30s flat) instead of giving
             // up: three quick failures at a busy event start used to zero out the
             // whole event's frames (live 2026-07-25).

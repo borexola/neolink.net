@@ -26,6 +26,22 @@ public sealed class AiSettings
         "speculate beyond what the images show, and answer with the description only.";
 
     /// <summary>
+    /// Grounding rules appended to every event request (between the user's prompt
+    /// and the threat protocol), uneditable on purpose. Born from a live failure:
+    /// a person who walked away and never returned was described as "turning to
+    /// walk back toward the house" — the model completing a familiar story rather
+    /// than reading the frames. Also tells the model to trust the camera's own
+    /// burned-in timestamp when one is visible, the one ordering signal that
+    /// survives any transport.
+    /// </summary>
+    public const string GroundingProtocol =
+        "Ground every statement in the frames themselves. State movement or direction only " +
+        "when consecutive frames actually show it; if the subject leaves the view, say they " +
+        "left the view — never assume they returned, continued, or did anything that no later " +
+        "frame shows. Many cameras stamp the date and time onto each frame; when such a " +
+        "timestamp is visible, trust it to confirm the order and timing of what you see.";
+
+    /// <summary>
     /// The threat-classification contract, appended to the (user-editable) prompt
     /// on every event request — separate from it so a custom prompt cannot break
     /// the parsing. The answer's first line carries the level; SplitLevel in the
