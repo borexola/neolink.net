@@ -18,6 +18,13 @@ public sealed class RtspMount
     /// <summary>Camera control that backs the RTSP audio backchannel (two-way talk)
     /// for this mount, or null when talk is disabled or the source has no speaker.</summary>
     public ICameraControl? Talk { get; set; }
+
+    /// <summary>True when sessions on this mount get Opus audio (transcoded)
+    /// instead of the camera's original track. Every camera path also gets
+    /// "/opus" and "/original" variant mounts, so each CLIENT picks its audio
+    /// codec by URL; the camera's audio_transcode config only chooses which of
+    /// the two the plain path serves.</summary>
+    public bool Opus { get; init; }
 }
 
 /// <summary>Pure .NET RTSP server (RFC 2326 subset: OPTIONS/DESCRIBE/SETUP/PLAY/PAUSE/GET_PARAMETER/TEARDOWN).</summary>

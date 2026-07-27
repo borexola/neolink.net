@@ -61,7 +61,8 @@ public sealed record ApiWhiteLed(int Bright, bool On, int Mode);
 public sealed record ApiHttpFeatures(ApiImageSettings? Image, int? Volume, ApiWifi? WifiSignal,
     List<ApiPtzPreset>? PtzPresets, List<ApiQuickReply>? QuickReplies, bool? AutoTrack,
     List<ApiSdCard>? SdCards, int? MdSensitivity = null,
-    List<ApiAiSensitivity>? AiSensitivities = null, ApiOsd? Osd = null);
+    List<ApiAiSensitivity>? AiSensitivities = null, ApiOsd? Osd = null,
+    bool? RecordAudio = null, int? AlarmVolume = null, int? MicVolume = null);
 
 /// <summary>Picture adjustments (0-255, 128 neutral) + ISP config; null = not reported.
 /// Hdr: 0 = off, up to HdrMax (1 = on/off, 2 = off/low/high).</summary>

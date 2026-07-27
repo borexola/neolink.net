@@ -42,6 +42,15 @@ public interface IStreamHub
     uint Height { get; }
     AudioTrackInfo? Audio { get; }
 
+    /// <summary>An Opus-consuming session arrived/left. The hub transcodes the
+    /// camera's audio to Opus (<see cref="HubAudioOpus"/> packets, alongside the
+    /// originals) only while at least one such session is playing — ffmpeg runs
+    /// on demand and stops with the last Opus listener. Defaults are no-ops so
+    /// hubs without a transcode path need nothing.</summary>
+    void AcquireOpus() { }
+    /// <inheritdoc cref="AcquireOpus"/>
+    void ReleaseOpus() { }
+
     /// <param name="viewer">True for external watchers (RTSP/web); false for
     /// internal consumers like the recorders, which don't count as viewers.</param>
     (Guid id, ChannelReader<HubPacket> reader) Subscribe(bool viewer = false);

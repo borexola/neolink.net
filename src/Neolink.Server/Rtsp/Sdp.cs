@@ -18,7 +18,7 @@ public static class Sdp
     /// <summary>trackID used for the ONVIF audio backchannel (0 = video, 1 = audio out).</summary>
     public const int BackchannelTrackId = 2;
 
-    public static string Build(IStreamHub hub, string sessionName, bool backchannel = false)
+    public static string Build(IStreamHub hub, string sessionName, bool backchannel = false, bool opus = false)
     {
         var sb = new StringBuilder();
         long sid = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
@@ -58,7 +58,17 @@ public static class Sdp
         if (audio != null)
         {
             sb.Append($"m=audio 0 RTP/AVP {AudioPayloadType}\r\n");
-            if (audio.IsAac && audio.AudioSpecificConfig != null)
+            if (opus)
+            {
+                // Transcoded track (an /opus mount, or a plain path whose camera
+                // defaults to Opus via audio_transcode). RFC 7587 mandates
+                // "opus/48000/2" in the rtpmap regardless of the actual content;
+                // sprop-stereo=0 says the content is mono.
+                sb.Append($"a=rtpmap:{AudioPayloadType} opus/48000/2\r\n");
+                sb.Append($"a=fmtp:{AudioPayloadType} sprop-stereo=0\r\n");
+                sb.Append("a=ptime:20\r\n");
+            }
+            else if (audio.IsAac && audio.AudioSpecificConfig != null)
             {
                 string config = Convert.ToHexString(audio.AudioSpecificConfig);
                 sb.Append($"a=rtpmap:{AudioPayloadType} mpeg4-generic/{audio.SampleRate}/{audio.Channels}\r\n");

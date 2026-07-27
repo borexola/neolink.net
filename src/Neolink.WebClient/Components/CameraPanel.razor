@@ -697,19 +697,64 @@
         </div> @* /campanel-col (left) *@
 
         <div class="campanel-col">
-        @if (_http?.Volume is { } vol)
+        @if (_http is { } httpAudio && (httpAudio.Volume != null || httpAudio.RecordAudio != null
+             || httpAudio.AlarmVolume != null || httpAudio.MicVolume != null))
         {
             <div class="campanel-section">
-                <div class="campanel-section-title">@UiIcon.Render("siren", 13) SPEAKER</div>
-                <div class="control-row">
-                    <span>Volume @PendingMark(_pendingVolume?.ToString())</span>
-                    <input class="zf-slider @(_pendingVolume != null ? "input-pending" : "")"
-                           type="range" min="0" max="100" step="1"
-                           disabled="@_applying" value="@(_pendingVolume ?? vol)"
-                           @oninput="e => StageVolume(long.Parse((string)e.Value!))" />
-                    <span class="zf-pos">@(_pendingVolume ?? vol)</span>
+                <div class="campanel-section-title">@UiIcon.Render("siren", 13) AUDIO</div>
+                @if (httpAudio.RecordAudio is { } recAudio)
+                {
+                    <div class="control-row">
+                        <span>Record audio @PendingMark(_pendingRecordAudio?.ToString())</span>
+                        <button class="chip @((_pendingRecordAudio ?? recAudio) ? "" : "chip-off") @(_pendingRecordAudio != null ? "chip-pending" : "")"
+                                disabled="@_applying" @onclick="StageRecordAudioToggle">
+                            @((_pendingRecordAudio ?? recAudio) ? "on" : "off")
+                        </button>
+                    </div>
+                }
+                @if (httpAudio.Volume is { } vol)
+                {
+                    <div class="control-row">
+                        <span>Speaker volume @PendingMark(_pendingVolume?.ToString())</span>
+                        <input class="zf-slider @(_pendingVolume != null ? "input-pending" : "")"
+                               type="range" min="0" max="100" step="1"
+                               disabled="@_applying" value="@(_pendingVolume ?? vol)"
+                               @oninput="e => StageVolume(long.Parse((string)e.Value!))" />
+                        <span class="zf-pos">@(_pendingVolume ?? vol)</span>
+                    </div>
+                }
+                @if (httpAudio.AlarmVolume is { } alarmVol)
+                {
+                    <div class="control-row">
+                        <span>Alarm volume @PendingMark(_pendingAlarmVolume?.ToString())</span>
+                        <input class="zf-slider @(_pendingAlarmVolume != null ? "input-pending" : "")"
+                               type="range" min="0" max="100" step="1"
+                               disabled="@_applying" value="@(_pendingAlarmVolume ?? alarmVol)"
+                               @oninput="e => StageAlarmVolume(long.Parse((string)e.Value!))" />
+                        <span class="zf-pos">@(_pendingAlarmVolume ?? alarmVol)</span>
+                    </div>
+                }
+                @if (httpAudio.MicVolume is { } micVol)
+                {
+                    <div class="control-row">
+                        <span>Microphone volume @PendingMark(_pendingMicVolume?.ToString())</span>
+                        <input class="zf-slider @(_pendingMicVolume != null ? "input-pending" : "")"
+                               type="range" min="0" max="100" step="1"
+                               disabled="@_applying" value="@(_pendingMicVolume ?? micVol)"
+                               @oninput="e => StageMicVolume(long.Parse((string)e.Value!))" />
+                        <span class="zf-pos">@(_pendingMicVolume ?? micVol)</span>
+                    </div>
+                }
+                <div class="notice small">The camera's own audio settings — what it offers varies per model.
+                    @if (httpAudio.RecordAudio != null)
+                    {
+                        <text> Record audio puts the microphone into every stream and recording, here and in the Reolink app alike.</text>
+                    }
+                    @if (httpAudio.Volume != null)
+                    {
+                        <text> Speaker volume covers sirens, alerts and two-way talk.</text>
+                    }
                 </div>
-                <div class="notice small">How loud the camera's speaker plays — sirens, alerts and two-way talk alike.</div>
             </div>
         }
 
@@ -1444,6 +1489,8 @@
     private string? _pendingDayNight, _pendingAntiFlicker;
     private bool? _pendingFlip, _pendingMirror;
     private long? _pendingVolume;
+    private bool? _pendingRecordAudio;   // camera-side record-audio switch (Enc audio flag)
+    private long? _pendingAlarmVolume, _pendingMicVolume; // extra AudioCfg volumes (per-model)
     private bool? _pendingAutoTrack;
     private long? _pendingIrBright;      // LedState IRLedBrightness (0-100)
     private string? _pendingDoorbellLed; // LedState doorbellLightState
@@ -1470,6 +1517,8 @@
         + (_pendingDayNight != null ? 1 : 0) + (_pendingAntiFlicker != null ? 1 : 0)
         + (_pendingFlip != null ? 1 : 0) + (_pendingMirror != null ? 1 : 0)
         + (_pendingVolume != null ? 1 : 0) + (_pendingAutoTrack != null ? 1 : 0)
+        + (_pendingRecordAudio != null ? 1 : 0)
+        + (_pendingAlarmVolume != null ? 1 : 0) + (_pendingMicVolume != null ? 1 : 0)
         + (_pendingIrBright != null ? 1 : 0) + (_pendingDoorbellLed != null ? 1 : 0)
         + (_pendingHdr != null ? 1 : 0) + (_pendingMdSens != null ? 1 : 0)
         + _pendingAiSens.Count
@@ -1623,6 +1672,16 @@
 
     private void StageVolume(long v) => _pendingVolume = v == _http?.Volume ? null : v;
 
+    private void StageRecordAudioToggle()
+    {
+        var cur = _http?.RecordAudio ?? false;
+        var target = !(_pendingRecordAudio ?? cur);
+        _pendingRecordAudio = target == cur ? null : target;
+    }
+
+    private void StageAlarmVolume(long v) => _pendingAlarmVolume = v == _http?.AlarmVolume ? null : v;
+    private void StageMicVolume(long v) => _pendingMicVolume = v == _http?.MicVolume ? null : v;
+
     private void StageAutoTrackToggle()
     {
         var cur = _http?.AutoTrack ?? false;
@@ -1716,6 +1775,8 @@
         _pendingDayNight = _pendingAntiFlicker = null;
         _pendingFlip = _pendingMirror = null;
         _pendingVolume = null;
+        _pendingRecordAudio = null;
+        _pendingAlarmVolume = _pendingMicVolume = null;
         _pendingAutoTrack = null;
         _pendingIrBright = null;
         _pendingDoorbellLed = null;
@@ -1838,6 +1899,18 @@
                 _pendingVolume = null;
                 applied.Add("speaker volume");
             }
+            if (_pendingRecordAudio is { } pra && await PostAsync("audio", new { recordAudio = pra }))
+            {
+                _pendingRecordAudio = null;
+                applied.Add(pra ? "record audio on" : "record audio off");
+            }
+            if ((_pendingAlarmVolume != null || _pendingMicVolume != null)
+                && await PostAsync("audio", new { alarmVolume = _pendingAlarmVolume, micVolume = _pendingMicVolume }))
+            {
+                if (_pendingAlarmVolume != null) applied.Add("alarm volume");
+                if (_pendingMicVolume != null) applied.Add("microphone volume");
+                _pendingAlarmVolume = _pendingMicVolume = null;
+            }
             if (_pendingAutoTrack is { } pat && await PostAsync("autotrack", new { on = pat }))
             {
                 _pendingAutoTrack = null;
@@ -1909,7 +1982,10 @@
         fresh.SdCards ?? old.SdCards,
         fresh.MdSensitivity ?? old.MdSensitivity,
         fresh.AiSensitivities ?? old.AiSensitivities,
-        fresh.Osd ?? old.Osd);
+        fresh.Osd ?? old.Osd,
+        fresh.RecordAudio ?? old.RecordAudio,
+        fresh.AlarmVolume ?? old.AlarmVolume,
+        fresh.MicVolume ?? old.MicVolume);
 
     protected override async Task OnParametersSetAsync()
     {

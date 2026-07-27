@@ -14,6 +14,11 @@ public sealed record HubVideo(long Index, byte[] AnnexB, bool Keyframe, uint Rtp
 public sealed record HubAudioAac(long Index, byte[] Au, uint RtpTs) : HubPacket(Index);
 /// <summary>16-bit little-endian mono PCM decoded from ADPCM. RTP clock = sample rate.</summary>
 public sealed record HubAudioPcm(long Index, byte[] Pcm, uint RtpTs) : HubPacket(Index);
+/// <summary>One Opus packet transcoded from the camera's audio (RFC 7587: 48 kHz
+/// RTP clock, 20 ms per packet). Emitted ALONGSIDE the original audio packets —
+/// RTSP sessions on an Opus-active hub forward these and skip the originals,
+/// while the recorders and the web player keep the camera's own audio.</summary>
+public sealed record HubAudioOpus(long Index, byte[] Packet, uint RtpTs) : HubPacket(Index);
 
 public sealed record AudioTrackInfo(bool IsAac, int SampleRate, int Channels, byte[]? AudioSpecificConfig);
 
@@ -76,7 +81,26 @@ public sealed class StreamHub : IStreamHub, IMediaSink
     // Audio RTP timestamps (clock = sample rate)
     private uint _audioRtpTs = (uint)Random.Shared.Next();
 
+    // --- Opus transcode, demand-counted: ffmpeg runs only while at least one
+    // Opus-mount session is playing (see IStreamHub.AcquireOpus).
+    private int _opusDemand;
+    private AudioTranscoder? _transcoder;
+    private uint _opusRtpTs = (uint)Random.Shared.Next(); // 48 kHz clock (RFC 7587)
+
     public StreamHub(string name) => Name = name;
+
+    public void AcquireOpus() => Interlocked.Increment(ref _opusDemand);
+
+    public void ReleaseOpus()
+    {
+        if (Interlocked.Decrement(ref _opusDemand) > 0) return;
+        lock (_gate)
+        {
+            if (Volatile.Read(ref _opusDemand) > 0) return; // a new listener raced in
+            _transcoder?.Dispose();
+            _transcoder = null;
+        }
+    }
 
     public int SubscriberCount => _subscribers.Count;
 
@@ -172,6 +196,8 @@ public sealed class StreamHub : IStreamHub, IMediaSink
 
     public void PublishAac(AacFrame frame)
     {
+        MaybeStartTranscoder(AudioTranscoder.SourceKind.AdtsAac);
+        _transcoder?.Feed(frame.Data); // whole ADTS block — ffmpeg reads the framing itself
         foreach (var au in Adts.Split(frame.Data))
         {
             if (Audio == null || !Audio.IsAac)
@@ -202,8 +228,34 @@ public sealed class StreamHub : IStreamHub, IMediaSink
             Audio = new AudioTrackInfo(false, 8000, 1, null);
             Log.Debug($"{Name}: ADPCM audio detected (decoding to PCM @ 8 kHz)");
         }
+        MaybeStartTranscoder(AudioTranscoder.SourceKind.Pcm16le8k);
+        _transcoder?.Feed(pcm);
         Emit(new HubAudioPcm(Interlocked.Increment(ref _index), pcm, _audioRtpTs), false, pcm.Length);
         _audioRtpTs = unchecked(_audioRtpTs + (uint)(pcm.Length / 2));
+    }
+
+    /// <summary>Starts the Opus transcoder on the publish loop's next audio frame
+    /// once an Opus session is listening (missing ffmpeg/libopus never gets this
+    /// far — Opus mounts refuse the DESCRIBE first). The demand check is cheap,
+    /// so paying it per audio frame keeps the start/stop logic in one place.</summary>
+    private void MaybeStartTranscoder(AudioTranscoder.SourceKind kind)
+    {
+        if (Volatile.Read(ref _opusDemand) == 0 || _transcoder != null) return;
+        lock (_gate)
+        {
+            if (Volatile.Read(ref _opusDemand) == 0 || _transcoder != null) return;
+            if (Ffmpeg.ExePath == null || !Ffmpeg.SupportsOpus) return; // the DESCRIBE gate already told the user
+            Log.Info($"{Name}: transcoding audio to Opus " +
+                     $"({(kind == AudioTranscoder.SourceKind.AdtsAac ? "AAC" : "ADPCM/PCM")} source, " +
+                     "48 kHz mono @ 32 kb/s) — runs while Opus clients are connected");
+            _transcoder = new AudioTranscoder(Name, kind, pkt =>
+            {
+                // Runs on the transcoder's reader task; Emit locks, _index is
+                // interlocked, and _opusRtpTs is only ever touched here.
+                Emit(new HubAudioOpus(Interlocked.Increment(ref _index), pkt, _opusRtpTs), false, pkt.Length);
+                _opusRtpTs = unchecked(_opusRtpTs + AudioTranscoder.SamplesPerPacket);
+            });
+        }
     }
 
     // Caches the packet into the current GOP (video keyframe starts a fresh one)
@@ -245,6 +297,14 @@ public sealed class StreamHub : IStreamHub, IMediaSink
 
     public void SourceStopped()
     {
+        // The transcoder is session-scoped too: kill its ffmpeg with the session
+        // (a battery camera parking must not leave one idling). While Opus
+        // listeners remain, the next session's first audio frame starts a fresh one.
+        lock (_gate)
+        {
+            _transcoder?.Dispose();
+            _transcoder = null;
+        }
         // The GOP cache is session-scoped: with no live publisher behind it, priming
         // a joiner would play a second of stale video and freeze (seen when clicking
         // an offline camera in the sidebar). The next session's first keyframe

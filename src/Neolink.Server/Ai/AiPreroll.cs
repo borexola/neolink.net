@@ -31,41 +31,10 @@ public static class AiPreroll
     /// and always the newest — the frame nearest the trigger instant).</summary>
     public const int MaxFrames = 3;
 
-    private static readonly Lazy<string?> FfmpegLazy = new(() =>
-        Locate(Environment.GetEnvironmentVariable("NEOLINK_FFMPEG"),
-               Environment.GetEnvironmentVariable("PATH")));
-
-    /// <summary>The NEOLINK_FFMPEG env var wins when it points at an existing
-    /// file (the escape hatch for nonstandard installs); otherwise the PATH is
-    /// scanned for ffmpeg(.exe). Null = no ffmpeg, feature sits out.</summary>
-    internal static string? Locate(string? envOverride, string? pathVar)
-    {
-        if (envOverride is { Length: > 0 })
-        {
-            try
-            {
-                if (File.Exists(envOverride)) return envOverride;
-                Log.Warn($"NEOLINK_FFMPEG points at '{envOverride}', which does not " +
-                         "exist — falling back to the PATH scan");
-            }
-            catch { /* unusable override: same fallback */ }
-        }
-        var exe = OperatingSystem.IsWindows() ? "ffmpeg.exe" : "ffmpeg";
-        foreach (var dir in (pathVar ?? "")
-                     .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
-        {
-            try
-            {
-                var p = Path.Combine(dir.Trim(), exe);
-                if (File.Exists(p)) return p;
-            }
-            catch { /* an unparsable PATH entry is somebody else's problem */ }
-        }
-        return null;
-    }
-
-    /// <summary>Full path of the ffmpeg binary, or null when none was found.</summary>
-    public static string? FfmpegPath => FfmpegLazy.Value;
+    /// <summary>Full path of the ffmpeg binary, or null when none was found.
+    /// (The locate logic lives in <see cref="Ffmpeg"/> — it is shared with the
+    /// audio transcoder.)</summary>
+    public static string? FfmpegPath => Ffmpeg.ExePath;
 
     private static int _missingLogged;
 

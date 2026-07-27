@@ -8,6 +8,28 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Added
 
+- **Opus audio for RTSP clients — chosen per client, by URL.** Every camera
+  path now serves `/opus` and `/original` variants
+  (`rtsp://host:8654/driveway/opus`, `.../driveway/subStream/opus`, …): the
+  Opus URLs carry the camera's AAC/ADPCM transcoded to Opus — what WebRTC
+  ecosystems (go2rtc, browsers, Home Assistant WebRTC cards) take natively,
+  saving them their own ffmpeg hop — while the plain URL keeps the camera's
+  original audio, so an NVR records AAC and a WebRTC gateway pulls Opus from
+  the same camera at the same time. `"audio_transcode": "opus"` on a camera
+  flips its plain URL's default. The transcode rides the same optional ffmpeg
+  the AI features use (libopus, which the standard builds all carry), runs
+  only while an Opus client is actually connected, and costs well under 1% of
+  a core; without ffmpeg the Opus URLs 404 with a log line saying why.
+  Recordings, the web UI player and two-way talk always keep the camera's
+  original audio.
+- **AUDIO section in camera settings.** The speaker-volume section grows into
+  the camera's own audio settings, offered per what each model exposes: a
+  **record audio** switch (the camera-side flag that puts the microphone into
+  every stream and recording — here, on the SD card and in the Reolink app
+  alike), the speaker volume as before, and alarm/microphone volumes on models
+  that have them. Staged and applied like every other camera setting, always
+  read from the camera itself.
+
 - **PORTS tab: the camera's own service switches, live.** Each camera's
   settings dialog gains a Ports tab (admins only — in the UI and at the API)
   showing what the camera itself reports — Baichuan, HTTP, HTTPS, RTSP, RTMP,

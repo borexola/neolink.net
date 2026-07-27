@@ -168,6 +168,8 @@ public static class WebApi
     private sealed record ImageRequest(int? Bright, int? Contrast, int? Saturation, int? Hue, int? Sharpen,
         string? DayNight, string? AntiFlicker, bool? Flip, bool? Mirror);
     private sealed record VolumeRequest(int? Volume);
+
+    private sealed record AudioRequest(bool? RecordAudio, int? AlarmVolume, int? MicVolume);
     private sealed record PtzPresetRequest(int? Id, string? Name, bool? Save);
     private sealed record QuickReplyRequest(int? Id);
     private sealed record AutoReplyRequest(int? FileId, int? Timeout);
@@ -2087,6 +2089,9 @@ public static class WebApi
                         hdrMax = f.Image.HdrMax,
                     },
                     volume = f.Volume,
+                    recordAudio = f.Audio?.RecordAudio,
+                    alarmVolume = f.Audio?.AlarmVolume,
+                    micVolume = f.Audio?.MicVolume,
                     // Same { level, label } shape the camera list uses.
                     wifiSignal = f.WifiSignal is { } fw ? new { level = fw.Level, label = fw.Label } : null,
                     ptzPresets = f.PtzPresets?.Select(p => new { id = p.Id, name = p.Name, enabled = p.Enabled }),
@@ -2149,6 +2154,26 @@ public static class WebApi
                 await control.SetVolumeAsync(vol, reqCt);
                 NudgeHa(name);
                 return Results.Json(new { ok = true, volume = vol });
+            }));
+
+        // Camera-side audio settings beyond the speaker volume: the record-audio
+        // switch (encode settings' audio flag) and the extra AudioCfg volumes some
+        // models expose. Which of them exist varies per camera — the GET features
+        // reply is the menu, and posting one the camera lacks earns the camera's
+        // own refusal.
+        app.MapPost("/api/cameras/{name}/audio", (string name, AudioRequest req, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: true, async (control, reqCt) =>
+            {
+                if (req is { RecordAudio: null, AlarmVolume: null, MicVolume: null })
+                    return Results.Json(new { error = "provide recordAudio, alarmVolume and/or micVolume" }, statusCode: 400);
+                if (req.AlarmVolume is < 0 or > 100 || req.MicVolume is < 0 or > 100)
+                    return Results.Json(new { error = "volumes are 0-100" }, statusCode: 400);
+                if (req.RecordAudio is { } rec)
+                    await control.SetRecordAudioAsync(rec, reqCt);
+                if (req.AlarmVolume != null || req.MicVolume != null)
+                    await control.SetAudioVolumesAsync(req.AlarmVolume, req.MicVolume, reqCt);
+                NudgeHa(name);
+                return Results.Json(new { ok = true });
             }));
 
         // PTZ presets: {id} recalls a saved position; {id, name, save:true} saves

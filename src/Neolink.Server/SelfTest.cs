@@ -997,6 +997,76 @@ public static class SelfTest
             Assert((packets[^1][1] & 0x80) != 0, "marker on last packet");
         });
 
+        Test("audio transcode: ogg/opus depacketizer + RTP + SDP", () =>
+        {
+            // Ogg page: capture pattern + fixed header + lacing table + payload.
+            // The reader skips CRC (its source is a local pipe), so zeros do.
+            static byte[] Page(byte headerType, int[] laces, byte[] payload)
+            {
+                var page = new byte[27 + laces.Length + payload.Length];
+                page[0] = (byte)'O'; page[1] = (byte)'g'; page[2] = (byte)'g'; page[3] = (byte)'S';
+                page[5] = headerType;
+                page[26] = (byte)laces.Length;
+                for (int i = 0; i < laces.Length; i++) page[27 + i] = (byte)laces[i];
+                payload.CopyTo(page, 27 + laces.Length);
+                return page;
+            }
+
+            var reader = new OggOpusReader();
+            // OpusHead/OpusTags describe the stream, they are not audio — swallowed.
+            var head = Encoding.ASCII.GetBytes("OpusHead").Concat(new byte[] { 1, 1 }).ToArray();
+            AssertEq(reader.Feed(Page(0x02, new[] { head.Length }, head)).Count, 0);
+            // Two packets on one page, arriving split mid-page across two feeds.
+            var page2 = Page(0, new[] { 3, 4 }, new byte[] { 10, 11, 12, 20, 21, 22, 23 });
+            AssertEq(reader.Feed(page2.AsSpan(0, 10)).Count, 0);
+            var got = reader.Feed(page2.AsSpan(10));
+            AssertEq(got.Count, 2);
+            AssertSeq(got[0], new byte[] { 10, 11, 12 });
+            AssertSeq(got[1], new byte[] { 20, 21, 22, 23 });
+            // A 255 lacing value continues the packet — across a page boundary too.
+            var part1 = new byte[255];
+            for (int i = 0; i < part1.Length; i++) part1[i] = (byte)i;
+            AssertEq(reader.Feed(Page(0, new[] { 255 }, part1)).Count, 0);
+            var joined = reader.Feed(Page(0x01, new[] { 3 }, new byte[] { 1, 2, 3 }));
+            AssertEq(joined.Count, 1);
+            AssertEq(joined[0].Length, 258);
+            AssertSeq(joined[0].Skip(255).ToArray(), new byte[] { 1, 2, 3 });
+
+            // RFC 7587: one Opus packet per RTP packet, payload verbatim, 48 kHz ts.
+            var pkt = new Rtsp.RtpPacketizer(97);
+            var rtp = pkt.PacketizeOpus(new byte[] { 0xF8, 1, 2 }, 0x1092);
+            AssertEq(rtp.Length, 12 + 3);
+            AssertEq(rtp[1] & 0x7F, 97);
+            AssertEq(rtp[6], 0x10);
+            AssertEq(rtp[7], 0x92);
+            AssertSeq(rtp.Skip(12).ToArray(), new byte[] { 0xF8, 1, 2 });
+
+            // SDP: an Opus mount advertises opus/48000/2 in PLACE of the original
+            // audio; the plain/original mount keeps the camera's AAC line — the
+            // same hub serves both, per URL.
+            var hub = new OpusSdpHub { Audio = new Streaming.AudioTrackInfo(true, 16000, 1, new byte[] { 0x14, 0x08 }) };
+            var sdp = Rtsp.Sdp.Build(hub, "cam", opus: true);
+            Assert(sdp.Contains("opus/48000/2"), "opus rtpmap advertised");
+            Assert(sdp.Contains("sprop-stereo=0"), "mono fmtp advertised");
+            Assert(!sdp.Contains("mpeg4-generic"), "the original AAC line is replaced");
+            Assert(Rtsp.Sdp.Build(hub, "cam").Contains("mpeg4-generic"), "AAC advertised on the original mount");
+        });
+
+        Test("camera audio settings: Enc record-audio mapping", () =>
+        {
+            static System.Text.Json.Nodes.JsonObject Enc(string json) =>
+                (System.Text.Json.Nodes.JsonObject)System.Text.Json.Nodes.JsonNode.Parse(json)!;
+            // Any stream carrying audio reads as ON (the streams move together —
+            // the app exposes one switch); no audio field anywhere reads as
+            // "this firmware has no such switch" and hides the row.
+            Assert(Streaming.CameraControl.EncRecordAudio(
+                Enc("{\"mainStream\":{\"audio\":1},\"subStream\":{\"audio\":0}}")) == true, "any stream on = on");
+            Assert(Streaming.CameraControl.EncRecordAudio(
+                Enc("{\"mainStream\":{\"audio\":0},\"subStream\":{\"audio\":0}}")) == false, "all off = off");
+            Assert(Streaming.CameraControl.EncRecordAudio(
+                Enc("{\"mainStream\":{\"size\":\"640*480\"}}")) == null, "no audio flag = feature absent");
+        });
+
         Test("event label mapping", () =>
         {
             var labels = Recording.EventRecorder.LabelsOf(new MotionPush("MD",
@@ -4408,11 +4478,11 @@ public static class SelfTest
                 Directory.CreateDirectory(ffDir);
                 var ffExe = Path.Combine(ffDir, OperatingSystem.IsWindows() ? "ffmpeg.exe" : "ffmpeg");
                 File.WriteAllBytes(ffExe, new byte[] { 1 });
-                AssertEq(Neolink.Ai.AiPreroll.Locate(ffExe, null) ?? "-", ffExe);
-                AssertEq(Neolink.Ai.AiPreroll.Locate(null, ffDir) ?? "-", ffExe);
-                AssertEq(Neolink.Ai.AiPreroll.Locate(
+                AssertEq(Neolink.Media.Ffmpeg.Locate(ffExe, null) ?? "-", ffExe);
+                AssertEq(Neolink.Media.Ffmpeg.Locate(null, ffDir) ?? "-", ffExe);
+                AssertEq(Neolink.Media.Ffmpeg.Locate(
                     Path.Combine(ffDir, "missing-ffmpeg"), ffDir) ?? "-", ffExe);
-                Assert(Neolink.Ai.AiPreroll.Locate(null, Path.Combine(dir, "nowhere")) == null,
+                Assert(Neolink.Media.Ffmpeg.Locate(null, Path.Combine(dir, "nowhere")) == null,
                     "no override, nothing on the path: no ffmpeg");
             }
             finally
@@ -5139,6 +5209,27 @@ public static class SelfTest
     /// exactly what a backpressured socket write looks like. Real kernels buffer
     /// too much to reproduce this with sockets alone (a 1 GB loopback send
     /// "completes" unread).</summary>
+    /// <summary>Just enough IStreamHub for Sdp.Build: audio track info + the Opus flag.</summary>
+    private sealed class OpusSdpHub : Streaming.IStreamHub
+    {
+        public string Name => "fake";
+        public int SubscriberCount => 0;
+        public int ViewerCount => 0;
+        public bool VideoReady => true;
+        public VideoCodec? Codec => VideoCodec.H264;
+        public byte[]? Sps => null;
+        public byte[]? Pps => null;
+        public byte[]? Vps => null;
+        public uint Width => 0;
+        public uint Height => 0;
+        public Streaming.AudioTrackInfo? Audio { get; set; }
+        public (Guid id, ChannelReader<Streaming.HubPacket> reader) Subscribe(bool viewer = false)
+            => throw new NotSupportedException();
+        public void Unsubscribe(Guid id) { }
+        public DateTime LastViewerAskUtc => DateTime.MinValue;
+        public Task<bool> WaitForDescribeInfoAsync(TimeSpan timeout, CancellationToken ct) => Task.FromResult(true);
+    }
+
     private sealed class StallableStream(Stream inner) : Stream
     {
         public volatile bool Stall;

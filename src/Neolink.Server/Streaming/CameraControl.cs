@@ -130,13 +130,19 @@ public sealed record WifiReading(int Raw, WifiUnit Unit)
         new(raw, raw < 0 ? WifiUnit.Dbm : raw <= 4 ? WifiUnit.Bars : WifiUnit.Percent);
 }
 
+/// <summary>Camera-side audio settings beyond the speaker volume — every member
+/// is null when that particular camera doesn't expose it (they vary per model).
+/// RecordAudio is the encode settings' audio flag: whether the microphone goes
+/// into the streams (and thus recordings) at all.</summary>
+public sealed record AudioState(bool? RecordAudio, int? AlarmVolume, int? MicVolume);
+
 /// <summary>Everything readable over the camera's HTTP API in one round: a null
 /// member means that feature is absent (or the camera rejected the query).</summary>
 public sealed record HttpFeatures(ImageSettings? Image, int? Volume, WifiReading? WifiSignal,
     IReadOnlyList<PtzPresetInfo>? PtzPresets, IReadOnlyList<QuickReplyFile>? QuickReplies,
     bool? AutoTrack, IReadOnlyList<SdCardInfo>? SdCards,
     int? MdSensitivity = null, IReadOnlyList<AiSensitivity>? AiSensitivities = null,
-    OsdSettings? Osd = null);
+    OsdSettings? Osd = null, AudioState? Audio = null);
 
 /// <summary>Discovered camera capabilities: identity, advertised support flags, probed features.</summary>
 public sealed record CameraCapabilities(VersionInfoXml? Version, XElement? Support, CameraFeatures Features);
@@ -260,6 +266,17 @@ public interface ICameraControl
 
     /// <summary>Sets the camera's speaker volume (0-100).</summary>
     Task SetVolumeAsync(int volume, CancellationToken ct);
+
+    /// <summary>Camera-side record-audio switch (the encode settings' audio flag,
+    /// set on every stream): whether the microphone goes into the streams and
+    /// recordings at all. Default: not supported.</summary>
+    Task SetRecordAudioAsync(bool on, CancellationToken ct) =>
+        Task.FromException(new NotSupportedException("this camera has no record-audio switch"));
+
+    /// <summary>Writes the extra AudioCfg volumes some models expose (0-100 each;
+    /// null = leave untouched). Default: not supported.</summary>
+    Task SetAudioVolumesAsync(int? alarmVolume, int? micVolume, CancellationToken ct) =>
+        Task.FromException(new NotSupportedException("this camera has no audio volume settings"));
 
     /// <summary>The camera's Wi-Fi signal reading with the unit it came in, or null.</summary>
     Task<WifiReading?> GetWifiSignalAsync(CancellationToken ct);
@@ -1069,7 +1086,8 @@ public sealed class CameraControl : ICameraControl
         var mdSens = await Step<int?>(GetMdSensitivityAsync).ConfigureAwait(false);
         var aiSens = await Step<IReadOnlyList<AiSensitivity>>(GetAiSensitivitiesAsync).ConfigureAwait(false);
         var osd = await Step<OsdSettings>(GetOsdSettingsAsync).ConfigureAwait(false);
-        var fresh = new HttpFeatures(image, volume, wifi, presets, replies, autoTrack, sdCards, mdSens, aiSens, osd);
+        var audio = await Step<AudioState>(GetAudioStateAsync).ConfigureAwait(false);
+        var fresh = new HttpFeatures(image, volume, wifi, presets, replies, autoTrack, sdCards, mdSens, aiSens, osd, audio);
 
         // Fill the holes from the last good sweep — live values always win; the
         // cache only stands in for sections this sweep couldn't read (including
@@ -1082,16 +1100,16 @@ public sealed class CameraControl : ICameraControl
             fresh.PtzPresets ?? c.PtzPresets, fresh.QuickReplies ?? c.QuickReplies,
             fresh.AutoTrack ?? c.AutoTrack, fresh.SdCards ?? c.SdCards,
             fresh.MdSensitivity ?? c.MdSensitivity, fresh.AiSensitivities ?? c.AiSensitivities,
-            fresh.Osd ?? c.Osd);
+            fresh.Osd ?? c.Osd, fresh.Audio ?? c.Audio);
         bool freshContent = fresh.Image != null || fresh.Volume != null || fresh.WifiSignal != null
             || fresh.PtzPresets != null || fresh.QuickReplies != null || fresh.AutoTrack != null
             || fresh.SdCards != null || fresh.MdSensitivity != null || fresh.AiSensitivities != null
-            || fresh.Osd != null;
+            || fresh.Osd != null || fresh.Audio != null;
         bool hasContent = freshContent
             || merged.Image != null || merged.Volume != null || merged.WifiSignal != null
             || merged.PtzPresets != null || merged.QuickReplies != null || merged.AutoTrack != null
             || merged.SdCards != null || merged.MdSensitivity != null || merged.AiSensitivities != null
-            || merged.Osd != null;
+            || merged.Osd != null || merged.Audio != null;
         if (freshContent) _httpFeaturesCache = merged;
 
         // Never fail silently. The panel shows every HTTP-backed section (picture,
@@ -1322,6 +1340,86 @@ public sealed class CameraControl : ICameraControl
 
     public Task<int?> GetVolumeAsync(CancellationToken ct) =>
         HttpTryAsync<int?>(async c => (int?)(await _httpApi!.GetAudioCfgAsync(c).ConfigureAwait(false))["volume"], ct);
+
+    /// <summary>The audio settings BEYOND the speaker volume, which models expose
+    /// unevenly: the encode settings' record-audio flag, and whichever extra
+    /// AudioCfg volumes this firmware carries. Absent members read as null and the
+    /// UI simply doesn't draw them — the camera decides what's on offer.</summary>
+    public Task<AudioState?> GetAudioStateAsync(CancellationToken ct) =>
+        HttpTryAsync<AudioState>(async c =>
+        {
+            bool? rec = null;
+            try { rec = EncRecordAudio(await _httpApi!.GetEncAsync(c).ConfigureAwait(false)); }
+            catch (ReolinkApiException) { /* no Enc surface: flag stays hidden */ }
+            int? alarm = null, mic = null;
+            try
+            {
+                var cfg = await _httpApi!.GetAudioCfgAsync(c).ConfigureAwait(false);
+                alarm = (int?)cfg["alarmVolume"];
+                mic = (int?)cfg["micVolume"];
+            }
+            catch (ReolinkApiException) { /* no AudioCfg: volumes stay hidden */ }
+            return rec == null && alarm == null && mic == null ? null : new AudioState(rec, alarm, mic);
+        }, ct);
+
+    /// <summary>The record-audio state across the encode settings' streams: true
+    /// when any stream carries audio (they move together — the app exposes one
+    /// switch), null when this firmware has no audio flag at all.</summary>
+    internal static bool? EncRecordAudio(JsonObject enc)
+    {
+        bool? any = null;
+        foreach (var key in new[] { "mainStream", "subStream", "extStream" })
+        {
+            if (enc[key] is not JsonObject s || s["audio"] is not { } flag) continue;
+            any = (any ?? false) || ((int?)flag ?? 0) != 0;
+        }
+        return any;
+    }
+
+    /// <summary>Camera-side record-audio switch: puts the microphone into (or
+    /// strips it from) every stream the camera encodes — which is what lands in
+    /// recordings here, in the Reolink app and on the SD card alike.</summary>
+    public async Task SetRecordAudioAsync(bool on, CancellationToken ct)
+    {
+        if (_httpApi == null)
+            throw new NotSupportedException($"record audio needs the camera's HTTP API ('{CameraName}' has none)");
+        var enc = await _httpApi.GetEncAsync(ct).ConfigureAwait(false);
+        bool touched = false;
+        foreach (var key in new[] { "mainStream", "subStream", "extStream" })
+        {
+            if (enc[key] is not JsonObject s || s["audio"] is null) continue;
+            s["audio"] = on ? 1 : 0;
+            touched = true;
+        }
+        if (!touched)
+            throw new NotSupportedException($"{CameraName} exposes no record-audio flag in its encode settings");
+        await _httpApi.SetEncAsync(enc, ct).ConfigureAwait(false);
+        if (_httpFeaturesCache?.Audio is { } ca)
+            _httpFeaturesCache = _httpFeaturesCache with { Audio = ca with { RecordAudio = on } };
+        Log.Info($"{CameraName}: record audio {(on ? "enabled" : "disabled")} on every stream — " +
+                 "the camera may briefly restart its streams to apply");
+    }
+
+    /// <summary>Writes whichever extra AudioCfg volumes were staged (0–100 each);
+    /// minimal payload like the picture writes — see SetImageSettingsAsync.</summary>
+    public async Task SetAudioVolumesAsync(int? alarmVolume, int? micVolume, CancellationToken ct)
+    {
+        if (_httpApi == null)
+            throw new NotSupportedException($"audio volumes need the camera's HTTP API ('{CameraName}' has none)");
+        var cfg = new JsonObject { ["channel"] = _httpApi.ChannelId };
+        if (alarmVolume is { } av) cfg["alarmVolume"] = Math.Clamp(av, 0, 100);
+        if (micVolume is { } mv) cfg["micVolume"] = Math.Clamp(mv, 0, 100);
+        if (cfg.Count == 1) return; // nothing staged
+        await _httpApi.SetAudioCfgAsync(cfg, ct).ConfigureAwait(false);
+        if (_httpFeaturesCache?.Audio is { } ca)
+            _httpFeaturesCache = _httpFeaturesCache with
+            {
+                Audio = ca with { AlarmVolume = alarmVolume ?? ca.AlarmVolume, MicVolume = micVolume ?? ca.MicVolume },
+            };
+        Log.Info($"{CameraName}: audio volumes changed" +
+                 $"{(alarmVolume != null ? $" alarm={Math.Clamp(alarmVolume.Value, 0, 100)}" : "")}" +
+                 $"{(micVolume != null ? $" mic={Math.Clamp(micVolume.Value, 0, 100)}" : "")}");
+    }
 
     public async Task SetVolumeAsync(int volume, CancellationToken ct)
     {

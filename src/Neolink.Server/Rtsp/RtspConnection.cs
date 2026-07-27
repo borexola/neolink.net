@@ -20,6 +20,8 @@ public sealed class RtspConnection
     private readonly Dictionary<string, RtspSession> _sessions = new();
     private readonly byte[] _readBuf = new byte[8192];
     private readonly EndPoint? _remote;
+    /// <summary>Once-per-process flag for the "Opus mount but no usable ffmpeg" refusal log.</summary>
+    private static int _opusRefusalLogged;
     private int _readLen;
     private int _readPos;
 
@@ -186,6 +188,21 @@ public sealed class RtspConnection
         }
         if (!await CheckAuthAsync(req, mount, ct).ConfigureAwait(false)) return;
 
+        // An Opus mount is only honest when the located ffmpeg can actually
+        // encode Opus (probed once, lazily). Refusing here beats promising Opus
+        // in the SDP and delivering silence.
+        if (mount.Opus && !Media.Ffmpeg.SupportsOpus)
+        {
+            if (Interlocked.Exchange(ref _opusRefusalLogged, 1) == 0)
+                Log.Warn($"DESCRIBE {path}: Opus audio was requested but " +
+                         (Media.Ffmpeg.ExePath == null
+                             ? "no ffmpeg was found (install one on PATH or set NEOLINK_FFMPEG)"
+                             : "this ffmpeg has no libopus encoder") +
+                         " — Opus mounts answer 404 until that changes");
+            await RespondAsync(req, 404, "Not Found", ct: ct).ConfigureAwait(false);
+            return;
+        }
+
         if (!await mount.Hub.WaitForDescribeInfoAsync(TimeSpan.FromSeconds(12), ct).ConfigureAwait(false))
         {
             Log.Warn($"DESCRIBE {path}: stream not ready (camera offline or still connecting)");
@@ -211,7 +228,7 @@ public sealed class RtspConnection
             }
         }
 
-        string sdp = Sdp.Build(mount.Hub, mount.Hub.Name, backchannel);
+        string sdp = Sdp.Build(mount.Hub, mount.Hub.Name, backchannel, opus: mount.Opus);
         string contentBase = req.Uri.TrimEnd('/') + "/";
         await RespondAsync(req, 200, "OK",
             $"Content-Base: {contentBase}\r\nContent-Type: application/sdp",
@@ -658,7 +675,11 @@ internal sealed class RtspSession
         long lastIndex = -1;
         bool waitKeyframe = true; // always start on a keyframe
 
-        Log.Info($"{hub.Name}: client started streaming (session {Id})");
+        // Opus mounts vote for the transcoder: ffmpeg runs only while at least
+        // one Opus session is playing, and stops with the last one.
+        if (_mount.Opus) hub.AcquireOpus();
+        Log.Info($"{hub.Name}: client started streaming (session {Id}" +
+                 $"{(_mount.Opus ? ", Opus audio" : "")})");
         try
         {
             await foreach (var packet in reader.ReadAllAsync(ct).ConfigureAwait(false))
@@ -693,10 +714,17 @@ internal sealed class RtspSession
                         }
                         break;
                     }
-                    case HubAudioAac a when Audio != null:
+                    // The mount decides this session's audio: on an Opus mount the
+                    // transcoded packets ARE the track and the originals are
+                    // skipped; on an original mount it's the exact opposite. Both
+                    // kinds flow through the hub side by side.
+                    case HubAudioOpus o when Audio != null && _mount.Opus:
+                        await SendAsync(Audio, Audio.Packetizer.PacketizeOpus(o.Packet, o.RtpTs), ct).ConfigureAwait(false);
+                        break;
+                    case HubAudioAac a when Audio != null && !_mount.Opus:
                         await SendAsync(Audio, Audio.Packetizer.PacketizeAac(a.Au, a.RtpTs), ct).ConfigureAwait(false);
                         break;
-                    case HubAudioPcm p when Audio != null:
+                    case HubAudioPcm p when Audio != null && !_mount.Opus:
                         foreach (var rtp in Audio.Packetizer.PacketizePcm(p.Pcm, p.RtpTs))
                             await SendAsync(Audio, rtp, ct).ConfigureAwait(false);
                         break;
@@ -710,6 +738,7 @@ internal sealed class RtspSession
         }
         finally
         {
+            if (_mount.Opus) hub.ReleaseOpus();
             hub.Unsubscribe(subId);
             Log.Info($"{hub.Name}: client stopped streaming (session {Id})");
         }

@@ -117,6 +117,11 @@ public sealed class RtpPacketizer
         return BuildPacket(head, au, ts, marker: true);
     }
 
+    /// <summary>Opus (RFC 7587): one Opus packet per RTP packet, 48 kHz clock.
+    /// Camera audio packets (20 ms @ 32 kb/s ≈ 80 bytes) never need fragmenting.</summary>
+    public byte[] PacketizeOpus(ReadOnlySpan<byte> packet, uint ts) =>
+        BuildPacket(packet, ReadOnlySpan<byte>.Empty, ts, marker: false);
+
     /// <summary>L16 (RFC 3551): network byte order 16-bit PCM. Input is little-endian.</summary>
     public List<byte[]> PacketizePcm(ReadOnlySpan<byte> pcmLe, uint baseTs)
     {

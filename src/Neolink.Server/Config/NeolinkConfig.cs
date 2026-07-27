@@ -148,6 +148,7 @@ public sealed class NeolinkConfig
         string? name = null, username = null, password = null, address = null, uid = null, httpAddress = null;
         string? onvifAddress = null;
         string? rtspMain = null, rtspSub = null;
+        string? audioTranscode = null;
         string stream = "both";
         byte channelId = 0;
         bool record = true;
@@ -185,6 +186,7 @@ public sealed class NeolinkConfig
                 case "udp": udp = prop.Value.GetBoolean(); break;
                 case "wakecapture": wakeCapture = prop.Value.GetBoolean(); break;
                 case "keepalivehours": keepAliveHours = Math.Clamp(prop.Value.GetDouble(), 0, 24); break;
+                case "audiotranscode": audioTranscode = prop.Value.GetString(); break;
                 // Generic (non-Reolink) camera: pull these RTSP URLs directly.
                 case "rtsp" or "rtspmain": rtspMain = prop.Value.GetString(); break;
                 case "rtspsub": rtspSub = prop.Value.GetString(); break;
@@ -201,7 +203,8 @@ public sealed class NeolinkConfig
         }
 
         return BuildCamera(name, username, password, address, uid, stream, channelId, permitted, httpAddress,
-            record, rtspMain, rtspSub, alwaysOn, udpProbe, udp, wakeCapture, onvifAddress, keepAliveHours);
+            record, rtspMain, rtspSub, alwaysOn, udpProbe, udp, wakeCapture, onvifAddress, keepAliveHours,
+            audioTranscode);
     }
 
     private static RecordingConfig ParseJsonRecording(JsonElement el)
@@ -428,7 +431,8 @@ public sealed class NeolinkConfig
                 MiniToml.GetBool(c, "udp") ?? false,
                 MiniToml.GetBool(c, "wake_capture") ?? false,
                 MiniToml.GetString(c, "onvif_address"),
-                Math.Clamp(MiniToml.GetDouble(c, "keep_alive_hours") ?? 0, 0, 24)));
+                Math.Clamp(MiniToml.GetDouble(c, "keep_alive_hours") ?? 0, 0, 24),
+                MiniToml.GetString(c, "audio_transcode")));
         }
         return config;
     }
@@ -443,9 +447,10 @@ public sealed class NeolinkConfig
         string? address, string? uid, string stream, byte channelId, List<string>? permitted,
         string? httpAddress = null, bool record = true, string? rtspMain = null, string? rtspSub = null,
         bool? alwaysOn = null, bool udpProbe = false, bool udp = false, bool wakeCapture = false,
-        string? onvifAddress = null, double keepAliveHours = 0)
+        string? onvifAddress = null, double keepAliveHours = 0, string? audioTranscode = null)
     {
         if (name == null) throw new FormatException("camera entry missing \"name\"");
+        audioTranscode = NormalizeAudioTranscode(name, audioTranscode);
 
         // Generic (non-Reolink) camera: RTSP URLs stand in for address/credentials
         // (put the login inside the URL: rtsp://user:pass@host/path).
@@ -468,6 +473,7 @@ public sealed class NeolinkConfig
                 Stream = stream,
                 PermittedUsers = permitted,
                 Record = record,
+                AudioTranscode = audioTranscode,
             };
         }
 
@@ -505,7 +511,20 @@ public sealed class NeolinkConfig
             Udp = udp,
             WakeCapture = wakeCapture,
             KeepAliveHours = keepAliveHours,
+            AudioTranscode = audioTranscode,
         };
+    }
+
+    /// <summary>null/off = passthrough; "opus" is the only transcode target so
+    /// far. A typo must not silently serve the original codec with no clue why.</summary>
+    private static string? NormalizeAudioTranscode(string name, string? value)
+    {
+        var v = value?.Trim().ToLowerInvariant();
+        if (v is null or "" or "off" or "none") return null;
+        if (v == "opus") return v;
+        Log.Warn($"Camera \"{name}\": unknown audio_transcode \"{value}\" — supported: " +
+                 "\"opus\" or \"off\". Serving the camera's original audio.");
+        return null;
     }
 
     private void Validate()
@@ -824,4 +843,9 @@ public sealed class CameraConfig
     /// forever. Only meaningful when the camera is sleep-friendly (battery, no
     /// always_on); ignored otherwise.</summary>
     public double KeepAliveHours { get; init; }
+    /// <summary>Transcode this camera's audio for RTSP clients: "opus" (needs
+    /// ffmpeg with libopus; WebRTC ecosystems take Opus natively) or null =
+    /// serve the camera's original audio. Recordings, the web player and
+    /// two-way talk always keep the original.</summary>
+    public string? AudioTranscode { get; init; }
 }

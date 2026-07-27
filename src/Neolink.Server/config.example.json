@@ -141,6 +141,19 @@
       // "both" serves /driveway (+ /driveway/mainStream) and /driveway/subStream.
       "stream": "both",
 
+      // Audio per RTSP client: every camera path also serves an "/opus" and an
+      // "/original" variant, so each client picks its audio codec by URL —
+      //   rtsp://host:8654/driveway/opus            (also .../subStream/opus etc.)
+      // gets Opus (what WebRTC ecosystems — go2rtc, browsers, HA WebRTC cards —
+      // take natively, saving them their own ffmpeg hop), while an NVR keeps
+      // recording the camera's own AAC from the plain URL, simultaneously.
+      // ffmpeg (with libopus) on PATH or NEOLINK_FFMPEG powers the transcode; it
+      // runs only while an Opus client is connected and costs <1% of a core. No
+      // ffmpeg = no /opus URLs (404 + a log line). Recordings, the web UI player
+      // and two-way talk always use the camera's original audio.
+      // Optional: make the PLAIN path (no suffix) serve Opus instead:
+      // "audio_transcode": "opus",
+
       // Only needed when connecting through a Reolink NVR: camera channel, starting at 0.
       "channel_id": 0
 
