@@ -125,9 +125,12 @@ public sealed class AiSettings
     /// other kept frame is dropped and the interval doubles, so the final set
     /// always spans the WHOLE event, however long it runs — a long event gets
     /// the same bounded payload, spread thinner. (The stored JSON name is
-    /// historic — the field began life as "seconds sampled".)</summary>
+    /// historic — the field began life as "seconds sampled".) Default 30: at
+    /// keyframe cadence that covers ~2 minutes before any thinning, and stays
+    /// a single request with pre-roll riding on top. Stored settings keep
+    /// whatever value they carry.</summary>
     [JsonPropertyName("captureSeconds")]
-    public int MaxFrames { get; set; } = 10;
+    public int MaxFrames { get; set; } = 30;
 
     /// <summary>How long one completion may take before the job is abandoned.
     /// Local models on modest hardware can genuinely need minutes.</summary>

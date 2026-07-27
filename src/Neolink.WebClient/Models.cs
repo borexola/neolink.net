@@ -281,7 +281,7 @@ public sealed class ApiAiSettings
     public bool KeepFrames { get; set; }
     /// <summary>Cost ceiling: at most this many frames per event; long events
     /// spread the kept frames end to end.</summary>
-    public int MaxFrames { get; set; } = 10;
+    public int MaxFrames { get; set; } = 30;
     public int TimeoutSeconds { get; set; } = 120;
     /// <summary>Whether the server found an ffmpeg (stream sampling, pre-roll
     /// frames, downscaling) — surfaced so the UI can say so instead of guessing.</summary>

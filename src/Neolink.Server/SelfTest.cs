@@ -4291,8 +4291,8 @@ public static class SelfTest
             // 2s / 10 frames; keep-frames is a strict opt-in. The cap keeps its
             // historic JSON name so pre-rework ai.json files carry it over.
             var sdef = new Neolink.Ai.AiSettings();
-            Assert(sdef is { SampleEverySeconds: 2, MaxFrames: 10, KeepFrames: false },
-                "sampling defaults: every 2s, 10 frames max, frames not kept");
+            Assert(sdef is { SampleEverySeconds: 2, MaxFrames: 30, KeepFrames: false },
+                "sampling defaults: every 2s, 30 frames max, frames not kept");
             var legacy = System.Text.Json.JsonSerializer.Deserialize<Neolink.Ai.AiSettings>(
                 "{\"captureSeconds\":25,\"sampleMode\":\"interval\"}",
                 new System.Text.Json.JsonSerializerOptions
