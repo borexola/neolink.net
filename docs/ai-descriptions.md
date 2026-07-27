@@ -61,8 +61,9 @@ tentative self-wake recordings are never sampled.
 
 **Which pipeline am I on?** The startup log says it in one line ("AI
 describe: ffmpeg at … — stream frame sampling, pre-trigger frames and
-downscaling active", or the "no ffmpeg found" variant); each event's
-"describing event" line says `stream-tap` when the stream was the source.
+downscaling active", or the "no ffmpeg found" variant), the Settings → AI
+page shows the same status, and each event's "describing event" log line
+says `stream-tap` when the stream was the source.
 
 ## Threat classification
 
@@ -111,7 +112,9 @@ never a requirement.
 
 With ffmpeg: effectively nothing per frame — the tap reads video already
 flowing, and decoding runs on the describe worker, never the event path.
-Without: one sub-stream snapshot per second during events. Either way, one
+Without: one sub-stream snapshot request per sampled frame while events
+record (the density knob sets the pace; the opening seconds sample at one
+per second). Either way, one
 model call per event on a bounded queue (8) — a burst beyond it skips events
 with a log line rather than piling up. Cameras with the toggle off cost
 nothing at all.
