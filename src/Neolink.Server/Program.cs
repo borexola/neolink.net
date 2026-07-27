@@ -271,7 +271,8 @@ if (eventStore != null && recordingSettings != null)
 {
     var recSettingsForAi = recordingSettings;
     aiDescriber = new Neolink.Ai.AiDescriber(aiStore, eventStore,
-        cam => recSettingsForAi.Get(cam).AiDescribe);
+        cam => recSettingsForAi.Get(cam).AiDescribe,
+        cam => recSettingsForAi.Get(cam).AiContext);
     var describer = aiDescriber;
     tasks.Add(Task.Run(() => describer.RunAsync(shutdown.Token)));
 }

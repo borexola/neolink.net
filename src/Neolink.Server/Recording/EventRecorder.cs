@@ -583,13 +583,21 @@ public sealed class EventRecorder
 
     private async Task RunEventCoreAsync(EventRecord rec, bool provisional, CancellationToken ct)
     {
+        // The pre-roll buffers hold the trigger moment itself — the seconds the
+        // live snapshot burst can never reach. StartClip is about to drain them
+        // into the clip writer, so the AI's copy (packet refs only) goes first.
+        var aiPreroll = !provisional && _ai?.WantsCapture(_camera) == true
+            ? SnapshotPrerollForAi() : null;
         StartClip(rec);
         var thumbTask = CaptureThumbAsync(rec, ct);
-        // The AI frame burst rides the event: one low-res frame per second via the
-        // camera's own snapshot command. A tentative self-wake captures nothing
-        // until promoted — its footage usually gets discarded, and every shot
-        // would cost the battery camera awake-time for nothing.
-        var aiCapture = provisional ? null : _ai?.TryBeginCapture(_camera, _control, ct);
+        // The AI frames ride the event: with ffmpeg and a flowing stream, a
+        // passive tap of the recording's own keyframes (zero camera cost);
+        // otherwise one low-res snapshot per second via the camera's command.
+        // A tentative self-wake captures nothing until promoted — its footage
+        // usually gets discarded, and every shot would cost the battery camera
+        // awake-time for nothing.
+        var aiCapture = provisional ? null
+            : _ai?.TryBeginCapture(_camera, _control, ct, aiPreroll, PickAiStreamHub());
 
         var hardStop = DateTime.UtcNow.AddSeconds(_cfg.MaxClipSeconds);
         var quietUntil = DateTime.UtcNow.AddSeconds(_cfg.PostSeconds);
@@ -657,7 +665,8 @@ public sealed class EventRecorder
                     // ("Human detected", never "Wake") — wakes as such belong to
                     // the timeline, not the events list.
                     provisional = false;
-                    aiCapture ??= _ai?.TryBeginCapture(_camera, _control, ct);
+                    aiCapture ??= _ai?.TryBeginCapture(_camera, _control, ct,
+                        streamHub: PickAiStreamHub());
                     if (rec.Labels.Remove("wake")) _store.Save(rec);
                     Log.Info($"{_camera}: ⚡ event started ({string.Join("+", rec.Labels)} — " +
                              "confirmed self-wake, footage from the wake onward)");
@@ -790,6 +799,49 @@ public sealed class EventRecorder
         rec.HasPreview = _previewWriter != null;
         if (rec.HasClip || rec.HasPreview)
             _store.Save(rec);
+    }
+
+    /// <summary>The hub the AI stream tap should listen to: the sub-stream twin
+    /// when it's flowing (model-sized frames), else the record stream, else null
+    /// — and always null without ffmpeg, since compressed keyframes would be
+    /// undecodable; the snapshot burst then carries the event as before.</summary>
+    private IStreamHub? PickAiStreamHub()
+    {
+        if (Neolink.Ai.AiPreroll.FfmpegPath == null) return null;
+        if (_previewHub is { VideoReady: true }) return _previewHub;
+        var hub = _activeRecordHub ?? _hub;
+        return hub.VideoReady ? hub : null;
+    }
+
+    /// <summary>A frozen copy of the pre-roll for the AI describer, taken under
+    /// the media gate BEFORE StartClip consumes the buffers. Prefers the
+    /// sub-stream twin (small frames, same size class as the snapshot burst);
+    /// falls back to the record stream. Packet byte arrays are shared refs — the
+    /// copy costs a list, not a re-buffer — and they live only until the event's
+    /// describe job finishes.</summary>
+    private Neolink.Ai.AiPrerollVideo? SnapshotPrerollForAi()
+    {
+        lock (_mediaGate)
+        {
+            List<(HubPacket Packet, bool Gap)> buffer;
+            IStreamHub hub;
+            if (_previewHub != null && _previewPreroll.Count > 0)
+            {
+                buffer = _previewPreroll;
+                hub = _previewHub;
+            }
+            else
+            {
+                buffer = _preroll;
+                hub = _activeRecordHub ?? _hub;
+            }
+            if (hub.Codec is not { } codec) return null;
+            var packets = buffer.Select(x => x.Packet).OfType<HubVideo>()
+                .Select(v => (v.AnnexB, v.Keyframe, v.RtpTs)).ToList();
+            return packets.Count == 0
+                ? null
+                : new Neolink.Ai.AiPrerollVideo(codec, hub.Vps, hub.Sps, hub.Pps, packets);
+        }
     }
 
     /// <summary>Best-effort thumbnail via the camera's own JPEG snapshot command.</summary>

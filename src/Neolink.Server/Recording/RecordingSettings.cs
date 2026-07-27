@@ -40,7 +40,11 @@ public sealed record CameraRecordingSettings(bool Events, bool Continuous, List<
     // AI event descriptions: send this camera's event frames to the configured
     // LLM. Strict opt-in, and inert unless the feature is also enabled globally
     // (Settings → AI) — the global switch owns the endpoint.
-    bool AiDescribe = false)
+    bool AiDescribe = false,
+    // Owner's scene notes for the LLM ("faces the street — passing cars are
+    // routine; the white SUV belongs here"). Threat calls are mostly context,
+    // and this is the only place the model can get any. Null/blank = none.
+    string? AiContext = null)
 {
     /// <summary>Known detection labels (what the UI offers as event-type filters).</summary>
     public static readonly string[] KnownLabels =
@@ -197,7 +201,8 @@ public sealed class RecordingSettings
         bool? scheduleEnabled = null,
         bool? archiveEvents = null, bool? archiveContinuous = null,
         int? archiveRetentionDays = null, bool setArchiveRetention = false,
-        bool? wakeTimeline = null, bool? aiDescribe = null)
+        bool? wakeTimeline = null, bool? aiDescribe = null,
+        string? aiContext = null, bool setAiContext = false)
     {
         lock (_gate)
         {
@@ -219,7 +224,8 @@ public sealed class RecordingSettings
                 archiveContinuous ?? cur.ArchiveContinuous,
                 setArchiveRetention ? archiveRetentionDays : cur.ArchiveRetentionDays,
                 wakeTimeline ?? cur.WakeTimeline,
-                aiDescribe ?? cur.AiDescribe);
+                aiDescribe ?? cur.AiDescribe,
+                setAiContext ? aiContext : cur.AiContext);
             _cameras[camera] = next;
             SaveLocked();
             return next;

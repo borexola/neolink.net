@@ -248,8 +248,9 @@ public sealed record ApiRecordingSettings(bool Events, bool Continuous,
     // to the timeline (zero battery cost — the frames are already flowing).
     bool ContinuousBlockedBySleep = false, bool WakeTimeline = true,
     // AI descriptions: AiAvailable mirrors the GLOBAL switch (Settings → AI) —
-    // the per-camera opt-in only renders while it is on.
-    bool AiAvailable = false, bool AiDescribe = false)
+    // the per-camera opt-in only renders while it is on. AiContext is the
+    // owner's scene notes for the model ("" = none).
+    bool AiAvailable = false, bool AiDescribe = false, string? AiContext = null)
 {
     /// <summary>null EventTypes = every detection type is recorded.</summary>
     public bool TypeEnabled(string label) => EventTypes == null || EventTypes.Contains(label);

@@ -218,7 +218,7 @@ public static class WebApi
         List<string>? ScheduleDays = null, string? ScheduleStart = null, string? ScheduleEnd = null,
         bool? ScheduleEnabled = null,
         bool? ArchiveEvents = null, bool? ArchiveContinuous = null, int? ArchiveRetentionDays = null,
-        bool? WakeTimeline = null, bool? AiDescribe = null);
+        bool? WakeTimeline = null, bool? AiDescribe = null, string? AiContext = null);
     /// <summary>AI-description settings update. ApiKey is WRITE-ONLY: null keeps the
     /// stored one, "" clears it, a value sets it. It is never returned by GET.</summary>
     private sealed record AiSettingsRequest(bool? Enabled, string? Provider,
@@ -2675,6 +2675,7 @@ public static class WebApi
                 // acts) while the feature is enabled globally in Settings → AI.
                 aiAvailable = o.Ai?.Enabled == true,
                 aiDescribe = s.AiDescribe,
+                aiContext = s.AiContext ?? "",
             };
 
             app.MapGet("/api/cameras/{name}/recording", (string name, HttpContext ctx) =>
@@ -2780,7 +2781,13 @@ public static class WebApi
                     archiveRetentionDays: Retention(req.ArchiveRetentionDays),
                     setArchiveRetention: req.ArchiveRetentionDays != null,
                     wakeTimeline: req.WakeTimeline,
-                    aiDescribe: req.AiDescribe);
+                    aiDescribe: req.AiDescribe,
+                    // Scene notes ride the prompt on every event — bound them so a
+                    // paste-happy admin can't balloon each request. "" clears.
+                    aiContext: req.AiContext is { } noteRaw
+                               && noteRaw.Trim() is { Length: > 0 } note
+                        ? (note.Length > 500 ? note[..500] : note) : null,
+                    setAiContext: req.AiContext != null);
                 NudgeHa(cam.Name);
                 return Results.Json(ShapeSettings(cam, updated));
             });

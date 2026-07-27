@@ -5634,6 +5634,28 @@ textarea.ai-prompt {
     text-overflow: clip;
 }
 
+/* Scene notes for the AI: a full-width textarea in the control column. The
+   first selector out-specifies the wide-panel grid rule
+   (.campanel-wide .campanel-cols .control-row), which would otherwise win. */
+.campanel-wide .campanel-cols .control-row.ai-context-row,
+.control-row.ai-context-row {
+    display: block;
+}
+
+.ai-context {
+    width: 100%;
+    box-sizing: border-box;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 5px 8px;
+    font-size: 12px;
+    font-family: inherit;
+    resize: vertical;
+    min-height: 40px;
+}
+
 .control-row select {
     background: var(--bg);
     color: var(--text);

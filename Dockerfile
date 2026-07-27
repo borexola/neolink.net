@@ -43,6 +43,16 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends tzdata \
     && rm -rf /var/lib/apt/lists/*
 
+# ffmpeg (static, single binary — NOT the apt package and its 300 MB of libs):
+# lets AI event descriptions decode pre-roll frames, the seconds BEFORE the
+# trigger that the live snapshot burst can never reach. Strictly optional at
+# runtime — the app probes PATH and simply skips pre-roll frames when absent —
+# so this line is the whole feature for Docker/HA users. ~40 MB.
+# Digest-pinned (the 7.1 tag could be repushed; the digest can't change under
+# us) — verified multi-arch for this workflow's amd64+arm64 targets.
+COPY --from=mwader/static-ffmpeg:7.1@sha256:a8090df5f5608daef387e1b2e93b98aaacb4d92153ad904e7d715c725724fca4 \
+    /ffmpeg /usr/local/bin/ffmpeg
+
 # 8654 = RTSP, 8655 = web UI + HTTP/WebSocket API
 EXPOSE 8654 8655
 VOLUME /config

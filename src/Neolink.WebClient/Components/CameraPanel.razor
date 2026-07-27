@@ -1023,9 +1023,20 @@
                         @if (_recording.AiDescribe)
                         {
                             <div class="event-sub ai-sub">
-                                While an event records, low-res frames (1/sec) go to the LLM from
-                                Settings → AI; its description lands in the event's metadata and the
-                                server log.
+                                While an event records, low-res frames are sampled (from the stream
+                                itself when ffmpeg is installed, else via camera snapshots) and sent
+                                to the LLM from Settings → AI; its description lands in the event's
+                                metadata and the server log.
+                            </div>
+                            @* Scene notes: what is ROUTINE in this camera's view. The
+                               threat call (green/yellow/red) is mostly context, and this
+                               field is the model's only source of it. Saved on blur. *@
+                            <div class="control-row ai-context-row">
+                                <textarea class="ai-context" maxlength="500" rows="2"
+                                          placeholder="Scene notes for the AI, e.g. “faces the street — passing cars are routine; the white SUV belongs here”"
+                                          title="Owner's notes sent with every event: tell the model what this camera watches and what counts as normal, so its descriptions and threat levels fit the scene"
+                                          value="@(_recording.AiContext ?? "")"
+                                          @onchange='e => SetRecordingAsync(aiContext: (string?)e.Value ?? "")'></textarea>
                             </div>
                         }
                     }
@@ -2265,13 +2276,13 @@
         List<string>? scheduleDays = null, string? scheduleStart = null, string? scheduleEnd = null,
         bool? scheduleEnabled = null,
         bool? archiveEvents = null, bool? archiveContinuous = null, int? archiveRetentionDays = null,
-        bool? wakeTimeline = null, bool? aiDescribe = null)
+        bool? wakeTimeline = null, bool? aiDescribe = null, string? aiContext = null)
     {
         object body = new
         {
             events, continuous, eventTypes, eventRetentionDays, continuousRetentionDays, recordStream,
             scheduleDays, scheduleStart, scheduleEnd, scheduleEnabled,
-            archiveEvents, archiveContinuous, archiveRetentionDays, wakeTimeline, aiDescribe,
+            archiveEvents, archiveContinuous, archiveRetentionDays, wakeTimeline, aiDescribe, aiContext,
         };
         if (await PostAsync("recording", body))
             _recording = await GetAsync<ApiRecordingSettings>("recording");

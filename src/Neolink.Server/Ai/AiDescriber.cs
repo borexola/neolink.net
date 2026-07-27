@@ -45,12 +45,27 @@ public sealed class AiCapture
     internal string Camera { get; }
     internal List<(DateTime Utc, byte[] Jpeg)> Frames { get; } = new();
     internal Task Completion { get; }
+    /// <summary>The recorder's pre-roll at event start (compressed packet refs) —
+    /// decoded into leading frames at describe time, if ffmpeg is around.</summary>
+    internal AiPrerollVideo? Preroll { get; }
+    /// <summary>Stream-tap mode (ffmpeg + a flowing stream): instead of asking
+    /// the camera for snapshots, the capture listens to this hub and keeps the
+    /// event's own KEYFRAMES (compressed refs; an IDR decodes standalone) on the
+    /// same budget/thinning contract. Costs the camera nothing — the frames are
+    /// already flowing for the recording — and never touches the HTTP session
+    /// pool the snapshot fallback chain drains (max-session lockout, live
+    /// 2026-07-26). Null = classic snapshot polling.</summary>
+    internal IStreamHub? StreamHub { get; }
+    internal List<(DateTime Utc, byte[] AnnexB)> StreamPackets { get; } = new();
 
     internal AiCapture(string camera, ICameraControl control, int budget,
-        TimeSpan startInterval, CancellationToken ct)
+        TimeSpan startInterval, CancellationToken ct, AiPrerollVideo? preroll = null,
+        IStreamHub? streamHub = null)
     {
         Camera = camera;
         _control = control;
+        Preroll = preroll;
+        StreamHub = streamHub;
         _budget = Math.Max(2, budget); // decimation needs headroom to halve
         _startInterval = startInterval < TimeSpan.FromSeconds(1)
             ? TimeSpan.FromSeconds(1) : startInterval;
@@ -96,6 +111,11 @@ public sealed class AiCapture
 
     private async Task RunAsync()
     {
+        if (StreamHub != null)
+        {
+            await RunStreamTapAsync().ConfigureAwait(false);
+            return;
+        }
         int failures = 0; // consecutive misses; any good frame resets
         int locked = 0;   // opening-window frames, exempt from decimation
         var launched = DateTime.UtcNow;
@@ -127,6 +147,12 @@ public sealed class AiCapture
                         opening || failures == 0 ? 5 : failures == 1 ? 20 : 45));
                     Interlocked.Increment(ref _attempts);
                     var jpeg = await _control.SnapshotSmallAsync(shot.Token).ConfigureAwait(false);
+                    // Stamped at ARRIVAL, not at request start: the patient retry
+                    // deadline stretches to 45s, and a frame the camera finally
+                    // answered a minute in must not be labeled with the offset of
+                    // the second the command was issued — the model is told these
+                    // offsets as truth, so they have to be when the frame is FROM.
+                    var taken = DateTime.UtcNow;
                     if (jpeg is { Length: > 100 } && jpeg[0] == 0xFF && jpeg[1] == 0xD8)
                     {
                         lock (Frames)
@@ -141,7 +167,7 @@ public sealed class AiCapture
                                 ThinTail(Frames, locked);
                                 interval += interval;
                             }
-                            Frames.Add((t0, jpeg));
+                            Frames.Add((taken, jpeg));
                         }
                         failures = 0;
                         got = true;
@@ -188,6 +214,68 @@ public sealed class AiCapture
             // Belt and braces: the loop body already contains its failures, and
             // nothing here may ever surface into the event lifecycle.
             Log.Debug($"{Camera}: AI frame capture aborted: {Log.Flatten(ex)}");
+        }
+    }
+
+    /// <summary>Stream-tap mode: listen to the hub and keep keyframes on the
+    /// same opening/budget/thin-and-double contract as the snapshot loop —
+    /// keyframes arrive at the camera's GOP cadence (typically 2-4s), so the
+    /// pacing interval acts as a floor, not a metronome. Packets are shared
+    /// byte-array refs; they die with the capture.</summary>
+    private async Task RunStreamTapAsync()
+    {
+        var hub = StreamHub!;
+        var launched = DateTime.UtcNow;
+        var interval = _startInterval;
+        int locked = 0;
+        int maxLocked = Math.Clamp(_budget - 2, 0, OpeningSeconds);
+        var lastKept = DateTime.MinValue;
+        var (id, reader) = hub.Subscribe(viewer: false);
+        try
+        {
+            while (!_stop.IsCancellationRequested)
+            {
+                HubPacket packet;
+                try
+                {
+                    packet = await reader.ReadAsync(_stop.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) { break; }
+                catch (ChannelClosedException) { break; } // stream ended; keep what we have
+                if (packet is not HubVideo { Keyframe: true } kv) continue;
+                var now = DateTime.UtcNow;
+                bool opening = locked < maxLocked
+                    && now - launched < TimeSpan.FromSeconds(OpeningSeconds);
+                // The 200ms grace keeps a GOP that lands just short of the
+                // interval from being skipped for a whole further GOP.
+                if (!opening && now - lastKept < interval - TimeSpan.FromMilliseconds(200))
+                    continue;
+                lock (StreamPackets)
+                {
+                    if (opening)
+                    {
+                        locked++;
+                    }
+                    else if (StreamPackets.Count >= _budget)
+                    {
+                        ThinTail(StreamPackets, locked);
+                        interval += interval;
+                    }
+                    StreamPackets.Add((now, kv.AnnexB));
+                }
+                lastKept = now;
+                Interlocked.Increment(ref _attempts);
+            }
+        }
+        catch (Exception ex)
+        {
+            // Same contract as the snapshot loop: nothing here may ever surface
+            // into the event lifecycle.
+            Log.Debug($"{Camera}: AI stream tap aborted: {Log.Flatten(ex)}");
+        }
+        finally
+        {
+            hub.Unsubscribe(id);
         }
     }
 
@@ -239,15 +327,18 @@ public sealed class AiDescriber
     private readonly AiStore _store;
     private readonly EventStore _events;
     private readonly Func<string, bool> _cameraOptIn;
+    private readonly Func<string, string?>? _cameraContext;
     // Events queued or in flight, so the UI can say "describing…" instead of
     // showing nothing while the model works. Ids only — jobs hold the frames.
     private readonly ConcurrentDictionary<string, byte> _pending = new();
 
-    public AiDescriber(AiStore store, EventStore events, Func<string, bool> cameraOptIn)
+    public AiDescriber(AiStore store, EventStore events, Func<string, bool> cameraOptIn,
+        Func<string, string?>? cameraContext = null)
     {
         _store = store;
         _events = events;
         _cameraOptIn = cameraOptIn;
+        _cameraContext = cameraContext;
     }
 
     /// <summary>Both gates in one place: the global switch AND this camera's opt-in.
@@ -258,9 +349,13 @@ public sealed class AiDescriber
     /// is persisted — the MQTT bridge mirrors it into the camera's sensors.</summary>
     public event Action<EventRecord>? Described;
 
-    /// <summary>Starts the 1 fps frame burst for a starting event; null when the
-    /// feature is off for this camera.</summary>
-    public AiCapture? TryBeginCapture(string camera, ICameraControl control, CancellationToken ct)
+    /// <summary>Starts the frame capture for a starting event; null when the
+    /// feature is off for this camera. <paramref name="preroll"/> is the recorder's
+    /// pre-roll copy (the seconds BEFORE the trigger), decoded at describe time;
+    /// a non-null <paramref name="streamHub"/> switches the capture to the
+    /// stream tap (the event's own keyframes) instead of snapshot polling.</summary>
+    public AiCapture? TryBeginCapture(string camera, ICameraControl control, CancellationToken ct,
+        AiPrerollVideo? preroll = null, IStreamHub? streamHub = null)
     {
         if (!WantsCapture(camera)) return null;
         var cfg = _store.Snapshot();
@@ -270,9 +365,9 @@ public sealed class AiDescriber
         // the same thin-and-double valve budget mode lives by.
         return cfg.UsesInterval
             ? new AiCapture(camera, control, AiCapture.IntervalSafetyBudget,
-                TimeSpan.FromSeconds(Math.Clamp(cfg.SampleEverySeconds, 1, 600)), ct)
+                TimeSpan.FromSeconds(Math.Clamp(cfg.SampleEverySeconds, 1, 600)), ct, preroll, streamHub)
             : new AiCapture(camera, control, Math.Max(1, cfg.CaptureSeconds),
-                TimeSpan.FromSeconds(1), ct);
+                TimeSpan.FromSeconds(1), ct, preroll, streamHub);
     }
 
     /// <summary>Event closed and saved: stop sampling and queue the description
@@ -334,15 +429,6 @@ public sealed class AiDescriber
         if (!cfg.Enabled || job.Capture.Discarded) return; // switched off since capture
         List<(DateTime Utc, byte[] Jpeg)> frames;
         lock (job.Capture.Frames) frames = job.Capture.Frames.ToList();
-        if (frames.Count == 0)
-        {
-            Log.Warn($"{job.Capture.Camera}: AI describe skipped — no frames captured (" +
-                     (job.Capture.Attempts == 0
-                         ? "the event ended before a snapshot could be asked for"
-                         : $"all {job.Capture.Attempts} snapshot attempt(s) failed; " +
-                           $"last: {job.Capture.LastMiss ?? "no detail"}") + ")");
-            return;
-        }
         if (cfg.ActiveUrl() is not { } url)
         {
             Log.Warn($"{job.Capture.Camera}: AI describe skipped — the " +
@@ -353,6 +439,83 @@ public sealed class AiDescriber
         }
 
         var rec = job.Record;
+        // Stream-tap mode: the frames ARE the event's own keyframes, decoded
+        // here in one ffmpeg pass — no snapshot command was ever sent. A failed
+        // decode falls through to whatever the snapshot list holds (usually
+        // nothing in this mode) and then to the pre-roll below.
+        bool streamMode = false;
+        List<(DateTime Utc, byte[] AnnexB)> taps;
+        lock (job.Capture.StreamPackets) taps = job.Capture.StreamPackets.ToList();
+        if (taps.Count > 0 && job.Capture.StreamHub is { Codec: { } tapCodec } tapHub)
+        {
+            var decoded = await AiPreroll.DecodeFramesAsync(tapCodec, tapHub.Vps, tapHub.Sps,
+                tapHub.Pps, taps, ct).ConfigureAwait(false);
+            if (decoded.Count > 0)
+            {
+                frames = decoded;
+                streamMode = true;
+            }
+            else
+            {
+                Log.Warn($"{rec.Camera}: stream-tap decode produced no frames from " +
+                         $"{taps.Count} keyframe(s) — the event falls back to snapshots/pre-roll");
+            }
+        }
+        // The pre-roll seconds, decoded here on the worker (never on the event
+        // path): the trigger moment itself, which the live burst structurally
+        // missed. They PREPEND — oldest first still holds, offsets go negative.
+        // A short event whose burst came up empty can still be described by
+        // these alone.
+        if (job.Capture.Preroll is { } preroll)
+        {
+            var pre = await AiPreroll.ExtractAsync(preroll, rec.StartUtc, ct).ConfigureAwait(false);
+            if (pre.Count > 0)
+            {
+                frames.InsertRange(0, pre);
+                Log.Info($"{rec.Camera}: {pre.Count} pre-roll frame(s) join the AI set " +
+                         "(the moments before the trigger)");
+            }
+        }
+        if (frames.Count == 0)
+        {
+            Log.Warn($"{job.Capture.Camera}: AI describe skipped — no frames captured (" +
+                     (job.Capture.StreamHub != null
+                         ? "the stream tap caught no decodable keyframes"
+                         : job.Capture.Attempts == 0
+                             ? "the event ended before a snapshot could be asked for"
+                             : $"all {job.Capture.Attempts} snapshot attempt(s) failed; " +
+                               $"last: {job.Capture.LastMiss ?? "no detail"}") + ")");
+            return;
+        }
+        // Some cameras answer the "small" snapshot command with the FULL
+        // resolution picture (~5 MB a frame) — a long event's payload then
+        // outgrows what chat endpoints accept (a 234 MB body broke the pipe,
+        // live 2026-07-26). With ffmpeg around, oversized frames shrink to
+        // model size here; without it, the byte-capped parts below keep every
+        // request deliverable on its own.
+        int oversized = frames.Count(f => f.Jpeg.Length > AiPreroll.OversizeBytes);
+        if (oversized > 0)
+        {
+            long before = frames.Sum(f => (long)f.Jpeg.Length);
+            if (AiPreroll.FfmpegPath != null)
+            {
+                frames = await AiPreroll.ShrinkAsync(frames, ct).ConfigureAwait(false);
+                long after = frames.Sum(f => (long)f.Jpeg.Length);
+                if (after < before)
+                    Log.Info($"{rec.Camera}: downscaled {oversized} full-resolution frame(s) " +
+                             $"for the model ({before / 1024 / 1024} MB → {after / 1024 / 1024} MB — " +
+                             "this camera's snapshot command ignores the size request)");
+            }
+            else if (before > MaxBytesPerRequest)
+            {
+                Log.Info($"{rec.Camera}: {frames.Count} frame(s) total {before / 1024 / 1024} MB — " +
+                         "this camera's snapshot command serves full-resolution images, so the " +
+                         "event goes to the model in byte-capped parts; installing ffmpeg (or " +
+                         "setting NEOLINK_FFMPEG) would downscale the frames to a fraction of " +
+                         "the size and time");
+            }
+        }
+
         var modelName = cfg.UsesOllama ? cfg.OllamaModel : cfg.UsesAnthropic ? cfg.AnthropicModel : cfg.Model;
         // Coverage up front: "12 frames over 14s of the 15s event" answers the
         // first question a puzzling description raises — what did the model see?
@@ -360,37 +523,46 @@ public sealed class AiDescriber
         int coveredSecs = (int)(frames[^1].Utc - frames[0].Utc).TotalSeconds;
         int eventSecs = Math.Max(1, (int)(rec.EndUtc - rec.StartUtc).TotalSeconds);
         Log.Info($"{rec.Camera}: 🧠 describing event ({frames.Count} frame(s) over " +
-                 $"{coveredSecs}s of the {eventSecs}s event, {bytes / 1024} KB " +
+                 $"{coveredSecs}s of the {eventSecs}s event, {bytes / 1024} KB" +
+                 $"{(streamMode ? ", stream-tap" : "")} " +
                  $"→ {url.GetLeftPart(UriPartial.Authority)}" +
                  $"{(string.IsNullOrWhiteSpace(modelName) ? "" : $", model {modelName}")})");
         if (cfg.KeepFrames)
             await KeepFramesAsync(rec, frames, ct).ConfigureAwait(false); // before the call: reviewable even if the model fails
 
-        // Very long events (fixed-rate mode especially) can outgrow a single
-        // request: past MaxFramesPerRequest the frames are sent in ORDERED parts,
-        // each part told what came before it, and the answers append to the same
-        // event. The final threat level is the most severe any part reported.
-        var chunks = Chunk(frames, MaxFramesPerRequest);
+        // Very long events (fixed-rate mode especially) — and full-resolution
+        // frames a missing ffmpeg couldn't shrink — can outgrow a single
+        // request: parts are capped by FRAME COUNT and by PAYLOAD BYTES, sent
+        // in order, each part told what came before it, and the answers append
+        // to the same event. The final threat level is the most severe any part
+        // reported.
+        var chunks = ChunkFrames(frames, MaxFramesPerRequest, MaxBytesPerRequest);
         if (chunks.Count > 1)
             Log.Info($"{rec.Camera}: long event — describing in {chunks.Count} parts " +
-                     $"of up to {MaxFramesPerRequest} frames each");
+                     $"of up to {MaxFramesPerRequest} frames / {MaxBytesPerRequest / 1024 / 1024} MB each");
 
         var sw = Stopwatch.StartNew();
         string? model = null;
         long usageSum = 0;
         string? level = null;
         var parts = new List<string>();
+        // Fetched per event (not per part, not at wiring): settings edits apply
+        // to the next event, and every part of one event sees the same notes.
+        var sceneNotes = _cameraContext?.Invoke(rec.Camera);
         for (int c = 0; c < chunks.Count; c++)
         {
             var chunk = chunks[c];
+            // The carry-forward is ALL earlier parts, not just the last one — a
+            // subject from part 1 must not resurface in part 3 as a stranger.
             var userText = BuildUserText(rec, chunk, c + 1, chunks.Count,
-                prevSummary: parts.Count > 0 ? parts[^1] : null);
+                prevSummary: parts.Count > 0 ? string.Join(" ", parts) : null,
+                sceneNotes: sceneNotes);
             // Every image travels with its own inline label ("Frame 3 of 12 —
             // +4s…") so the timestamp sits ADJACENT to its picture on backends
             // that allow interleaving — a single offsets list up front provably
             // smears: the model loses which image is which and starts narrating.
             var jpegs = chunk.Select((f, i) => (f.Jpeg, (string?)FrameLabel(i, chunk.Count,
-                Math.Max(0, (int)(f.Utc - rec.StartUtc).TotalSeconds)))).ToList();
+                (int)(f.Utc - rec.StartUtc).TotalSeconds))).ToList();
             (string? raw, string? model, long? usage) reply;
             try
             {
@@ -475,8 +647,11 @@ public sealed class AiDescriber
             Directory.CreateDirectory(dir);
             for (int i = 0; i < frames.Count; i++)
             {
-                int off = Math.Max(0, (int)(frames[i].Utc - rec.StartUtc).TotalSeconds);
-                await File.WriteAllBytesAsync(Path.Combine(dir, $"{i + 1:000}-{off}s.jpg"),
+                // Pre-roll frames land before the event start; "m3s" = minus 3s
+                // (a literal '-' here would read as just another name separator).
+                int off = (int)(frames[i].Utc - rec.StartUtc).TotalSeconds;
+                await File.WriteAllBytesAsync(
+                    Path.Combine(dir, $"{i + 1:000}-{(off < 0 ? $"m{-off}" : $"{off}")}s.jpg"),
                     frames[i].Jpeg, ct).ConfigureAwait(false);
             }
             Log.Info($"{rec.Camera}: kept the {frames.Count} frame(s) sent to the model in {dir}");
@@ -508,9 +683,13 @@ public sealed class AiDescriber
     }
 
     /// <summary>The inline label sent immediately before each image, binding the
-    /// picture to its place and time — "Frame 3 of 12 — +4s into the event:".</summary>
+    /// picture to its place and time — "Frame 3 of 12 — +4s into the event:".
+    /// Negative offsets are pre-roll (decoded from before the trigger) and say so
+    /// in words — a bare "-3s" invites the model to misread it as a typo.</summary>
     internal static string FrameLabel(int index, int count, int offsetSeconds) =>
-        $"Frame {index + 1} of {count} — +{offsetSeconds}s into the event:";
+        offsetSeconds < 0
+            ? $"Frame {index + 1} of {count} — {-offsetSeconds}s BEFORE the trigger (pre-roll):"
+            : $"Frame {index + 1} of {count} — +{offsetSeconds}s into the event:";
 
     /// <summary>No more than this many frames ride one model request. A very long
     /// event (fixed-rate sampling on a half-hour clip) is described in ordered
@@ -518,12 +697,33 @@ public sealed class AiDescriber
     /// previous part saw, and the answers append to the same event.</summary>
     internal const int MaxFramesPerRequest = 100;
 
-    /// <summary>The frame list in ordered slices of at most <paramref name="size"/>.</summary>
-    internal static List<List<T>> Chunk<T>(IReadOnlyList<T> items, int size)
+    /// <summary>No part may carry more than this much raw JPEG either (base64
+    /// adds a third on top). Chat endpoints slam the connection shut on huge
+    /// bodies — "Broken pipe" mid-upload, live 2026-07-26 at 210+ MB, while
+    /// 28 MB sailed through; 24 MB stays under the proven ceiling.</summary>
+    internal const long MaxBytesPerRequest = 24_000_000;
+
+    /// <summary>The frame list in ordered slices, each at most
+    /// <paramref name="maxFrames"/> frames AND <paramref name="maxBytes"/> of
+    /// JPEG. A single frame over the byte budget still travels — alone.</summary>
+    internal static List<List<(DateTime Utc, byte[] Jpeg)>> ChunkFrames(
+        IReadOnlyList<(DateTime Utc, byte[] Jpeg)> frames, int maxFrames, long maxBytes)
     {
-        var result = new List<List<T>>();
-        for (int i = 0; i < items.Count; i += size)
-            result.Add(items.Skip(i).Take(size).ToList());
+        var result = new List<List<(DateTime Utc, byte[] Jpeg)>>();
+        var part = new List<(DateTime Utc, byte[] Jpeg)>();
+        long bytes = 0;
+        foreach (var f in frames)
+        {
+            if (part.Count > 0 && (part.Count >= maxFrames || bytes + f.Jpeg.Length > maxBytes))
+            {
+                result.Add(part);
+                part = new List<(DateTime Utc, byte[] Jpeg)>();
+                bytes = 0;
+            }
+            part.Add(f);
+            bytes += f.Jpeg.Length;
+        }
+        if (part.Count > 0) result.Add(part);
         return result;
     }
 
@@ -538,18 +738,35 @@ public sealed class AiDescriber
         return Rank(a) >= Rank(b) ? a ?? b : b;
     }
 
-    private static string BuildUserText(EventRecord rec, IReadOnlyList<(DateTime Utc, byte[] Jpeg)> frames,
-        int part, int parts, string? prevSummary)
+    internal static string BuildUserText(EventRecord rec, IReadOnlyList<(DateTime Utc, byte[] Jpeg)> frames,
+        int part, int parts, string? prevSummary, string? sceneNotes = null)
     {
         var local = rec.StartUtc.ToLocalTime();
         // Real per-frame offsets: sampling spreads across the whole event (the
         // interval grows as it runs), and telling the model where each frame
         // sits lets it narrate "at first … then 30 seconds later …" truthfully.
+        // Negative = pre-roll, decoded from the seconds before the trigger.
         var offsets = string.Join(", ",
-            frames.Select(f => $"+{Math.Max(0, (int)(f.Utc - rec.StartUtc).TotalSeconds)}s"));
+            frames.Select(f => (int)(f.Utc - rec.StartUtc).TotalSeconds)
+                .Select(s => s < 0 ? $"-{-s}s" : $"+{s}s"));
         var text = $"Camera \"{rec.Camera}\" reported: {string.Join(", ", rec.Labels)}. " +
                    $"Event started {local:yyyy-MM-dd HH:mm:ss} (local) and lasted " +
                    $"{Math.Max(1, (int)(rec.EndUtc - rec.StartUtc).TotalSeconds)}s. ";
+        if (!string.IsNullOrWhiteSpace(sceneNotes))
+        {
+            // The owner's own words about what this camera watches — the model's
+            // only source of "what is normal HERE". Framed as context, so notes
+            // can calibrate the threat call but never overwrite what frames show.
+            text += $"The owner's notes about this camera's scene (context for judging what " +
+                    $"is routine here, not a description of these frames): {sceneNotes.Trim()} ";
+        }
+        if (frames.Count > 0 && frames[0].Utc < rec.StartUtc)
+        {
+            // Only when pre-roll frames actually made it in — an unexplained
+            // negative offset would otherwise read like an error to the model.
+            text += "Frames at negative offsets were decoded from the recorder's pre-roll — " +
+                    "the moments just BEFORE the trigger, usually showing what caused it. ";
+        }
         if (parts > 1)
         {
             // A long event arrives in ordered slices: the model must know it is

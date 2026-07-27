@@ -4252,15 +4252,27 @@ public static class SelfTest
             // and the grounding rules pin the two clauses that matter: never
             // invent a return, trust a burned-in camera timestamp.
             AssertEq(Neolink.Ai.AiDescriber.FrameLabel(2, 12, 4), "Frame 3 of 12 — +4s into the event:");
+            // Negative offsets are pre-roll and must say so in words — a bare
+            // "-3s" reads like a typo to the model.
+            AssertEq(Neolink.Ai.AiDescriber.FrameLabel(0, 12, -3),
+                "Frame 1 of 12 — 3s BEFORE the trigger (pre-roll):");
             Assert(Neolink.Ai.AiSettings.GroundingProtocol.Contains("left the view")
                 && Neolink.Ai.AiSettings.GroundingProtocol.Contains("timestamp"),
                 "grounding rules cover the no-invented-return and camera-timestamp clauses");
 
-            // Long events go to the model in ordered parts of at most
-            // MaxFramesPerRequest frames; the final level is the worst reported.
-            var chunked = Neolink.Ai.AiDescriber.Chunk(Enumerable.Range(0, 250).ToList(), 100);
+            // Long events go to the model in ordered parts capped by frame count
+            // AND payload bytes (full-res snapshots broke a 210 MB pipe, live
+            // 2026-07-26); a single over-budget frame still travels, alone.
+            var ct0 = new DateTime(2026, 1, 1);
+            var cf = Enumerable.Range(0, 250).Select(i => (ct0, new[] { (byte)i })).ToList();
+            var chunked = Neolink.Ai.AiDescriber.ChunkFrames(cf, 100, long.MaxValue);
             AssertEq(string.Join(",", chunked.Select(c => c.Count)), "100,100,50");
-            AssertEq(chunked[2][0], 200); // order preserved across the slices
+            AssertEq((int)chunked[2][0].Jpeg[0], 200); // order preserved across the slices
+            var sized = Enumerable.Range(0, 5).Select(_ => (ct0, new byte[10])).ToList();
+            AssertEq(string.Join(",", Neolink.Ai.AiDescriber.ChunkFrames(sized, 100, 25)
+                .Select(c => c.Count)), "2,2,1");
+            AssertEq(Neolink.Ai.AiDescriber.ChunkFrames(
+                new List<(DateTime, byte[])> { (ct0, new byte[99]) }, 100, 25).Count, 1);
             AssertEq(Neolink.Ai.AiDescriber.MoreSevere(null, "green") ?? "-", "green");
             AssertEq(Neolink.Ai.AiDescriber.MoreSevere("yellow", "red") ?? "-", "red");
             AssertEq(Neolink.Ai.AiDescriber.MoreSevere("red", null) ?? "-", "red");
@@ -4329,6 +4341,67 @@ public static class SelfTest
                 settings.Update("cam", events: false, continuous: null, eventTypes: null,
                     setEventTypes: false);
                 Assert(settings.Get("cam").AiDescribe, "unrelated updates leave the opt-in alone");
+                // Scene notes: set, survive unrelated updates, clear on demand.
+                settings.Update("cam", events: null, continuous: null, eventTypes: null,
+                    setEventTypes: false, aiContext: "faces the street", setAiContext: true);
+                AssertEq(settings.Get("cam").AiContext ?? "-", "faces the street");
+                settings.Update("cam", events: true, continuous: null, eventTypes: null,
+                    setEventTypes: false);
+                AssertEq(settings.Get("cam").AiContext ?? "-", "faces the street");
+                settings.Update("cam", events: null, continuous: null, eventTypes: null,
+                    setEventTypes: false, aiContext: null, setAiContext: true);
+                Assert(settings.Get("cam").AiContext == null, "scene notes clear on demand");
+
+                // Scene notes ride the user text as CONTEXT (framed so they can't
+                // pass as a description of the frames); absent notes leave no trace.
+                var notesRec = new Recording.EventRecord { Id = "e1", Camera = "cam" };
+                notesRec.StartUtc = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+                notesRec.EndUtc = notesRec.StartUtc.AddSeconds(10);
+                notesRec.Labels.Add("person");
+                var oneFrame = new List<(DateTime, byte[])> { (notesRec.StartUtc.AddSeconds(2), new byte[] { 1 }) };
+                var withNotes = Neolink.Ai.AiDescriber.BuildUserText(notesRec, oneFrame, 1, 1,
+                    prevSummary: null, sceneNotes: "faces the street");
+                Assert(withNotes.Contains("faces the street") && withNotes.Contains("not a description"),
+                    "scene notes ride the prompt, framed as context");
+                Assert(!Neolink.Ai.AiDescriber.BuildUserText(notesRec, oneFrame, 1, 1, null)
+                        .Contains("notes"), "no notes, no notes clause");
+                // Pre-roll frames announce themselves: negative offsets get the
+                // explaining sentence, and the offsets list carries the sign.
+                var withPre = new List<(DateTime, byte[])>
+                {
+                    (notesRec.StartUtc.AddSeconds(-3), new byte[] { 1 }),
+                    (notesRec.StartUtc.AddSeconds(2), new byte[] { 2 }),
+                };
+                var preText = Neolink.Ai.AiDescriber.BuildUserText(notesRec, withPre, 1, 1, null);
+                Assert(preText.Contains("pre-roll") && preText.Contains("-3s, +2s"),
+                    "pre-roll frames get the explainer and signed offsets");
+                Assert(!Neolink.Ai.AiDescriber.BuildUserText(notesRec, oneFrame, 1, 1, null)
+                        .Contains("pre-roll"), "no pre-roll, no pre-roll clause");
+
+                // Pre-roll helpers: JPEG splitting on SOI/EOI (truncated tails
+                // dropped) and index spreading that always keeps both ends.
+                byte[] j1 = { 0xFF, 0xD8, 1, 2, 0xFF, 0xD9 };
+                byte[] j2 = { 0xFF, 0xD8, 3, 0xFF, 0xD9 };
+                var stitched = j1.Concat(j2).Concat(new byte[] { 0xFF, 0xD8, 9 }).ToArray();
+                var split = Neolink.Ai.AiPreroll.SplitJpegs(stitched);
+                Assert(split.Count == 2 && split[0].SequenceEqual(j1) && split[1].SequenceEqual(j2),
+                    "MJPEG stream splits into whole JPEGs; the truncated tail is dropped");
+                AssertEq(string.Join(",", Neolink.Ai.AiPreroll.SpreadIndices(2, 3)), "0,1");
+                AssertEq(string.Join(",", Neolink.Ai.AiPreroll.SpreadIndices(9, 3)), "0,4,8");
+                AssertEq(string.Join(",", Neolink.Ai.AiPreroll.SpreadIndices(3, 3)), "0,1,2");
+
+                // ffmpeg locator: NEOLINK_FFMPEG override wins when it exists,
+                // falls back to the PATH scan (per-OS exe name), null when neither.
+                var ffDir = Path.Combine(dir, "ffbin");
+                Directory.CreateDirectory(ffDir);
+                var ffExe = Path.Combine(ffDir, OperatingSystem.IsWindows() ? "ffmpeg.exe" : "ffmpeg");
+                File.WriteAllBytes(ffExe, new byte[] { 1 });
+                AssertEq(Neolink.Ai.AiPreroll.Locate(ffExe, null) ?? "-", ffExe);
+                AssertEq(Neolink.Ai.AiPreroll.Locate(null, ffDir) ?? "-", ffExe);
+                AssertEq(Neolink.Ai.AiPreroll.Locate(
+                    Path.Combine(ffDir, "missing-ffmpeg"), ffDir) ?? "-", ffExe);
+                Assert(Neolink.Ai.AiPreroll.Locate(null, Path.Combine(dir, "nowhere")) == null,
+                    "no override, nothing on the path: no ffmpeg");
             }
             finally
             {
