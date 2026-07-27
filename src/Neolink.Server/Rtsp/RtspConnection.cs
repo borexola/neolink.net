@@ -166,39 +166,57 @@ public sealed class RtspConnection
     }
 
     /// <summary>Splits a request URI into mount path, trackID and the ?audio= query
-    /// value. Content-Base keeps the query and most clients append "/trackID=N" to
-    /// it verbatim, so the track marker can sit AFTER the query
-    /// ("…/cam?audio=opus/trackID=1") — it is found and removed first.</summary>
+    /// value. The SDP's control attribute is the relative "trackID=N", and clients
+    /// resolve it against our Content-Base in two different-looking ways once a
+    /// query is in play: a URL-aware resolver joins the PATH and keeps the query
+    /// last ("/cam/trackID=1?audio=opus"), while one that concatenates the
+    /// Content-Base string verbatim leaves the marker trailing the query
+    /// ("/cam?audio=opus/trackID=1"). Both must resolve to the same track — reading
+    /// the trackID out of only one of the two positions silently turns the audio
+    /// SETUP into a second video track, and the stream plays with no sound.</summary>
     internal static (string path, int trackId, string? audio) ParseUri(string uri)
     {
         string rest = uri;
         if (Uri.TryCreate(uri, UriKind.Absolute, out var parsed))
             rest = parsed.PathAndQuery;
 
-        int trackId = -1;
-        const string trackMarker = "/trackID=";
-        int idx = rest.LastIndexOf(trackMarker, StringComparison.OrdinalIgnoreCase);
-        if (idx >= 0)
-        {
-            _ = int.TryParse(rest[(idx + trackMarker.Length)..], out trackId);
-            rest = rest[..idx];
-        }
-
-        string? audio = null;
+        string path = rest, query = "";
         int q = rest.IndexOf('?');
         if (q >= 0)
         {
-            // Only "audio" is understood today; unknown KEYS are ignored so future
-            // parameters can be added without breaking older servers or clients.
-            foreach (var pair in rest[(q + 1)..].Split('&'))
-            {
-                var kv = pair.Split('=', 2);
-                if (kv.Length == 2 && kv[0].Trim().Equals("audio", StringComparison.OrdinalIgnoreCase))
-                    audio = Uri.UnescapeDataString(kv[1]).Trim().ToLowerInvariant();
-            }
-            rest = rest[..q];
+            path = rest[..q];
+            query = rest[(q + 1)..];
         }
-        return (Uri.UnescapeDataString(rest), trackId, audio);
+
+        // Query first: that is where a verbatim Content-Base concatenation puts it.
+        int trackId = TakeTrackId(ref query);
+        if (trackId < 0) trackId = TakeTrackId(ref path);
+
+        string? audio = null;
+        // Only "audio" is understood today; unknown KEYS are ignored so future
+        // parameters can be added without breaking older servers or clients.
+        foreach (var pair in query.Split('&'))
+        {
+            var kv = pair.Split('=', 2);
+            if (kv.Length == 2 && kv[0].Trim().Equals("audio", StringComparison.OrdinalIgnoreCase))
+                audio = Uri.UnescapeDataString(kv[1]).Trim().ToLowerInvariant();
+        }
+        return (Uri.UnescapeDataString(path), trackId, audio);
+    }
+
+    /// <summary>Cuts a "/trackID=N" marker out of <paramref name="s"/> and returns N,
+    /// or -1 when there is none. Only the DIGITS are consumed, so whatever follows
+    /// the id (a query the client kept on the end) survives in place.</summary>
+    private static int TakeTrackId(ref string s)
+    {
+        const string marker = "/trackID=";
+        int idx = s.LastIndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (idx < 0) return -1;
+        int start = idx + marker.Length, end = start;
+        while (end < s.Length && char.IsAsciiDigit(s[end])) end++;
+        if (end == start || !int.TryParse(s[start..end], out int id)) return -1;
+        s = s[..idx] + s[end..];
+        return id;
     }
 
     /// <summary>Maps a ?audio= value to a session's Opus choice: null when the URL

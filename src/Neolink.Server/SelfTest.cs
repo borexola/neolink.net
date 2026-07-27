@@ -1051,16 +1051,34 @@ public static class SelfTest
             Assert(!sdp.Contains("mpeg4-generic"), "the original AAC line is replaced");
             Assert(Rtsp.Sdp.Build(hub, "cam").Contains("mpeg4-generic"), "AAC advertised without opus");
 
-            // URL parsing: ?audio= picks the codec; clients append "/trackID=N"
-            // to a Content-Base that KEPT the query, so the marker can trail it.
+            // URL parsing: ?audio= picks the codec. The SDP's control attribute is
+            // relative ("trackID=N"), and clients resolve it against Content-Base
+            // in BOTH of these shapes once a query is present. Reading the trackID
+            // out of only one position turns the audio SETUP into a second video
+            // track — the stream then plays with no sound at all.
             var (p1, t1, a1) = Rtsp.RtspConnection.ParseUri("rtsp://h:8654/cam/subStream");
             AssertEq(p1, "/cam/subStream");
             AssertEq(t1, -1);
             Assert(a1 == null, "no query = no audio choice");
+            // (a) Content-Base concatenated verbatim: the marker trails the query.
             var (p2, t2, a2) = Rtsp.RtspConnection.ParseUri("rtsp://h/cam?audio=Opus&future=1/trackID=1");
             AssertEq(p2, "/cam");
             AssertEq(t2, 1);
             AssertEq(a2!, "opus"); // case-folded; the unknown "future" KEY is ignored
+            // (b) URL-aware resolver: the marker joins the PATH, query stays last.
+            var (p3, t3, a3) = Rtsp.RtspConnection.ParseUri("rtsp://h/cam/trackID=1?audio=opus");
+            AssertEq(p3, "/cam");
+            AssertEq(t3, 1);
+            AssertEq(a3!, "opus");
+            var (p4, t4, a4) = Rtsp.RtspConnection.ParseUri("rtsp://h/cam/subStream/trackID=0?audio=original&x=2");
+            AssertEq(p4, "/cam/subStream");
+            AssertEq(t4, 0);
+            AssertEq(a4!, "original");
+            // No query at all still works (every pre-0.9.8 client).
+            var (p5, t5, a5) = Rtsp.RtspConnection.ParseUri("rtsp://h/cam/trackID=1");
+            AssertEq(p5, "/cam");
+            AssertEq(t5, 1);
+            Assert(a5 == null, "no query = mount default");
             Assert(Rtsp.RtspConnection.TryMapAudio("opus", out var mOpus) && mOpus == true, "opus maps to transcode");
             Assert(Rtsp.RtspConnection.TryMapAudio("original", out var mOrig) && mOrig == false, "original maps to camera track");
             Assert(Rtsp.RtspConnection.TryMapAudio(null, out var mNone) && mNone == null, "absent = mount default");
