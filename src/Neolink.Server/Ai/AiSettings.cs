@@ -105,21 +105,14 @@ public sealed class AiSettings
     /// &lt;think&gt; blocks stripped either way; this saves the time they take.</summary>
     public bool NoThink { get; set; } = true;
 
-    /// <summary>How frames are sampled: "budget" (a fixed number of frames per
-    /// event, spread across it — <see cref="CaptureSeconds"/>) or "interval"
-    /// (a fixed RATE — one frame every <see cref="SampleEverySeconds"/> seconds
-    /// for as long as the event runs, so longer events send more frames).
-    /// Both modes keep the event's first five seconds at one frame per second.</summary>
-    public string SampleMode { get; set; } = "budget";
-
-    /// <summary>Interval mode's rate: one frame every N seconds (1–600).
-    /// 1 = maximum detail; 5–10 suits long, slow scenes. Only meaningful while
-    /// <see cref="SampleMode"/> is "interval".</summary>
+    /// <summary>Sampling density: one frame about every N seconds (1–600), AS
+    /// THE SOURCE ALLOWS — the stream tap can only keep keyframes, which arrive
+    /// at the camera's GOP cadence (typically one per 2-4s), so values below
+    /// that mean "every keyframe"; snapshot polling paces to it directly. The
+    /// event's first five seconds always sample at full source density. (The
+    /// old budget/fixed-rate mode switch collapsed into this knob plus
+    /// <see cref="MaxFrames"/>: both "modes" were always this same machine.)</summary>
     public int SampleEverySeconds { get; set; } = 2;
-
-    /// <summary>True while fixed-rate sampling is the active mode.</summary>
-    [JsonIgnore]
-    public bool UsesInterval => string.Equals(SampleMode, "interval", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Save the exact JPEGs sent to the model into the event's folder
     /// (ai-frames/) for review. Deliberately PLAIN files — they exist to be
@@ -127,15 +120,14 @@ public sealed class AiSettings
     /// on. They are deleted together with the event.</summary>
     public bool KeepFrames { get; set; }
 
-    /// <summary>The frame budget per event, uncapped (≥ 1). Sampling starts at
-    /// one frame per second and spreads: whenever the budget fills, every other
-    /// frame is dropped and the interval doubles, so the set always spans the
-    /// WHOLE event, however long it runs. No artificial ceiling: an event can
-    /// only ever yield about one frame per second of its length, so a big
-    /// budget simply means "keep every frame" — the event's own duration
-    /// (bounded by recording.max_clip_seconds) is the real limit. (The JSON
-    /// name is historic — it began life as "seconds sampled".)</summary>
-    public int CaptureSeconds { get; set; } = 10;
+    /// <summary>The cost ceiling: at most this many frames per event (≥ 1).
+    /// When sampling at <see cref="SampleEverySeconds"/> would exceed it, every
+    /// other kept frame is dropped and the interval doubles, so the final set
+    /// always spans the WHOLE event, however long it runs — a long event gets
+    /// the same bounded payload, spread thinner. (The stored JSON name is
+    /// historic — the field began life as "seconds sampled".)</summary>
+    [JsonPropertyName("captureSeconds")]
+    public int MaxFrames { get; set; } = 10;
 
     /// <summary>How long one completion may take before the job is abandoned.
     /// Local models on modest hardware can genuinely need minutes.</summary>
@@ -158,10 +150,9 @@ public sealed class AiSettings
         ApiKeyEnc = ApiKeyEnc,
         Prompt = Prompt,
         NoThink = NoThink,
-        SampleMode = SampleMode,
         SampleEverySeconds = SampleEverySeconds,
         KeepFrames = KeepFrames,
-        CaptureSeconds = CaptureSeconds,
+        MaxFrames = MaxFrames,
         TimeoutSeconds = TimeoutSeconds,
     };
 
@@ -319,9 +310,8 @@ public sealed class AiStore
             };
             incoming.Provider = incoming.UsesOllama ? "ollama"
                 : incoming.UsesAnthropic ? "anthropic" : "openai"; // normalize unknowns
-            incoming.SampleMode = incoming.UsesInterval ? "interval" : "budget";
             incoming.SampleEverySeconds = Math.Clamp(incoming.SampleEverySeconds, 1, 600);
-            incoming.CaptureSeconds = Math.Max(1, incoming.CaptureSeconds);
+            incoming.MaxFrames = Math.Max(1, incoming.MaxFrames);
             incoming.TimeoutSeconds = Math.Clamp(incoming.TimeoutSeconds, 5, 600);
             _settings = incoming;
             SaveLocked();

@@ -274,13 +274,18 @@ public sealed class ApiAiSettings
     public string Prompt { get; set; } = "";
     public string DefaultPrompt { get; set; } = "";
     public bool NoThink { get; set; } = true;
-    /// <summary>"budget" (frames per event) or "interval" (one frame every N seconds).</summary>
-    public string SampleMode { get; set; } = "budget";
+    /// <summary>One frame about every N seconds, as the source allows (the stream
+    /// tap can't sample faster than the camera's keyframe cadence).</summary>
     public int SampleEverySeconds { get; set; } = 2;
     /// <summary>Save the JPEGs sent to the model into the event folder for review.</summary>
     public bool KeepFrames { get; set; }
-    public int CaptureSeconds { get; set; } = 10;
+    /// <summary>Cost ceiling: at most this many frames per event; long events
+    /// spread the kept frames end to end.</summary>
+    public int MaxFrames { get; set; } = 10;
     public int TimeoutSeconds { get; set; } = 120;
+    /// <summary>Whether the server found an ffmpeg (stream sampling, pre-roll
+    /// frames, downscaling) — surfaced so the UI can say so instead of guessing.</summary>
+    public bool Ffmpeg { get; set; }
 }
 
 /// <summary>GET /api/system/stats — static facts about the server process/host.</summary>

@@ -36,12 +36,6 @@ public sealed class AiCapture
     private volatile bool _discarded;
     private int _disposeArmed;
 
-    /// <summary>Fixed-rate mode's frame ceiling — a memory/payload safety valve,
-    /// not a target. At one frame per second it takes a 10-minute event to hit;
-    /// past it the same thin-and-double machinery as budget mode takes over, so
-    /// even a pathological event stays bounded and still spans end to end.</summary>
-    internal const int IntervalSafetyBudget = 600;
-
     internal string Camera { get; }
     internal List<(DateTime Utc, byte[] Jpeg)> Frames { get; } = new();
     internal Task Completion { get; }
@@ -359,15 +353,12 @@ public sealed class AiDescriber
     {
         if (!WantsCapture(camera)) return null;
         var cfg = _store.Snapshot();
-        // Fixed-rate mode is the same machine with a different starting gait:
-        // the chosen interval instead of 1s, and a roomy safety ceiling instead
-        // of a user budget — the rate holds until an absurdly long event forces
-        // the same thin-and-double valve budget mode lives by.
-        return cfg.UsesInterval
-            ? new AiCapture(camera, control, AiCapture.IntervalSafetyBudget,
-                TimeSpan.FromSeconds(Math.Clamp(cfg.SampleEverySeconds, 1, 600)), ct, preroll, streamHub)
-            : new AiCapture(camera, control, Math.Max(1, cfg.CaptureSeconds),
-                TimeSpan.FromSeconds(1), ct, preroll, streamHub);
+        // The two knobs compose in one machine: sample about every N seconds
+        // (source permitting), and when the cap fills, thin-and-double so the
+        // kept set spans the whole event. The old budget/fixed-rate mode
+        // switch was only ever two presets of exactly this.
+        return new AiCapture(camera, control, Math.Max(1, cfg.MaxFrames),
+            TimeSpan.FromSeconds(Math.Clamp(cfg.SampleEverySeconds, 1, 600)), ct, preroll, streamHub);
     }
 
     /// <summary>Event closed and saved: stop sampling and queue the description

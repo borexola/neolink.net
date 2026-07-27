@@ -4287,13 +4287,20 @@ public static class SelfTest
             AssertEq(Neolink.Ai.AiCapture.RetryPause(4).TotalSeconds.ToString("0"), "30");
             AssertEq(Neolink.Ai.AiCapture.RetryPause(50).TotalSeconds.ToString("0"), "30");
 
-            // Sampling defaults to the budget mode; the interval mode flag is
-            // case-insensitive and keep-frames is a strict opt-in.
+            // Sampling: two composable knobs (interval + frame cap), defaults
+            // 2s / 10 frames; keep-frames is a strict opt-in. The cap keeps its
+            // historic JSON name so pre-rework ai.json files carry it over.
             var sdef = new Neolink.Ai.AiSettings();
-            Assert(!sdef.UsesInterval && sdef.SampleMode == "budget" && !sdef.KeepFrames,
-                "sampling defaults: budget mode, frames not kept");
-            Assert(new Neolink.Ai.AiSettings { SampleMode = "INTERVAL" }.UsesInterval,
-                "interval mode flag is case-insensitive");
+            Assert(sdef is { SampleEverySeconds: 2, MaxFrames: 10, KeepFrames: false },
+                "sampling defaults: every 2s, 10 frames max, frames not kept");
+            var legacy = System.Text.Json.JsonSerializer.Deserialize<Neolink.Ai.AiSettings>(
+                "{\"captureSeconds\":25,\"sampleMode\":\"interval\"}",
+                new System.Text.Json.JsonSerializerOptions
+                {
+                    PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
+                });
+            Assert(legacy is { MaxFrames: 25 },
+                "historic captureSeconds JSON name loads as the frame cap; dead sampleMode is ignored");
 
             // Decimation never touches the protected opening window (the event's
             // first seconds at 1 fps): only the tail halves.

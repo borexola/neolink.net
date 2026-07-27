@@ -275,6 +275,12 @@ if (eventStore != null && recordingSettings != null)
         cam => recSettingsForAi.Get(cam).AiContext);
     var describer = aiDescriber;
     tasks.Add(Task.Run(() => describer.RunAsync(shutdown.Token)));
+    // Say up front which frame pipeline this install has — "why no ffmpeg in
+    // my logs" should be answerable from the startup banner, not archaeology.
+    Log.Info(Neolink.Ai.AiPreroll.FfmpegPath is { } ffPath
+        ? $"AI describe: ffmpeg at {ffPath} — stream frame sampling, pre-trigger frames and downscaling active"
+        : "AI describe: no ffmpeg found — frames come from camera snapshots only " +
+          "(install ffmpeg or set NEOLINK_FFMPEG to add stream sampling, pre-trigger frames and downscaling)");
 }
 
 // Footage encryption (beta, opt-in via recording.encrypt): new clips, segments

@@ -126,7 +126,7 @@ public static class AiPreroll
             var jpegs = SplitJpegs(outBytes);
             if (jpegs.Count == 0)
             {
-                Log.Debug($"AI pre-roll: ffmpeg produced no frames from {packets.Count} packet(s)" +
+                Log.Info($"AI pre-roll: ffmpeg produced no frames from {packets.Count} packet(s)" +
                           $"{(stderr.Length > 0 ? $": {stderr[..Math.Min(300, stderr.Length)]}" : "")}");
                 return none;
             }
@@ -150,12 +150,12 @@ public static class AiPreroll
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            Log.Debug("AI pre-roll: ffmpeg exceeded its 20s deadline — skipped");
+            Log.Info("AI pre-roll: ffmpeg exceeded its 20s deadline — skipped");
             return none;
         }
         catch (Exception ex)
         {
-            Log.Debug($"AI pre-roll extraction failed: {Log.Flatten(ex)}");
+            Log.Info($"AI pre-roll extraction failed: {Log.Flatten(ex)}");
             return none;
         }
     }
@@ -195,7 +195,7 @@ public static class AiPreroll
             var jpegs = SplitJpegs(outBytes);
             if (jpegs.Count == 0)
             {
-                Log.Debug($"AI stream-tap decode: ffmpeg produced no frames from {aus.Count} AU(s)" +
+                Log.Info($"AI stream-tap decode: ffmpeg produced no frames from {aus.Count} AU(s)" +
                           $"{(stderr.Length > 0 ? $": {stderr[..Math.Min(300, stderr.Length)]}" : "")}");
                 return none;
             }
@@ -211,12 +211,12 @@ public static class AiPreroll
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            Log.Debug("AI stream-tap decode: ffmpeg exceeded its deadline — skipped");
+            Log.Info("AI stream-tap decode: ffmpeg exceeded its deadline — skipped");
             return none;
         }
         catch (Exception ex)
         {
-            Log.Debug($"AI stream-tap decode failed: {Log.Flatten(ex)}");
+            Log.Info($"AI stream-tap decode failed: {Log.Flatten(ex)}");
             return none;
         }
     }
@@ -256,7 +256,7 @@ public static class AiPreroll
             {
                 // A miscount means frames would pair with the wrong timestamps —
                 // originals are oversized but at least honest.
-                Log.Debug($"AI frame downscale: expected {big.Count} JPEG(s) back, got {scaled.Count}" +
+                Log.Info($"AI frame downscale: expected {big.Count} JPEG(s) back, got {scaled.Count}" +
                           $"{(stderr.Length > 0 ? $" ({stderr[..Math.Min(200, stderr.Length)]})" : "")}" +
                           " — sending the originals");
                 return frames;
@@ -268,7 +268,7 @@ public static class AiPreroll
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
-            Log.Debug($"AI frame downscale failed ({Log.Flatten(ex)}) — sending the originals");
+            Log.Info($"AI frame downscale failed ({Log.Flatten(ex)}) — sending the originals");
             return frames;
         }
     }

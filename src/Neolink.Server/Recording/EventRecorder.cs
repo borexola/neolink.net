@@ -810,7 +810,12 @@ public sealed class EventRecorder
         if (Neolink.Ai.AiPreroll.FfmpegPath == null) return null;
         if (_previewHub is { VideoReady: true }) return _previewHub;
         var hub = _activeRecordHub ?? _hub;
-        return hub.VideoReady ? hub : null;
+        if (hub.VideoReady) return hub;
+        // ffmpeg is there but no stream is decodable yet — say so, or this
+        // event's snapshot sampling looks like the feature silently not working.
+        Log.Info($"{_camera}: AI stream sampling unavailable for this event (no live " +
+                 "stream at its start) — using camera snapshots");
+        return null;
     }
 
     /// <summary>A frozen copy of the pre-roll for the AI describer, taken under
