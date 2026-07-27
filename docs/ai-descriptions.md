@@ -11,6 +11,23 @@
 > speaking the Messages shape) are implemented to spec. The only hard
 > requirement on the model: it must be **vision-capable** (accept images).
 
+## Enabling it
+
+Two switches, both required:
+
+1. **Globally** — Settings → **AI** (admin): pick the backend (OpenAI-style,
+   Ollama, or Anthropic-style — each keeps its own endpoint/model/key),
+   set the endpoint (API paths are appended automatically; blank Anthropic
+   endpoint = `https://api.anthropic.com`) and a vision-capable model name.
+   API keys are stored encrypted, write-only. Use **Test LLM connection** —
+   it sends a real request *with a test image*, so a text-only model fails
+   here instead of on your first event.
+2. **Per camera** — camera ⚙ → EVENTS → **AI descriptions**. Only opted-in
+   cameras send frames anywhere. The toggle reveals the **scene notes**
+   field — see below.
+
+Requires event recording (a `recording` section in the config).
+
 ## How it works
 
 1. **A detection fires** — the camera's own detection, and the event records
@@ -55,23 +72,6 @@ The model must start its answer with **GREEN** (routine), **YELLOW**
 your prompt automatically, so editing the instructions can't break it. The
 level drives the colored dot/banner and the `ai_threat` HA sensor — the
 natural automation hook ("notify loudly on RED").
-
-## Enabling it
-
-Two switches, both required:
-
-1. **Globally** — Settings → **AI** (admin): pick the backend (OpenAI-style,
-   Ollama, or Anthropic-style — each keeps its own endpoint/model/key),
-   set the endpoint (API paths are appended automatically; blank Anthropic
-   endpoint = `https://api.anthropic.com`) and a vision-capable model name.
-   API keys are stored encrypted, write-only. Use **Test LLM connection** —
-   it sends a real request *with a test image*, so a text-only model fails
-   here instead of on your first event.
-2. **Per camera** — camera ⚙ → EVENTS → **AI descriptions**. Only opted-in
-   cameras send frames anywhere. The toggle reveals the **scene notes**
-   field — see below.
-
-Requires event recording (a `recording` section in the config).
 
 ## Getting good descriptions
 
