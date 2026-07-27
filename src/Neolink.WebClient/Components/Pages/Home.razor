@@ -1977,10 +1977,6 @@
                                         ? "ffmpeg found: frames are sampled from the stream itself (keyframes, one per 2-4s typically), the moments before the trigger join each event, and oversized images are downscaled."
                                         : "No ffmpeg on this server: frames come from camera snapshots. Installing ffmpeg (or setting NEOLINK_FFMPEG) adds stream sampling, pre-trigger frames and downscaling.")
                                 </div>
-                                <div class="control-row"><span>Keep sent frames on disk</span>
-                                    <button class="chip @(_ai.KeepFrames ? "" : "chip-off")"
-                                            title="Saves the exact JPEGs sent to the model into the event's folder (ai-frames/) so you can review what the model actually saw. Plain, unencrypted files — deliberately, so they open anywhere — even when footage encryption is on; they are deleted together with the event."
-                                            @onclick="() => _ai.KeepFrames = !_ai.KeepFrames">@(_ai.KeepFrames ? "on" : "off")</button></div>
                                 <div class="control-row"><span>Skip model “thinking”</span>
                                     <button class="chip @(_ai.NoThink ? "" : "chip-off")"
                                             title="Asks reasoning models to answer directly (the /no_think convention) — much faster on local hardware. Think-blocks are stripped from answers either way."
@@ -2599,7 +2595,6 @@
         prompt = _ai.Prompt,
         noThink = _ai.NoThink,
         sampleEverySeconds = _ai.SampleEverySeconds,
-        keepFrames = _ai.KeepFrames,
         maxFrames = _ai.MaxFrames,
         timeoutSeconds = _ai.TimeoutSeconds,
     };

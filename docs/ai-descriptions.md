@@ -85,10 +85,6 @@ natural automation hook ("notify loudly on RED").
   frames = a better story, paid in tokens and latency — seconds on a local
   model, money on a hosted API. The defaults (every 2s, max 30) cover a
   ~2-minute event at full keyframe density.
-- **Keep sent frames on disk** stores the exact JPEGs sent with each event
-  (`ai-frames/` in the event folder — plain files by design, deleted with
-  the event). When a description surprises you, this answers "what did it
-  actually see?".
 - **The instruction prompt** sets the global voice — length, focus,
   language. Property-specific facts belong in scene notes instead.
 - **Model choice.** A small vision model answers in seconds; reasoning-heavy

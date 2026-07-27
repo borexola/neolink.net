@@ -226,7 +226,7 @@ public static class WebApi
         string? OllamaEndpoint, string? OllamaModel,
         string? AnthropicEndpoint, string? AnthropicModel, string? AnthropicApiKey,
         string? Prompt, bool? NoThink, int? MaxFrames, int? TimeoutSeconds,
-        int? SampleEverySeconds = null, bool? KeepFrames = null);
+        int? SampleEverySeconds = null);
     private sealed record CredentialsRequest(string? Username, string? Password);
 
     /// <summary>
@@ -1135,7 +1135,6 @@ public static class WebApi
                     defaultPrompt = Neolink.Ai.AiSettings.DefaultPrompt,
                     noThink = s.NoThink,
                     sampleEverySeconds = s.SampleEverySeconds,
-                    keepFrames = s.KeepFrames,
                     maxFrames = s.MaxFrames,
                     timeoutSeconds = s.TimeoutSeconds,
                     // Lets the settings UI say whether stream sampling / pre-roll /
@@ -1165,7 +1164,6 @@ public static class WebApi
                     Prompt = req.Prompt ?? cur.Prompt,
                     NoThink = req.NoThink ?? cur.NoThink,
                     SampleEverySeconds = Math.Clamp(req.SampleEverySeconds ?? cur.SampleEverySeconds, 1, 600),
-                    KeepFrames = req.KeepFrames ?? cur.KeepFrames,
                     MaxFrames = Math.Max(1, req.MaxFrames ?? cur.MaxFrames),
                     TimeoutSeconds = Math.Clamp(req.TimeoutSeconds ?? cur.TimeoutSeconds, 5, 600),
                 };

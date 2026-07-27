@@ -277,8 +277,6 @@ public sealed class ApiAiSettings
     /// <summary>One frame about every N seconds, as the source allows (the stream
     /// tap can't sample faster than the camera's keyframe cadence).</summary>
     public int SampleEverySeconds { get; set; } = 2;
-    /// <summary>Save the JPEGs sent to the model into the event folder for review.</summary>
-    public bool KeepFrames { get; set; }
     /// <summary>Cost ceiling: at most this many frames per event; long events
     /// spread the kept frames end to end.</summary>
     public int MaxFrames { get; set; } = 30;

@@ -115,10 +115,13 @@ public sealed class AiSettings
     public int SampleEverySeconds { get; set; } = 2;
 
     /// <summary>Save the exact JPEGs sent to the model into the event's folder
-    /// (ai-frames/) for review. Deliberately PLAIN files — they exist to be
-    /// opened, so the footage vault is not used even when footage encryption is
-    /// on. They are deleted together with the event.</summary>
-    public bool KeepFrames { get; set; }
+    /// (ai-frames/) for review. Hard OFF — the switch was removed from the UI
+    /// (2026-07-26): it was a beta diagnostic, and the plain unencrypted copies
+    /// it writes undercut the footage vault. The KeepFramesAsync machinery in
+    /// the describer stays; turning this back into a stored setting is the
+    /// whole resurrection. A leftover "keepFrames" in ai.json is ignored.</summary>
+    [JsonIgnore]
+    public bool KeepFrames => false;
 
     /// <summary>The cost ceiling: at most this many frames per event (≥ 1).
     /// When sampling at <see cref="SampleEverySeconds"/> would exceed it, every
@@ -154,7 +157,6 @@ public sealed class AiSettings
         Prompt = Prompt,
         NoThink = NoThink,
         SampleEverySeconds = SampleEverySeconds,
-        KeepFrames = KeepFrames,
         MaxFrames = MaxFrames,
         TimeoutSeconds = TimeoutSeconds,
     };
