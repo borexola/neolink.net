@@ -1036,15 +1036,18 @@ The short version:
   camera ⚙ → EVENTS. Tested with **llama.cpp**, **Ollama** and
   **LM Studio**; Anthropic-style APIs are implemented to spec. It's
   **beta — feedback is very welcome**.
-- Frames are sampled with the camera's own snapshot command (low-res sub
-  stream, no server-side video decoding) and **spread across the whole
-  event**; the model is told each frame's time offset. **More frames = a
-  better description** — the frame budget in Settings → AI is the quality
-  lever, paid for in answer latency.
-- **Tune the instruction prompt** to your property (what the scene is, what's
-  normal, what counts as suspicious) — it is the biggest quality win, and the
-  classification contract is appended automatically so your edits can't break
-  it.
+- **Frames come from the stream itself** when an ffmpeg is present (the
+  Docker image ships one): a passive keyframe tap that costs the camera
+  nothing, plus up to three **pre-roll frames from the moments before the
+  trigger** — usually the best look at whatever caused the event. Without
+  ffmpeg, the camera's own snapshot command carries the event as before.
+  Frames **spread across the whole event** and the model is told each one's
+  time offset; the sampling density and per-event frame cap in Settings → AI
+  are the quality levers, paid for in answer latency.
+- **Tune it to your property**: per-camera **scene notes** (what this camera
+  watches, what is normal there) are the biggest threat-level win, and the
+  instruction prompt sets the global voice. The classification contract is
+  appended automatically so your edits can't break it.
 - Descriptions run on an isolated background queue: a slow or dead model can
   never delay recording or streaming — at worst an event goes undescribed
   with a log line.
