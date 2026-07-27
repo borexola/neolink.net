@@ -211,6 +211,15 @@ public sealed class AiCapture
         }
     }
 
+    /// <summary>The event's LAST seconds get the same protection as its first:
+    /// every keyframe of this closing window rides a rolling side buffer
+    /// regardless of pacing, and merges into the kept set when the event ends.
+    /// The departure that closes an event — the car pulling away, the visitor
+    /// walking off — happens in exactly the stretch the doubled interval samples
+    /// most thinly, and it cannot be re-sampled after the fact (live complaint
+    /// 2026-07-27: "the AI doesn't see the driving-away part").</summary>
+    private const int ClosingSeconds = 10;
+
     /// <summary>Stream-tap mode: listen to the hub and keep keyframes on the
     /// same opening/budget/thin-and-double contract as the snapshot loop —
     /// keyframes arrive at the camera's GOP cadence (typically 2-4s), so the
@@ -224,6 +233,9 @@ public sealed class AiCapture
         int locked = 0;
         int maxLocked = Math.Clamp(_budget - 2, 0, OpeningSeconds);
         var lastKept = DateTime.MinValue;
+        // Rolling closing window (see ClosingSeconds): shared refs, pruned as
+        // time advances, folded into StreamPackets when the loop ends.
+        var closing = new List<(DateTime Utc, byte[] AnnexB)>();
         var (id, reader) = hub.Subscribe(viewer: false);
         try
         {
@@ -238,6 +250,9 @@ public sealed class AiCapture
                 catch (ChannelClosedException) { break; } // stream ended; keep what we have
                 if (packet is not HubVideo { Keyframe: true } kv) continue;
                 var now = DateTime.UtcNow;
+                closing.Add((now, kv.AnnexB));
+                while (now - closing[0].Utc > TimeSpan.FromSeconds(ClosingSeconds))
+                    closing.RemoveAt(0);
                 bool opening = locked < maxLocked
                     && now - launched < TimeSpan.FromSeconds(OpeningSeconds);
                 // The 200ms grace keeps a GOP that lands just short of the
@@ -269,17 +284,52 @@ public sealed class AiCapture
         }
         finally
         {
+            // Event over: fold the closing window in. Runs before this task
+            // completes, and the worker awaits Completion before reading — the
+            // merged set is what ProcessAsync sees.
+            lock (StreamPackets)
+                MergeClosing(StreamPackets, closing, locked, _budget);
             hub.Unsubscribe(id);
         }
     }
 
     /// <summary>Budget full: drop every other frame BEYOND the protected opening
-    /// prefix (<paramref name="locked"/> frames). The survivors still span the
-    /// whole tail so far; the opening keeps its full one-per-second density.</summary>
+    /// prefix (<paramref name="locked"/> frames), starting from the SECOND-newest
+    /// so the newest capture always survives — the freshest look at the event
+    /// must never be the one a thinning pass deletes. The survivors still span
+    /// the whole tail so far; the opening keeps its full density.</summary>
     internal static void ThinTail(List<(DateTime Utc, byte[] Jpeg)> frames, int locked)
     {
-        for (int k = frames.Count - 1; k > locked; k -= 2)
+        for (int k = frames.Count - 2; k > locked; k -= 2)
             frames.RemoveAt(k);
+    }
+
+    /// <summary>Folds the closing-window buffer into the kept set: every buffered
+    /// frame newer than the newest kept one appends, then the budget is enforced
+    /// by thinning the MIDDLE — an event is explained by its opening and its
+    /// ending, so those two windows keep full density and the long middle pays.</summary>
+    internal static void MergeClosing(List<(DateTime Utc, byte[] Data)> kept,
+        IReadOnlyList<(DateTime Utc, byte[] Data)> closing, int locked, int budget)
+    {
+        int tailStart = kept.Count;
+        foreach (var c in closing)
+            if (kept.Count == 0 || c.Utc > kept[^1].Utc)
+                kept.Add(c);
+        while (kept.Count > budget)
+        {
+            int removed = 0;
+            for (int k = tailStart - 2; k > locked; k -= 2)
+            {
+                kept.RemoveAt(k);
+                removed++;
+            }
+            if (removed == 0) break;
+            tailStart -= removed;
+        }
+        // Degenerate budgets leave no middle to thin: give up frames just below
+        // the end instead, so the opening and the very last look both survive.
+        while (kept.Count > budget && kept.Count >= 2)
+            kept.RemoveAt(kept.Count - 2);
     }
 
     /// <summary>Pause before the next attempt after N consecutive misses:
@@ -781,6 +831,17 @@ public sealed class AiDescriber
         {
             text += $"The {frames.Count} frame(s) below span the event, oldest first, " +
                     $"taken at {offsets} after its start.";
+        }
+        if (part == parts && frames.Count > 0)
+        {
+            // The tail can be thin (snapshot pacing backs off as an event runs):
+            // when the last frame sits well short of the event's end, say so —
+            // paired with the grounding rules, the model then reports the gap
+            // instead of writing an ending those frames never showed.
+            int endGap = (int)(rec.EndUtc - frames[^1].Utc).TotalSeconds;
+            if (endGap > 10)
+                text += $" The event ran another {endGap}s after the last frame below — " +
+                        "that final stretch is not pictured.";
         }
         return text;
     }

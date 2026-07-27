@@ -26,10 +26,12 @@ public sealed class AiSettings
         "motion. That subject is the reason these frames exist: find it first and make it " +
         "the center of the description — what it looks like, where it is, and what it does " +
         "across the frames. Detections fire on the event's first moments, so look closest " +
-        "at the earliest frames, including any marked as taken before the trigger. If the " +
-        "stated subject never appears in any frame, do not invent it — say plainly that it " +
-        "is not visible; that is useful information. For plain motion, name what actually " +
-        "moved. " +
+        "at the earliest frames, including any marked as taken before the trigger. Then " +
+        "follow the event through to its final frames — how it ends (the subject leaves, a " +
+        "vehicle drives off, the scene empties again) is as much the event as how it began. " +
+        "If the stated subject never appears in any frame, do not invent it — say plainly " +
+        "that it is not visible; that is useful information. For plain motion, name what " +
+        "actually moved. " +
         "In 1-3 short sentences, describe what happens across the frames: who or what is " +
         "visible, what they are doing, and anything unusual. Be concrete and factual, do not " +
         "speculate beyond what the images show, and answer with the description only.";
@@ -48,7 +50,10 @@ public sealed class AiSettings
         "when consecutive frames actually show it; if the subject leaves the view, say they " +
         "left the view — never assume they returned, continued, or did anything that no later " +
         "frame shows. Many cameras stamp the date and time onto each frame; when such a " +
-        "timestamp is visible, trust it to confirm the order and timing of what you see.";
+        "timestamp is visible, trust it to confirm the order and timing of what you see. " +
+        "Describe through to the last frame: how an event ends — a person or vehicle leaving, " +
+        "the scene standing empty again — is part of what happened, not an afterthought. If " +
+        "the frames stop while something is still underway, end the description there too.";
 
     /// <summary>
     /// The threat-classification contract, appended to the (user-editable) prompt

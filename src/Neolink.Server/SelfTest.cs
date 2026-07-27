@@ -4391,6 +4391,49 @@ public static class SelfTest
             AssertEq(Neolink.Ai.AiDescriber.MoreSevere("red", null) ?? "-", "red");
             AssertEq(Neolink.Ai.AiDescriber.MoreSevere("green", "yellow") ?? "-", "yellow");
 
+            // The event's ENDING keeps its frames (live complaint 2026-07-27: the
+            // car driving away at the close of an event never reached the model).
+            // The closing-window merge appends the unpaced final keyframes, paying
+            // for the budget out of the MIDDLE — opening and ending both keep
+            // full density.
+            var kept = Enumerable.Range(0, 28)
+                .Select(i => (Utc: ct0.AddSeconds(i * 3), Data: new[] { (byte)i })).ToList();
+            var closingBuf = Enumerable.Range(0, 5)
+                .Select(i => (Utc: ct0.AddSeconds(100 + i * 2), Data: new[] { (byte)(100 + i) })).ToList();
+            Neolink.Ai.AiCapture.MergeClosing(kept, closingBuf, locked: 5, budget: 30);
+            Assert(kept.Count <= 30, "budget held after the closing merge");
+            AssertEq((int)kept[^1].Data[0], 104);     // very last closing frame survives
+            AssertEq((int)kept[^5].Data[0], 100);     // the whole closing window survives
+            AssertEq((int)kept[4].Data[0], 4);        // opening prefix untouched
+            // A closing frame no newer than the kept set is a duplicate, not an append.
+            var dupKept = new List<(DateTime Utc, byte[] Data)> { (ct0.AddSeconds(50), new byte[] { 1 }) };
+            Neolink.Ai.AiCapture.MergeClosing(dupKept,
+                new List<(DateTime Utc, byte[] Data)> { (ct0.AddSeconds(50), new byte[] { 1 }) }, 0, 30);
+            AssertEq(dupKept.Count, 1);
+            // Degenerate budget: the opening and the very LAST look both survive.
+            var tiny = Enumerable.Range(0, 4)
+                .Select(i => (Utc: ct0.AddSeconds(i), Data: new[] { (byte)i })).ToList();
+            Neolink.Ai.AiCapture.MergeClosing(tiny,
+                new List<(DateTime Utc, byte[] Data)> { (ct0.AddSeconds(9), new byte[] { 9 }) }, 0, 2);
+            AssertEq(tiny.Count, 2);
+            AssertEq((int)tiny[^1].Data[0], 9);
+            // The prompts ask for the ending in both layers: the (replaceable)
+            // default prompt and the always-appended grounding rules.
+            Assert(Neolink.Ai.AiSettings.DefaultPrompt.Contains("final frames"),
+                "default prompt follows the event to its end");
+            Assert(Neolink.Ai.AiSettings.GroundingProtocol.Contains("through to the last frame"),
+                "grounding rules carry the description to the last frame");
+            // And when the tail genuinely is not pictured (snapshot pacing), the
+            // request says so instead of letting the model invent an ending.
+            var gapRec = new Recording.EventRecord { Id = "t", Camera = "c",
+                StartUtc = ct0, EndUtc = ct0.AddSeconds(60), Labels = { "person" } };
+            var gapFrames = new List<(DateTime, byte[])> { (ct0.AddSeconds(2), new byte[] { 1 }) };
+            Assert(Neolink.Ai.AiDescriber.BuildUserText(gapRec, gapFrames, 1, 1, null)
+                .Contains("not pictured"), "a bare tail is declared to the model");
+            gapFrames.Add((ct0.AddSeconds(56), new byte[] { 2 }));
+            Assert(!Neolink.Ai.AiDescriber.BuildUserText(gapRec, gapFrames, 1, 1, null)
+                .Contains("not pictured"), "a covered tail needs no disclaimer");
+
             // Frame-capture misses back off (4, 8, 16, 30s flat) instead of giving
             // up: three quick failures at a busy event start used to zero out the
             // whole event's frames (live 2026-07-25).
@@ -4416,19 +4459,21 @@ public static class SelfTest
                 "historic captureSeconds JSON name loads as the frame cap; dead sampleMode is ignored");
 
             // Decimation never touches the protected opening window (the event's
-            // first seconds at 1 fps): only the tail halves.
+            // first seconds at 1 fps) — only the tail halves — and it starts at
+            // the SECOND-newest frame, so the freshest look always survives a
+            // pass (deleting the newest was part of the missing-ending bug).
             var thin = Enumerable.Range(0, 12)
                 .Select(i => (Utc: new DateTime(2026, 1, 1).AddSeconds(i), Jpeg: new[] { (byte)i }))
                 .ToList();
             Neolink.Ai.AiCapture.ThinTail(thin, 5);
-            AssertEq(string.Join(",", thin.Select(f => f.Jpeg[0])), "0,1,2,3,4,5,6,8,10");
+            AssertEq(string.Join(",", thin.Select(f => f.Jpeg[0])), "0,1,2,3,4,5,7,9,11");
             // No opening frames (tiny budget, or the camera missed all five
-            // slots): classic every-other halving, first frame always kept.
+            // slots): every-other halving; first AND newest frames always kept.
             var classic = Enumerable.Range(0, 8)
                 .Select(i => (Utc: new DateTime(2026, 1, 1).AddSeconds(i), Jpeg: new[] { (byte)i }))
                 .ToList();
             Neolink.Ai.AiCapture.ThinTail(classic, 0);
-            AssertEq(string.Join(",", classic.Select(f => f.Jpeg[0])), "0,2,4,6");
+            AssertEq(string.Join(",", classic.Select(f => f.Jpeg[0])), "0,1,3,5,7");
 
             // The embedded vision-test image must stay a decodable JPEG (SOI…EOI) —
             // a corrupted constant would make every connection test fail confusingly.

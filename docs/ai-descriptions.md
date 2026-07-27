@@ -43,7 +43,15 @@ Requires event recording (a `recording` section in the config).
    seconds** (density — bounded by the camera's keyframe cadence, typically
    one per 2–4s, when the stream is the source) and **max frames per event**
    (default 30 — long events spread their kept frames end to end rather than
-   cutting off). The first five seconds are always kept at full density.
+   cutting off). The first five seconds are always kept at full density, and
+   so are the last ~10 (stream sampling): the departure that closes an event
+   — the car pulling away, the visitor leaving — is exactly the stretch that
+   thinning used to sample most sparsely, so the closing window is protected
+   like the opening and the long middle pays for the budget instead. If an
+   ending still goes missing, check the event actually *contains* it: a pause
+   longer than `recording.post_seconds` (default 8) between, say, someone
+   getting into a car and the car moving closes the event before the
+   departure — raise `post_seconds` to bridge such gaps.
 3. **When the event closes**, the frames go to the model, each introduced by
    its own time label ("Frame 3 of 12 — +4s into the event:", or "3s BEFORE
    the trigger (pre-roll):"), with grounding rules that forbid narrating

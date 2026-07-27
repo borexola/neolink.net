@@ -133,6 +133,21 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Fixed
 
+- **AI descriptions no longer trail off before the event does.** The ending
+  of an event — the car pulling away, the visitor leaving — used to be the
+  part the model was least likely to mention: frame sampling thins as an
+  event runs (so the final seconds were its sparsest stretch, and a thinning
+  pass could delete the newest frame outright), and the prompt pointed the
+  model at the earliest frames without ever asking how things ended. Now the
+  last ~10 seconds keep every keyframe (a closing window mirroring the
+  protected opening — the long middle pays for the frame budget instead),
+  thinning always keeps the newest frame, both prompt layers ask for the
+  ending, and when the tail genuinely isn't pictured (snapshot-mode pacing)
+  the request says so, so the model reports the gap instead of inventing a
+  conclusion. Note: if the camera goes quiet between "person gets in the
+  car" and the car actually moving for longer than `recording.post_seconds`
+  (default 8), the event *closes* before the departure and no description
+  can include it — raise `post_seconds` to bridge such pauses.
 - **AI descriptions no longer come up empty on events with a busy start.**
   Frame capture used to stop asking for the rest of the event after three
   failed snapshots — and its per-shot deadline (5s) was shorter than the
