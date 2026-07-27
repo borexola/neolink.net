@@ -4259,6 +4259,11 @@ public static class SelfTest
             Assert(Neolink.Ai.AiSettings.GroundingProtocol.Contains("left the view")
                 && Neolink.Ai.AiSettings.GroundingProtocol.Contains("timestamp"),
                 "grounding rules cover the no-invented-return and camera-timestamp clauses");
+            // The default prompt turns the trigger labels into an assignment —
+            // find the subject, and honest absence beats an invented sighting.
+            Assert(Neolink.Ai.AiSettings.DefaultPrompt.Contains("find it first")
+                && Neolink.Ai.AiSettings.DefaultPrompt.Contains("do not invent it"),
+                "default prompt hunts the detected subject and forbids inventing it");
 
             // Long events go to the model in ordered parts capped by frame count
             // AND payload bytes (full-res snapshots broke a 210 MB pipe, live

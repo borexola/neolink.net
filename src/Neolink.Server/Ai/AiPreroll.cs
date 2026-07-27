@@ -116,9 +116,12 @@ public static class AiPreroll
                 "-hide_banner", "-loglevel", "error",
                 "-f", video.Codec == VideoCodec.H265 ? "hevc" : "h264",
                 "-i", "pipe:0",
-                // The model reads low-res anyway; 640 wide caps a 4K main
-                // stream's JPEGs at snapshot-like sizes.
-                "-vf", "scale=640:-2",
+                // Height-based on purpose: a 16:9 frame lands at the classic
+                // 640×360, while an ultra-wide dual-lens panorama keeps its
+                // proportional width (5120×1552 → 1188×360) instead of being
+                // crushed to 640×194 — where a rabbit on the lawn dissolved
+                // into ~5 unfindable pixels (live 2026-07-27).
+                "-vf", "scale=-2:360",
                 "-q:v", "5",
                 "-f", "image2pipe", "-c:v", "mjpeg", "pipe:1",
             }, stdinChunks, TimeSpan.FromSeconds(20), ct).ConfigureAwait(false);
@@ -188,7 +191,7 @@ public static class AiPreroll
                 "-hide_banner", "-loglevel", "error",
                 "-f", codec == VideoCodec.H265 ? "hevc" : "h264",
                 "-i", "pipe:0",
-                "-vf", "scale=640:-2",
+                "-vf", "scale=-2:360",
                 "-q:v", "5",
                 "-f", "image2pipe", "-c:v", "mjpeg", "pipe:1",
             }, stdinChunks, TimeSpan.FromSeconds(Math.Max(20, aus.Count)), ct).ConfigureAwait(false);
@@ -228,7 +231,7 @@ public static class AiPreroll
     public const int OversizeBytes = 300_000;
 
     /// <summary>Rescales every oversized JPEG in <paramref name="frames"/> to
-    /// model size (640 wide) through ONE ffmpeg pass, leaving small frames
+    /// model size (360 tall, width proportional) through ONE ffmpeg pass, leaving small frames
     /// untouched and every timestamp in place. Returns the original list when
     /// ffmpeg is missing or anything goes wrong — shrinking is an optimization,
     /// never a gate; the describer's byte-capped parts carry the fallback.</summary>
@@ -246,7 +249,7 @@ public static class AiPreroll
             {
                 "-hide_banner", "-loglevel", "error",
                 "-f", "image2pipe", "-c:v", "mjpeg", "-i", "pipe:0",
-                "-vf", "scale=640:-2",
+                "-vf", "scale=-2:360",
                 "-q:v", "5",
                 "-f", "image2pipe", "-c:v", "mjpeg", "pipe:1",
             }, big.Select(i => frames[i].Jpeg).ToList(),

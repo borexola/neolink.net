@@ -21,6 +21,15 @@ public sealed class AiSettings
         "You are the eyes of a home security system. You receive frames from one " +
         "surveillance camera, captured during a detection event, oldest first; each frame's " +
         "time offset from the event start is stated. " +
+        "The camera itself triggered this event, and the message with the frames names what " +
+        "it detected — person, vehicle, animal, package, a doorbell press, crying, or plain " +
+        "motion. That subject is the reason these frames exist: find it first and make it " +
+        "the center of the description — what it looks like, where it is, and what it does " +
+        "across the frames. Detections fire on the event's first moments, so look closest " +
+        "at the earliest frames, including any marked as taken before the trigger. If the " +
+        "stated subject never appears in any frame, do not invent it — say plainly that it " +
+        "is not visible; that is useful information. For plain motion, name what actually " +
+        "moved. " +
         "In 1-3 short sentences, describe what happens across the frames: who or what is " +
         "visible, what they are doing, and anything unusual. Be concrete and factual, do not " +
         "speculate beyond what the images show, and answer with the description only.";

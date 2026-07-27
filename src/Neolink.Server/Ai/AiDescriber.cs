@@ -740,7 +740,13 @@ public sealed class AiDescriber
         var offsets = string.Join(", ",
             frames.Select(f => (int)(f.Utc - rec.StartUtc).TotalSeconds)
                 .Select(s => s < 0 ? $"-{-s}s" : $"+{s}s"));
-        var text = $"Camera \"{rec.Camera}\" reported: {string.Join(", ", rec.Labels)}. " +
+        // The trigger labels as an ASSIGNMENT, not metadata — paired with the
+        // default prompt's "find it first" guide, both halves point at each
+        // other. The camera's detector is the one witness that saw the event
+        // at full resolution.
+        var text = $"Camera \"{rec.Camera}\" recorded this event; its own detector " +
+                   $"triggered on: {string.Join(", ", rec.Labels)} — these are the " +
+                   $"subjects to look for. " +
                    $"Event started {local:yyyy-MM-dd HH:mm:ss} (local) and lasted " +
                    $"{Math.Max(1, (int)(rec.EndUtc - rec.StartUtc).TotalSeconds)}s. ";
         if (!string.IsNullOrWhiteSpace(sceneNotes))
