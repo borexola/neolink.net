@@ -26,9 +26,9 @@ in the README). Paste the matching section below into the GitHub release.
   the camera's own audio settings, offered per what each model exposes: a
   **record audio** switch (the camera-side flag that puts the microphone into
   every stream and recording — here, on the SD card and in the Reolink app
-  alike), the speaker volume as before, and alarm/microphone volumes on models
-  that have them. Staged and applied like every other camera setting, always
-  read from the camera itself.
+  alike), the speaker volume as before, and talk-and-reply / visitor volumes
+  on models that have them (doorbells). Staged and applied like every other
+  camera setting, always read from the camera itself.
 
 - **PORTS tab: the camera's own service switches, live.** Each camera's
   settings dialog gains a Ports tab (admins only — in the UI and at the API)

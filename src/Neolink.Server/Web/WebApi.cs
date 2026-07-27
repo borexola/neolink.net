@@ -169,7 +169,7 @@ public static class WebApi
         string? DayNight, string? AntiFlicker, bool? Flip, bool? Mirror);
     private sealed record VolumeRequest(int? Volume);
 
-    private sealed record AudioRequest(bool? RecordAudio, int? AlarmVolume, int? MicVolume);
+    private sealed record AudioRequest(bool? RecordAudio, int? TalkVolume, int? VisitorVolume);
     private sealed record PtzPresetRequest(int? Id, string? Name, bool? Save);
     private sealed record QuickReplyRequest(int? Id);
     private sealed record AutoReplyRequest(int? FileId, int? Timeout);
@@ -2090,8 +2090,8 @@ public static class WebApi
                     },
                     volume = f.Volume,
                     recordAudio = f.Audio?.RecordAudio,
-                    alarmVolume = f.Audio?.AlarmVolume,
-                    micVolume = f.Audio?.MicVolume,
+                    talkVolume = f.Audio?.TalkVolume,
+                    visitorVolume = f.Audio?.VisitorVolume,
                     // Same { level, label } shape the camera list uses.
                     wifiSignal = f.WifiSignal is { } fw ? new { level = fw.Level, label = fw.Label } : null,
                     ptzPresets = f.PtzPresets?.Select(p => new { id = p.Id, name = p.Name, enabled = p.Enabled }),
@@ -2164,14 +2164,14 @@ public static class WebApi
         app.MapPost("/api/cameras/{name}/audio", (string name, AudioRequest req, HttpContext ctx) =>
             ExecAsync(name, ctx, mutating: true, async (control, reqCt) =>
             {
-                if (req is { RecordAudio: null, AlarmVolume: null, MicVolume: null })
-                    return Results.Json(new { error = "provide recordAudio, alarmVolume and/or micVolume" }, statusCode: 400);
-                if (req.AlarmVolume is < 0 or > 100 || req.MicVolume is < 0 or > 100)
+                if (req is { RecordAudio: null, TalkVolume: null, VisitorVolume: null })
+                    return Results.Json(new { error = "provide recordAudio, talkVolume and/or visitorVolume" }, statusCode: 400);
+                if (req.TalkVolume is < 0 or > 100 || req.VisitorVolume is < 0 or > 100)
                     return Results.Json(new { error = "volumes are 0-100" }, statusCode: 400);
                 if (req.RecordAudio is { } rec)
                     await control.SetRecordAudioAsync(rec, reqCt);
-                if (req.AlarmVolume != null || req.MicVolume != null)
-                    await control.SetAudioVolumesAsync(req.AlarmVolume, req.MicVolume, reqCt);
+                if (req.TalkVolume != null || req.VisitorVolume != null)
+                    await control.SetAudioVolumesAsync(req.TalkVolume, req.VisitorVolume, reqCt);
                 NudgeHa(name);
                 return Results.Json(new { ok = true });
             }));

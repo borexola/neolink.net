@@ -133,8 +133,10 @@ public sealed record WifiReading(int Raw, WifiUnit Unit)
 /// <summary>Camera-side audio settings beyond the speaker volume — every member
 /// is null when that particular camera doesn't expose it (they vary per model).
 /// RecordAudio is the encode settings' audio flag: whether the microphone goes
-/// into the streams (and thus recordings) at all.</summary>
-public sealed record AudioState(bool? RecordAudio, int? AlarmVolume, int? MicVolume);
+/// into the streams (and thus recordings) at all. TalkVolume is AudioCfg's
+/// "talkAndReplyVolume" (two-way talk and quick replies); VisitorVolume is
+/// "visitorVolume" (a doorbell's voice prompts toward the visitor).</summary>
+public sealed record AudioState(bool? RecordAudio, int? TalkVolume, int? VisitorVolume);
 
 /// <summary>Everything readable over the camera's HTTP API in one round: a null
 /// member means that feature is absent (or the camera rejected the query).</summary>
@@ -274,8 +276,9 @@ public interface ICameraControl
         Task.FromException(new NotSupportedException("this camera has no record-audio switch"));
 
     /// <summary>Writes the extra AudioCfg volumes some models expose (0-100 each;
-    /// null = leave untouched). Default: not supported.</summary>
-    Task SetAudioVolumesAsync(int? alarmVolume, int? micVolume, CancellationToken ct) =>
+    /// null = leave untouched): talkAndReplyVolume / visitorVolume. Default: not
+    /// supported.</summary>
+    Task SetAudioVolumesAsync(int? talkVolume, int? visitorVolume, CancellationToken ct) =>
         Task.FromException(new NotSupportedException("this camera has no audio volume settings"));
 
     /// <summary>The camera's Wi-Fi signal reading with the unit it came in, or null.</summary>
@@ -1351,27 +1354,29 @@ public sealed class CameraControl : ICameraControl
             bool? rec = null;
             try { rec = EncRecordAudio(await _httpApi!.GetEncAsync(c).ConfigureAwait(false)); }
             catch (ReolinkApiException) { /* no Enc surface: flag stays hidden */ }
-            int? alarm = null, mic = null;
+            int? talk = null, visitor = null;
             try
             {
                 var cfg = await _httpApi!.GetAudioCfgAsync(c).ConfigureAwait(false);
-                alarm = (int?)cfg["alarmVolume"];
-                mic = (int?)cfg["micVolume"];
+                talk = (int?)cfg["talkAndReplyVolume"];
+                visitor = (int?)cfg["visitorVolume"];
             }
             catch (ReolinkApiException) { /* no AudioCfg: volumes stay hidden */ }
-            return rec == null && alarm == null && mic == null ? null : new AudioState(rec, alarm, mic);
+            return rec == null && talk == null && visitor == null ? null : new AudioState(rec, talk, visitor);
         }, ct);
 
-    /// <summary>The record-audio state across the encode settings' streams: true
-    /// when any stream carries audio (they move together — the app exposes one
-    /// switch), null when this firmware has no audio flag at all.</summary>
+    /// <summary>The record-audio state from the encode settings. The flag lives at
+    /// the TOP of the Enc object (one switch for the camera — what the app shows);
+    /// a per-stream fallback covers firmwares that nest it instead. Null = this
+    /// firmware has no audio flag at all.</summary>
     internal static bool? EncRecordAudio(JsonObject enc)
     {
+        if (enc["audio"] is { } flag) return ((int?)flag ?? 0) != 0;
         bool? any = null;
         foreach (var key in new[] { "mainStream", "subStream", "extStream" })
         {
-            if (enc[key] is not JsonObject s || s["audio"] is not { } flag) continue;
-            any = (any ?? false) || ((int?)flag ?? 0) != 0;
+            if (enc[key] is not JsonObject s || s["audio"] is not { } sFlag) continue;
+            any = (any ?? false) || ((int?)sFlag ?? 0) != 0;
         }
         return any;
     }
@@ -1385,6 +1390,11 @@ public sealed class CameraControl : ICameraControl
             throw new NotSupportedException($"record audio needs the camera's HTTP API ('{CameraName}' has none)");
         var enc = await _httpApi.GetEncAsync(ct).ConfigureAwait(false);
         bool touched = false;
+        if (enc["audio"] is not null) // the flag's documented home: top of Enc
+        {
+            enc["audio"] = on ? 1 : 0;
+            touched = true;
+        }
         foreach (var key in new[] { "mainStream", "subStream", "extStream" })
         {
             if (enc[key] is not JsonObject s || s["audio"] is null) continue;
@@ -1402,23 +1412,23 @@ public sealed class CameraControl : ICameraControl
 
     /// <summary>Writes whichever extra AudioCfg volumes were staged (0–100 each);
     /// minimal payload like the picture writes — see SetImageSettingsAsync.</summary>
-    public async Task SetAudioVolumesAsync(int? alarmVolume, int? micVolume, CancellationToken ct)
+    public async Task SetAudioVolumesAsync(int? talkVolume, int? visitorVolume, CancellationToken ct)
     {
         if (_httpApi == null)
             throw new NotSupportedException($"audio volumes need the camera's HTTP API ('{CameraName}' has none)");
         var cfg = new JsonObject { ["channel"] = _httpApi.ChannelId };
-        if (alarmVolume is { } av) cfg["alarmVolume"] = Math.Clamp(av, 0, 100);
-        if (micVolume is { } mv) cfg["micVolume"] = Math.Clamp(mv, 0, 100);
+        if (talkVolume is { } tv) cfg["talkAndReplyVolume"] = Math.Clamp(tv, 0, 100);
+        if (visitorVolume is { } vv) cfg["visitorVolume"] = Math.Clamp(vv, 0, 100);
         if (cfg.Count == 1) return; // nothing staged
         await _httpApi.SetAudioCfgAsync(cfg, ct).ConfigureAwait(false);
         if (_httpFeaturesCache?.Audio is { } ca)
             _httpFeaturesCache = _httpFeaturesCache with
             {
-                Audio = ca with { AlarmVolume = alarmVolume ?? ca.AlarmVolume, MicVolume = micVolume ?? ca.MicVolume },
+                Audio = ca with { TalkVolume = talkVolume ?? ca.TalkVolume, VisitorVolume = visitorVolume ?? ca.VisitorVolume },
             };
         Log.Info($"{CameraName}: audio volumes changed" +
-                 $"{(alarmVolume != null ? $" alarm={Math.Clamp(alarmVolume.Value, 0, 100)}" : "")}" +
-                 $"{(micVolume != null ? $" mic={Math.Clamp(micVolume.Value, 0, 100)}" : "")}");
+                 $"{(talkVolume != null ? $" talk={Math.Clamp(talkVolume.Value, 0, 100)}" : "")}" +
+                 $"{(visitorVolume != null ? $" visitor={Math.Clamp(visitorVolume.Value, 0, 100)}" : "")}");
     }
 
     public async Task SetVolumeAsync(int volume, CancellationToken ct)

@@ -1056,13 +1056,18 @@ public static class SelfTest
         {
             static System.Text.Json.Nodes.JsonObject Enc(string json) =>
                 (System.Text.Json.Nodes.JsonObject)System.Text.Json.Nodes.JsonNode.Parse(json)!;
-            // Any stream carrying audio reads as ON (the streams move together —
-            // the app exposes one switch); no audio field anywhere reads as
-            // "this firmware has no such switch" and hides the row.
+            // The flag's documented home is the TOP of the Enc object (one switch
+            // for the camera, matching the app — confirmed against reolink_aio,
+            // 2026-07-27); a per-stream nesting is the fallback. No audio field
+            // anywhere reads as "this firmware has no such switch" and hides the row.
             Assert(Streaming.CameraControl.EncRecordAudio(
-                Enc("{\"mainStream\":{\"audio\":1},\"subStream\":{\"audio\":0}}")) == true, "any stream on = on");
+                Enc("{\"audio\":1,\"mainStream\":{\"size\":\"640*480\"}}")) == true, "top-level flag on");
             Assert(Streaming.CameraControl.EncRecordAudio(
-                Enc("{\"mainStream\":{\"audio\":0},\"subStream\":{\"audio\":0}}")) == false, "all off = off");
+                Enc("{\"audio\":0,\"mainStream\":{\"audio\":1}}")) == false, "top-level flag outranks nested");
+            Assert(Streaming.CameraControl.EncRecordAudio(
+                Enc("{\"mainStream\":{\"audio\":1},\"subStream\":{\"audio\":0}}")) == true, "nested fallback: any stream on = on");
+            Assert(Streaming.CameraControl.EncRecordAudio(
+                Enc("{\"mainStream\":{\"audio\":0},\"subStream\":{\"audio\":0}}")) == false, "nested fallback: all off = off");
             Assert(Streaming.CameraControl.EncRecordAudio(
                 Enc("{\"mainStream\":{\"size\":\"640*480\"}}")) == null, "no audio flag = feature absent");
         });

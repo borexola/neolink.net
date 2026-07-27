@@ -698,7 +698,7 @@
 
         <div class="campanel-col">
         @if (_http is { } httpAudio && (httpAudio.Volume != null || httpAudio.RecordAudio != null
-             || httpAudio.AlarmVolume != null || httpAudio.MicVolume != null))
+             || httpAudio.TalkVolume != null || httpAudio.VisitorVolume != null))
         {
             <div class="campanel-section">
                 <div class="campanel-section-title">@UiIcon.Render("siren", 13) AUDIO</div>
@@ -723,26 +723,26 @@
                         <span class="zf-pos">@(_pendingVolume ?? vol)</span>
                     </div>
                 }
-                @if (httpAudio.AlarmVolume is { } alarmVol)
+                @if (httpAudio.TalkVolume is { } talkVol)
                 {
                     <div class="control-row">
-                        <span>Alarm volume @PendingMark(_pendingAlarmVolume?.ToString())</span>
-                        <input class="zf-slider @(_pendingAlarmVolume != null ? "input-pending" : "")"
+                        <span>Talk &amp; reply volume @PendingMark(_pendingTalkVolume?.ToString())</span>
+                        <input class="zf-slider @(_pendingTalkVolume != null ? "input-pending" : "")"
                                type="range" min="0" max="100" step="1"
-                               disabled="@_applying" value="@(_pendingAlarmVolume ?? alarmVol)"
-                               @oninput="e => StageAlarmVolume(long.Parse((string)e.Value!))" />
-                        <span class="zf-pos">@(_pendingAlarmVolume ?? alarmVol)</span>
+                               disabled="@_applying" value="@(_pendingTalkVolume ?? talkVol)"
+                               @oninput="e => StageTalkVolume(long.Parse((string)e.Value!))" />
+                        <span class="zf-pos">@(_pendingTalkVolume ?? talkVol)</span>
                     </div>
                 }
-                @if (httpAudio.MicVolume is { } micVol)
+                @if (httpAudio.VisitorVolume is { } visitorVol)
                 {
                     <div class="control-row">
-                        <span>Microphone volume @PendingMark(_pendingMicVolume?.ToString())</span>
-                        <input class="zf-slider @(_pendingMicVolume != null ? "input-pending" : "")"
+                        <span>Visitor volume @PendingMark(_pendingVisitorVolume?.ToString())</span>
+                        <input class="zf-slider @(_pendingVisitorVolume != null ? "input-pending" : "")"
                                type="range" min="0" max="100" step="1"
-                               disabled="@_applying" value="@(_pendingMicVolume ?? micVol)"
-                               @oninput="e => StageMicVolume(long.Parse((string)e.Value!))" />
-                        <span class="zf-pos">@(_pendingMicVolume ?? micVol)</span>
+                               disabled="@_applying" value="@(_pendingVisitorVolume ?? visitorVol)"
+                               @oninput="e => StageVisitorVolume(long.Parse((string)e.Value!))" />
+                        <span class="zf-pos">@(_pendingVisitorVolume ?? visitorVol)</span>
                     </div>
                 }
                 <div class="notice small">The camera's own audio settings — what it offers varies per model.
@@ -1490,7 +1490,7 @@
     private bool? _pendingFlip, _pendingMirror;
     private long? _pendingVolume;
     private bool? _pendingRecordAudio;   // camera-side record-audio switch (Enc audio flag)
-    private long? _pendingAlarmVolume, _pendingMicVolume; // extra AudioCfg volumes (per-model)
+    private long? _pendingTalkVolume, _pendingVisitorVolume; // extra AudioCfg volumes (per-model)
     private bool? _pendingAutoTrack;
     private long? _pendingIrBright;      // LedState IRLedBrightness (0-100)
     private string? _pendingDoorbellLed; // LedState doorbellLightState
@@ -1518,7 +1518,7 @@
         + (_pendingFlip != null ? 1 : 0) + (_pendingMirror != null ? 1 : 0)
         + (_pendingVolume != null ? 1 : 0) + (_pendingAutoTrack != null ? 1 : 0)
         + (_pendingRecordAudio != null ? 1 : 0)
-        + (_pendingAlarmVolume != null ? 1 : 0) + (_pendingMicVolume != null ? 1 : 0)
+        + (_pendingTalkVolume != null ? 1 : 0) + (_pendingVisitorVolume != null ? 1 : 0)
         + (_pendingIrBright != null ? 1 : 0) + (_pendingDoorbellLed != null ? 1 : 0)
         + (_pendingHdr != null ? 1 : 0) + (_pendingMdSens != null ? 1 : 0)
         + _pendingAiSens.Count
@@ -1679,8 +1679,8 @@
         _pendingRecordAudio = target == cur ? null : target;
     }
 
-    private void StageAlarmVolume(long v) => _pendingAlarmVolume = v == _http?.AlarmVolume ? null : v;
-    private void StageMicVolume(long v) => _pendingMicVolume = v == _http?.MicVolume ? null : v;
+    private void StageTalkVolume(long v) => _pendingTalkVolume = v == _http?.TalkVolume ? null : v;
+    private void StageVisitorVolume(long v) => _pendingVisitorVolume = v == _http?.VisitorVolume ? null : v;
 
     private void StageAutoTrackToggle()
     {
@@ -1776,7 +1776,7 @@
         _pendingFlip = _pendingMirror = null;
         _pendingVolume = null;
         _pendingRecordAudio = null;
-        _pendingAlarmVolume = _pendingMicVolume = null;
+        _pendingTalkVolume = _pendingVisitorVolume = null;
         _pendingAutoTrack = null;
         _pendingIrBright = null;
         _pendingDoorbellLed = null;
@@ -1904,12 +1904,12 @@
                 _pendingRecordAudio = null;
                 applied.Add(pra ? "record audio on" : "record audio off");
             }
-            if ((_pendingAlarmVolume != null || _pendingMicVolume != null)
-                && await PostAsync("audio", new { alarmVolume = _pendingAlarmVolume, micVolume = _pendingMicVolume }))
+            if ((_pendingTalkVolume != null || _pendingVisitorVolume != null)
+                && await PostAsync("audio", new { talkVolume = _pendingTalkVolume, visitorVolume = _pendingVisitorVolume }))
             {
-                if (_pendingAlarmVolume != null) applied.Add("alarm volume");
-                if (_pendingMicVolume != null) applied.Add("microphone volume");
-                _pendingAlarmVolume = _pendingMicVolume = null;
+                if (_pendingTalkVolume != null) applied.Add("talk & reply volume");
+                if (_pendingVisitorVolume != null) applied.Add("visitor volume");
+                _pendingTalkVolume = _pendingVisitorVolume = null;
             }
             if (_pendingAutoTrack is { } pat && await PostAsync("autotrack", new { on = pat }))
             {
@@ -1984,8 +1984,8 @@
         fresh.AiSensitivities ?? old.AiSensitivities,
         fresh.Osd ?? old.Osd,
         fresh.RecordAudio ?? old.RecordAudio,
-        fresh.AlarmVolume ?? old.AlarmVolume,
-        fresh.MicVolume ?? old.MicVolume);
+        fresh.TalkVolume ?? old.TalkVolume,
+        fresh.VisitorVolume ?? old.VisitorVolume);
 
     protected override async Task OnParametersSetAsync()
     {
