@@ -328,6 +328,7 @@ in exchange you get an integration light enough to leave running forever.
 | `rtsp://host:8654/driveway` | main stream (alias) |
 | `rtsp://host:8654/driveway/mainStream` | main stream (high resolution) |
 | `rtsp://host:8654/driveway/subStream` | sub stream (low resolution) |
+| `rtsp://host:8654/driveway?audio=opus` | same stream, audio transcoded to **Opus** (WebRTC-friendly; needs ffmpeg) — works on any camera path; `?audio=original` forces the camera's own track |
 | `http://host:8655/` | web UI |
 | `http://host:8655/api/cameras` | JSON list of cameras and stream state |
 | `ws://host:8655/api/stream?path=/driveway/subStream` | live fMP4 (MSE-compatible) |
@@ -364,6 +365,32 @@ streams:
   driveway:
     - rtsp://<neolink-host>:8654/driveway#backchannel=1
 ```
+
+### WebRTC in Home Assistant
+
+The [WebRTC Camera](https://github.com/AlexxIT/WebRTC) custom card (HACS) plays
+Neolink streams over WebRTC with near-zero latency, straight from the RTSP URL —
+its embedded go2rtc does the WebRTC lifting. Ask for `?audio=opus` so the audio
+arrives in the codec WebRTC takes natively (no browser-side silence, no extra
+ffmpeg hop on the HA box), and add `microphone` to get two-way talk through the
+ONVIF backchannel above:
+
+```yaml
+type: custom:webrtc-camera
+grid_options:
+  columns: full
+  rows: 12
+streams:
+  - url: rtsp://admin:password@<neolink-ip>:8654/FrontDoor?audio=opus
+    name: FrontDoor
+    mode: webrtc
+    media: video,audio,microphone
+```
+
+Use your RTSP credentials from `users` in the URL (omit `admin:password@` when
+none are configured). `?audio=opus` needs an ffmpeg next to Neolink (the Docker
+image and Home Assistant add-on ship one); the `microphone` line needs two-way
+talk enabled and a camera with a speaker.
 
 ## Configuration
 

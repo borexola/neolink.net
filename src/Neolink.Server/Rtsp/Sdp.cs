@@ -60,8 +60,8 @@ public static class Sdp
             sb.Append($"m=audio 0 RTP/AVP {AudioPayloadType}\r\n");
             if (opus)
             {
-                // Transcoded track (an /opus mount, or a plain path whose camera
-                // defaults to Opus via audio_transcode). RFC 7587 mandates
+                // Transcoded track (?audio=opus, or a camera whose audio_transcode
+                // config defaults to Opus). RFC 7587 mandates
                 // "opus/48000/2" in the rtpmap regardless of the actual content;
                 // sprop-stereo=0 says the content is mono.
                 sb.Append($"a=rtpmap:{AudioPayloadType} opus/48000/2\r\n");

@@ -91,6 +91,7 @@ Alternatively, skip MQTT for the picture entirely: point a Home Assistant
 | Reboot, Pan up/down/left/right | `button` | PTZ buttons on pan-tilt cameras |
 | Snapshot | `camera` | Latest JPEG, refreshed periodically (when the camera supports snapshots) |
 | Volume (beta) | `number` | Speaker volume 0-100 via the camera's HTTP API — governs sirens, alerts and two-way talk |
+| Record audio (beta) | `switch` | The camera-side flag that puts the microphone into every stream and recording — only on cameras whose firmware exposes it |
 | Auto-tracking (beta) | `switch` | Follow detected subjects, on cameras that support AI tracking |
 | PTZ preset (beta) | `select` | The camera's saved positions; picking one moves the camera there |
 | Spotlight (beta) | `light` | White-LED cameras (Lumus/Elite): on/off, plus brightness where the HTTP white LED answers |

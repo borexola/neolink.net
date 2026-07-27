@@ -20,8 +20,15 @@ public sealed class RtspConnection
     private readonly Dictionary<string, RtspSession> _sessions = new();
     private readonly byte[] _readBuf = new byte[8192];
     private readonly EndPoint? _remote;
-    /// <summary>Once-per-process flag for the "Opus mount but no usable ffmpeg" refusal log.</summary>
+    /// <summary>Once-per-process flag for the "Opus requested but no usable ffmpeg" refusal log.</summary>
     private static int _opusRefusalLogged;
+    /// <summary>Unsupported ?audio= values already logged: one line each (a retrying
+    /// client would spam), capped so hostile scanners can't grow it unbounded.</summary>
+    private static readonly HashSet<string> UnknownAudioLogged = new();
+    /// <summary>The audio choice the last DESCRIBE on this connection settled on.
+    /// SETUP falls back to it when its own URI carries no ?audio= — some clients
+    /// resolve control URIs strictly per RFC 3986 and drop the query.</summary>
+    private bool? _describedOpus;
     private int _readLen;
     private int _readPos;
 
@@ -152,22 +159,55 @@ public sealed class RtspConnection
         }
     }
 
-    private (RtspMount? mount, string path, int trackId) ResolveUri(string uri)
+    private (RtspMount? mount, string path, int trackId, string? audio) ResolveUri(string uri)
     {
-        string path = uri;
+        var (path, trackId, audio) = ParseUri(uri);
+        return (_server.FindMount(path), path, trackId, audio);
+    }
+
+    /// <summary>Splits a request URI into mount path, trackID and the ?audio= query
+    /// value. Content-Base keeps the query and most clients append "/trackID=N" to
+    /// it verbatim, so the track marker can sit AFTER the query
+    /// ("…/cam?audio=opus/trackID=1") — it is found and removed first.</summary>
+    internal static (string path, int trackId, string? audio) ParseUri(string uri)
+    {
+        string rest = uri;
         if (Uri.TryCreate(uri, UriKind.Absolute, out var parsed))
-            path = parsed.AbsolutePath;
-        path = Uri.UnescapeDataString(path);
+            rest = parsed.PathAndQuery;
 
         int trackId = -1;
         const string trackMarker = "/trackID=";
-        int idx = path.LastIndexOf(trackMarker, StringComparison.OrdinalIgnoreCase);
+        int idx = rest.LastIndexOf(trackMarker, StringComparison.OrdinalIgnoreCase);
         if (idx >= 0)
         {
-            _ = int.TryParse(path[(idx + trackMarker.Length)..], out trackId);
-            path = path[..idx];
+            _ = int.TryParse(rest[(idx + trackMarker.Length)..], out trackId);
+            rest = rest[..idx];
         }
-        return (_server.FindMount(path), path, trackId);
+
+        string? audio = null;
+        int q = rest.IndexOf('?');
+        if (q >= 0)
+        {
+            // Only "audio" is understood today; unknown KEYS are ignored so future
+            // parameters can be added without breaking older servers or clients.
+            foreach (var pair in rest[(q + 1)..].Split('&'))
+            {
+                var kv = pair.Split('=', 2);
+                if (kv.Length == 2 && kv[0].Trim().Equals("audio", StringComparison.OrdinalIgnoreCase))
+                    audio = Uri.UnescapeDataString(kv[1]).Trim().ToLowerInvariant();
+            }
+            rest = rest[..q];
+        }
+        return (Uri.UnescapeDataString(rest), trackId, audio);
+    }
+
+    /// <summary>Maps a ?audio= value to a session's Opus choice: null when the URL
+    /// names none (the mount's audio_transcode default applies), true/false for
+    /// opus/original. Returns false for a value that is not a supported format.</summary>
+    internal static bool TryMapAudio(string? audio, out bool? opus)
+    {
+        opus = audio switch { "opus" => true, "original" => false, _ => null };
+        return audio is null or "opus" or "original";
     }
 
     private async Task<bool> CheckAuthAsync(RtspRequest req, RtspMount mount, CancellationToken ct)
@@ -180,7 +220,7 @@ public sealed class RtspConnection
 
     private async Task HandleDescribeAsync(RtspRequest req, CancellationToken ct)
     {
-        var (mount, path, _) = ResolveUri(req.Uri);
+        var (mount, path, _, audio) = ResolveUri(req.Uri);
         if (mount == null)
         {
             await RespondAsync(req, 404, "Not Found", ct: ct).ConfigureAwait(false);
@@ -188,20 +228,37 @@ public sealed class RtspConnection
         }
         if (!await CheckAuthAsync(req, mount, ct).ConfigureAwait(false)) return;
 
-        // An Opus mount is only honest when the located ffmpeg can actually
-        // encode Opus (probed once, lazily). Refusing here beats promising Opus
-        // in the SDP and delivering silence.
-        if (mount.Opus && !Media.Ffmpeg.SupportsOpus)
+        // ?audio= picks this client's codec. An unsupported format is refused
+        // loudly — a silent fallback would leave the user debugging why the
+        // codec they asked for never arrived.
+        if (!TryMapAudio(audio, out var audioChoice))
+        {
+            bool logIt;
+            lock (UnknownAudioLogged)
+                logIt = UnknownAudioLogged.Count < 16 && UnknownAudioLogged.Add(audio!);
+            if (logIt)
+                Log.Warn($"DESCRIBE {path}: unsupported audio format \"{audio}\" — " +
+                         "supported: ?audio=opus, ?audio=original — answering 404");
+            await RespondAsync(req, 404, "Not Found", ct: ct).ConfigureAwait(false);
+            return;
+        }
+        bool opus = audioChoice ?? mount.Opus;
+
+        // Opus is only honest when the located ffmpeg can actually encode it
+        // (probed once, lazily). Refusing here beats promising Opus in the SDP
+        // and delivering silence.
+        if (opus && !Media.Ffmpeg.SupportsOpus)
         {
             if (Interlocked.Exchange(ref _opusRefusalLogged, 1) == 0)
                 Log.Warn($"DESCRIBE {path}: Opus audio was requested but " +
                          (Media.Ffmpeg.ExePath == null
                              ? "no ffmpeg was found (install one on PATH or set NEOLINK_FFMPEG)"
                              : "this ffmpeg has no libopus encoder") +
-                         " — Opus mounts answer 404 until that changes");
+                         " — ?audio=opus answers 404 until that changes");
             await RespondAsync(req, 404, "Not Found", ct: ct).ConfigureAwait(false);
             return;
         }
+        _describedOpus = opus;
 
         if (!await mount.Hub.WaitForDescribeInfoAsync(TimeSpan.FromSeconds(12), ct).ConfigureAwait(false))
         {
@@ -228,7 +285,7 @@ public sealed class RtspConnection
             }
         }
 
-        string sdp = Sdp.Build(mount.Hub, mount.Hub.Name, backchannel, opus: mount.Opus);
+        string sdp = Sdp.Build(mount.Hub, mount.Hub.Name, backchannel, opus: opus);
         string contentBase = req.Uri.TrimEnd('/') + "/";
         await RespondAsync(req, 200, "OK",
             $"Content-Base: {contentBase}\r\nContent-Type: application/sdp",
@@ -244,7 +301,7 @@ public sealed class RtspConnection
 
     private async Task HandleSetupAsync(RtspRequest req, CancellationToken ct)
     {
-        var (mount, _, trackId) = ResolveUri(req.Uri);
+        var (mount, _, trackId, audio) = ResolveUri(req.Uri);
         if (mount == null)
         {
             await RespondAsync(req, 404, "Not Found", ct: ct).ConfigureAwait(false);
@@ -267,7 +324,14 @@ public sealed class RtspConnection
             _sessions.TryGetValue(sessionId, out session);
         if (session == null)
         {
-            session = new RtspSession(this, mount);
+            // The codec choice travels on the query: this URI's own ?audio= wins,
+            // else what the DESCRIBE on this connection settled on, else the mount
+            // default. Unknown values were already policed at DESCRIBE.
+            bool opus = (TryMapAudio(audio, out var choice) ? choice : null)
+                ?? _describedOpus ?? mount.Opus;
+            if (opus && !Media.Ffmpeg.SupportsOpus)
+                opus = false; // DESCRIBE-less client; never promise silence
+            session = new RtspSession(this, mount, opus);
             _sessions[session.Id] = session;
         }
         else if (session.Playing)
@@ -617,14 +681,19 @@ internal sealed class RtspSession
 
     private readonly RtspConnection _conn;
     private readonly RtspMount _mount;
+    /// <summary>This session's audio: transcoded Opus or the camera's original
+    /// track. Settled at SETUP from the URL's ?audio= (falling back to the mount's
+    /// audio_transcode default) and fixed for the session's lifetime.</summary>
+    private readonly bool _opus;
     private CancellationTokenSource? _pumpCts;
     private Task? _pumpTask;
     private BackchannelReceiver? _backchannel;
 
-    public RtspSession(RtspConnection conn, RtspMount mount)
+    public RtspSession(RtspConnection conn, RtspMount mount, bool opus)
     {
         _conn = conn;
         _mount = mount;
+        _opus = opus;
     }
 
     public void SetTrack(int trackId, TrackTransport transport)
@@ -675,11 +744,11 @@ internal sealed class RtspSession
         long lastIndex = -1;
         bool waitKeyframe = true; // always start on a keyframe
 
-        // Opus mounts vote for the transcoder: ffmpeg runs only while at least
+        // Opus sessions vote for the transcoder: ffmpeg runs only while at least
         // one Opus session is playing, and stops with the last one.
-        if (_mount.Opus) hub.AcquireOpus();
+        if (_opus) hub.AcquireOpus();
         Log.Info($"{hub.Name}: client started streaming (session {Id}" +
-                 $"{(_mount.Opus ? ", Opus audio" : "")})");
+                 $"{(_opus ? ", Opus audio" : "")})");
         try
         {
             await foreach (var packet in reader.ReadAllAsync(ct).ConfigureAwait(false))
@@ -714,17 +783,17 @@ internal sealed class RtspSession
                         }
                         break;
                     }
-                    // The mount decides this session's audio: on an Opus mount the
+                    // The URL decided this session's audio: on an Opus session the
                     // transcoded packets ARE the track and the originals are
-                    // skipped; on an original mount it's the exact opposite. Both
+                    // skipped; on an original session it's the exact opposite. Both
                     // kinds flow through the hub side by side.
-                    case HubAudioOpus o when Audio != null && _mount.Opus:
+                    case HubAudioOpus o when Audio != null && _opus:
                         await SendAsync(Audio, Audio.Packetizer.PacketizeOpus(o.Packet, o.RtpTs), ct).ConfigureAwait(false);
                         break;
-                    case HubAudioAac a when Audio != null && !_mount.Opus:
+                    case HubAudioAac a when Audio != null && !_opus:
                         await SendAsync(Audio, Audio.Packetizer.PacketizeAac(a.Au, a.RtpTs), ct).ConfigureAwait(false);
                         break;
-                    case HubAudioPcm p when Audio != null && !_mount.Opus:
+                    case HubAudioPcm p when Audio != null && !_opus:
                         foreach (var rtp in Audio.Packetizer.PacketizePcm(p.Pcm, p.RtpTs))
                             await SendAsync(Audio, rtp, ct).ConfigureAwait(false);
                         break;
@@ -738,7 +807,7 @@ internal sealed class RtspSession
         }
         finally
         {
-            if (_mount.Opus) hub.ReleaseOpus();
+            if (_opus) hub.ReleaseOpus();
             hub.Unsubscribe(subId);
             Log.Info($"{hub.Name}: client stopped streaming (session {Id})");
         }

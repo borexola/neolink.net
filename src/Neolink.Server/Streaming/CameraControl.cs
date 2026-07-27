@@ -269,6 +269,10 @@ public interface ICameraControl
     /// <summary>Sets the camera's speaker volume (0-100).</summary>
     Task SetVolumeAsync(int volume, CancellationToken ct);
 
+    /// <summary>The audio settings beyond the speaker volume (record-audio flag,
+    /// per-model extra volumes), or null when the camera has none. Default: none.</summary>
+    Task<AudioState?> GetAudioStateAsync(CancellationToken ct) => Task.FromResult<AudioState?>(null);
+
     /// <summary>Camera-side record-audio switch (the encode settings' audio flag,
     /// set on every stream): whether the microphone goes into the streams and
     /// recordings at all. Default: not supported.</summary>

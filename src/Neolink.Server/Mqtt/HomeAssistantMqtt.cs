@@ -57,6 +57,8 @@ namespace Neolink.Mqtt;
 ///   • button:        reboot and PTZ steps               (per capability)
 ///   • camera:        latest snapshot                    (when the camera supports it)
 ///   • number:        speaker volume 0-100, beta         (via the camera's HTTP API)
+///   • switch:        record audio, beta                 (cameras exposing the
+///                                                        encode settings' audio flag)
 ///   • number:        motion/AI detection sensitivity    (via the camera's HTTP API)
 ///   • select:        HDR off/on or off/low/high         (via the camera's HTTP API)
 ///   • binary_sensor: firmware update available          (read-only; never installs)
@@ -519,7 +521,7 @@ internal sealed class CameraBridge
     private bool _hasFloodlight, _hasIr, _hasSnapshot;
     private bool _isBattery; // from the capability probe — gates the Asleep sensor
     // HTTP-API extras (beta): probed once when the camera first comes online.
-    private bool _hasVolume, _hasAutoTrack;
+    private bool _hasVolume, _hasAutoTrack, _hasRecordAudio;
     private IReadOnlyList<PtzPresetInfo>? _presets;
     private IReadOnlyList<QuickReplyFile>? _quickReplies;
     private ImageSettings? _imgCaps;      // which picture fields this camera reports
@@ -904,6 +906,14 @@ internal sealed class CameraBridge
             await AnnounceEntityAsync("switch", "auto_track", SwitchConfig("Auto-tracking", "auto_track"), ct).ConfigureAwait(false);
         else
             await ClearEntityAsync("switch", "auto_track", ct).ConfigureAwait(false);
+        // Camera-side record-audio (the encode settings' audio flag): whether the
+        // microphone goes into every stream and recording. A device setting, not a
+        // control — hence the config category.
+        if (_hasRecordAudio)
+            await AnnounceEntityAsync("switch", "record_audio",
+                SwitchConfig("Record audio", "record_audio", "mdi:microphone", "config"), ct).ConfigureAwait(false);
+        else
+            await ClearEntityAsync("switch", "record_audio", ct).ConfigureAwait(false);
         // Gated on real PTZ ability too — never trust the preset list alone.
         if (f.Ptz && _presets?.Any(p => p.Enabled) == true)
             await AnnounceEntityAsync("select", "ptz_preset", PtzPresetSelectConfig(), ct).ConfigureAwait(false);
@@ -1769,7 +1779,7 @@ internal sealed class CameraBridge
                     await PublishHttpExtrasAsync(ct).ConfigureAwait(false);
                 }
             }
-            else if (_hasVolume || _hasAutoTrack || _imgCaps != null
+            else if (_hasVolume || _hasAutoTrack || _hasRecordAudio || _imgCaps != null
                      || _hasWhiteLedBrightness || _presets != null)
             {
                 await PublishHttpExtrasAsync(ct).ConfigureAwait(false);
@@ -1819,6 +1829,7 @@ internal sealed class CameraBridge
     {
         var extras = await TryAsync(() => _control.GetHttpFeaturesAsync(ct)).ConfigureAwait(false);
         _hasVolume = extras?.Volume != null;
+        _hasRecordAudio = extras?.Audio?.RecordAudio != null;
         _hasAutoTrack = extras?.AutoTrack != null;
         _presets = extras?.PtzPresets;
         _quickReplies = extras?.QuickReplies;
@@ -1835,7 +1846,8 @@ internal sealed class CameraBridge
         _ptzCapable = f.Ptz;
         _httpExtrasKnown = extras != null && (extras.Volume != null || extras.AutoTrack != null
             || extras.Image != null || extras.PtzPresets != null || extras.QuickReplies != null
-            || extras.WifiSignal != null || extras.SdCards != null);
+            || extras.WifiSignal != null || extras.SdCards != null
+            || extras.Audio?.RecordAudio != null);
         return _httpExtrasKnown;
     }
 
@@ -1848,6 +1860,8 @@ internal sealed class CameraBridge
         {
             if (_hasVolume && await _control.GetVolumeAsync(ct).ConfigureAwait(false) is { } vol)
                 await _hub.PublishAsync(StateTopic("volume"), vol.ToString(), ct).ConfigureAwait(false);
+            if (_hasRecordAudio && (await _control.GetAudioStateAsync(ct).ConfigureAwait(false))?.RecordAudio is { } recAud)
+                await _hub.PublishAsync(StateTopic("record_audio"), recAud ? "ON" : "OFF", ct).ConfigureAwait(false);
             if (_hasAutoTrack && await _control.GetAutoTrackAsync(ct).ConfigureAwait(false) is { } track)
                 await _hub.PublishAsync(StateTopic("auto_track"), track ? "ON" : "OFF", ct).ConfigureAwait(false);
             if (_imgCaps != null && await _control.GetImageSettingsAsync(ct).ConfigureAwait(false) is { } img)
@@ -2104,6 +2118,10 @@ internal sealed class CameraBridge
                 case "auto_track":
                     await _control.SetAutoTrackAsync(payload == "ON", ct).ConfigureAwait(false);
                     await _hub.PublishAsync(StateTopic("auto_track"), payload == "ON" ? "ON" : "OFF", ct).ConfigureAwait(false);
+                    break;
+                case "record_audio":
+                    await _control.SetRecordAudioAsync(payload == "ON", ct).ConfigureAwait(false);
+                    await _hub.PublishAsync(StateTopic("record_audio"), payload == "ON" ? "ON" : "OFF", ct).ConfigureAwait(false);
                     break;
                 case "ptz_preset":
                     if (_presets?.FirstOrDefault(p => p.Enabled && p.Name == payload) is { } preset)

@@ -19,11 +19,10 @@ public sealed class RtspMount
     /// for this mount, or null when talk is disabled or the source has no speaker.</summary>
     public ICameraControl? Talk { get; set; }
 
-    /// <summary>True when sessions on this mount get Opus audio (transcoded)
-    /// instead of the camera's original track. Every camera path also gets
-    /// "/opus" and "/original" variant mounts, so each CLIENT picks its audio
-    /// codec by URL; the camera's audio_transcode config only chooses which of
-    /// the two the plain path serves.</summary>
+    /// <summary>The DEFAULT audio for sessions on this mount: true serves
+    /// transcoded Opus, false the camera's original track. Seeded from the
+    /// camera's audio_transcode config; each client overrides it per URL with
+    /// ?audio=opus / ?audio=original.</summary>
     public bool Opus { get; init; }
 }
 

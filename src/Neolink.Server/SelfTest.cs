@@ -1041,15 +1041,30 @@ public static class SelfTest
             AssertEq(rtp[7], 0x92);
             AssertSeq(rtp.Skip(12).ToArray(), new byte[] { 0xF8, 1, 2 });
 
-            // SDP: an Opus mount advertises opus/48000/2 in PLACE of the original
-            // audio; the plain/original mount keeps the camera's AAC line — the
-            // same hub serves both, per URL.
+            // SDP: an Opus session advertises opus/48000/2 in PLACE of the
+            // original audio; an original session keeps the camera's AAC line —
+            // the same hub serves both, chosen per URL.
             var hub = new OpusSdpHub { Audio = new Streaming.AudioTrackInfo(true, 16000, 1, new byte[] { 0x14, 0x08 }) };
             var sdp = Rtsp.Sdp.Build(hub, "cam", opus: true);
             Assert(sdp.Contains("opus/48000/2"), "opus rtpmap advertised");
             Assert(sdp.Contains("sprop-stereo=0"), "mono fmtp advertised");
             Assert(!sdp.Contains("mpeg4-generic"), "the original AAC line is replaced");
-            Assert(Rtsp.Sdp.Build(hub, "cam").Contains("mpeg4-generic"), "AAC advertised on the original mount");
+            Assert(Rtsp.Sdp.Build(hub, "cam").Contains("mpeg4-generic"), "AAC advertised without opus");
+
+            // URL parsing: ?audio= picks the codec; clients append "/trackID=N"
+            // to a Content-Base that KEPT the query, so the marker can trail it.
+            var (p1, t1, a1) = Rtsp.RtspConnection.ParseUri("rtsp://h:8654/cam/subStream");
+            AssertEq(p1, "/cam/subStream");
+            AssertEq(t1, -1);
+            Assert(a1 == null, "no query = no audio choice");
+            var (p2, t2, a2) = Rtsp.RtspConnection.ParseUri("rtsp://h/cam?audio=Opus&future=1/trackID=1");
+            AssertEq(p2, "/cam");
+            AssertEq(t2, 1);
+            AssertEq(a2!, "opus"); // case-folded; the unknown "future" KEY is ignored
+            Assert(Rtsp.RtspConnection.TryMapAudio("opus", out var mOpus) && mOpus == true, "opus maps to transcode");
+            Assert(Rtsp.RtspConnection.TryMapAudio("original", out var mOrig) && mOrig == false, "original maps to camera track");
+            Assert(Rtsp.RtspConnection.TryMapAudio(null, out var mNone) && mNone == null, "absent = mount default");
+            Assert(!Rtsp.RtspConnection.TryMapAudio("mp3", out _), "unsupported format is refused");
         });
 
         Test("camera audio settings: Enc record-audio mapping", () =>

@@ -326,29 +326,22 @@ foreach (var cam in config.Cameras)
 {
     var permitted = config.PermittedUsersFor(cam);
 
-    // Every camera path serves the audio codec by URL: the plain path carries
-    // the camera's audio_transcode default, and "/opus" + "/original" variants
-    // let each CLIENT pick — the NVR can record the camera's AAC while the
-    // WebRTC gateway pulls Opus from the same hub. Variants only exist when an
-    // ffmpeg is present; a build without libopus is refused at DESCRIBE.
+    // Each RTSP client picks its audio codec on the URL: ?audio=opus asks for
+    // the transcoded track, ?audio=original for the camera's own — the NVR can
+    // record the camera's AAC while the WebRTC gateway pulls Opus from the same
+    // hub. A bare URL serves the camera's audio_transcode default. Unsupported
+    // formats (and Opus without a usable ffmpeg) are refused at DESCRIBE with a
+    // log line saying why.
     bool ffmpegPresent = Neolink.Media.Ffmpeg.ExePath != null;
     bool defaultOpus = cam.AudioTranscode == "opus" && ffmpegPresent;
     if (cam.AudioTranscode == "opus" && !ffmpegPresent)
         Log.Warn($"{cam.Name}: audio_transcode \"opus\" needs ffmpeg — none was found, serving original " +
                  "audio (install ffmpeg on PATH or point NEOLINK_FFMPEG at one)");
-    // The variants exist regardless of ffmpeg: /original never needs it, and an
-    // /opus DESCRIBE without a usable ffmpeg gets a 404 WITH a log line saying
-    // what to install — kinder than the bare 404 of a missing mount.
-    List<RtspMount> MountAll(string path, IStreamHub hub)
+    RtspMount Mount(string path, IStreamHub hub)
     {
-        var mounts = new List<RtspMount>
-        {
-            new() { Path = path, Hub = hub, PermittedUsers = permitted, Opus = defaultOpus },
-            new() { Path = $"{path}/opus", Hub = hub, PermittedUsers = permitted, Opus = true },
-            new() { Path = $"{path}/original", Hub = hub, PermittedUsers = permitted, Opus = false },
-        };
-        foreach (var m in mounts) server.AddMount(m);
-        return mounts;
+        var m = new RtspMount { Path = path, Hub = hub, PermittedUsers = permitted, Opus = defaultOpus };
+        server.AddMount(m);
+        return m;
     }
 
     var webStreams = new List<WebStreamInfo>();
@@ -365,9 +358,9 @@ foreach (var cam in config.Cameras)
         void AddRtsp(string url, string suffix, bool alsoRoot)
         {
             var hub = new StreamHub($"{cam.Name} {suffix}");
-            MountAll($"/{cam.Name}/{suffix}", hub);
+            Mount($"/{cam.Name}/{suffix}", hub);
             if (alsoRoot)
-                MountAll($"/{cam.Name}", hub);
+                Mount($"/{cam.Name}", hub);
             webStreams.Add(new WebStreamInfo(suffix, $"/{cam.Name}/{suffix}", hub));
             var service = new RtspCameraService($"{cam.Name} {suffix}", url, hub,
                 TimeSpan.FromSeconds(2 * rtspIndex++));
@@ -391,9 +384,9 @@ foreach (var cam in config.Cameras)
         void AddStream(StreamKind kind, string suffix, bool alsoRoot)
         {
             var hub = new StreamHub($"{cam.Name} {suffix}");
-            camMounts.AddRange(MountAll($"/{cam.Name}/{suffix}", hub));
+            camMounts.Add(Mount($"/{cam.Name}/{suffix}", hub));
             if (alsoRoot)
-                camMounts.AddRange(MountAll($"/{cam.Name}", hub));
+                camMounts.Add(Mount($"/{cam.Name}", hub));
             webStreams.Add(new WebStreamInfo(suffix, $"/{cam.Name}/{suffix}", hub));
             var service = new CameraService(cam, kind, hub, TimeSpan.FromSeconds(2 * streamIndex++));
             service.SetSuspended(cameraState.Suspended(cam.Name)); // restore persisted suspend
