@@ -2434,9 +2434,10 @@ public static class WebApi
                 }
                 // Wake-only records never belong on the events list: tentative
                 // self-wake recordings (still unconfirmed) and wake events stored
-                // by older versions. Their footage lives on the timeline instead.
-                return Results.Json(events.List(camera, reviewed, limit ?? 200, day)
-                    .Where(r => !(r.Labels is ["wake"]))
+                // by older versions. Excluded inside the store, before the limit,
+                // so they cannot eat list slots on a busy day.
+                return Results.Json(events
+                    .List(camera, reviewed, limit ?? 200, day, excludeWakeOnly: true)
                     .Select(Shape));
             });
 

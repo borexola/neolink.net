@@ -987,10 +987,13 @@
         }
         if (!_supported) return;
 
-        // The events reply gives the day's colored lane marks AND playable event clips.
+        // The events reply gives the day's colored lane marks AND playable event
+        // clips. The date filter must run on the server, inside the cap — a
+        // newest-N window alone spans less than a day on a busy installation.
         try
         {
-            var events = await GetJsonAsync<List<ApiEvent>>("/api/events?limit=1000");
+            var events = await GetJsonAsync<List<ApiEvent>>(
+                $"/api/events?limit=10000&date={_date:yyyy-MM-dd}");
             if (events == null)
             {
                 _supported = false;
@@ -999,7 +1002,7 @@
             foreach (var ev in events)
             {
                 var start = ev.Start.ToLocalTime();
-                if (start.Date != _date) continue;
+                if (start.Date != _date) continue; // guards a day rollover mid-request
                 double s = (start - _date).TotalSeconds;
                 double dur = Math.Max(ev.Duration.TotalSeconds, 1);
                 double e = Math.Min(DaySeconds, s + dur);
