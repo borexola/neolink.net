@@ -132,4 +132,22 @@ assert_cameras '[
   {"name": "newcam", "address": "10.0.0.8", "username": "admin", "password": "n"}
 ]' "per-camera merge: web-UI fields, stored password and web-only cameras survive; options address wins; new camera appended"
 
+# --- 6. Camera renamed by case in the web UI: updated, never duplicated ------
+# The app compares camera names case-insensitively, so appending a second
+# entry under the options' spelling would give it two cameras it calls one.
+cat > "$work/options.json" <<'JSON'
+{
+  "cameras": [{"name": "TestCam", "address": "10.0.0.2", "username": "admin", "password": "p"}],
+  "auto_mqtt": false,
+  "log_verbose": false
+}
+JSON
+cat > "$work/config.json" <<'JSON'
+{"bind": "0.0.0.0", "cameras": [{"name": "testcam", "address": "10.0.0.1", "username": "admin", "password": "p", "uid": "95270000ABCDEFGH"}]}
+JSON
+launch "$work/options.json"
+assert_cameras '[
+  {"name": "testcam", "address": "10.0.0.2", "username": "admin", "password": "p", "uid": "95270000ABCDEFGH"}
+]' "case-renamed camera is updated in place (web UI spelling kept), not duplicated"
+
 echo "all launcher checks passed"

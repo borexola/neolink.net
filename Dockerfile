@@ -43,11 +43,13 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends tzdata \
     && rm -rf /var/lib/apt/lists/*
 
-# ffmpeg (static, single binary — NOT the apt package and its 300 MB of libs):
+# ffmpeg (static, single binary — NOT the apt package and its dependency tree):
 # lets AI event descriptions decode pre-roll frames, the seconds BEFORE the
-# trigger that the live snapshot burst can never reach. Strictly optional at
-# runtime — the app probes PATH and simply skips pre-roll frames when absent —
-# so this line is the whole feature for Docker/HA users. ~40 MB.
+# trigger that the live snapshot burst can never reach, and encodes Opus for
+# clients that ask for it (?audio=opus). Strictly optional at runtime — the app
+# probes PATH and skips both features when absent — so this line is what makes
+# them work for Docker/HA users. Costs ~135 MB on disk (~50 MB of download);
+# nothing runs unless a described event or an Opus client asks for it.
 # Digest-pinned (the 7.1 tag could be repushed; the digest can't change under
 # us) — verified multi-arch for this workflow's amd64+arm64 targets.
 COPY --from=mwader/static-ffmpeg:7.1@sha256:a8090df5f5608daef387e1b2e93b98aaacb4d92153ad904e7d715c725724fca4 \

@@ -62,15 +62,19 @@ build_config() {
               + (if .always_on == true then {always_on: true} else {} end)
               + (if .channel_id != null then {channel_id} else {} end)]' "$OPTIONS")
   count=$(jq 'length' <<<"$cams")
+  # Names match case-INSENSITIVELY, as the app compares them: renaming a camera's
+  # case in the web UI must update that camera, not append a second one under a
+  # name the app then treats as the same camera.
   if [ "$count" -gt 0 ]; then
     base=$(jq --argjson opts "$cams" '
       (.cameras // []) as $existing
-      | ($existing | map(.name)) as $have
+      | ($existing | map(.name | ascii_downcase)) as $have
       | .cameras =
           [ $existing[] as $c
-            | (($opts | map(select(.name == $c.name)) | first) // null) as $o
-            | if $o == null then $c else $c + $o end ]
-          + [ $opts[] | select([.name] | inside($have) | not) ]' <<<"$base")
+            | (($opts | map(select((.name | ascii_downcase) == ($c.name | ascii_downcase)))
+                | first) // null) as $o
+            | if $o == null then $c else $c + $o | .name = $c.name end ]
+          + [ $opts[] | select(([.name | ascii_downcase] | inside($have)) | not) ]' <<<"$base")
     log "merged $count camera(s) from the add-on options (web-UI-managed fields preserved)"
   fi
 
