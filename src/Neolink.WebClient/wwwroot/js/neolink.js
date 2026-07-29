@@ -2121,6 +2121,12 @@
         notifState() {
             return ('Notification' in window) ? Notification.permission : 'unsupported';
         },
+        // The desktop shell marks its WebView before any page script runs; the
+        // alerts panel words itself around the shell's native delivery then.
+        isShell() { return !!window.__neolinkShell; },
+        // Nudge the desktop shell (it listens on WebMessageReceived). In a plain
+        // browser there is no chrome.webview and this is a silent no-op.
+        shellPing(msg) { try { window.chrome?.webview?.postMessage(msg); } catch (e) { } },
         async notifRequest() {
             if (!('Notification' in window)) return 'unsupported';
             try { return await Notification.requestPermission(); }

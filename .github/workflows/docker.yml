@@ -102,6 +102,82 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  # The Windows desktop app's MSI rides the same release tag as the docker
+  # images, so the installer on the release page and the server image always
+  # carry the same vX.Y.Z. Beta pushes build one too, kept as a workflow
+  # artifact — testable without being published to users. Release tags don't
+  # run ci.yml, so the desktop selftest is repeated here: an installer must
+  # not package an app that fails its own checks.
+  desktop-msi:
+    needs: gate
+    if: >-
+      needs.gate.outputs.app == 'true'
+      && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/beta')
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build and self-test
+        shell: pwsh
+        run: |
+          dotnet build src/Neolink.Desktop/Neolink.Desktop.csproj -c Release -warnaserror -nologo
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          & "src/Neolink.Desktop/bin/Release/net10.0-windows10.0.19041.0/Neolink.Desktop.exe" --selftest
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      # Same version rules as the docker image: the tag IS the version; beta
+      # builds report "<csproj version>-beta.<run>" (build-msi.ps1 reduces that
+      # to the numeric X.Y.Z for the MSI's ProductVersion, and the app itself
+      # still reports the full string).
+      - id: ver
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF -like 'refs/tags/v*') {
+            "version=$($env:GITHUB_REF_NAME.Substring(1))" >> $env:GITHUB_OUTPUT
+          } else {
+            $v = [regex]::Match((Get-Content src/Neolink.Server/Neolink.Server.csproj -Raw),
+              '<Version>(.*?)</Version>').Groups[1].Value
+            "version=$($v -replace '-beta$','')-beta.$($env:GITHUB_RUN_NUMBER)" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Package MSI
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 5.0.2
+          wix extension add -g WixToolset.Util.wixext/5.0.2
+          wix extension add -g WixToolset.UI.wixext/5.0.2
+          ./installer/build-msi.ps1 -Version "${{ steps.ver.outputs.version }}"
+
+      # The release page is written by hand (the changelog section is pasted
+      # in); when the tag arrives first, a draft is created to receive the MSI
+      # and publishing it stays a human decision.
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view $env:GITHUB_REF_NAME *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $env:GITHUB_REF_NAME --draft --title $env:GITHUB_REF_NAME `
+              --notes "Draft created by CI to carry the MSI - paste the changelog section here before publishing."
+          }
+          gh release upload $env:GITHUB_REF_NAME (Get-ChildItem artifacts/*.msi).FullName --clobber
+
+      - name: Keep the beta MSI as a workflow artifact
+        if: github.ref == 'refs/heads/beta'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: Neolink.NET.Desktop-${{ steps.ver.outputs.version }}
+          path: artifacts/*.msi
+          retention-days: 30
+
   # The launcher runs at every add-on boot for every user, and nothing else
   # executes it before an image ships — a jq typo in its options mapping would
   # crash-loop them all. Run it against fixtures before publishing.

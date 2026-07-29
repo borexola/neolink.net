@@ -1,0 +1,65 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Neolink.NET Desktop — a native shell around the SAME web UI the server
+       already serves. It is a client, not a second implementation: the window is
+       a WebView2 pointed at your server, so every feature the browser has, this
+       has, the day the server ships it.
+
+       Deliberately OUTSIDE Neolink.sln: this is the one Windows-only project in
+       the tree, and a net10.0-windows TFM in the shared solution would break
+       `dotnet build` for Linux contributors. Build it directly:
+           dotnet build src/Neolink.Desktop/Neolink.Desktop.csproj -c Release
+       The server never references it, so the "no third-party dependencies" rule
+       the product lives by is untouched — WebView2 below is a dependency of the
+       shell alone, and there is no way to host Edge without it. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <!-- 10.0.19041 unlocks the WinRT toast APIs (rich notifications with a
+         thumbnail, Action Center history). The shell falls back to tray balloons
+         wherever those refuse, so the floor is still plain Windows 10. -->
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Neolink.Desktop</RootNamespace>
+    <AssemblyName>Neolink.Desktop</AssemblyName>
+    <!-- Kept in step with the server by hand: the shell shows both its own and
+         the connected server's version, and a mismatch is a supported state. -->
+    <Version>0.9.8</Version>
+    <Product>Neolink.NET Desktop</Product>
+    <Company>Oluwabori Olaleye</Company>
+    <ApplicationIcon>neolink.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <!-- WinForms designers are not used here; every window is built in code. -->
+    <EnableDefaultApplicationDefinition>false</EnableDefaultApplicationDefinition>
+    <!-- Self-contained so the MSI carries the runtime: nobody installing a camera
+         viewer should have to install .NET first. Deliberately NOT single-file —
+         the installer lays the files down once, whereas a single-file bundle
+         re-extracts its native libraries on every launch and makes a tray app
+         that starts with Windows slower for no benefit. -->
+    <SelfContained Condition="'$(RuntimeIdentifier)' != ''">true</SelfContained>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <!-- Symbols inside the assembly: the crash log keeps its line numbers without
+         a loose .pdb, and the installed folder stays free of build leftovers. -->
+    <DebugType>embedded</DebugType>
+    <!-- Reference XML docs and pdbs are ~10 MB of nothing a user needs. -->
+    <AllowedReferenceRelatedFileExtensions>none</AllowedReferenceRelatedFileExtensions>
+    <!-- The WebView2 package references its WPF control unconditionally, which
+         binds an older WindowsBase than the WinForms control does. Nothing here
+         touches the WPF type, so the conflict is noise — and CI builds this tree
+         with -warnaserror. -->
+    <MSBuildWarningsAsMessages>$(MSBuildWarningsAsMessages);MSB3277</MSBuildWarningsAsMessages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4078.44" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="neolink.ico" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

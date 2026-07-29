@@ -37,7 +37,11 @@ public static class CameraProbe
         (9000, "Baichuan"), (80, "HTTP"), (443, "HTTPS"), (554, "RTSP"),
     };
 
-    public static async Task SweepAsync(string tag, CameraConfig cfg, CancellationToken ct)
+    /// <summary>Runs the full sweep. Returns true when a probe actually REACHED
+    /// the camera (accepted UDP handshake, open TCP 9000, or an answering HTTP
+    /// API) — i.e. the camera is awake right now, whatever the earlier connect
+    /// failure said.</summary>
+    public static async Task<bool> SweepAsync(string tag, CameraConfig cfg, CancellationToken ct)
     {
         string Mask(string s) => string.IsNullOrEmpty(cfg.Uid) ? s : UdpDiscovery.MaskUid(s, cfg.Uid!);
         string P(string msg) => $"{tag}: [discover] {Mask(msg)}";
@@ -51,24 +55,24 @@ public static class CameraProbe
         if (!string.IsNullOrWhiteSpace(cfg.Host))
         {
             ip = await ResolveV4Async(P, cfg.Host, ct).ConfigureAwait(false);
-            if (ip == null) return;
+            if (ip == null) return false;
         }
         else
             Log.Info(P("no address configured — skipping the TCP/HTTP steps; UDP discovery goes by broadcast"));
 
         // 1. TCP reachability map.
         var open = ip == null ? new HashSet<int>() : await TcpMapAsync(P, ip, cfg.Port, ct).ConfigureAwait(false);
-        if (ct.IsCancellationRequested) return;
+        if (ct.IsCancellationRequested) return false;
 
         // 2. Reolink HTTP API — the capability jackpot when it answers.
         var http = ip == null
             ? new HttpResult(false, null, null)
             : await HttpDumpAsync(P, cfg, ip, open, ct).ConfigureAwait(false);
-        if (ct.IsCancellationRequested) return;
+        if (ct.IsCancellationRequested) return false;
 
         // 3. ONVIF WS-Discovery.
         var onvif = await OnvifProbeAsync(P, ct).ConfigureAwait(false);
-        if (ct.IsCancellationRequested) return;
+        if (ct.IsCancellationRequested) return false;
 
         // 4. Baichuan-over-UDP discovery (needs a UID).
         UdpDiscovery.UdpOutcome udp;
@@ -81,11 +85,12 @@ public static class CameraProbe
         {
             udp = await UdpDiscovery.ProbeAsync(tag, ip, cfg.Uid!, ct).ConfigureAwait(false);
         }
-        if (ct.IsCancellationRequested) return;
+        if (ct.IsCancellationRequested) return false;
 
         // Consolidated verdict.
         Log.Info(P("SUMMARY: " + Recommend(open, http, onvif.Count, udp) +
                    " — please paste every [discover…] line into GitHub issue #39."));
+        return udp == UdpDiscovery.UdpOutcome.Accepted || open.Contains(9000) || http.Reached;
     }
 
     // ------------------------------------------------------------------ steps

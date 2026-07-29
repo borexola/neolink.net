@@ -1136,7 +1136,7 @@
                     <button class="settings-tab @(_settingsTab == "connection" ? "active" : "")" role="tab"
                             @onclick='() => _settingsTab = "connection"'>@UiIcon.Render("activity", 13) Connection</button>
                     <button class="settings-tab @(_settingsTab == "alerts" ? "active" : "")" role="tab"
-                            @onclick='() => _settingsTab = "alerts"'>@UiIcon.Render("bell", 13) Alerts</button>
+                            @onclick="OpenAlertsTabAsync">@UiIcon.Render("bell", 13) Alerts</button>
                     @if (_adminHasRecording)
                     {
                         <button class="settings-tab @(_settingsTab == "recording" ? "active" : "")" role="tab"
@@ -1272,16 +1272,26 @@
                     @if (_settingsTab == "alerts")
                     {
                         <div class="campanel-section">
-                            <div class="campanel-section-title">@UiIcon.Render("bell", 13) BROWSER ALERTS</div>
+                            <div class="campanel-section-title">@UiIcon.Render("bell", 13) @(_isShell ? "ALERTS" : "BROWSER ALERTS")</div>
                             <div class="notice small">
-                                Pop a system notification when a chosen camera reports a chosen detection —
-                                on <b>this device</b>, while the app is open (tab or installed app, foreground
-                                or minimized; nothing arrives once it is fully closed). Clicking a
-                                notification opens the exact clip.
-                                @(_authEnabled ? "Preferences follow your account across browsers." :
-                                                 "Preferences are stored in this browser.")
+                                @if (_isShell)
+                                {
+                                    <text>Pop a native Windows notification when a chosen camera reports a
+                                    chosen detection. The desktop app delivers these itself — even while
+                                    this window is closed to the tray. Clicking a notification opens the
+                                    exact clip. </text>@(_authEnabled ? "Preferences follow your account across devices." :
+                                                                       "Preferences are stored on this device.")
+                                }
+                                else
+                                {
+                                    <text>Pop a system notification when a chosen camera reports a chosen detection —
+                                    on <b>this device</b>, while the app is open (tab or installed app, foreground
+                                    or minimized; nothing arrives once it is fully closed). Clicking a
+                                    notification opens the exact clip. </text>@(_authEnabled ? "Preferences follow your account across browsers." :
+                                                                                              "Preferences are stored in this browser.")
+                                }
                             </div>
-                            @if (_notifPerm == "unsupported")
+                            @if (_notifPerm == "unsupported" && !_isShell)
                             {
                                 <div class="notice error">
                                     This browser doesn't expose notifications on this page — they need a
@@ -1295,8 +1305,12 @@
                                     <button class="chip @(_alerts.Enabled ? "" : "chip-off")"
                                             @onclick="ToggleAlertsEnabledAsync">@(_alerts.Enabled ? "on" : "off")</button>
                                 </div>
-                                <div class="control-row"><span>Browser permission</span>
-                                    @if (_notifPerm == "granted")
+                                <div class="control-row"><span>@(_isShell ? "Delivery" : "Browser permission")</span>
+                                    @if (_isShell)
+                                    {
+                                        <span title="The desktop app raises these as native Windows toasts on its own — no browser permission involved. Mute or tune them from the tray icon's Notification settings, or in Windows' notification settings.">native Windows notifications ✓</span>
+                                    }
+                                    else if (_notifPerm == "granted")
                                     {
                                         <span title="This browser will show notifications from this site">granted ✓</span>
                                     }
@@ -2711,6 +2725,7 @@
             _loaded = true;
             await RefreshAuthAsync();
             try { _notifPerm = await JS.InvokeAsync<string>("neolink.notifState"); } catch { }
+            try { _isShell = await JS.InvokeAsync<bool>("neolink.isShell"); } catch { }
             await LoadAlertPrefsAsync();
             await RefreshCamerasAsync();
             await RefreshEventsAsync();
@@ -3110,9 +3125,19 @@
                 _loginError = await ApiErrorAsync(res) ?? "reset failed";
                 return;
             }
+            string? admin = null;
+            try
+            {
+                var el = await res.Content.ReadFromJsonAsync<JsonElement>();
+                if (el.TryGetProperty("user", out var u)) admin = u.GetString();
+            }
+            catch { }
             _resetMode = false;
             _resetPass = "";
-            _loginError = "Password updated — sign in with it now, then set reset_admin_password back to false.";
+            if (admin != null) _loginUser = admin;
+            _loginError = admin == null
+                ? "Password updated — sign in with it now, then set reset_admin_password back to false."
+                : $"Password updated for '{admin}' — sign in as that account now, then set reset_admin_password back to false.";
         }
         catch (Exception ex)
         {
@@ -4405,6 +4430,16 @@
     private const string AlertPrefsKey = "neolink.alerts";
     private AlertPrefs _alerts = new();
     private string _notifPerm = "default"; // granted | denied | default | unsupported
+    private bool _isShell; // inside the desktop app's WebView: alerts are delivered natively
+
+    /// <summary>Alerts tab: re-read the permission (it can change in another tab's
+    /// site settings while the app runs) and the shell flag before rendering.</summary>
+    private async Task OpenAlertsTabAsync()
+    {
+        _settingsTab = "alerts";
+        try { _notifPerm = await JS.InvokeAsync<string>("neolink.notifState"); } catch { }
+        try { _isShell = await JS.InvokeAsync<bool>("neolink.isShell"); } catch { }
+    }
     private readonly HashSet<string> _alertSeen = new();
     private bool _alertSeenSeeded;
     private readonly Dictionary<string, DateTime> _alertLastFired = new();
@@ -4444,6 +4479,9 @@
             var req = ApiRequest(HttpMethod.Put, "/api/me/settings/notifications");
             req.Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
             using var _ = await Http.SendAsync(req);
+            // Inside the desktop shell: its alert engine polls these rules from the
+            // server — tell it to re-read now so the edit applies immediately.
+            try { await JS.InvokeVoidAsync("neolink.shellPing", "alert-prefs-changed"); } catch { }
         }
         catch { /* transient: localStorage still has it */ }
     }

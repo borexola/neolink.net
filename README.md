@@ -72,6 +72,15 @@ no further setup. Recordings land in `/media/neolink`, so clips show up in HA's
 media browser. Full details in the add-on's Documentation tab
 ([neolink-addon/DOCS.md](neolink-addon/DOCS.md)).
 
+**Prefer to write the config yourself?** Empty the add-on's camera list
+(`cameras: []`) and it stops touching `cameras` — then edit `config.json` in
+`/addon_configs/…_neolink/` (Samba/SSH/Studio Code Server) and restart. That
+folder also holds `settings.json` and the rest of the UI state. Every option
+below works there; a `//` comment in the file stops the add-on merging
+anything at all, MQTT included. For a NAS, add it under Settings → System →
+Storage and point `path`/`archive_path` at `/media/<share>` or
+`/share/<share>` — add-ons cannot take Docker-style volume mappings.
+
 Running Home Assistant in a plain container (no Supervisor)? Use the Docker
 route below — everything works the same, including the MQTT integration.
 
@@ -873,6 +882,29 @@ over WebSocket — no plugins, no transcoding), an event review strip, a synced
 multi-camera timeline with export, and per-camera settings discovered from
 the camera itself. It installs as an app (PWA), works behind a TLS reverse
 proxy, and every account keeps its own layouts server-side.
+
+## Windows desktop app — BETA
+
+> ### 📖 Full guide: **[docs/desktop-app.md](docs/desktop-app.md)** — setup,
+> the notification panel, start-with-Windows, installing and upgrading,
+> building it yourself.
+
+An MSI-installed Windows app that puts the same web UI in its own window, sits
+in the system tray, and starts with Windows. It is a **client** — your server
+keeps running wherever it already does, and nothing about that setup changes.
+
+What it adds over the PWA is being there when you are not looking: it runs its
+own alert connection, so detections, camera outages and server problems reach
+you as real Windows notifications no matter which page the window is showing,
+whether the window is even open — and on a plain-`http` LAN server, where a
+browser refuses to raise notifications at all. Per-camera and per-label alert
+rules are stored on your account, so they stay in step with the browser both
+ways; quiet hours, sound and cadence are per-machine.
+
+Grab the MSI from the [releases page](https://github.com/borexola/neolink.net/releases).
+Installing a newer build over an older one replaces it and shuts the running
+copy down by itself — no reboot, no duplicate entry in Add/Remove Programs.
+Linux and macOS keep the PWA for now; see the guide for what a port would take.
 
 ## Versioning & releases
 

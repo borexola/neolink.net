@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Neolink.NET Desktop installer.
+
+  Three things this has to get right, because they are what people actually hit:
+
+  1. Installing over an existing copy REPLACES it, including a reinstall of the
+     same version number (AllowSameVersionUpgrades) - "download the new build and
+     run it" must never end with two entries in Add/Remove Programs.
+  2. The app is a tray app that starts with Windows, so it is almost always
+     RUNNING during an upgrade. It is asked to shut down politely first and
+     terminated if it will not, before any file is touched.
+  3. The Start Menu shortcut carries the AppUserModelID. That shortcut IS the
+     app's identity to the Action Center; without it Windows will not accept its
+     toasts, and notifications quietly downgrade to tray balloons.
+
+  Build it with installer/build-msi.ps1 - that script publishes the app and
+  passes the version and publish directory in.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+
+  <?define AppName = "Neolink.NET Desktop" ?>
+  <?define Manufacturer = "Oluwabori Olaleye" ?>
+  <?define ExeName = "Neolink.Desktop.exe" ?>
+  <!-- Must match AppShortcut.AppUserModelId in the app, or the shortcut the
+       installer writes registers a DIFFERENT app and toasts stop working. -->
+  <?define Aumid = "OluwaboriOlaleye.NeolinkNET.Desktop" ?>
+
+  <Package Name="$(AppName)"
+           Manufacturer="$(Manufacturer)"
+           Version="$(Version)"
+           UpgradeCode="3F8DC7D6-953C-4057-824F-71B797DE5C98"
+           Scope="perMachine"
+           Compressed="yes"
+           InstallerVersion="500">
+
+    <SummaryInformation Description="$(AppName) $(Version)" Manufacturer="$(Manufacturer)" />
+
+    <!-- Any earlier version is removed first; the same version is treated as an
+         upgrade too, so re-running the installer refreshes a broken install
+         instead of refusing. Scheduled after InstallInitialize so the old files
+         only disappear once the new ones are known good. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  Schedule="afterInstallInitialize"
+                  DowngradeErrorMessage="A newer version of $(AppName) is already installed. Uninstall it first if you really want to go back to $(Version)." />
+
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <!--
+      Closing the running app is a two-layer job, and the layers run at different
+      times.
+
+      Restart Manager (left ENABLED - not disabling it is the point) detects the
+      running shell during InstallValidate, which is BEFORE RemoveExistingProducts
+      removes the old version, and asks it to shut down the way Windows does at
+      logoff. The shell answers that properly: OnFormClosing only swallows a
+      CloseReason.UserClosing, so a session-end request really exits while the
+      tray's own X does not.
+
+      util:CloseApplication below is the backstop, running just before InstallFiles
+      for anything Restart Manager could not reach - a hung copy, or one whose
+      window never came up. WM_CLOSE is deliberately NOT sent: for this app that
+      means "hide to the tray" and would achieve nothing. The end-session message
+      exits it cleanly; TerminateProcess ends it after Timeout if it will not go.
+    -->
+    <util:CloseApplication Id="CloseNeolinkDesktop"
+                           Target="$(ExeName)"
+                           Description="$(AppName) is running and will be closed to complete the installation."
+                           EndSessionMessage="yes"
+                           ElevatedEndSessionMessage="yes"
+                           TerminateProcess="0"
+                           RebootPrompt="no"
+                           Timeout="10" />
+
+    <!-- Once the shell is closed nothing here is in use, so a reboot is never the
+         right answer; say so rather than letting Windows guess. -->
+    <Property Id="REBOOT" Value="ReallySuppress" />
+
+    <Property Id="ARPPRODUCTICON" Value="NeolinkIcon" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/QuantumEntangledAndy/neolink" />
+    <!-- Add/Remove Programs shows a blank install location without this, because
+         INSTALLFOLDER is only known once the user has been through the dialog. -->
+    <SetProperty Id="ARPINSTALLLOCATION" Value="[INSTALLFOLDER]" After="CostFinalize" Sequence="both" />
+    <!-- ARPNOMODIFY comes from WixUI_InstallDir; there is nothing to modify here. -->
+    <Icon Id="NeolinkIcon" SourceFile="$(PublishDir)\neolink.ico" />
+
+    <!-- One feature: this is a viewer, there is nothing meaningful to opt out of. -->
+    <Feature Id="Main" Title="$(AppName)" Level="1" AllowAdvertise="no" AllowAbsent="no">
+      <ComponentGroupRef Id="AppFiles" />
+      <ComponentGroupRef Id="AppShortcuts" />
+    </Feature>
+
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="$(AppName)" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+
+    <!-- Every file the publish produced, laid down as-is. A self-contained build
+         means the .NET runtime rides along and no prerequisite has to be chased. -->
+    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
+      <Files Include="$(PublishDir)\**" />
+    </ComponentGroup>
+
+    <ComponentGroup Id="AppShortcuts">
+      <Component Id="StartMenuShortcut" Directory="ProgramMenuFolder" Guid="424CC58D-1869-4051-A945-D10CEB00083D">
+        <Shortcut Id="StartMenuLink"
+                  Name="$(AppName)"
+                  Description="Live view, recordings and alerts for your Reolink cameras"
+                  Target="[INSTALLFOLDER]$(ExeName)"
+                  WorkingDirectory="INSTALLFOLDER">
+          <!-- The whole reason this shortcut is required: it is what lets an
+               unpackaged app raise Windows toasts under a stable identity. -->
+          <ShortcutProperty Key="System.AppUserModel.ID" Value="$(Aumid)" />
+        </Shortcut>
+        <RemoveFolder Id="RemoveStartMenuFolder" Directory="ProgramMenuFolder" On="uninstall" />
+        <!-- A per-machine component needs a per-user anchor for its shortcut. -->
+        <RegistryValue Root="HKCU" Key="Software\$(Manufacturer)\$(AppName)"
+                       Name="installed" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <!-- The autostart entry the app writes lives under HKCU and belongs to
+         whoever turned it on, so the installer touches it in NO direction. It
+         must not create it, and it must not remove it either: MSI's
+         RemoveRegistryValue fires when its component INSTALLS, which would wipe
+         the user's autostart on every upgrade. After an uninstall the entry may
+         linger pointing at a removed file - Windows skips such entries silently,
+         and a reinstall's first launch rewrites it (Autostart.RepairIfStale). -->
+
+    <!-- Offer to start it when the install finishes: this app's job begins the
+         moment it is running, not the next time someone remembers it exists. -->
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Start $(AppName) now" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
+    <!-- Resolved at run time, not build time: INSTALLFOLDER is whatever the user
+         chose on the install-directory page. -->
+    <SetProperty Id="WixShellExecTarget" Value="[INSTALLFOLDER]$(ExeName)"
+                 After="CostFinalize" Sequence="both" />
+    <CustomAction Id="LaunchApp" DllEntry="WixShellExec" Impersonate="yes"
+                  BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)" Return="ignore" />
+
+    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
+    <UI>
+      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchApp"
+               Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 and NOT Installed" />
+    </UI>
+    <WixVariable Id="WixUILicenseRtf" Value="$(LicenseRtf)" />
+
+  </Package>
+</Wix>

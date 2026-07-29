@@ -364,7 +364,7 @@ public static class WebApi
                         return;
                     }
                     if (IsSnapshotPath(ctx.Request.Path))
-                        ctx.Response.Headers.WWWAuthenticate = "Basic realm=\"neolink\"";
+                        ChallengeBasic(ctx);
                     ctx.Response.StatusCode = 401;
                     await ctx.Response.WriteAsJsonAsync(new { error = "authentication required" });
                     return;
@@ -1452,7 +1452,7 @@ public static class WebApi
                 && NetUtil.FixedTimeEquals(expected, creds.Value.Pass)
                 && cam.PermittedUsers.Contains(creds.Value.User))
                 return null;
-            ctx.Response.Headers.WWWAuthenticate = "Basic realm=\"neolink\"";
+            ChallengeBasic(ctx);
             return Results.Json(new { error = "authentication required" }, statusCode: 401);
         }
 
@@ -1665,7 +1665,7 @@ public static class WebApi
             // Nothing configured to authenticate against → open, like the streams.
             if (!userStore.Enabled && (cam.PermittedUsers == null || users.Count == 0))
                 return null;
-            ctx.Response.Headers.WWWAuthenticate = "Basic realm=\"neolink\"";
+            ChallengeBasic(ctx);
             return Results.Json(new { error = "authentication required" }, statusCode: 401);
         }
 
@@ -2502,7 +2502,7 @@ public static class WebApi
                     if (creds == null || !users.TryGetValue(creds.Value.User, out var pw)
                         || !NetUtil.FixedTimeEquals(pw, creds.Value.Pass))
                     {
-                        ctx.Response.Headers.WWWAuthenticate = "Basic realm=\"neolink\"";
+                        ChallengeBasic(ctx);
                         return Results.Json(new { error = "authentication required" }, statusCode: 401);
                     }
                 }
@@ -2528,7 +2528,7 @@ public static class WebApi
                     if (creds == null || !users.TryGetValue(creds.Value.User, out var pw)
                         || !NetUtil.FixedTimeEquals(pw, creds.Value.Pass))
                     {
-                        ctx.Response.Headers.WWWAuthenticate = "Basic realm=\"neolink\"";
+                        ChallengeBasic(ctx);
                         return Results.Json(new { error = "authentication required" }, statusCode: 401);
                     }
                 }
@@ -2599,7 +2599,7 @@ public static class WebApi
                 if (creds != null && users.TryGetValue(creds.Value.User, out var pw)
                     && NetUtil.FixedTimeEquals(pw, creds.Value.Pass))
                     return null;
-                ctx.Response.Headers.WWWAuthenticate = "Basic realm=\"neolink\"";
+                ChallengeBasic(ctx);
                 return Results.Json(new { error = "authentication required" }, statusCode: 401);
             }
 
@@ -3235,6 +3235,28 @@ public static class WebApi
         path.StartsWithSegments("/api/cameras")
         && (path.Value!.EndsWith("/snapshot.jpg", StringComparison.OrdinalIgnoreCase)
             || path.Value.EndsWith("/snapshot", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>Offers the Basic challenge only where it helps: headerless clients
+    /// (HA, scripts) and address-bar navigations. A browser answering 401+Basic on
+    /// a page subresource (img, fetch) pops its native credential dialog over the
+    /// web UI's own login form. Such loads carry a non-navigate Sec-Fetch-Mode —
+    /// but only on https/localhost origins (browsers withhold Sec-Fetch elsewhere),
+    /// so on plain http the web UI's fingerprints stand in: its browser-made
+    /// requests authenticate via a token query parameter, and subresource loads
+    /// send a Referer. Neither appears on scripted clients or typed-in URLs.</summary>
+    private static void ChallengeBasic(HttpContext ctx)
+    {
+        var mode = ctx.Request.Headers["Sec-Fetch-Mode"].ToString();
+        if (mode.Length > 0)
+        {
+            if (mode.Equals("navigate", StringComparison.OrdinalIgnoreCase))
+                ctx.Response.Headers.WWWAuthenticate = "Basic realm=\"neolink\"";
+            return;
+        }
+        if (ctx.Request.Query.ContainsKey("token") || ctx.Request.Headers.Referer.Count > 0)
+            return;
+        ctx.Response.Headers.WWWAuthenticate = "Basic realm=\"neolink\"";
+    }
 
     /// <summary>The worst storage-tier state for the wall banner: null when recording
     /// is off or every tier is healthy, else the most urgent tier's summary.</summary>

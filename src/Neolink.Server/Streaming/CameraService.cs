@@ -475,7 +475,17 @@ public sealed class CameraService : ILiveCameraSource
 
             // Sleep-friendly cameras: stay disconnected while nobody watches, so
             // the camera can power down. A viewer's DESCRIBE/init attempt wakes us.
-            if (AllowSleep && !DemandNow)
+            // One-shot park bypass: the diagnostic sweep after a failed connect can
+            // itself REACH the camera (its bursts are what finally woke it) — the
+            // camera is awake right now, and the ask that triggered the attempt only
+            // expired while the attempt was busy failing. Parking here would strand
+            // an awake camera until the viewer's player happens to retry.
+            bool sweepProvedAwake = _sweepProvedAwake;
+            _sweepProvedAwake = false;
+            if (sweepProvedAwake && AllowSleep && !DemandNow)
+                Log.Info($"{Tag}: the discovery sweep reached the camera (it is awake now) — " +
+                         "finishing the interrupted connect instead of parking");
+            if (AllowSleep && !DemandNow && !sweepProvedAwake)
             {
                 _parked = true;
                 try
@@ -767,7 +777,7 @@ public sealed class CameraService : ILiveCameraSource
                 // unreachable, probe the Baichuan-over-UDP discovery handshake
                 // and log the exchange (UID masked, no credentials).
                 if (_config.UdpProbe && !gotFrames && !ct.IsCancellationRequested)
-                    await MaybeUdpProbeAsync(ct).ConfigureAwait(false);
+                    _sweepProvedAwake = await MaybeUdpProbeAsync(ct).ConfigureAwait(false);
             }
             finally
             {
@@ -798,7 +808,7 @@ public sealed class CameraService : ILiveCameraSource
     /// without probing forever. Shared across the camera's stream services; never
     /// lets a sweep failure disturb the retry loop.
     /// </summary>
-    private async Task MaybeUdpProbeAsync(CancellationToken ct)
+    private async Task<bool> MaybeUdpProbeAsync(CancellationToken ct)
     {
         var now = DateTime.UtcNow;
         var st = _probeState.GetOrAdd(_config.Name, _ => new ProbeState());
@@ -813,21 +823,27 @@ public sealed class CameraService : ILiveCameraSource
                     Log.Info($"{Tag}: [discover] discovery probing stopped — the {ProbeWindow.TotalMinutes:0}-minute " +
                              "window has elapsed; restart Neolink to probe again");
                 }
-                return;
+                return false;
             }
-            if (st.Last != default && now - st.Last < ProbeEvery) return;
+            if (st.Last != default && now - st.Last < ProbeEvery) return false;
             st.Last = now;
         }
         try
         {
-            await CameraProbe.SweepAsync(Tag, _config, ct).ConfigureAwait(false);
+            return await CameraProbe.SweepAsync(Tag, _config, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
             Log.Warn($"{Tag}: [discover] sweep crashed: {Log.Flatten(ex)}");
         }
+        return false;
     }
+
+    // The diagnostic sweep reached the camera after a failed connect: one-shot
+    // permission to retry immediately instead of parking (consumed at the top of
+    // the retry loop).
+    private bool _sweepProvedAwake;
 
     // Where the camera was last seen (from a prior connect) — the ICMP scan target
     // for a UID-only camera that has no configured host address.

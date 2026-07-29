@@ -39,6 +39,8 @@ settings.json
 camera-state.json
 storage-trend.json
 bookmarks.json
+#   desktop.json       the Windows shell's server URL + DPAPI-protected password
+desktop.json
 # ...but the editor's own settings are not ours to hide.
 !.vscode/settings.json
 
@@ -50,3 +52,7 @@ neolink-*.tar
 
 # Local dev tools, not shipped
 /devtools/
+
+# Installer output (installer/build-msi.ps1)
+/artifacts/
+*.wixpdb

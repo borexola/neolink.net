@@ -8,6 +8,44 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Added
 
+- **Neolink.NET Desktop for Windows (BETA) — an MSI-installed app that is
+  there when you are not looking.** The same web UI in its own window, in the
+  system tray, starting with Windows. It is a client: the server keeps running
+  wherever it already runs, and because the window renders the live UI, every
+  feature the server ships appears in it the same day with no separate app
+  update.
+
+  What it adds over the installable PWA is alerting that does not depend on a
+  page being open. The web UI raises its notifications from a poll on its
+  dashboard; navigate away and they stop, close the tab and they stop, and over
+  plain `http` on a LAN the browser will not raise them at all (the
+  `Notification` API needs a secure context). The desktop app runs its own
+  alert connection with the same rules, so detections, camera outages and
+  server problems arrive as real Windows toasts — with the event thumbnail, in
+  the Action Center, clicking through to the clip — whatever the window is
+  showing and whether or not it is open.
+
+  Notification rules stay in one place: which cameras alert and for which
+  detections, the per-camera offline alerts, the server-condition alerts and
+  the cooldown are read from and written back to the **account** (the same
+  `/api/me/settings/notifications` the web UI's alert panel edits), so a change
+  made in either client shows up in the other. Quiet hours (with a separate
+  choice about whether they may also silence faults), sound, thumbnails and
+  poll cadence belong to the machine. `--test-notification` proves the path and
+  says whether Windows accepted the toast, for when the answer is Focus assist
+  rather than Neolink.
+
+  The password is stored encrypted with the Windows account (DPAPI), a
+  self-signed LAN certificate is an explicit opt-in that says what it costs,
+  and "start with Windows" is a per-user Run entry — no administrator rights,
+  no scheduled task, rewritten each launch so an upgrade that moves the
+  executable cannot orphan it. Installing a newer build over an older one
+  replaces it (no second entry in Add/Remove Programs) and shuts the running
+  copy down first, which matters for an app that starts with Windows and is
+  therefore almost always running during its own upgrade. Settings in
+  `%APPDATA%\Neolink.NET\` survive both upgrade and uninstall. See
+  [docs/desktop-app.md](docs/desktop-app.md).
+
 - **Opus audio for RTSP clients — chosen per client, by URL.** Any camera URL
   takes an audio query parameter (`rtsp://host:8654/driveway?audio=opus`,
   `.../driveway/subStream?audio=opus`, …): `opus` carries the camera's
@@ -133,6 +171,38 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Fixed
 
+- **No more surprise browser password popups over the web UI.** When a signed-in
+  page's session token expired, the next snapshot image refresh answered with an
+  HTTP Basic challenge — meant for Home Assistant and scripts using RTSP
+  credentials on snapshot URLs — and the browser reacted with its native
+  credential dialog on top of the web UI's own sign-in form. The challenge is
+  now withheld from browser page loads (images, fetches) and kept for the
+  clients it exists for: headerless tools like HA's generic camera, curl, and a
+  snapshot URL typed straight into the address bar.
+- **A deep-sleep wake no longer strands the viewer after the camera is
+  already up.** Waking a deeply sleeping battery camera can outlive the
+  viewer's ask: the first UDP handshake times out, the diagnostic discovery
+  sweep runs — its bursts are often what finally wake the camera, and its
+  handshake gets ACCEPTED — but that proof was thrown away: by then the ask
+  had expired, so the loop parked again and an awake, reachable camera sat
+  idle until the player's next retry (~15 s later in the reported log). The
+  sweep now reports "I reached the camera" back to the retry loop, which
+  spends it on one immediate connect instead of parking. Applies when the
+  udp_probe diagnostic is enabled; the deep-sleep wake itself (the camera
+  answering only after repeated bursts) is the camera's nature, not fixable
+  from here.
+- **The camera panel explains a missing "Camera settings" tab and grows it
+  back on its own.** Device settings are read live from the camera, so an
+  offline camera's panel shows only the server-side Recording tab — but it
+  used to do so silently (the offline notice was suppressed whenever recording
+  settings rendered), and a panel opened while the camera was down never asked
+  again: the tab refused to appear until the panel was closed and reopened.
+  Now the panel says the camera is offline (and that the recording options
+  still work meanwhile), says when the capability query failed outright, and
+  re-probes by itself when the wall reports the camera back — the device tabs
+  appear in place. Sleep-capable battery cameras get a settle period before
+  that re-probe: "online" arrives mid-wake, and the capability sweep's
+  round-trips must not fight the stream spin-up for the camera's radio.
 - **AI descriptions no longer trail off before the event does.** The ending
   of an event — the car pulling away, the visitor leaving — used to be the
   part the model was least likely to mention: frame sampling thins as an

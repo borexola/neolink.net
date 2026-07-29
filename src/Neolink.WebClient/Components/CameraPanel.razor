@@ -137,9 +137,13 @@
            settings tab (a spinner in its label) rather than as a banner here —
            the tab stays selectable throughout, and the explanatory line appears
            inside it for whoever actually opens it. *@
-        @if (!_probing && _caps is { Online: false } && _recording == null)
+        @if (!_probing && !_loading && _caps is { Online: false })
         {
-            <div class="notice">Camera is offline (reconnecting). Controls appear when it comes back.</div>
+            <div class="notice">Camera is offline (reconnecting). Its settings are read from the device, so they appear when it comes back@(_recording != null ? " — the recording options below are server-side and work meanwhile" : "").</div>
+        }
+        else if (!_probing && !_loading && _caps == null)
+        {
+            <div class="notice">The camera didn't answer the capability query, so its settings can't be shown right now — reopen the panel to retry.</div>
         }
 
         <div class="settings-tabs campanel-tabs" role="tablist">
@@ -1989,10 +1993,37 @@
 
     protected override async Task OnParametersSetAsync()
     {
-        if (_loadedFor == CameraName) return;
-        _loadedFor = CameraName;
-        await LoadAsync();
+        if (_loadedFor != CameraName)
+        {
+            _loadedFor = CameraName;
+            await LoadAsync();
+            return;
+        }
+        // The probe concluded "offline" but the wall's state feed now says the
+        // camera is back: probe again, so an open panel grows its device tabs
+        // without a close/reopen. Rate-limited — the wall refresh drives this,
+        // and a camera the probe still calls offline shouldn't be hammered.
+        // Sleep-capable cameras get a settle period first: "online" appears the
+        // moment the connection is up, mid-wake, and the capability sweep's
+        // round-trips would fight the stream spin-up for the battery cam's thin
+        // radio — the sweep waits until the wake has had the radio to itself.
+        if (Camera is not { Online: true })
+        {
+            _onlineSince = default;
+            return;
+        }
+        if (_onlineSince == default) _onlineSince = DateTime.UtcNow;
+        var settle = Camera.Sleeps ? TimeSpan.FromSeconds(20) : TimeSpan.Zero;
+        if (!_loading && !_probing && _caps is not { Online: true }
+            && DateTime.UtcNow - _onlineSince >= settle
+            && DateTime.UtcNow - _lastAutoProbe > TimeSpan.FromSeconds(10))
+        {
+            _lastAutoProbe = DateTime.UtcNow;
+            await LoadAsync();
+        }
     }
+    private DateTime _lastAutoProbe;
+    private DateTime _onlineSince;
 
     private async Task LoadAsync()
     {

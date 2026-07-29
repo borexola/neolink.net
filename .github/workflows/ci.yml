@@ -29,3 +29,35 @@ jobs:
 
       - name: Self-tests
         run: dotnet src/Neolink.Server/bin/Release/net10.0/neolink.net.dll selftest
+
+  # The Windows desktop shell is the tree's only Windows-only project (WebView2
+  # + WinForms); the Linux job above builds the server csproj directly and never
+  # has to know it exists. It gets its own runner and its own self-test.
+  desktop-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build (warnings are errors)
+        run: dotnet build src/Neolink.Desktop/Neolink.Desktop.csproj -c Release -warnaserror -nologo
+
+      - name: Self-tests
+        run: |
+          $exe = "src/Neolink.Desktop/bin/Release/net10.0-windows10.0.19041.0/Neolink.Desktop.exe"
+          & $exe --selftest
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+        shell: pwsh
+
+      # Proves the installer still builds and that the app publishes
+      # self-contained. Not uploaded here - releases carry the MSI (docker.yml).
+      - name: Installer
+        run: |
+          dotnet tool install --global wix --version 5.0.2
+          wix extension add -g WixToolset.Util.wixext/5.0.2
+          wix extension add -g WixToolset.UI.wixext/5.0.2
+          ./installer/build-msi.ps1
+        shell: pwsh
