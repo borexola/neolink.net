@@ -189,6 +189,12 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Fixed
 
+- **HA add-on: a camera whose name is a substring of another's is added, not
+  swallowed.** The launcher's "is this camera already in config.json?" test
+  used jq's `inside()`, which compares strings by SUBSTRING — so adding a
+  camera called `Drive` in the add-on options while `Driveway` existed counted
+  as "already present", and the new camera silently never appeared. The test
+  is now an exact (case-insensitive) name match, with a launcher test for it.
 - **HA add-on: the Options page stops looking like the camera list.** Its
   `cameras` field only ever held six of a camera's settings, so a camera added
   in the web UI showed up nowhere on that page — an empty list beside two

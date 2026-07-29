@@ -185,4 +185,30 @@ assert_cameras '[
    "stream": "subStream", "keep_alive_hours": 6, "http_address": "10.0.0.6:80"}
 ]' "extended fields apply when set; blank text and false toggles never clobber the web UI"
 
+# --- 8. A name that is a SUBSTRING of an existing one is still a new camera --
+# jq's inside() compares strings by substring, so "Drive" once counted as
+# already present because "Driveway" contains it, and was silently dropped.
+cat > "$work/options.json" <<'JSON'
+{
+  "cameras": [
+    {"name": "Drive", "address": "10.0.0.9", "username": "admin", "password": "b"}
+  ],
+  "auto_mqtt": false,
+  "log_verbose": false
+}
+JSON
+cat > "$work/config.json" <<'JSON'
+{
+  "bind": "0.0.0.0",
+  "cameras": [
+    {"name": "Driveway", "address": "10.0.0.1", "username": "admin", "password": "a", "uid": "95270000KEEPMEXX"}
+  ]
+}
+JSON
+launch "$work/options.json"
+assert_cameras '[
+  {"name": "Driveway", "address": "10.0.0.1", "username": "admin", "password": "a", "uid": "95270000KEEPMEXX"},
+  {"name": "Drive", "address": "10.0.0.9", "username": "admin", "password": "b"}
+]' "a name that is a substring of an existing camera is appended, not swallowed"
+
 echo "all launcher checks passed"

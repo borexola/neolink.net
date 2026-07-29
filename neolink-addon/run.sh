@@ -76,7 +76,10 @@ build_config() {
   count=$(jq 'length' <<<"$cams")
   # Names match case-INSENSITIVELY, as the app compares them: renaming a camera's
   # case in the web UI must update that camera, not append a second one under a
-  # name the app then treats as the same camera.
+  # name the app then treats as the same camera. The "is it already there?" test
+  # is index(), never inside(): inside() compares strings by SUBSTRING, so a new
+  # "Drive" would count as present because "Driveway" contains it, and would be
+  # silently dropped instead of added.
   if [ "$count" -gt 0 ]; then
     base=$(jq --argjson opts "$cams" '
       (.cameras // []) as $existing
@@ -86,7 +89,7 @@ build_config() {
             | (($opts | map(select((.name | ascii_downcase) == ($c.name | ascii_downcase)))
                 | first) // null) as $o
             | if $o == null then $c else $c + $o | .name = $c.name end ]
-          + [ $opts[] | select(([.name | ascii_downcase] | inside($have)) | not) ]' <<<"$base")
+          + [ $opts[] | . as $o | select(($have | index($o.name | ascii_downcase)) == null) ]' <<<"$base")
     log "merged $count camera(s) from the add-on options (web-UI-managed fields preserved)"
   else
     # The options list being empty while the web UI shows cameras is normal and

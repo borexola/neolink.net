@@ -288,9 +288,9 @@ in exchange you get an integration light enough to leave running forever.
 - Camera wall with five layouts (Grid, Focus, Mosaic, Theater, Free),
   per-tile stream choice, maximize and fullscreen
 - **Camera settings & controls** discovered from the camera itself: PTZ,
-  zoom/focus, lights, siren, privacy mode, reboot — plus, over the HTTP API
-  (beta), picture settings, HDR, volume, detection sensitivity, OSD, PTZ
-  presets, quick replies and a firmware-update badge. Changes stage and are
+  zoom/focus, lights, siren, privacy mode, reboot, detection sensitivity and
+  infrared brightness — plus, over the HTTP API (beta), picture settings, HDR,
+  volume, OSD, PTZ presets, quick replies and a firmware-update badge. Changes stage and are
   sent only on "Apply to camera"; a **PORTS tab** can enable the camera's own
   HTTP/ONVIF services right from Neolink
 - **Events** review strip and deep-linkable events page, a synced
