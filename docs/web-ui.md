@@ -18,7 +18,12 @@ on `web_port` (default 8655) or turn it off with `"webui": false`.
   maximized tile / quick view streams your microphone to the camera
   (resampled and ADPCM-encoded server-side). Enable in *Server settings →
   Web UI*; needs HTTPS or localhost — browsers only expose the mic in secure
-  contexts.
+  contexts. Talk uses the system-default microphone unless you pick one
+  under *Server settings → Connection* (per device — do this when the
+  default is a headset amp or virtual cable, which capture only silence; the
+  UI warns when a live talk session is carrying no signal). This matters
+  especially in the desktop app, whose permission prompt has no device
+  picker of its own.
 
 ## Layouts
 

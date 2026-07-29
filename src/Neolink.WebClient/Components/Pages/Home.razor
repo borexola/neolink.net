@@ -1140,7 +1140,7 @@
                                 @onclick="SelectUsersTabAsync">@UiIcon.Render("user", 13) @T["Users"]</button>
                     }
                     <button class="settings-tab @(_settingsTab == "connection" ? "active" : "")" role="tab"
-                            @onclick='() => _settingsTab = "connection"'>@UiIcon.Render("activity", 13) @T["Connection"]</button>
+                            @onclick="OpenConnectionTabAsync">@UiIcon.Render("activity", 13) @T["Connection"]</button>
                     <button class="settings-tab @(_settingsTab == "alerts" ? "active" : "")" role="tab"
                             @onclick="OpenAlertsTabAsync">@UiIcon.Render("bell", 13) @T["Alerts"]</button>
                     @* Everyone gets this one: the language is the user's, not the
@@ -1193,6 +1193,19 @@
                                        @bind="_server" @bind:after="OnServerChangedAsync" /></div>
                             <div class="notice small">
                                 @((MarkupString)T["Where this page sends its API calls and pulls video from. <b>Leave it blank in normal setups</b> — the UI automatically talks to the server that served it. Set it only when this UI runs somewhere else than the Neolink.NET server (a dev build, a separately hosted copy) or you want this browser to control a <i>different</i> Neolink.NET instance, e.g. <code>http://192.168.1.10:8655</code>."])
+                            </div>
+                            <div class="control-row"><span>@T["Two-way talk microphone"]</span>
+                                <select class="notif-input" @bind="_micId" @bind:after="MicChangedAsync">
+                                    <option value="">@T["System default"]</option>
+                                    @foreach (var m in _mics)
+                                    {
+                                        <option value="@m.Id">@m.Label</option>
+                                    }
+                                </select>
+                                <button class="chip" @onclick="RefreshMicsAsync">@T["Refresh"]</button>
+                            </div>
+                            <div class="notice small">
+                                @T["Which microphone two-way talk uses on this device. Pick one explicitly when the system default is not a real microphone (a headset amplifier, a virtual cable) — talk streams silence from those. Refresh may ask for microphone permission: device names only show once it is granted."]
                             </div>
                             <div class="campanel-divider"></div>
                             <div class="campanel-subtitle">@T["CONTROL CREDENTIALS (LEGACY)"]</div>
@@ -3354,6 +3367,7 @@
         if (!_authAdmin)
         {
             _settingsTab = "connection";
+            await LoadMicsAsync(unlock: false);
             return;
         }
         _settingsTab = "general";
@@ -5604,6 +5618,37 @@
     private bool TalkSupported(string? cam) =>
         cam != null && _talkCaps.TryGetValue(cam, out var t) && t;
 
+    // ---- microphone choice (per device, localStorage — hardware is not an
+    // account trait, so this never follows the account) ----
+    private sealed record MicInfo(string Id, string Label);
+    private List<MicInfo> _mics = new();
+    private string _micId = "";
+
+    private async Task OpenConnectionTabAsync()
+    {
+        _settingsTab = "connection";
+        await LoadMicsAsync(unlock: false);
+    }
+
+    /// <summary>unlock=false lists silently (names may be blank before the mic
+    /// permission exists); only the Refresh button passes true, which may show
+    /// the browser's permission prompt to reveal them.</summary>
+    private async Task LoadMicsAsync(bool unlock)
+    {
+        try { _mics = await JS.InvokeAsync<List<MicInfo>>("neolink.micList", unlock) ?? new(); }
+        catch { _mics = new(); }
+        try { _micId = await JS.InvokeAsync<string>("neolink.micPref") ?? ""; } catch { }
+        if (_micId != "" && _mics.All(m => m.Id != _micId))
+            _mics.Insert(0, new MicInfo(_micId, T["saved microphone"]));
+    }
+
+    private async Task RefreshMicsAsync() => await LoadMicsAsync(unlock: true);
+
+    private async Task MicChangedAsync()
+    {
+        try { await JS.InvokeVoidAsync("neolink.setMicPref", _micId); } catch { }
+    }
+
     // ------------------------------------------------------------ on-video PTZ pad
     // A PTZ camera's maximized tile gets a small translucent pad (collapsed to a
     // "PTZ" pill until opened) so panning doesn't require the settings dialog.
@@ -5752,6 +5797,11 @@
                 _talkError = string.IsNullOrWhiteSpace(detail) ? T["could not start"] : detail;
                 _talkCamera = null;
                 _talkPhase = "off";
+                break;
+            case "silent":
+                // The session stays live — this is a diagnosis, not a failure.
+                _talkError = T.F("The microphone ({0}) is capturing silence — the camera hears nothing. Pick a real microphone under Server settings → Connection.",
+                    string.IsNullOrWhiteSpace(detail) ? T["System default"] : detail!);
                 break;
             default: // "off"
                 _talkCamera = null;

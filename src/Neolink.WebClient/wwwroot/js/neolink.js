@@ -1763,7 +1763,34 @@
         // One session at a time. Opens the /api/talk WebSocket, sends a JSON
         // hello with the AudioContext's real sample rate (the server resamples
         // to whatever the camera wants), then streams Int16 LE PCM chunks.
-        // State flows back to Blazor via OnTalkState("live"|"off"|"error").
+        // State flows back to Blazor via OnTalkState("live"|"off"|"error"|"silent").
+        //
+        // The microphone is chosen per DEVICE (localStorage), because "the
+        // system default" is a hardware fact of one machine: a headset
+        // amplifier or virtual cable as Windows' default records pure silence,
+        // and no account-level setting can know which box has one.
+        micPref() { try { return localStorage.getItem('neolink.mic') || ''; } catch { return ''; } },
+        setMicPref(id) {
+            try { id ? localStorage.setItem('neolink.mic', id) : localStorage.removeItem('neolink.mic'); } catch { }
+        },
+        // Real microphones only — Chromium's "default"/"communications" rows are
+        // aliases of devices already in the list. Labels are blank until the
+        // mic permission is granted; unlock=true takes (and instantly releases)
+        // a capture so the names appear — only the settings Refresh button does
+        // that, never a mere tab open.
+        async micList(unlock) {
+            if (!(navigator.mediaDevices && navigator.mediaDevices.enumerateDevices)) return [];
+            let ins = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audioinput');
+            if (unlock && ins.length && ins.every(d => !d.label) && navigator.mediaDevices.getUserMedia) {
+                try {
+                    const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    s.getTracks().forEach(t => t.stop());
+                    ins = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audioinput');
+                } catch { /* denied: ids without names still select */ }
+            }
+            return ins.filter(d => d.deviceId && d.deviceId !== 'default' && d.deviceId !== 'communications')
+                .map((d, i) => ({ id: d.deviceId, label: d.label || `Microphone ${i + 1}` }));
+        },
         async talkStart(wsUrl, dotnetRef) {
             this.talkStop();
             const report = (state, detail) => {
@@ -1773,19 +1800,29 @@
                 report('error', 'microphone access needs HTTPS (or localhost)');
                 return;
             }
-            const s = { ws: null, ctx: null, stream: null, src: null, proc: null, report };
+            const s = { ws: null, ctx: null, stream: null, src: null, proc: null, report, peak: 0, sampled: 0, warned: false };
             this._talk = s;
             let stream;
+            const micId = this.micPref();
+            const base = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
             try {
                 stream = await navigator.mediaDevices.getUserMedia({
-                    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+                    audio: micId ? { ...base, deviceId: { exact: micId } } : base
                 });
             } catch (err) {
-                if (this._talk === s) this._talk = null;
-                report('error', err && err.name === 'NotAllowedError'
-                    ? 'microphone permission denied'
-                    : 'microphone unavailable');
-                return;
+                // The chosen microphone can be gone (unplugged, another machine
+                // via the roaming profile): a call the default could carry must
+                // not fail over a stale preference.
+                if (micId && err && (err.name === 'OverconstrainedError' || err.name === 'NotFoundError')) {
+                    try { stream = await navigator.mediaDevices.getUserMedia({ audio: base }); } catch (err2) { err = err2; stream = null; }
+                }
+                if (!stream) {
+                    if (this._talk === s) this._talk = null;
+                    report('error', err && err.name === 'NotAllowedError'
+                        ? 'microphone permission denied'
+                        : 'microphone unavailable');
+                    return;
+                }
             }
             if (this._talk !== s) { stream.getTracks().forEach(t => t.stop()); return; } // stopped meanwhile
             s.stream = stream;
@@ -1801,6 +1838,7 @@
             ws.binaryType = 'arraybuffer';
             ws.onopen = () => {
                 if (this._talk !== s) return;
+                s.opened = true;
                 ws.send(JSON.stringify({ sampleRate: ctx.sampleRate }));
                 // ScriptProcessor keeps this dependency-free; 2048 samples ≈ 43 ms
                 // per chunk at 48 kHz, plenty tight for voice.
@@ -1813,8 +1851,20 @@
                     for (let i = 0; i < f32.length; i++) {
                         const v = Math.max(-1, Math.min(1, f32[i]));
                         i16[i] = v < 0 ? v * 0x8000 : v * 0x7fff;
+                        const a = v < 0 ? -v : v;
+                        if (a > s.peak) s.peak = a;
                     }
                     ws.send(i16.buffer);
+                    // A dead input (a headset amp with nothing plugged in as the
+                    // system default) streams flawlessly and says nothing — the
+                    // one talk failure that shows no error anywhere. Warn once,
+                    // after enough audio that a quiet room can't false-positive
+                    // a working mic below this floor.
+                    if (!s.warned && (s.sampled += f32.length) > ctx.sampleRate * 2.5) {
+                        s.warned = true;
+                        if (s.peak < 0.001)
+                            report('silent', (stream.getTracks()[0] || {}).label || '');
+                    }
                 };
                 src.connect(proc);
                 proc.connect(ctx.destination); // processing needs a sink; output stays silent
@@ -1827,6 +1877,10 @@
                 if (!t) return; // already stopped locally
                 const reason = ev.reason || '';
                 if (reason && reason !== 'bye') t.report('error', reason);
+                // A handshake the server (or a proxy) refused closes with no
+                // reason at all — without naming it, the button just snaps back
+                // to idle and the failure is invisible.
+                else if (!t.opened) t.report('error', `the talk connection was refused (code ${ev.code})`);
                 else t.report('off');
             };
             ws.onerror = () => { /* onclose follows with the close reason */ };

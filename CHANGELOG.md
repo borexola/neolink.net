@@ -220,6 +220,34 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Fixed
 
+- **Two-way talk that "works" but says nothing is now diagnosable — and
+  fixable in the UI.** Talk always captured from the system-default
+  microphone, and when Windows' default is not a real microphone (a headset
+  amplifier with nothing plugged in, a virtual cable), the session went
+  fully live and streamed perfect silence — TALKING on screen, nothing from
+  the camera, no error anywhere. This hit the desktop app hardest: browsers
+  let you pick a microphone in their permission prompt, the WebView2 shell
+  has no such picker and always got the default. Three changes close it out:
+  a **microphone picker** under *Server settings → Connection* (per device,
+  stored in the browser/app, never on the account — hardware is not an
+  account trait), with a stale choice falling back to the default rather
+  than failing the call; a **silence warning** — when the first seconds of a
+  live talk session carry no signal at all, a toast names the silent device
+  and points at the picker; and a **refused handshake now reports itself**
+  ("the talk connection was refused", with the close code) instead of the
+  mic button silently snapping back to idle.
+- **The desktop app recovers from "Session expired" by itself.** That overlay
+  is not the sign-in expiring (tokens last 30 days) — it appears when the
+  page's live connection is gone for good: the server restarted, or the PC
+  slept past the connection's retention. A browser user clicks *Reload*;
+  nobody is at a tray app that started on boot, so the desktop shell now
+  detects the state and reloads the page the moment the server answers again.
+  Alerts were never affected either way — the desktop app's alert engine polls
+  the server on its own connection, independent of the window, and signs
+  itself back in silently. The overlay's wording is fixed with it: it now says
+  *"Reload needed — the connection was away too long or the server restarted.
+  Reloading signs you right back in."* instead of blaming a restart that may
+  never have happened.
 - **The desktop MSI's SmartScreen warning is explained rather than left to
   guess.** The installer is not code-signed, so Windows shows *"Windows
   protected your PC"* and then a UAC prompt reading *Publisher: Unknown*. The

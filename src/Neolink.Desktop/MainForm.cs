@@ -338,6 +338,26 @@ internal sealed class MainForm : Form
               }, true);
             })();
             """);
+        // A REJECTED circuit (server restarted, or the connection was away past
+        // the circuit's retention — a laptop sleep is enough) is the one state the
+        // page cannot recover from: Blazor stops and offers a Reload button. A
+        // browser user clicks it; nobody is at a tray app that started on boot,
+        // so the page reports the state and the shell reloads it itself.
+        await core.AddScriptToExecuteOnDocumentCreatedAsync($$"""
+            (() => {
+              if (location.origin !== {{JsonSerializer.Serialize(_origin)}}) return;
+              const arm = () => {
+                const el = document.getElementById('components-reconnect-modal');
+                if (!el) { setTimeout(arm, 2000); return; }
+                new MutationObserver(() => {
+                  if (el.classList.contains('components-reconnect-rejected'))
+                    try { window.chrome.webview.postMessage('circuit-rejected'); } catch (e) {}
+                }).observe(el, { attributes: true, attributeFilter: ['class'] });
+              };
+              if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', arm);
+              else arm();
+            })();
+            """);
         core.WebMessageReceived += (_, args) =>
         {
             if (!IsServerOrigin(args.Source)) return;
@@ -347,6 +367,7 @@ internal sealed class MainForm : Form
             // The web UI's alerts panel saved new rules to the account: apply them
             // to this machine's engine now, not on the next poll.
             else if (msg == "alert-prefs-changed") _engine.RefreshPrefs();
+            else if (msg == "circuit-rejected") _ = RecoverCircuitAsync();
         };
 
         await ApplyBootstrapAsync(core);
@@ -450,6 +471,43 @@ internal sealed class MainForm : Form
         if (_web.CoreWebView2 == null) return;
         if (_webReady) _web.CoreWebView2.Reload();
         else Navigate("/");
+    }
+
+    private bool _recoveringCircuit;
+
+    /// <summary>Reloads a page whose circuit the server rejected, as soon as the
+    /// server answers a probe. A dead page would otherwise sit behind the overlay
+    /// until a person notices; meanwhile the alert engine keeps running either
+    /// way. Runs on the UI thread — WebMessageReceived raises there and every
+    /// await resumes there — so Reload and ExecuteScriptAsync are safe to call.</summary>
+    private async Task RecoverCircuitAsync()
+    {
+        if (_recoveringCircuit) return;
+        _recoveringCircuit = true;
+        DesktopLog.Write("page session rejected by the server — reloading as soon as it answers");
+        try
+        {
+            while (!IsDisposed && _web.CoreWebView2 != null)
+            {
+                if (await _link.ProbeAsync() == null)
+                {
+                    Reload();
+                    return;
+                }
+                await Task.Delay(TimeSpan.FromSeconds(5));
+                // A manual reload or navigation clears the state — stop, so the
+                // next rejection can arm a fresh recovery.
+                string still;
+                try
+                {
+                    still = await _web.CoreWebView2.ExecuteScriptAsync(
+                        "document.getElementById('components-reconnect-modal')?.classList.contains('components-reconnect-rejected') === true");
+                }
+                catch { return; }
+                if (still != "true") return;
+            }
+        }
+        finally { _recoveringCircuit = false; }
     }
 
     /// <summary>The Ctrl+F5 path: unregisters the service worker and drops its
