@@ -203,6 +203,20 @@ in the README). Paste the matching section below into the GitHub release.
   appear in place. Sleep-capable battery cameras get a settle period before
   that re-probe: "online" arrives mid-wake, and the capability sweep's
   round-trips must not fight the stream spin-up for the camera's radio.
+- **Busy installations no longer lose history in the timeline and events
+  views.** Every event query was capped at the newest 500–1000 events across
+  ALL cameras — plenty for a quiet setup, but a camera on a busy view can log
+  600+ events a day, and then the caps quietly became "the last few hours":
+  the timeline fetched recent events without a date and filtered locally, so
+  any day older than the cap's reach rendered completely blank; the events
+  list "started" mid-morning; and a day view shared its 1000 slots between
+  cameras, showing e.g. 470 of the 630 events actually on disk. The timeline
+  and the events day view now ask the server for the selected day itself
+  (bounded by the day, so the cap for date-scoped queries is 10,000 —
+  effectively "the whole day"), and wake-only records are excluded before the
+  limit instead of after, so they can no longer eat list slots and then
+  vanish from the reply. The no-date "recent" queries keep their caps — the
+  day views are the tool for history, and they are now complete.
 - **AI descriptions no longer trail off before the event does.** The ending
   of an event — the car pulling away, the visitor leaving — used to be the
   part the model was least likely to mention: frame sampling thins as an

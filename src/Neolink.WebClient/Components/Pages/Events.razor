@@ -673,7 +673,8 @@
     private async Task LoadDayAsync()
     {
         if (_date is not { } day) return;
-        var list = await GetJsonAsync<List<ApiEvent>>($"/api/events?limit=1000&date={day:yyyy-MM-dd}");
+        // 10000 = the server's date-scoped cap: the whole day, every camera.
+        var list = await GetJsonAsync<List<ApiEvent>>($"/api/events?limit=10000&date={day:yyyy-MM-dd}");
         _eventsForDate = list ?? new List<ApiEvent>();
     }
 

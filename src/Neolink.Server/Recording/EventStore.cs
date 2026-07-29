@@ -241,9 +241,16 @@ public sealed class EventStore
         return true;
     }
 
-    /// <summary>Newest-first event listing with optional filters. <paramref name="localDate"/> matches the server-local calendar day.</summary>
+    /// <summary>Newest-first event listing with optional filters. <paramref name="localDate"/>
+    /// matches the server-local calendar day.
+    /// <paramref name="excludeWakeOnly"/> drops records whose only label is "wake"
+    /// (tentative self-wake recordings, and wake events from older versions)
+    /// before the limit is applied, so they cannot consume list slots. Off by
+    /// default — internal callers (the HA last-event sensor) see every record.
+    /// Date-scoped queries allow a far higher cap: the day itself bounds the
+    /// reply, and the day views must show a busy day whole.</summary>
     public List<EventRecord> List(string? camera = null, bool? reviewed = null, int limit = 200,
-        DateTime? localDate = null)
+        DateTime? localDate = null, bool excludeWakeOnly = false)
     {
         lock (_gate)
         {
@@ -251,8 +258,9 @@ public sealed class EventStore
                 .Where(r => camera == null || string.Equals(r.Camera, camera, StringComparison.OrdinalIgnoreCase))
                 .Where(r => reviewed == null || r.Reviewed == reviewed)
                 .Where(r => localDate == null || r.StartUtc.ToLocalTime().Date == localDate.Value.Date)
+                .Where(r => !excludeWakeOnly || !(r.Labels is ["wake"]))
                 .OrderByDescending(r => r.StartUtc)
-                .Take(Math.Clamp(limit, 1, 1000))
+                .Take(Math.Clamp(limit, 1, localDate == null ? 1000 : 10_000))
                 .ToList();
         }
     }

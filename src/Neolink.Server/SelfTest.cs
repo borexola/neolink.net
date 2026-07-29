@@ -1787,6 +1787,48 @@ public static class SelfTest
             }
         });
 
+        Test("event list: date-scoped cap + wake exclusion before the limit", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            try
+            {
+                var store = new Recording.EventStore(dir);
+                // Captured once: the assertions and the created events must agree on
+                // "today" even if this runs across midnight.
+                var day = DateTime.Today;
+
+                // A day busier than the no-date cap: a date-scoped query must return
+                // the day whole; the no-date query (unbounded history) keeps its cap.
+                var baseUtc = day.AddHours(1).ToUniversalTime();
+                for (int i = 0; i < 1005; i++)
+                    store.Create("busy", baseUtc.AddSeconds(i), new[] { "motion" });
+                AssertEq(store.List(camera: "busy", limit: 10_000, localDate: day).Count, 1005);
+                AssertEq(store.List(camera: "busy", limit: 10_000).Count, 1000);
+
+                // Wake-only records excluded inside the limit: newest-first the list
+                // is [3 wake, 3 person], so a post-limit filter would return only
+                // one real event where three are asked for.
+                var wakeBase = day.AddHours(3).ToUniversalTime();
+                for (int i = 0; i < 3; i++)
+                    store.Create("batt", wakeBase.AddSeconds(i), new[] { "person" });
+                for (int i = 0; i < 3; i++)
+                    store.Create("batt", wakeBase.AddSeconds(10 + i), new[] { "wake" });
+                var top3 = store.List(camera: "batt", limit: 3, excludeWakeOnly: true);
+                AssertEq(top3.Count, 3);
+                Assert(top3.All(r => !(r.Labels is ["wake"])), "wake-only rows never reach the reply");
+                Assert(store.List(camera: "batt", limit: 3).All(r => r.Labels is ["wake"]),
+                    "the default listing still surfaces wake records (HA's last-event sensor)");
+
+                // "wake" beside a real label is a real event, not a wake-only record.
+                var mixed = store.Create("batt", wakeBase.AddSeconds(20), new[] { "wake", "person" });
+                AssertEq(store.List(camera: "batt", limit: 1, excludeWakeOnly: true)[0].Id, mixed.Id);
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+        });
+
         Test("storage locations: tier resolution + capacity thresholds", () =>
         {
             var baseDir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
