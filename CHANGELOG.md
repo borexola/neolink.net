@@ -189,6 +189,17 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Fixed
 
+- **HA add-on: the Options page stops looking like the camera list.** Its
+  `cameras` field only ever held six of a camera's settings, so a camera added
+  in the web UI showed up nowhere on that page — an empty list beside two
+  working cameras read as lost configuration. It is now documented as what it
+  is (a head start for a new install, never a mirror of the web UI's list),
+  the add-on log names which list is in play at every start, and the fields
+  that were missing are there: `stream`, `uid`, `udp`,
+  `wake_capture`, `keep_alive_hours` and `http_address` — enough to bring up
+  a UDP battery camera without opening the web UI at all. Only fields you
+  actually set are applied, so blanks and untouched toggles never overwrite
+  what the web UI holds.
 - **HA add-on: camera settings edited in the web UI survive restarts.** With
   cameras listed in the add-on options, every start REPLACED the whole camera
   list with the options' six fields — so anything the Cameras editor saved

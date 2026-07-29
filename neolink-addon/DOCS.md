@@ -87,14 +87,21 @@ The add-on generates and maintains `config.json` in the add-on's config
 folder (`/addon_configs/…_neolink/`, reachable via the Samba/SSH add-ons).
 The rules, designed so nothing you set ever gets lost:
 
-- The **add-on options bootstrap the camera list**: each options camera is
-  merged onto the `config.json` camera of the same name — the options' own
-  fields (address, username, password, always-on, channel) win, and everything
-  set in the web UI's Cameras editor (UID, wake capture, UDP, streams, HTTP
-  address, …) survives restarts and updates. Cameras that exist only in
-  `config.json` are kept, so cameras added in the web UI persist too; deleting
-  a camera is the web UI's Delete button (remove it from the options as well,
-  or it returns on the next start).
+- **Neolink's web UI is the camera editor** (⚙ → Server settings → Cameras):
+  it holds every field, and it is where cameras are added, changed and
+  deleted. The add-on's `cameras` option is a head start for a brand-new
+  install, not a mirror of that list — **cameras added in the web UI never
+  appear on the Options page**, so an empty options list beside working
+  cameras is normal, not a lost configuration. The add-on log says which list
+  is in play at every start.
+- Where both know a camera (matched by name, case-insensitively), the options
+  **win for the fields you actually set** at every start; blanks and untouched
+  toggles change nothing, so everything else the web UI holds survives. To
+  turn an option like UDP or wake capture back **off**, use the web UI —
+  Home Assistant stores an untouched toggle as `false`, and honouring that
+  would silently revert the web UI at every boot.
+- Removing a camera from the options does **not** delete it; the web UI's
+  Delete does. Delete it in both, or it returns on the next start.
 - With **Automatic MQTT setup** on, only the broker *connection* fields are
   refreshed at start — `base_topic`, `stats_interval` and everything else you
   set in the web UI survive. Turn it off to point at your own broker.

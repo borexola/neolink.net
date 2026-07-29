@@ -58,5 +58,11 @@ schema:
       password: password?
       always_on: bool?
       channel_id: int(0,255)?
+      stream: list(mainStream|subStream|externStream|both|all)?
+      uid: str?
+      udp: bool?
+      wake_capture: bool?
+      keep_alive_hours: float?
+      http_address: str?
   auto_mqtt: bool
   log_verbose: bool

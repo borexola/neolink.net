@@ -57,10 +57,22 @@ build_config() {
   # (uid, wake_capture, udp, http_address, streams, ...) survives. Cameras
   # that exist only in config.json are KEPT: deleting happens in the web UI.
   # An empty options password keeps the stored one.
-  cams=$(jq '[.cameras[]? | {name, address, username}
-              + (if (.password // "") != "" then {password} else {} end)
-              + (if .always_on == true then {always_on: true} else {} end)
-              + (if .channel_id != null then {channel_id} else {} end)]' "$OPTIONS")
+  # Only fields the user actually SET are carried over: a blank text field or an
+  # untouched toggle must not overwrite what the web UI holds. Booleans are
+  # therefore applied on true only — turning one back off is the web UI's job,
+  # because Home Assistant stores an untouched toggle as false and that would
+  # silently revert the web UI's setting at every boot.
+  cams=$(jq '[.cameras[]? | . as $c
+              | {name, address, username}
+              + (if ($c.password // "") != "" then {password: $c.password} else {} end)
+              + (if $c.always_on == true then {always_on: true} else {} end)
+              + (if $c.udp == true then {udp: true} else {} end)
+              + (if $c.wake_capture == true then {wake_capture: true} else {} end)
+              + (if $c.channel_id != null then {channel_id: $c.channel_id} else {} end)
+              + (if $c.keep_alive_hours != null then {keep_alive_hours: $c.keep_alive_hours} else {} end)
+              + (if ($c.stream // "") != "" then {stream: $c.stream} else {} end)
+              + (if ($c.uid // "") != "" then {uid: $c.uid} else {} end)
+              + (if ($c.http_address // "") != "" then {http_address: $c.http_address} else {} end)]' "$OPTIONS")
   count=$(jq 'length' <<<"$cams")
   # Names match case-INSENSITIVELY, as the app compares them: renaming a camera's
   # case in the web UI must update that camera, not append a second one under a
@@ -76,6 +88,14 @@ build_config() {
             | if $o == null then $c else $c + $o | .name = $c.name end ]
           + [ $opts[] | select(([.name | ascii_downcase] | inside($have)) | not) ]' <<<"$base")
     log "merged $count camera(s) from the add-on options (web-UI-managed fields preserved)"
+  else
+    # The options list being empty while the web UI shows cameras is normal and
+    # confusing in equal measure: say which list is in play, so nobody reads the
+    # empty Options page as "my cameras are gone".
+    have=$(jq '(.cameras // []) | length' <<<"$base")
+    if [ "$have" -gt 0 ]; then
+      log "no cameras in the add-on options — running the $have camera(s) from config.json (add and edit them in Neolink's web UI, camera ⚙)"
+    fi
   fi
 
   # MQTT: fetch the broker the Mosquitto add-on provides and merge ONLY the

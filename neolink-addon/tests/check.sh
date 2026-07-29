@@ -150,4 +150,39 @@ assert_cameras '[
   {"name": "testcam", "address": "10.0.0.2", "username": "admin", "password": "p", "uid": "95270000ABCDEFGH"}
 ]' "case-renamed camera is updated in place (web UI spelling kept), not duplicated"
 
+# --- 7. Extended fields: set ones apply, blanks and false toggles do not -----
+# Home Assistant stores an untouched toggle as false, so a false udp/wake_capture
+# must NOT overwrite a web-UI-set true; blank text fields must not blank stored
+# values either. Fields the user really did set do win.
+cat > "$work/options.json" <<'JSON'
+{
+  "cameras": [
+    {"name": "batt", "address": "10.0.0.6", "username": "admin", "password": "p",
+     "uid": "95270000ABCDEFGH", "udp": true, "wake_capture": true,
+     "stream": "subStream", "keep_alive_hours": 6, "http_address": "10.0.0.6:80"},
+    {"name": "kept", "address": "10.0.0.7", "username": "admin", "password": "",
+     "uid": "", "udp": false, "wake_capture": false, "http_address": ""}
+  ],
+  "auto_mqtt": false,
+  "log_verbose": false
+}
+JSON
+cat > "$work/config.json" <<'JSON'
+{
+  "bind": "0.0.0.0",
+  "cameras": [
+    {"name": "kept", "address": "10.0.0.7", "username": "admin", "password": "stored",
+     "uid": "95270000ZZZZZZZZ", "udp": true, "wake_capture": true, "http_address": "10.0.0.7:80"}
+  ]
+}
+JSON
+launch "$work/options.json"
+assert_cameras '[
+  {"name": "kept", "address": "10.0.0.7", "username": "admin", "password": "stored",
+   "uid": "95270000ZZZZZZZZ", "udp": true, "wake_capture": true, "http_address": "10.0.0.7:80"},
+  {"name": "batt", "address": "10.0.0.6", "username": "admin", "password": "p",
+   "uid": "95270000ABCDEFGH", "udp": true, "wake_capture": true,
+   "stream": "subStream", "keep_alive_hours": 6, "http_address": "10.0.0.6:80"}
+]' "extended fields apply when set; blank text and false toggles never clobber the web UI"
+
 echo "all launcher checks passed"
