@@ -307,7 +307,7 @@ in exchange you get an integration light enough to leave running forever.
   [Battery cameras](#battery-cameras-argus-etc--beta)
 - **Tiered storage** (SSD clips tier + cold archive, capacity watching and
   fill forecasts — see [Tiered storage](#tiered-storage-optional)),
-  **footage encryption at rest** (beta), **email alerts** for critical
+  **footage encryption at rest**, **email alerts** for critical
   conditions ([Email notifications](#email-notifications)) and per-user
   **browser alerts**
 
@@ -461,14 +461,17 @@ password? Set `"reset_admin_password": true` in the config, restart, use
 The admin also gets ⚙ → **Server settings…**: a form that edits most of
 `config.json` (network ports, web UI, recording) and writes it back to the file
 (atomically, keeping a `.bak`; comments are not preserved, and RTSP users still
-need a text editor). The **Cameras** tab (beta) adds, edits and deletes cameras
+need a text editor). The **Cameras** tab adds, edits and deletes cameras
 from the same panel — Reolink and generic RTSP alike — with live validation, a
 **Test connection** button (a real Baichuan login for Reolink; an RTSP
 round-trip for generic URLs), and write-only passwords: a stored password is
 never sent to the browser, and leaving the field blank keeps it. Saved changes
 apply on the next restart, which the admin can trigger with **Restart
 service…** — the process exits and your container/systemd restart policy brings
-it back within seconds while the UI reconnects on its own. When a newer release
+it back within seconds while the UI reconnects on its own. Running the Home
+Assistant add-on, that policy is the add-on's **Watchdog** toggle (on its Info
+page): enable it, or the restart button stops the add-on and nothing starts it
+again. When a newer release
 exists on GitHub, a dismissable banner links to it.
 
 ### Recording (`"recording": { ... }`)
@@ -514,7 +517,7 @@ config file (in Docker: the `/config` mount), so they survive restarts:
 | `segment_minutes` | `10` | Continuous recording: time limit for one segment file |
 | `max_segment_size_mb` | `256` | Continuous recording: size limit for one segment file — a new file starts at the next keyframe once the segment reaches this size *or* `segment_minutes`, whichever comes first (keeps high-bitrate streams from producing huge files) |
 | `continuous_retention_days` | = `retention_days` | Days to keep continuous footage (`0` = forever) |
-| `encrypt` | `false` | **Beta:** encrypt new footage at rest (AES-256-GCM) — see [Encrypting footage](#encrypting-footage-beta) |
+| `encrypt` | `false` | Encrypt new footage at rest (AES-256-GCM) — see [Encrypting footage](#encrypting-footage) |
 
 Everything is fragmented MP4 (H.264/H.265 passthrough, video-only) playable in
 the browser and by ffmpeg/VLC. Storage layout is plain files, with everything
@@ -572,10 +575,10 @@ retention starts deleting as fast as the cameras record, it honestly says
 install says nothing for the first ~6 hours while it gathers data
 (`GET /api/storage` carries the same numbers: `forecastState`/`forecastDays`).
 
-#### Encrypting footage (beta)
+#### Encrypting footage
 
 Opt-in encryption at rest for everything the server records: turn on
-**Server settings → Recording → Encrypt footage (beta)** (or set
+**Server settings → Recording → Encrypt footage** (or set
 `"recording": { "encrypt": true }`) and restart. From then on new event clips,
 ambient previews, thumbnails and 24/7 segments are written as chunked
 **AES-256-GCM** — a stolen disk, a NAS share mounted elsewhere, or a copied

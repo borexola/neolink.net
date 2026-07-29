@@ -87,8 +87,14 @@ The add-on generates and maintains `config.json` in the add-on's config
 folder (`/addon_configs/…_neolink/`, reachable via the Samba/SSH add-ons).
 The rules, designed so nothing you set ever gets lost:
 
-- The **camera list in the add-on options owns `cameras`** whenever it is
-  non-empty. Leave it empty to manage cameras by hand in `config.json`.
+- The **add-on options bootstrap the camera list**: each options camera is
+  merged onto the `config.json` camera of the same name — the options' own
+  fields (address, username, password, always-on, channel) win, and everything
+  set in the web UI's Cameras editor (UID, wake capture, UDP, streams, HTTP
+  address, …) survives restarts and updates. Cameras that exist only in
+  `config.json` are kept, so cameras added in the web UI persist too; deleting
+  a camera is the web UI's Delete button (remove it from the options as well,
+  or it returns on the next start).
 - With **Automatic MQTT setup** on, only the broker *connection* fields are
   refreshed at start — `base_topic`, `stats_interval` and everything else you
   set in the web UI survive. Turn it off to point at your own broker.
@@ -99,6 +105,10 @@ The rules, designed so nothing you set ever gets lost:
 
 ## Troubleshooting
 
+- **"Restart service" in the web UI stops the add-on and it stays down** —
+  enable the add-on's **Watchdog** toggle (this add-on's Info page). The
+  restart button works by exiting the process; the Watchdog is what starts
+  it again.
 - **"no MQTT broker service found" in the log** — install the Mosquitto
   broker add-on (Settings → Add-ons), then restart this add-on.
 - **Camera shows offline** — verify the IP, and that the camera works in the

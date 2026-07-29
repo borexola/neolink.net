@@ -50,6 +50,7 @@ internal sealed class NotificationsForm : Form
         _prefs = engine.Prefs.Clone();
 
         Text = "Neolink.NET — notifications";
+        WindowTheme.Attach(this);
         FormBorderStyle = FormBorderStyle.Sizable;
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterParent;

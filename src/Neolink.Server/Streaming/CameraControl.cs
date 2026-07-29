@@ -1762,7 +1762,7 @@ public sealed class CameraControl : ICameraControl
                 Mounted: ((int?)s["mount"] ?? 0) != 0))
             .ToList();
 
-    // ------------------------------------------- detection sensitivity (HTTP, beta)
+    // ------------------------------------------- detection sensitivity (HTTP)
 
     public Task<int?> GetMdSensitivityAsync(CancellationToken ct) =>
         HttpTryAsync<int?>(async c =>

@@ -1027,7 +1027,7 @@ public static class WebApi
             return Results.Json(new
             {
                 ok = true,
-                note = "shutting down — the restart policy (docker / systemd) brings the service back",
+                note = "shutting down — the restart policy (docker / systemd / the HA add-on's Watchdog) brings the service back",
             });
         });
 

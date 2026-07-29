@@ -43,6 +43,7 @@ internal sealed class MainForm : Form
         _lastOpenState = settings.WindowMaximized ? FormWindowState.Maximized : FormWindowState.Normal;
 
         Text = "Neolink.NET";
+        WindowTheme.Attach(this);
         Icon = LoadIcon();
         MinimumSize = new Size(640, 480);
         StartPosition = FormStartPosition.Manual;
@@ -185,6 +186,12 @@ internal sealed class MainForm : Form
         }
 
         UpdateTrayText();
+    }
+
+    protected override void WndProc(ref Message m)
+    {
+        WindowTheme.OnSettingChange(this, ref m);
+        base.WndProc(ref m);
     }
 
     private static Icon LoadIcon()

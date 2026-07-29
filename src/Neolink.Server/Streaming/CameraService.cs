@@ -963,7 +963,7 @@ public sealed class CameraService : ILiveCameraSource
             return true;
         }
 
-        // UDP transport (experimental, opt-in) for battery-only cameras that never
+        // UDP transport (opt-in) for battery-only cameras that never
         // listen on TCP; everything after connect is identical to the TCP path.
         Note(_config.Udp
             ? $"{Tag}: connecting over UDP to " +

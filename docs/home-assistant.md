@@ -95,12 +95,12 @@ Alternatively, skip MQTT for the picture entirely: point a Home Assistant
 | Auto-tracking (beta) | `switch` | Follow detected subjects, on cameras that support AI tracking |
 | PTZ preset (beta) | `select` | The camera's saved positions; picking one moves the camera there |
 | Spotlight (beta) | `light` | White-LED cameras (Lumus/Elite): on/off, plus brightness where the HTTP white LED answers |
-| IR brightness (beta) | `number` | Infrared LED intensity 0-100, on cameras that report it |
+| IR brightness | `number` | Infrared LED intensity 0-100, on cameras that report it |
 | Doorbell light (beta) | `switch` | The doorbell's button light |
 | Play quick reply (beta) | `select` | Video doorbells: picking a pre-recorded message plays it through the speaker |
 | Picture settings (beta) | `number`/`select`/`switch` | Image brightness/contrast/saturation/hue/sharpness, day/night mode, anti-flicker, flip and mirror — per what the camera reports (config category) |
-| Motion sensitivity (beta) | `number` | The camera's own motion-detection threshold, 1-50, higher = more sensitive (normalized across firmware dialects) |
-| Person / Vehicle / Animal / Face / Package sensitivity (beta) | `number` | Per-type AI detection sensitivity 0-100 — one entity per type this camera's firmware answers for |
+| Motion sensitivity | `number` | The camera's own motion-detection threshold, 1-50, higher = more sensitive (normalized across firmware dialects) |
+| Person / Vehicle / Animal / Face / Package sensitivity | `number` | Per-type AI detection sensitivity 0-100 — one entity per type this camera's firmware answers for |
 | HDR (beta) | `select` | Cameras whose ISP reports HDR: `off`/`on`, or `off`/`low`/`high` on three-step firmwares |
 | Firmware update | `binary_sensor` (`update`) | Read-only diagnostic: ON when Reolink offers newer firmware for this camera (checked by the camera itself, cached for hours). Update from the Reolink app — Neolink.NET never installs firmware |
 

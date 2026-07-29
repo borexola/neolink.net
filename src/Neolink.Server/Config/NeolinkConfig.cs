@@ -772,7 +772,7 @@ public sealed class RecordingConfig
     /// <summary>Days to keep continuous footage; null = same as RetentionDays.</summary>
     public int? ContinuousRetentionDays { get; set; }
 
-    /// <summary>Beta: encrypt newly written footage (clips, 24/7 segments, previews,
+    /// <summary>Encrypt newly written footage (clips, 24/7 segments, previews,
     /// thumbnails) at rest with chunked AES-256-GCM. Existing plaintext footage keeps
     /// playing; footage recorded while this was on stays playable after turning it
     /// off. The key is the server secret (NEOLINK_SECRET_KEY or the state dir's
@@ -826,7 +826,7 @@ public sealed class CameraConfig
     /// of TCP — and log the exchange comprehensively (UID masked, no credentials).
     /// Requires "uid".</summary>
     public bool UdpProbe { get; init; }
-    /// <summary>Experimental (opt-in): connect to this camera over Baichuan-over-UDP
+    /// <summary>Opt-in: connect to this camera over Baichuan-over-UDP
     /// instead of TCP — for battery-only models (Argus family) that never listen on
     /// TCP. Requires "uid". The default (false) is the unchanged TCP path.</summary>
     public bool Udp { get; init; }

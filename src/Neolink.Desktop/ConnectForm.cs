@@ -29,6 +29,7 @@ internal sealed class ConnectForm : Form
         _settings = settings;
 
         Text = reconfiguring ? "Neolink.NET — server connection" : "Neolink.NET — connect to your server";
+        WindowTheme.Attach(this);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;

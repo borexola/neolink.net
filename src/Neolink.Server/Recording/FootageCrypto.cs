@@ -7,7 +7,7 @@ using System.Security.Cryptography;
 namespace Neolink.Recording;
 
 /// <summary>
-/// Footage encryption at rest (beta, opt-in via recording.encrypt): every read
+/// Footage encryption at rest (opt-in via recording.encrypt): every read
 /// and write of clip/segment/thumbnail files goes through this vault. Writes
 /// produce chunked AES-256-GCM files when encryption is on; reads SNIFF the
 /// header, so plaintext footage from before the switch (or after turning it

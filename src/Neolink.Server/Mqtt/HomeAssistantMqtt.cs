@@ -67,7 +67,7 @@ namespace Neolink.Mqtt;
 ///                    camera there, beta                 (via the camera's HTTP API)
 ///   • light:         spotlight (on/off + brightness), beta (white-LED cameras
 ///                    without a FloodlightTask: Lumus/Elite)
-///   • number:        IR brightness 0-100, beta          (cameras reporting it)
+///   • number:        IR brightness 0-100                (cameras reporting it)
 ///   • switch:        status LED                         (cameras whose lightState
 ///                    is the little status LED — i.e. no floodlight, no spotlight)
 ///   • switch:        doorbell light, beta               (video doorbells)
@@ -988,7 +988,7 @@ internal sealed class CameraBridge
                 SwitchConfig("Mirror image", "img_mirror", "mdi:flip-horizontal", "config"), ct).ConfigureAwait(false);
         else
             await ClearEntityAsync("switch", "img_mirror", ct).ConfigureAwait(false);
-        // Detection sensitivity (beta): the camera's own thresholds — higher = more
+        // Detection sensitivity: the camera's own thresholds — higher = more
         // sensitive on both scales (MD is normalized server-side).
         if (_hasMdSens)
             await AnnounceEntityAsync("number", "md_sensitivity",

@@ -283,7 +283,7 @@ if (eventStore != null && recordingSettings != null)
           "(install ffmpeg or set NEOLINK_FFMPEG to add stream sampling, pre-trigger frames and downscaling)");
 }
 
-// Footage encryption (beta, opt-in via recording.encrypt): new clips, segments
+// Footage encryption (opt-in via recording.encrypt): new clips, segments
 // and thumbnails are written as chunked AES-256-GCM. The vault gets the key
 // whenever recording exists AT ALL — even with the switch off — so footage
 // recorded while it WAS on stays playable after toggling back. Reads sniff the
@@ -294,7 +294,7 @@ if (config.Recording != null)
         encryptNew: config.Recording.Encrypt);
     if (config.Recording.Encrypt)
     {
-        Log.Info("Recording: footage encryption is ON (beta) — new footage is written " +
+        Log.Info("Recording: footage encryption is ON — new footage is written " +
                  "AES-256-GCM; earlier plaintext footage keeps playing. Back up the key " +
                  $"({Neolink.Notifications.SecretProtector.KeyEnvVar} or the state dir's " +
                  $"{Neolink.Notifications.SecretProtector.KeyFileName}) — without it the footage is gone. " +
@@ -819,7 +819,8 @@ if (config.WebPort > 0)
         Ai = aiStore,
         AiPending = aiDescriber != null ? aiDescriber.IsPending : null,
         Logs = logBuffer,
-        // Graceful shutdown; docker's restart policy (or systemd) starts us again.
+        // Graceful shutdown; docker's restart policy (systemd, or the HA
+        // add-on's Watchdog toggle) starts us again.
         RestartRequested = () =>
         {
             Log.Warn("Shutting down for a UI-requested restart");

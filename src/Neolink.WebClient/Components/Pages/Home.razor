@@ -1471,7 +1471,7 @@
                     @if (_settingsTab == "cameras")
                     {
                         <div class="campanel-section">
-                            <div class="campanel-section-title">@UiIcon.Render("film", 13) CAMERAS <span class="beta-tag">BETA</span></div>
+                            <div class="campanel-section-title">@UiIcon.Render("film", 13) CAMERAS</div>
                             @if (_adminCams == null)
                             {
                                 <div class="notice small">Loading cameras…</div>
@@ -1569,7 +1569,7 @@
                                                placeholder="95270000ABCDEFGH — from the app or the sticker"
                                                @bind="e.Uid" @bind:event="oninput" /></div>
                                     @if (CamUidError != null) { <div class="field-error">@CamUidError</div> }
-                                    <div class="control-row"><span>Connect over UDP (experimental)</span>
+                                    <div class="control-row"><span>Connect over UDP</span>
                                         <select class="event-filter" value="@(e.Udp ? "true" : "false")"
                                                 @onchange='ev => e.Udp = (string?)ev.Value == "true"'>
                                             <option value="false">No — over TCP (default)</option>
@@ -1683,7 +1683,7 @@
                             @AdminField("Continuous retention (days, blank = event value)", "recording.continuousRetentionDays", "number",
                                 AdminIntError("recording.continuousRetentionDays", 0, 36500))
                             <div class="campanel-divider"></div>
-                            @AdminToggle("Encrypt footage", "recording.encrypt", beta: true)
+                            @AdminToggle("Encrypt footage", "recording.encrypt")
                             <div class="notice small">
                                 <b>Beta.</b> New footage — event clips, previews, thumbnails and 24/7
                                 segments — is written encrypted (AES-256-GCM) so a stolen disk or a

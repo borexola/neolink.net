@@ -540,7 +540,7 @@
                 @if (Num(_led, "IRLedBrightness") is { } irCur)
                 {
                     <div class="control-row">
-                        <span>Infrared brightness <span class="beta-tag">BETA</span> @PendingMark(_pendingIrBright?.ToString())</span>
+                        <span>Infrared brightness @PendingMark(_pendingIrBright?.ToString())</span>
                         <input class="zf-slider @(_pendingIrBright != null ? "input-pending" : "")"
                                type="range" min="0" max="100" step="1"
                                disabled="@_applying" value="@(_pendingIrBright ?? irCur)"
@@ -779,7 +779,7 @@
         @if (_http?.MdSensitivity != null || _http?.AiSensitivities is { Count: > 0 })
         {
             <div class="campanel-section">
-                <div class="campanel-section-title">@UiIcon.Render("bolt", 13) DETECTION SENSITIVITY <span class="beta-tag">BETA</span></div>
+                <div class="campanel-section-title">@UiIcon.Render("bolt", 13) DETECTION SENSITIVITY</div>
                 @if (_http?.MdSensitivity is { } mdSens)
                 {
                     <div class="control-row">

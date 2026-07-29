@@ -119,6 +119,24 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Changed
 
+- **Baichuan-over-UDP connect is no longer "experimental".** The Cameras
+  editor's Connect over UDP field, the config example and the code drop the
+  experimental wording — the transport has carried real battery cameras
+  (including two-stage-sleep Argus models) through daily use.
+- **Detection sensitivity and infrared brightness are out of beta.** The
+  camera panel's sensitivity sliders (motion 1-50, per-AI-type 0-100) and the
+  IR brightness control lose their beta labels, as do the matching Home
+  Assistant number entities in the docs — entity ids and names are unchanged,
+  so nothing moves in HA.
+- **The Cameras editor is out of beta.** The server-settings Cameras tab
+  (add/edit/delete with live validation, Test connection, write-only
+  passwords) loses its beta label — it has been the routine way cameras get
+  configured for several releases.
+- **Footage encryption at rest is out of beta.** `recording.encrypt` and the
+  Encrypt footage toggle lose their beta label — the format (chunked
+  AES-256-GCM with sniffed reads, so plaintext and encrypted footage coexist
+  forever) has been stable since it shipped, and nothing about the switch,
+  the key handling or the threat model changes with the promotion.
 - **AI event descriptions are now BETA.** The EXPERIMENTAL labels come off —
   the feature has proven itself end-to-end (llama.cpp, Ollama, LM Studio, and
   the Anthropic Messages shape) and is safe to leave on; feedback stays very
@@ -171,6 +189,18 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Fixed
 
+- **HA add-on: camera settings edited in the web UI survive restarts.** With
+  cameras listed in the add-on options, every start REPLACED the whole camera
+  list with the options' six fields — so anything the Cameras editor saved
+  (UID, wake capture, UDP transport, streams, HTTP address) was silently wiped
+  on the next boot, and an empty options password could clobber a stored one.
+  The launcher now merges per camera: the options' own fields still win, every
+  other field survives, an empty options password keeps the stored one, and
+  cameras added in the web UI are kept. Deleting a camera is now the web UI's
+  job (a camera removed only from the options stays). Also documented: the
+  web UI's Restart service button works by exiting the process, so under the
+  add-on it needs the add-on's **Watchdog** toggle enabled to come back —
+  that's now in the add-on docs, the README and the restart reply itself.
 - **No more surprise browser password popups over the web UI.** When a signed-in
   page's session token expired, the next snapshot image refresh answered with an
   HTTP Basic challenge — meant for Home Assistant and scripts using RTSP

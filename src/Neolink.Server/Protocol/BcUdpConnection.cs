@@ -81,8 +81,8 @@ public sealed class BcUdpConnection : IBcConnection
     private uint _rxNext;
     private readonly SortedDictionary<uint, byte[]> _rxBuffer = new();
     // ---- Diagnostics (all Debug-level; silent unless NEOLINK_LOG=debug). The UDP
-    // battery transport is experimental and hard to reproduce here, so the session
-    // is heavily instrumented to pin down camera-initiated closes from one capture.
+    // battery transport is hard to reproduce here, so the session is heavily
+    // instrumented to pin down camera-initiated closes from one capture.
     private bool _confirmLogged, _connIdWarned;
     private readonly DateTime _t0 = DateTime.UtcNow;
     private long _rxData, _rxCtrl, _txAck, _txHb, _txC2dA, _txData, _rxKa, _txKa;

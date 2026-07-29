@@ -65,7 +65,7 @@
   //   "segment_minutes": 10,           // continuous recording: max length of one file
   //   "max_segment_size_mb": 256,      // continuous recording: max size of one file (rolls at whichever hits first)
   //   "continuous_retention_days": 7,  // continuous footage retention (default = retention_days)
-  //   "encrypt": false                 // BETA: encrypt new footage at rest (AES-256-GCM). Playback and
+  //   "encrypt": false                 // encrypt new footage at rest (AES-256-GCM). Playback and
   //                                    // old plaintext footage are unaffected. The key is NEOLINK_SECRET_KEY
   //                                    // or the state dir's secret.key — back it up (see README)
   // },
@@ -166,7 +166,7 @@
       // or false to force sleep-friendly behavior.
       // "always_on": false,
 
-      // UDP transport (EXPERIMENTAL) for battery-only models (parts of the Argus
+      // UDP transport for battery-only models (parts of the Argus
       // line) that never listen on TCP — they log "Connection refused" forever on
       // the normal path because they speak Baichuan over UDP. Set the camera's UID
       // (Reolink app -> device info, or the sticker) and "udp": true to connect over
