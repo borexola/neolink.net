@@ -5,6 +5,7 @@
 @inject IJSRuntime JS
 @inject NavigationManager Nav
 @inject LocalApiInfo Local
+@inject Translator T
 @implements IAsyncDisposable
 
 @* Dedicated events page — the landing target for "motion detected" push
@@ -12,17 +13,17 @@
    A recent-events list on the left, the selected clip on the right (stacked on
    phones), and a one-tap jump to that camera's live feed. *@
 
-<PageTitle>Neolink.NET — Events</PageTitle>
+<PageTitle>@T["Neolink.NET — Events"]</PageTitle>
 
 <div class="ev-page @((_sdMode ? _sdSelected != null : _selected != null) ? "has-selection" : "")">
     <div class="toolbar ev-toolbar">
-        <a class="tool-btn" href="" title="Back to the live camera wall">@UiIcon.Render("chev-left", 16) <span class="tool-name">Live</span></a>
-        <span class="tool-label">EVENTS</span>
+        <a class="tool-btn" href="" title="@T["Back to the live camera wall"]">@UiIcon.Render("chev-left", 16) <span class="tool-name">@T["Live"]</span></a>
+        <span class="tool-label">@T["EVENTS"]</span>
 
         @* Events ⇄ Live segmented toggle: the fast switch the use case asks for. *@
         <span class="ev-switch" role="tablist">
-            <span class="ev-switch-opt active" role="tab" aria-selected="true">Events</span>
-            <a class="ev-switch-opt" role="tab" href="@LiveHref()" title="Watch the cameras live">Live</a>
+            <span class="ev-switch-opt active" role="tab" aria-selected="true">@T["Events"]</span>
+            <a class="ev-switch-opt" role="tab" href="@LiveHref()" title="@T["Watch the cameras live"]">@T["Live"]</a>
         </span>
 
         <span class="tile-spacer"></span>
@@ -30,90 +31,90 @@
         @* SOURCE: what the list shows — this server's recorded events, or footage
            on the camera's own SD card. A labelled segmented switch: the previous
            lone "SD card" chip read as an action, not as the page-wide mode it is. *@
-        <span class="tool-label">SOURCE</span>
+        <span class="tool-label">@T["SOURCE"]</span>
         <span class="ev-switch" role="tablist" style="margin-right:8px">
             <button class="ev-switch-opt @(!_sdMode ? "active" : "")" role="tab" aria-selected="@(!_sdMode)"
-                    title="Events this server recorded"
-                    @onclick="() => SetSdModeAsync(false)">Server</button>
+                    title="@T["Events this server recorded"]"
+                    @onclick="() => SetSdModeAsync(false)">@T["Server"]</button>
             <button class="ev-switch-opt @(_sdMode ? "active" : "")" role="tab" aria-selected="@_sdMode"
-                    title="Recordings stored on the camera's own SD card — including footage from while this server was off"
-                    @onclick="() => SetSdModeAsync(true)">SD card <span class="preview-tag">PREVIEW</span></button>
+                    title="@T["Recordings stored on the camera's own SD card — including footage from while this server was off"]"
+                    @onclick="() => SetSdModeAsync(true)">@T["SD card"] <span class="preview-tag">@T["PREVIEW"]</span></button>
         </span>
 
         @if (!_sdMode)
         {
             <select class="event-filter" @bind="_cameraFilter" @bind:after="OnFilterChanged"
-                    title="Show one camera's events, or all of them">
-                <option value="">all cameras</option>
+                    title="@T["Show one camera's events, or all of them"]">
+                <option value="">@T["all cameras"]</option>
                 @foreach (var c in _cameras)
                 {
                     <option value="@c.Name">@c.Name</option>
                 }
             </select>
             <button class="chip @(_unreviewedOnly ? "chip-active" : "chip-off")"
-                    title="@(_unreviewedOnly ? "Showing only events you haven't opened yet — click to show all" : "Show only events you haven't opened yet")"
-                    @onclick="() => _unreviewedOnly = !_unreviewedOnly">unreviewed only</button>
+                    title="@(_unreviewedOnly ? T["Showing only events you haven't opened yet — click to show all"] : T["Show only events you haven't opened yet"])"
+                    @onclick="() => _unreviewedOnly = !_unreviewedOnly">@T["unreviewed only"]</button>
             @if (AnyAiLevels)
             {
                 @* AI threat filter — the point of the threat level is "show me what
                    matters"; only offered once described events actually exist, so
                    setups without AI descriptions never see the extra control. *@
                 <select class="event-filter" @bind="_levelFilter"
-                        title="Show only events with a given AI threat level">
-                    <option value="">any threat</option>
-                    <option value="flagged">yellow + red</option>
-                    <option value="green">green</option>
-                    <option value="yellow">yellow</option>
-                    <option value="red">red</option>
+                        title="@T["Show only events with a given AI threat level"]">
+                    <option value="">@T["any threat"]</option>
+                    <option value="flagged">@T["yellow + red"]</option>
+                    <option value="green">@T["green"]</option>
+                    <option value="yellow">@T["yellow"]</option>
+                    <option value="red">@T["red"]</option>
                 </select>
             }
-            <span class="tool-label">DAY</span>
+            <span class="tool-label">@T["DAY"]</span>
             <input class="event-filter event-date-input" type="date"
-                   title="Show one day's events (blank = the rolling last 24 hours)"
+                   title="@T["Show one day's events (blank = the rolling last 24 hours)"]"
                    max="@DateTime.Today.ToString("yyyy-MM-dd")"
                    value="@(_date?.ToString("yyyy-MM-dd") ?? "")"
                    @onchange="e => SetDateAsync((string?)e.Value)" />
             @if (_date != null)
             {
-                <button class="chip" title="Back to the rolling last 24 hours" @onclick="() => SetDateAsync(null)">↺ 24h</button>
+                <button class="chip" title="@T["Back to the rolling last 24 hours"]" @onclick="() => SetDateAsync(null)">↺ 24h</button>
             }
             <button class="chip @(_selectMode ? "chip-active" : "")"
-                    title="@(_selectMode ? "Leave selection mode without deleting" : "Pick multiple events to delete at once")"
-                    @onclick="ToggleSelectModeAsync">@UiIcon.Render("trash", 13) Delete…</button>
+                    title="@(_selectMode ? T["Leave selection mode without deleting"] : T["Pick multiple events to delete at once"])"
+                    @onclick="ToggleSelectModeAsync">@UiIcon.Render("trash", 13) @T["Delete…"]</button>
         }
         else
         {
-            <span class="tool-label">CAMERA</span>
+            <span class="tool-label">@T["CAMERA"]</span>
             <select class="event-filter" @bind="_sdCamera" @bind:after="LoadSdAsync"
-                    title="Whose SD card to browse (one camera at a time)">
+                    title="@T["Whose SD card to browse (one camera at a time)"]">
                 @foreach (var c in _cameras)
                 {
                     <option value="@c.Name">@c.Name</option>
                 }
             </select>
-            <span class="tool-label">DAY</span>
+            <span class="tool-label">@T["DAY"]</span>
             <input class="event-filter event-date-input" type="date"
-                   title="Day to list from the camera's SD card — days with footage are offered as chips in the list"
+                   title="@T["Day to list from the camera's SD card — days with footage are offered as chips in the list"]"
                    max="@DateTime.Today.ToString("yyyy-MM-dd")"
                    value="@_sdDate.ToString("yyyy-MM-dd")"
                    @onchange="e => SetSdDateAsync((string?)e.Value)" />
         }
-        <button class="icon-btn" title="Refresh" @onclick="RefreshCurrentAsync">@UiIcon.Render("refresh", 14)</button>
+        <button class="icon-btn" title="@T["Refresh"]" @onclick="RefreshCurrentAsync">@UiIcon.Render("refresh", 14)</button>
     </div>
 
     @if (_selectMode)
     {
         @* Selection action bar: what's picked, select-all, and the delete trigger. *@
         <div class="ev-selbar">
-            <label class="ev-selall" title="Select or clear every event in view">
+            <label class="ev-selall" title="@T["Select or clear every event in view"]">
                 <input type="checkbox" checked="@AllShownSelected"
                        @onchange="e => ToggleSelectAll((bool)(e.Value ?? false))" />
-                <span>@(_selectedIds.Count == 0 ? "Select all" : $"{_selectedIds.Count} selected")</span>
+                <span>@(_selectedIds.Count == 0 ? T["Select all"] : T.F("{0} selected", _selectedIds.Count))</span>
             </label>
             <span class="tile-spacer"></span>
-            <button class="chip" disabled="@(_selectedIds.Count == 0)" @onclick="ClearSelection">Clear</button>
+            <button class="chip" disabled="@(_selectedIds.Count == 0)" @onclick="ClearSelection">@T["Clear"]</button>
             <button class="chip ev-del-btn" disabled="@(_selectedIds.Count == 0)" @onclick="OpenDeleteAsync">
-                @UiIcon.Render("trash", 13) Delete@(_selectedIds.Count > 0 ? $" ({_selectedIds.Count})" : "")
+                @UiIcon.Render("trash", 13) @T["Delete"]@(_selectedIds.Count > 0 ? $" ({_selectedIds.Count})" : "")
             </button>
         </div>
     }
@@ -127,7 +128,7 @@
             <div class="ev-list" role="list">
                 @if (_sdLoading)
                 {
-                    <div class="notice"><span class="btn-spinner"></span> Asking the camera…</div>
+                    <div class="notice"><span class="btn-spinner"></span> @T["Asking the camera…"]</div>
                 }
                 else if (_sdError != null)
                 {
@@ -138,20 +139,20 @@
                     @if (_sdDays.Count > 0)
                     {
                         <div class="ev-day">
-                            <div class="ev-day-head">@_sdDate.ToString("MMMM yyyy").ToUpperInvariant() — DAYS WITH RECORDINGS</div>
+                            <div class="ev-day-head">@T.F("{0} — DAYS WITH RECORDINGS", $"{T.Month(_sdDate.Month)} {_sdDate.Year}".ToUpperInvariant())</div>
                             <div class="stream-options sd-day-chips">
                                 @foreach (var d in _sdDays)
                                 {
                                     var day = d;
                                     <button class="chip @(day == _sdDate.Day ? "chip-active" : "")"
-                                            title="List this day" @onclick="() => SetSdDayAsync(day)">@day</button>
+                                            title="@T["List this day"]" @onclick="() => SetSdDayAsync(day)">@day</button>
                                 }
                             </div>
                         </div>
                     }
                     @if (_sdRecs.Count == 0)
                     {
-                        <div class="notice">No recordings on the camera's SD card for @DayLabel(_sdDate).ToLowerInvariant().</div>
+                        <div class="notice">@T.F("No recordings on the camera's SD card for {0}.", DayLabel(_sdDate).ToLowerInvariant())</div>
                     }
                     else
                     {
@@ -160,7 +161,7 @@
                             @foreach (var r in _sdRecs)
                             {
                                 <div class="event-row @(_sdSelected?.File == r.File ? "selected" : "")"
-                                     @key="r.File" role="listitem" title="Play this recording"
+                                     @key="r.File" role="listitem" title="@T["Play this recording"]"
                                      @onclick="() => SelectSdAsync(r)">
                                     <div class="event-row-main">
                                         <span class="event-title">@UiIcon.Render("film", 13) @r.TimeLabel</span>
@@ -171,9 +172,7 @@
                         </div>
                     }
                     <div class="notice small">
-                        Recorded by the <b>camera itself</b> onto its SD card — including anything from
-                        while this server was off. Playback streams straight from the camera, so
-                        loading can be slow (especially over Wi-Fi).
+                        @((MarkupString)T["Recorded by the <b>camera itself</b> onto its SD card — including anything from while this server was off. Playback streams straight from the camera, so loading can be slow (especially over Wi-Fi)."])
                     </div>
                 }
             </div>
@@ -182,13 +181,13 @@
                 @if (_sdSelected is { } sr)
                 {
                     <div class="event-player-head">
-                        <button class="icon-btn ev-back" title="Back to the list" @onclick="() => _sdSelected = null">@UiIcon.Render("chev-left", 16)</button>
+                        <button class="icon-btn ev-back" title="@T["Back to the list"]" @onclick="() => _sdSelected = null">@UiIcon.Render("chev-left", 16)</button>
                         <div class="event-player-title">
                             <span class="event-title">@_sdCamera — @sr.TimeLabel</span>
-                            <span class="event-sub">@sr.Start.ToString("ddd d MMM") · @sr.DurationLabel · @sr.SizeLabel</span>
+                            <span class="event-sub">@T.DateShort(sr.Start) · @sr.DurationLabel · @sr.SizeLabel</span>
                         </div>
-                        <a class="chip" href="@SdUrl(sr, dl: true)" title="Save this recording as a file">
-                            @UiIcon.Render("download", 13) Download
+                        <a class="chip" href="@SdUrl(sr, dl: true)" title="@T["Save this recording as a file"]">
+                            @UiIcon.Render("download", 13) @T["Download"]
                         </a>
                     </div>
                     @* zoom-on: SD-card playback gets the same digital zoom as live views. *@
@@ -197,15 +196,14 @@
                         @ZoomHud
                     </div>
                     <div class="notice small">
-                        The recording is fetched from the camera first — starting can take a few
-                        seconds (longer over Wi-Fi); once playing, scrubbing works normally.
+                        @T["The recording is fetched from the camera first — starting can take a few seconds (longer over Wi-Fi); once playing, scrubbing works normally."]
                     </div>
                 }
                 else
                 {
                     <div class="ev-detail-empty">
                         <span class="ev-detail-empty-icon">@UiIcon.Render("camera", 30)</span>
-                        <span>Select a recording to play it</span>
+                        <span>@T["Select a recording to play it"]</span>
                     </div>
                 }
             </div>
@@ -218,7 +216,7 @@
     else if (!_supported)
     {
         <div class="notice">
-            Recording is not enabled on this server — add a "recording" section to the config to capture events.
+            @T["Recording is not enabled on this server — add a 'recording' section to the config to capture events."]
         </div>
     }
     else
@@ -227,15 +225,15 @@
             <div class="ev-list" role="list">
                 @if (_loading)
                 {
-                    <div class="notice">Loading…</div>
+                    <div class="notice">@T["Loading…"]</div>
                 }
                 else if (!Filtered.Any())
                 {
                     <div class="notice">
-                        @(_levelFilter.Length > 0 ? "No events match the threat filter."
-                            : _unreviewedOnly ? "Nothing awaiting review — all clear."
-                            : _date != null ? "No events on this day."
-                            : "No events in the last 24 hours.")
+                        @(_levelFilter.Length > 0 ? T["No events match the threat filter."]
+                            : _unreviewedOnly ? T["Nothing awaiting review — all clear."]
+                            : _date != null ? T["No events on this day."]
+                            : T["No events in the last 24 hours."])
                     </div>
                 }
                 @foreach (var day in Filtered.GroupBy(e => e.Start.ToLocalTime().Date))
@@ -246,7 +244,7 @@
                         {
                             <div class="event-row @(ev.Reviewed ? "reviewed" : "") @(_selected?.Id == ev.Id ? "selected" : "") @(_selectMode && _selectedIds.Contains(ev.Id) ? "picked" : "")"
                                  @key="ev.Id" role="listitem"
-                                 title="@(_selectMode ? "Click to select or deselect" : "Play this event")"
+                                 title="@(_selectMode ? T["Click to select or deselect"] : T["Play this event"])"
                                  @onclick="() => RowClickAsync(ev)">
                                 @if (_selectMode)
                                 {
@@ -266,28 +264,28 @@
                                     <span class="event-row-dur">@DurationText(ev)</span>
                                     @if (ev.Ongoing)
                                     {
-                                        <span class="event-live">● REC</span>
+                                        <span class="event-live">● @T["REC"]</span>
                                     }
                                 </div>
                                 <div class="event-row-main">
                                     <span class="event-title">
-                                        @ev.Icon @ev.Title
+                                        @ev.Icon @EventTitle(ev)
                                         @if (ev.AiLevel != null)
                                         {
                                             @* The AI threat verdict at a glance; cameras without AI
                                                descriptions simply have no dot. *@
                                             <span class="ai-dot ai-@ev.AiLevel"
-                                                  title="@("AI threat level: " + ev.AiLevel.ToUpperInvariant() + (ev.AiDescription == null ? "" : " — " + ev.AiDescription))"></span>
+                                                  title="@(T.F("AI threat level: {0}", ev.AiLevel.ToUpperInvariant()) + (ev.AiDescription == null ? "" : " — " + ev.AiDescription))"></span>
                                         }
                                     </span>
                                     <span class="event-sub">@ev.Camera · @ev.Start.ToLocalTime().ToString("HH:mm:ss") · @Ago(ev.Start)</span>
                                 </div>
                                 @if (!ev.Reviewed)
                                 {
-                                    <span class="event-new-dot" title="Unreviewed"></span>
+                                    <span class="event-new-dot" title="@T["Unreviewed"]"></span>
                                 }
                                 <a class="icon-btn ev-row-live" href="@LiveHref(ev.Camera)"
-                                   title="Watch @ev.Camera live" @onclick:stopPropagation="true">@UiIcon.Render("activity", 14)</a>
+                                   title="@T.F("Watch {0} live", ev.Camera)" @onclick:stopPropagation="true">@UiIcon.Render("activity", 14)</a>
                             </div>
                         }
                     </div>
@@ -298,13 +296,13 @@
                 @if (_selected is { } sel)
                 {
                     <div class="event-player-head">
-                        <button class="icon-btn ev-back" title="Back to the list" @onclick="CloseAsync">@UiIcon.Render("chev-left", 16)</button>
+                        <button class="icon-btn ev-back" title="@T["Back to the list"]" @onclick="CloseAsync">@UiIcon.Render("chev-left", 16)</button>
                         <div class="event-player-title">
-                            <span class="event-title">@sel.Icon @sel.Title</span>
-                            <span class="event-sub">@sel.Camera · @sel.Start.ToLocalTime().ToString("ddd d MMM HH:mm:ss") · @DurationText(sel)</span>
+                            <span class="event-title">@sel.Icon @EventTitle(sel)</span>
+                            <span class="event-sub">@sel.Camera · @T.DateShort(sel.Start.ToLocalTime()) @sel.Start.ToLocalTime().ToString("HH:mm:ss") · @DurationText(sel)</span>
                         </div>
-                        <a class="chip ev-golive" href="@LiveHref(sel.Camera)" title="Watch @sel.Camera live now">
-                            @UiIcon.Render("activity", 13) Go live
+                        <a class="chip ev-golive" href="@LiveHref(sel.Camera)" title="@T.F("Watch {0} live now", sel.Camera)">
+                            @UiIcon.Render("activity", 13) @T["Go live"]
                         </a>
                     </div>
 
@@ -318,15 +316,15 @@
                             {
                                 <span class="ai-level-chip ai-@sel.AiLevel">@sel.AiLevel.ToUpperInvariant()</span>
                             }
-                            <span class="event-ai-text">@(sel.AiDescription ?? "classified without a description")</span>
-                            <span class="beta-tag" title="AI event descriptions are in beta — feedback is very welcome">BETA</span>
+                            <span class="event-ai-text">@(sel.AiDescription ?? T["classified without a description"])</span>
+                            <span class="beta-tag" title="@T["AI event descriptions are in beta — feedback is very welcome"]">@T["BETA"]</span>
                         </div>
                     }
                     else if (sel.AiPending)
                     {
                         <div class="event-ai ai-none">
-                            <span class="event-ai-text event-ai-pending">🧠 AI is describing this event — refresh in a moment to see the text…</span>
-                            <span class="beta-tag" title="AI event descriptions are in beta — feedback is very welcome">BETA</span>
+                            <span class="event-ai-text event-ai-pending">🧠 @T["AI is describing this event — refresh in a moment to see the text…"]</span>
+                            <span class="beta-tag" title="@T["AI event descriptions are in beta — feedback is very welcome"]">@T["BETA"]</span>
                         </div>
                     }
 
@@ -339,38 +337,38 @@
                             @ZoomHud
                         </div>
                         <div class="player-speed">
-                            <span class="tool-label">SPEED</span>
+                            <span class="tool-label">@T["SPEED"]</span>
                             @foreach (var s in Speeds)
                             {
                                 <button class="chip @(_speed == s ? "chip-active" : "")" @onclick="() => SetSpeedAsync(s)">@FormatSpeed(s)</button>
                             }
                             @if (sel.HasPreview)
                             {
-                                <span class="tool-label player-quality-label">QUALITY</span>
-                                <button class="chip @(_sd ? "" : "chip-active")" title="Full-quality main-stream recording"
+                                <span class="tool-label player-quality-label">@T["QUALITY"]</span>
+                                <button class="chip @(_sd ? "" : "chip-active")" title="@T["Full-quality main-stream recording"]"
                                         @onclick="() => SetStreamAsync(sd: false)">HD</button>
                                 <button class="chip @(_sd ? "chip-active" : "")"
-                                        title="Low-res sub-stream recording — smoother fast-forward on slow storage"
+                                        title="@T["Low-res sub-stream recording — smoother fast-forward on slow storage"]"
                                         @onclick="() => SetStreamAsync(sd: true)">SD</button>
                             }
                         </div>
                     }
                     else
                     {
-                        <div class="notice">No clip was recorded for this event@(sel.Ongoing ? " yet — it is still being captured" : "").</div>
+                        <div class="notice">@(sel.Ongoing ? T["No clip was recorded for this event yet — it is still being captured."] : T["No clip was recorded for this event."])</div>
                     }
 
                     <div class="event-player-foot">
-                        <button class="chip" disabled="@(Neighbor(1) == null)" @onclick="() => NavigateAsync(1)">← Older</button>
-                        <button class="chip" disabled="@(Neighbor(-1) == null)" @onclick="() => NavigateAsync(-1)">Newer →</button>
+                        <button class="chip" disabled="@(Neighbor(1) == null)" @onclick="() => NavigateAsync(1)">← @T["Older"]</button>
+                        <button class="chip" disabled="@(Neighbor(-1) == null)" @onclick="() => NavigateAsync(-1)">@T["Newer"] →</button>
                         <span class="tile-spacer"></span>
                         @if (sel.Reviewed)
                         {
-                            <span class="event-sub">✓ reviewed</span>
+                            <span class="event-sub">✓ @T["reviewed"]</span>
                         }
                         else
                         {
-                            <span class="event-sub">marking as reviewed…</span>
+                            <span class="event-sub">@T["marking as reviewed…"]</span>
                         }
                     </div>
                 }
@@ -378,7 +376,7 @@
                 {
                     <div class="ev-detail-empty">
                         <span class="ev-detail-empty-icon">@UiIcon.Render("clock", 30)</span>
-                        <span>Select an event to play it</span>
+                        <span>@T["Select an event to play it"]</span>
                     </div>
                 }
             </div>
@@ -390,12 +388,12 @@
         <div class="ev-del-backdrop" @onclick="CancelDelete">
             <div class="ev-del-dialog" @onclick:stopPropagation="true">
                 <div class="ev-del-title">
-                    <span>@UiIcon.Render("trash", 15) DELETE EVENTS</span>
-                    <button class="icon-btn" title="Cancel" @onclick="CancelDelete" disabled="@_deleting">✕</button>
+                    <span>@UiIcon.Render("trash", 15) @T["DELETE EVENTS"]</span>
+                    <button class="icon-btn" title="@T["Cancel"]" @onclick="CancelDelete" disabled="@_deleting">✕</button>
                 </div>
                 @if (_delBusy)
                 {
-                    <div class="ev-del-body">Working out what will be deleted…</div>
+                    <div class="ev-del-body">@T["Working out what will be deleted…"]</div>
                 }
                 else if (_delError != null)
                 {
@@ -405,8 +403,9 @@
                 {
                     <div class="ev-del-body">
                         <p class="ev-del-lead">
-                            Permanently delete <b>@_delCount event@(_delCount == 1 ? "" : "s")</b>,
-                            freeing about <b>@SizeText(_delBytes)</b> of disk?
+                            @((MarkupString)(_delCount == 1
+                                ? T.F("Permanently delete <b>1 event</b>, freeing about <b>{0}</b> of disk?", SizeText(_delBytes))
+                                : T.F("Permanently delete <b>{0} events</b>, freeing about <b>{1}</b> of disk?", _delCount, SizeText(_delBytes))))
                         </p>
                         <ul class="ev-del-facts">
                             @foreach (var c in _delCameras)
@@ -418,30 +417,32 @@
                         {
                             <p class="event-sub">
                                 @(_delEarliest.Value.Date == _delLatest.Value.Date
-                                    ? _delEarliest.Value.ToString("ddd d MMM, HH:mm") + " – " + _delLatest.Value.ToString("HH:mm")
-                                    : _delEarliest.Value.ToString("ddd d MMM HH:mm") + " – " + _delLatest.Value.ToString("ddd d MMM HH:mm"))
+                                    ? $"{T.DateShort(_delEarliest.Value)}, {_delEarliest.Value:HH:mm} – {_delLatest.Value:HH:mm}"
+                                    : $"{T.DateShort(_delEarliest.Value)} {_delEarliest.Value:HH:mm} – {T.DateShort(_delLatest.Value)} {_delLatest.Value:HH:mm}")
                             </p>
                         }
                         @if (_delSkipped > 0)
                         {
                             <p class="event-sub ev-del-skip">
-                                @_delSkipped selected event@(_delSkipped == 1 ? " is" : "s are") still recording and will be kept.
+                                @(_delSkipped == 1
+                                    ? T["1 selected event is still recording and will be kept."]
+                                    : T.F("{0} selected events are still recording and will be kept.", _delSkipped))
                             </p>
                         }
-                        <p class="ev-del-warn">This cannot be undone — the clips, thumbnails and previews are removed from disk.</p>
+                        <p class="ev-del-warn">@T["This cannot be undone — the clips, thumbnails and previews are removed from disk."]</p>
                     </div>
                 }
                 <div class="ev-del-actions">
-                    <button class="chip" @onclick="CancelDelete" disabled="@_deleting">Cancel</button>
+                    <button class="chip" @onclick="CancelDelete" disabled="@_deleting">@T["Cancel"]</button>
                     <button class="chip ev-del-confirm" disabled="@(_delBusy || _deleting || _delCount == 0 || _delError != null)"
                             @onclick="ConfirmDeleteAsync">
                         @if (_deleting)
                         {
-                            <span>Deleting…</span>
+                            <span>@T["Deleting…"]</span>
                         }
                         else
                         {
-                            <span>@UiIcon.Render("trash", 13) Delete @_delCount</span>
+                            <span>@UiIcon.Render("trash", 13) @T.F("Delete {0}", _delCount)</span>
                         }
                     </button>
                 </div>
@@ -511,10 +512,10 @@
     // Digital-zoom HUD, identical to the live view's: JS (neolink.zoomInit) owns
     // the clicks and the badge — Blazor only renders the shell once per surface.
     private RenderFragment ZoomHud => @<div class="zoom-hud" @onclick:stopPropagation="true" @ondblclick:stopPropagation="true">
-        <button type="button" class="icon-btn zoom-btn" data-zoom="in" title="Zoom in (or mouse-wheel up on the video)">＋</button>
+        <button type="button" class="icon-btn zoom-btn" data-zoom="in" title="@T["Zoom in (or mouse-wheel up on the video)"]">＋</button>
         <span class="zoom-badge" data-zoom-badge>100%</span>
-        <button type="button" class="icon-btn zoom-btn" data-zoom="out" title="Zoom out (or mouse-wheel down)">−</button>
-        <button type="button" class="icon-btn zoom-btn zoom-reset" data-zoom="reset" title="Restore 1:1 (or double-click the video)">1:1</button>
+        <button type="button" class="icon-btn zoom-btn" data-zoom="out" title="@T["Zoom out (or mouse-wheel down)"]">−</button>
+        <button type="button" class="icon-btn zoom-btn zoom-reset" data-zoom="reset" title="@T["Restore 1:1 (or double-click the video)"]">1:1</button>
     </div>;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -621,17 +622,17 @@
     /// own budget. Server-state reads are fast (20s is generous); the SD-card
     /// FILE search is answered by the camera walking its card and legitimately
     /// runs long, so its caller passes a budget above the server's own 90s.</summary>
-    private async Task<T?> GetJsonAsync<T>(string path, int timeoutSeconds = 20)
+    private async Task<TValue?> GetJsonAsync<TValue>(string path, int timeoutSeconds = 20)
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
         using var res = await Http.SendAsync(Req(HttpMethod.Get, path), cts.Token);
         if (res.StatusCode == System.Net.HttpStatusCode.Unauthorized)
         {
-            _error = "Sign in on the live view first, then reopen Events.";
+            _error = T["Sign in on the live view first, then reopen Events."];
             return default;
         }
         if (!res.IsSuccessStatusCode) return default;
-        return await res.Content.ReadFromJsonAsync<T>();
+        return await res.Content.ReadFromJsonAsync<TValue>();
     }
 
     private async Task LoadCamerasAsync()
@@ -642,7 +643,7 @@
             _cameras.Clear();
             if (cams != null) { _cameras.AddRange(cams); _error = null; }
         }
-        catch (Exception ex) { _error = $"Cannot reach {_server}: {ex.Message}"; }
+        catch (Exception ex) { _error = T.F("Cannot reach {0}: {1}", _server, ex.Message); }
     }
 
     private async Task RefreshAsync()
@@ -666,7 +667,7 @@
             if (_selected != null)
                 _selected = Source().FirstOrDefault(e => e.Id == _selected.Id) ?? _selected;
         }
-        catch (Exception ex) { _error = $"Cannot reach {_server}: {ex.Message}"; }
+        catch (Exception ex) { _error = T.F("Cannot reach {0}: {1}", _server, ex.Message); }
         finally { _loading = false; }
     }
 
@@ -721,7 +722,7 @@
         _sdError = null;
         if (_sdCamera.Length == 0)
         {
-            _sdError = "No cameras are configured.";
+            _sdError = T["No cameras are configured."];
             return;
         }
         _sdLoading = true;
@@ -738,8 +739,7 @@
                 timeoutSeconds: 95);
             if (recs == null && days == null)
             {
-                _sdError = "This camera's SD card can't be browsed — it needs a Reolink HTTP API " +
-                           "(http_address / HTTP enabled on the camera) and a mounted SD card.";
+                _sdError = T["This camera's SD card can't be browsed — it needs a Reolink HTTP API (http_address / HTTP enabled on the camera) and a mounted SD card."];
             }
             else if (recs == null)
             {
@@ -747,19 +747,17 @@
                 // failed query (the file search is much heavier and the camera
                 // may be busy), NOT an empty day. Saying "no recordings" here
                 // hid real failures behind an innocent-looking message.
-                _sdError = "The camera answered the calendar but not the file search — it may be " +
-                           "busy streaming. Hit refresh to retry; the server log has details.";
+                _sdError = T["The camera answered the calendar but not the file search — it may be busy streaming. Hit refresh to retry; the server log has details."];
             }
             _sdRecs = recs?.Recordings ?? new List<ApiSdRecording>();
         }
         catch (OperationCanceledException)
         {
-            _sdError = "The camera is taking too long to answer the SD-card search — it is likely " +
-                       "busy recording or streaming. Hit refresh to retry.";
+            _sdError = T["The camera is taking too long to answer the SD-card search — it is likely busy recording or streaming. Hit refresh to retry."];
         }
         catch (Exception ex)
         {
-            _sdError = $"Cannot reach {_server}: {ex.Message}";
+            _sdError = T.F("Cannot reach {0}: {1}", _server, ex.Message);
         }
         finally
         {
@@ -829,7 +827,7 @@
                  ?? await GetJsonAsync<ApiEvent>($"/api/events/{Uri.EscapeDataString(id)}");
         if (ev == null)
         {
-            _error = "That event no longer exists — it may have been cleaned up.";
+            _error = T["That event no longer exists — it may have been cleaned up."];
             return;
         }
         await OpenEventAsync(ev);
@@ -931,17 +929,17 @@
                     : new List<CameraCount>();
                 if (_delCount == 0)
                     _delError = _delSkipped > 0
-                        ? "Every selected event is still recording — nothing can be deleted yet."
-                        : "Those events no longer exist.";
+                        ? T["Every selected event is still recording — nothing can be deleted yet."]
+                        : T["Those events no longer exist."];
             }
             else
             {
-                _delError = "Could not prepare the deletion — are you signed in as an admin?";
+                _delError = T["Could not prepare the deletion — are you signed in as an admin?"];
             }
         }
         catch
         {
-            _delError = "Could not reach the server to prepare the deletion.";
+            _delError = T["Could not reach the server to prepare the deletion."];
         }
         finally
         {
@@ -981,7 +979,7 @@
         catch
         {
             _deleting = false;
-            _delError = "The deletion failed — nothing may have been removed. Try again.";
+            _delError = T["The deletion failed — nothing may have been removed. Try again."];
         }
         StateHasChanged();
     }
@@ -1079,25 +1077,27 @@
 
     private static string FormatSpeed(double s) => s == 1 ? "1×" : $"{s:0}×";
 
-    private static string DayLabel(DateTime day) =>
-        day == DateTime.Now.Date ? "TODAY"
-        : day == DateTime.Now.Date.AddDays(-1) ? "YESTERDAY"
-        : day.ToString("dddd, d MMMM").ToUpperInvariant();
+    private string EventTitle(ApiEvent ev) => ev.LocalTitle(s => T[s]);
 
-    private static string DurationText(ApiEvent ev) =>
-        ev.Ongoing ? "recording…"
+    private string DayLabel(DateTime day) =>
+        day == DateTime.Now.Date ? T["TODAY"]
+        : day == DateTime.Now.Date.AddDays(-1) ? T["YESTERDAY"]
+        : T.DateLong(day).ToUpperInvariant();
+
+    private string DurationText(ApiEvent ev) =>
+        ev.Ongoing ? T["recording…"]
         : ev.Duration.TotalSeconds < 1 ? "<1s"
         : ev.Duration.TotalSeconds < 90 ? $"{(int)Math.Ceiling(ev.Duration.TotalSeconds)}s"
-        : $"{(int)Math.Round(ev.Duration.TotalMinutes)} min";
+        : T.F("{0} min", (int)Math.Round(ev.Duration.TotalMinutes));
 
-    private static string Ago(DateTime utc)
+    private string Ago(DateTime utc)
     {
         var span = DateTime.UtcNow - utc.ToUniversalTime();
         if (span < TimeSpan.Zero) span = TimeSpan.Zero;
-        return span.TotalSeconds < 60 ? "just now"
-            : span.TotalMinutes < 60 ? $"{(int)span.TotalMinutes}m ago"
-            : span.TotalHours < 24 ? $"{(int)span.TotalHours}h ago"
-            : $"{(int)span.TotalDays}d ago";
+        return span.TotalSeconds < 60 ? T["just now"]
+            : span.TotalMinutes < 60 ? T.F("{0}m ago", (int)span.TotalMinutes)
+            : span.TotalHours < 24 ? T.F("{0}h ago", (int)span.TotalHours)
+            : T.F("{0}d ago", (int)span.TotalDays);
     }
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;

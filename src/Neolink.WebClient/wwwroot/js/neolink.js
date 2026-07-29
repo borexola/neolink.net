@@ -2115,6 +2115,21 @@
         ssGet(key) { return sessionStorage.getItem(key); },
         ssSet(key, value) { sessionStorage.setItem(key, value); },
 
+        // ---- UI language ----------------------------------------------------
+        // A cookie, not localStorage: the circuit that renders the page is created
+        // BEFORE any script of ours runs, and only a cookie rides along with that
+        // request — so this is what stops a French user seeing an English frame
+        // first. The <html lang> follows it live for spell-checkers and screen
+        // readers, which read the attribute rather than the text.
+        setLang(code) {
+            try {
+                const value = encodeURIComponent(code || 'en');
+                const secure = location.protocol === 'https:' ? '; Secure' : '';
+                document.cookie = `neolink_lang=${value}; Path=/; Max-Age=31536000; SameSite=Lax${secure}`;
+                document.documentElement.lang = code || 'en';
+            } catch (e) { }
+        },
+
         // ---- Browser alerts (per-detection notifications) -------------------
         // Notification is only defined in secure contexts (HTTPS or localhost),
         // so "unsupported" doubles as the http-on-LAN signal.

@@ -1,4 +1,5 @@
 @using System.Threading
+@inject Translator T
 @implements IDisposable
 
 @* The battery chip's clock. The per-second tick lives in this leaf component so
@@ -7,7 +8,7 @@
    When the clock hits 0:00 it tells the parent once, so the tile releases the
    camera immediately instead of on the next 10-second poll (which used to leave
    a dead "0:00" on screen for up to ten seconds). *@
-<span>view ends in @(_left / 60):@($"{_left % 60:00}") to save battery</span>
+<span>@T.F("view ends in {0} to save battery", $"{_left / 60}:{_left % 60:00}")</span>
 
 @code {
     /// <summary>When the stream attached — the viewing budget runs from here.</summary>

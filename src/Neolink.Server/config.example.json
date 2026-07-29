@@ -42,6 +42,13 @@
     // archiving progress, and future long-running jobs). On by default; set false
     // to hide it for everyone. Admins can also dismiss a single run from the strip.
     "show_background_tasks": true
+
+    // Optional: seed the default UI language ("en", "fr", "de", "es", "nl",
+    // "pl", "pt") on a server whose state has none yet — handy for provisioned
+    // deploys. It is only a seed: the first-run dialog and Server settings →
+    // Language own the setting from then on (stored in users.json, applied
+    // live, no restart needed).
+    // "language": "fr"
   },
 
   // Optional: recording to disk — motion/AI detection events (clips + thumbnails)

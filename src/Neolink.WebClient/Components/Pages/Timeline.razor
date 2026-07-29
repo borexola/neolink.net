@@ -3,44 +3,45 @@
 @inject HttpClient Http
 @inject IJSRuntime JS
 @inject LocalApiInfo Local
+@inject Translator T
 @implements IAsyncDisposable
 
 @* NVR-style timeline: pick a day, scrub the lanes, and every included camera
    shows its continuous footage at that instant. Coverage is drawn per camera;
    detection events overlay the lanes color-coded by type. *@
 
-<PageTitle>Neolink.NET — Timeline</PageTitle>
+<PageTitle>@T["Neolink.NET — Timeline"]</PageTitle>
 
 <div class="tl-page @(_studio ? "studio" : "")">
     <div class="toolbar tl-toolbar">
-        <a class="tool-btn" href="" title="Back to live view">@UiIcon.Render("chev-left", 16) <span class="tool-name">Live</span></a>
-        <span class="tool-label">TIMELINE</span>
+        <a class="tool-btn" href="" title="@T["Back to live view"]">@UiIcon.Render("chev-left", 16) <span class="tool-name">@T["Live"]</span></a>
+        <span class="tool-label">@T["TIMELINE"]</span>
 
         @* --- Date group: prev/next day flanking a calendar-dropdown button. --- *@
         <div class="tl-group tl-date-group">
-            <button class="tool-btn tl-daynav" title="Previous day" @onclick="() => ChangeDayAsync(-1)">@UiIcon.Render("chev-left", 16)</button>
+            <button class="tool-btn tl-daynav" title="@T["Previous day"]" @onclick="() => ChangeDayAsync(-1)">@UiIcon.Render("chev-left", 16)</button>
             <button class="tool-btn tl-date-btn @(_showCalendar ? "active" : "")"
-                    title="Pick a day — days with footage are highlighted"
+                    title="@T["Pick a day — days with footage are highlighted"]"
                     @onclick="ToggleCalendarAsync">
-                @UiIcon.Render("calendar", 13) <span class="tl-date-text">@_date.ToString("ddd, d MMM yyyy")</span> @UiIcon.Render("chev-down", 12)
+                @UiIcon.Render("calendar", 13) <span class="tl-date-text">@DateText(_date)</span> @UiIcon.Render("chev-down", 12)
             </button>
-            <button class="tool-btn tl-daynav" title="Next day" disabled="@(_date >= DateTime.Today)"
+            <button class="tool-btn tl-daynav" title="@T["Next day"]" disabled="@(_date >= DateTime.Today)"
                     @onclick="() => ChangeDayAsync(1)">@UiIcon.Render("chev-right", 16)</button>
         </div>
 
         @* --- Transport group: event hops + coarse/fine steps around play/pause.
            Every control names its keyboard twin — the fastest way to learn them. --- *@
         <div class="tl-group tl-transport">
-            <button class="tool-btn tl-step" title="Previous event   —   [" @onclick="() => JumpEventAsync(-1)">@UiIcon.Render("skip-back", 13)</button>
-            <button class="tool-btn tl-step" title="Back 10 seconds   —   J or Shift+←" @onclick="() => StepAsync(-10)">−10s</button>
-            <button class="tool-btn tl-step" title="Back 1 second   —   ←   (Ctrl+← or , for 0.1 s)" @onclick="() => StepAsync(-1)">−1s</button>
+            <button class="tool-btn tl-step" title="@T["Previous event   —   ["]" @onclick="() => JumpEventAsync(-1)">@UiIcon.Render("skip-back", 13)</button>
+            <button class="tool-btn tl-step" title="@T["Back 10 seconds   —   J or Shift+←"]" @onclick="() => StepAsync(-10)">−10s</button>
+            <button class="tool-btn tl-step" title="@T["Back 1 second   —   ←   (Ctrl+← or , for 0.1 s)"]" @onclick="() => StepAsync(-1)">−1s</button>
             <button class="tl-play @(_playing ? "playing" : "")"
-                    title="@(_playing ? "Pause — Space or K" : "Play — Space or K")" @onclick="TogglePlayAsync">
-                @UiIcon.Render(_playing ? "pause" : "play", 14) <span class="tool-name">@(_playing ? "Pause" : "Play")</span>
+                    title="@(_playing ? T["Pause — Space or K"] : T["Play — Space or K"])" @onclick="TogglePlayAsync">
+                @UiIcon.Render(_playing ? "pause" : "play", 14) <span class="tool-name">@(_playing ? T["Pause"] : T["Play"])</span>
             </button>
-            <button class="tool-btn tl-step" title="Forward 1 second   —   →   (Ctrl+→ or . for 0.1 s)" @onclick="() => StepAsync(1)">+1s</button>
-            <button class="tool-btn tl-step" title="Forward 10 seconds   —   L or Shift+→" @onclick="() => StepAsync(10)">+10s</button>
-            <button class="tool-btn tl-step" title="Next event   —   ]" @onclick="() => JumpEventAsync(1)">@UiIcon.Render("skip-fwd", 13)</button>
+            <button class="tool-btn tl-step" title="@T["Forward 1 second   —   →   (Ctrl+→ or . for 0.1 s)"]" @onclick="() => StepAsync(1)">+1s</button>
+            <button class="tool-btn tl-step" title="@T["Forward 10 seconds   —   L or Shift+→"]" @onclick="() => StepAsync(10)">+10s</button>
+            <button class="tool-btn tl-step" title="@T["Next event   —   ]"]" @onclick="() => JumpEventAsync(1)">@UiIcon.Render("skip-fwd", 13)</button>
         </div>
 
         @* --- Speed group: slow motion through fast skim; the choice sticks. --- *@
@@ -49,7 +50,7 @@
             {
                 var sp = s;
                 <button class="chip tl-speed @(_speed == sp ? "chip-active" : "")"
-                        title="Play at @SpeedLabel(sp) speed" @onclick="() => SetSpeedAsync(sp)">@SpeedLabel(sp)</button>
+                        title="@T.F("Play at {0} speed", SpeedLabel(sp))" @onclick="() => SetSpeedAsync(sp)">@SpeedLabel(sp)</button>
             }
         </div>
 
@@ -57,8 +58,8 @@
            used to reflow the toolbar and shove the clock/export controls onto
            another line at some widths. Reserved space cannot jump. *@
         <span class="tl-lag @(Lagging ? "" : "tl-lag-idle")"
-              title="The streams can't sustain @SpeedLabel(_speed) right now (server delivery or browser decoding is the limit) — the timeline slows down until they catch up">
-            ⏳ catching up…
+              title="@T.F("The streams can't sustain {0} right now (server delivery or browser decoding is the limit) — the timeline slows down until they catch up", SpeedLabel(_speed))">
+            ⏳ @T["catching up…"]
         </span>
 
         <span class="tool-spacer"></span>
@@ -72,30 +73,30 @@
             }
             else
             {
-                <span class="tl-clock tl-clock-btn" role="button" title="Click (or press T) to type an exact time"
+                <span class="tl-clock tl-clock-btn" role="button" title="@T["Click (or press T) to type an exact time"]"
                       @onclick="OpenClockEdit">@TimeText(_t)</span>
             }
             <button class="chip tl-zoom-chip @(Zoomed ? "chip-active" : "chip-off")"
-                    title="@(Zoomed ? "Zoomed in — click (or press 0) to see the whole day again" : "Scroll or pinch on the timeline to zoom in for fine seeking")"
+                    title="@(Zoomed ? T["Zoomed in — click (or press 0) to see the whole day again"] : T["Scroll or pinch on the timeline to zoom in for fine seeking"])"
                     @onclick="ResetZoomAsync">@UiIcon.Render("zoom", 12) @SpanLabel(_viewSpan)</button>
             @if (_continuous && Included.Any())
             {
                 <button class="tool-btn tl-export-btn @(_showExport ? "active" : "")"
-                        title="Export footage: download a period of this day (up to the whole day) as a zip of its recordings"
-                        @onclick="OpenExportAsync">@UiIcon.Render("download", 13) <span class="tool-name">Export</span></button>
+                        title="@T["Export footage: download a period of this day (up to the whole day) as a zip of its recordings"]"
+                        @onclick="OpenExportAsync">@UiIcon.Render("download", 13) <span class="tool-name">@T["Export"]</span></button>
             }
             @if (_supported)
             {
                 <button class="tool-btn tl-bm-btn @(_showBm ? "active" : "")"
-                        title="Bookmarks: save a named stretch of this day, and jump back to saved moments   —   B"
-                        @onclick="OpenBookmarks">@UiIcon.Render("bookmark", 13) <span class="tool-name">Bookmark</span></button>
+                        title="@T["Bookmarks: save a named stretch of this day, and jump back to saved moments   —   B"]"
+                        @onclick="OpenBookmarks">@UiIcon.Render("bookmark", 13) <span class="tool-name">@T["Bookmark"]</span></button>
             }
             <button class="tool-btn tl-studio-btn @(_studio ? "active" : "")"
                     title="@(_studio
-                        ? "Studio layout is on — click to switch back to the classic view (your choice is saved)"
-                        : "Studio layout: monitors on top, the timeline docked at the bottom like a video editor — saved to your account")"
-                    @onclick="ToggleStudioAsync">@UiIcon.Render("film", 13) <span class="tool-name">Studio</span></button>
-            <button class="tool-btn tl-keys-btn @(_showKeys ? "active" : "")" title="Keyboard shortcuts"
+                        ? T["Studio layout is on — click to switch back to the classic view (your choice is saved)"]
+                        : T["Studio layout: monitors on top, the timeline docked at the bottom like a video editor — saved to your account"])"
+                    @onclick="ToggleStudioAsync">@UiIcon.Render("film", 13) <span class="tool-name">@T["Studio"]</span></button>
+            <button class="tool-btn tl-keys-btn @(_showKeys ? "active" : "")" title="@T["Keyboard shortcuts"]"
                     @onclick="() => _showKeys = !_showKeys">?</button>
         </div>
     </div>
@@ -105,16 +106,16 @@
         <div class="tl-cal-backdrop" @onclick="() => _showCalendar = false"></div>
         <div class="tl-cal" @onclick:stopPropagation="true">
             <div class="tl-cal-head">
-                <button class="tool-btn tl-daynav" title="Previous month" @onclick="() => ShiftMonth(-1)">@UiIcon.Render("chev-left", 15)</button>
-                <span class="tl-cal-month">@_calMonth.ToString("MMMM yyyy")</span>
-                <button class="tool-btn tl-daynav" title="Next month"
+                <button class="tool-btn tl-daynav" title="@T["Previous month"]" @onclick="() => ShiftMonth(-1)">@UiIcon.Render("chev-left", 15)</button>
+                <span class="tl-cal-month">@T.Month(_calMonth.Month) @_calMonth.Year</span>
+                <button class="tool-btn tl-daynav" title="@T["Next month"]"
                         disabled="@(_calMonth >= new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1))"
                         @onclick="() => ShiftMonth(1)">@UiIcon.Render("chev-right", 15)</button>
             </div>
             <div class="tl-cal-grid">
                 @foreach (var d in new[] { "Mo", "Tu", "We", "Th", "Fr", "Sa", "Su" })
                 {
-                    <span class="tl-cal-dow">@d</span>
+                    <span class="tl-cal-dow">@T[d]</span>
                 }
                 @foreach (var cell in CalendarCells())
                 {
@@ -124,7 +125,7 @@
                         bool isFuture = day > DateTime.Today;
                         <button class="tl-cal-day @(day == _date ? "sel" : "") @(hasFootage ? "has" : "") @(day == DateTime.Today ? "today" : "")"
                                 disabled="@isFuture"
-                                title="@(hasFootage ? "Footage on this day" : isFuture ? "" : "No footage")"
+                                title="@(hasFootage ? T["Footage on this day"] : isFuture ? "" : T["No footage"])"
                                 @onclick="() => PickDayAsync(day)">@day.Day</button>
                     }
                     else
@@ -134,8 +135,8 @@
                 }
             </div>
             <div class="tl-cal-foot">
-                <span class="tl-cal-legend"><span class="tl-cal-dot"></span> has footage</span>
-                <button class="chip" @onclick="() => PickDayAsync(DateTime.Today)">Today</button>
+                <span class="tl-cal-legend"><span class="tl-cal-dot"></span> @T["has footage"]</span>
+                <button class="chip" @onclick="() => PickDayAsync(DateTime.Today)">@T["Today"]</button>
             </div>
         </div>
     }
@@ -145,25 +146,23 @@
         <div class="tl-keys-backdrop" @onclick="() => _showKeys = false">
             <div class="tl-keys-panel" @onclick:stopPropagation="true">
                 <div class="tl-keys-title">
-                    <span>KEYBOARD SHORTCUTS</span>
-                    <button class="icon-btn" title="Close" @onclick="() => _showKeys = false">✕</button>
+                    <span>@T["KEYBOARD SHORTCUTS"]</span>
+                    <button class="icon-btn" title="@T["Close"]" @onclick="() => _showKeys = false">✕</button>
                 </div>
                 <div class="tl-keys-grid">
-                    <span>Space · K</span><span>Play / pause</span>
-                    <span>← →</span><span>Step 1 s &nbsp;(Shift: 10 s, Ctrl: 0.1 s)</span>
-                    <span>J · L</span><span>Back / forward 10 s</span>
-                    <span>, · .</span><span>Nudge 0.1 s — frame-level review</span>
-                    <span>[ · ]</span><span>Previous / next event</span>
-                    <span>scroll</span><span>Zoom in/out around the mouse (Shift: pan)</span>
-                    <span>+ − 0</span><span>Zoom in / out / whole day</span>
-                    <span>T</span><span>Jump to an exact time</span>
-                    <span>S</span><span>Save a still (focused monitor, or a lone camera)</span>
-                    <span>B</span><span>Bookmarks — save this moment / jump to a saved one</span>
+                    <span>Space · K</span><span>@T["Play / pause"]</span>
+                    <span>← →</span><span>@T["Step 1 s  (Shift: 10 s, Ctrl: 0.1 s)"]</span>
+                    <span>J · L</span><span>@T["Back / forward 10 s"]</span>
+                    <span>, · .</span><span>@T["Nudge 0.1 s — frame-level review"]</span>
+                    <span>[ · ]</span><span>@T["Previous / next event"]</span>
+                    <span>@T["scroll"]</span><span>@T["Zoom in/out around the mouse (Shift: pan)"]</span>
+                    <span>+ − 0</span><span>@T["Zoom in / out / whole day"]</span>
+                    <span>T</span><span>@T["Jump to an exact time"]</span>
+                    <span>S</span><span>@T["Save a still (focused monitor, or a lone camera)"]</span>
+                    <span>B</span><span>@T["Bookmarks — save this moment / jump to a saved one"]</span>
                 </div>
                 <div class="event-sub tl-keys-hint">
-                    Drag the thin day strip above the lanes to move the zoomed view. Double-click the lanes to zoom back out.
-                    Drag the divider beside the tracks to make the timeline taller; with a focused monitor, the handle beside
-                    the thumbnail rail resizes it the same way. Double-click a divider for its default.
+                    @T["Drag the thin day strip above the lanes to move the zoomed view. Double-click the lanes to zoom back out. Drag the divider beside the tracks to make the timeline taller; with a focused monitor, the handle beside the thumbnail rail resizes it the same way. Double-click a divider for its default."]
                 </div>
             </div>
         </div>
@@ -174,10 +173,10 @@
         <div class="tl-keys-backdrop" @onclick="() => _showExport = false">
             <div class="tl-keys-panel tl-export-panel" @onclick:stopPropagation="true">
                 <div class="tl-keys-title">
-                    <span>EXPORT FOOTAGE — @_date.ToString("ddd, d MMM yyyy")</span>
-                    <button class="icon-btn" title="Close" @onclick="() => _showExport = false">✕</button>
+                    <span>@T.F("EXPORT FOOTAGE — {0}", DateText(_date))</span>
+                    <button class="icon-btn" title="@T["Close"]" @onclick="() => _showExport = false">✕</button>
                 </div>
-                <div class="tl-export-sec">Camera</div>
+                <div class="tl-export-sec">@T["Camera"]</div>
                 <div class="tl-export-cams">
                     @foreach (var cam in Included)
                     {
@@ -187,48 +186,48 @@
                     }
                 </div>
 
-                <div class="tl-export-sec">Time range</div>
+                <div class="tl-export-sec">@T["Time range"]</div>
                 <div class="tl-export-range">
-                    <label>From <input class="tl-clock-edit" value="@_exFrom" spellcheck="false" placeholder="HH:mm:ss"
+                    <label>@T["From"] <input class="tl-clock-edit" value="@_exFrom" spellcheck="false" placeholder="HH:mm:ss"
                                        @onchange="e => ExportRangeEditedAsync(e, from: true)" /></label>
                     <span class="tl-export-arrow">→</span>
-                    <label>To <input class="tl-clock-edit" value="@_exTo" spellcheck="false" placeholder="HH:mm:ss"
+                    <label>@T["To"] <input class="tl-clock-edit" value="@_exTo" spellcheck="false" placeholder="HH:mm:ss"
                                      @onchange="e => ExportRangeEditedAsync(e, from: false)" /></label>
                     @if (ExportRangeValid(out var exF, out var exT))
                     {
-                        <span class="tl-export-window" title="Length of the chosen range">@SpanLabel((exT - exF).TotalSeconds)</span>
+                        <span class="tl-export-window" title="@T["Length of the chosen range"]">@SpanLabel((exT - exF).TotalSeconds)</span>
                     }
                 </div>
                 <div class="tl-export-presets">
                     @if (Zoomed)
                     {
-                        <button class="chip" title="The stretch of the day you are zoomed into"
-                                @onclick="@(() => ApplyExportPresetAsync("view"))">Zoomed view</button>
+                        <button class="chip" title="@T["The stretch of the day you are zoomed into"]"
+                                @onclick="@(() => ApplyExportPresetAsync("view"))">@T["Zoomed view"]</button>
                     }
                     @if (_date == DateTime.Today)
                     {
-                        <button class="chip" title="The 60 minutes up to now"
-                                @onclick="@(() => ApplyExportPresetAsync("hour"))">Last hour</button>
+                        <button class="chip" title="@T["The 60 minutes up to now"]"
+                                @onclick="@(() => ApplyExportPresetAsync("hour"))">@T["Last hour"]</button>
                     }
-                    <button class="chip" title="Midnight to midnight"
-                            @onclick="@(() => ApplyExportPresetAsync("day"))">Whole day</button>
+                    <button class="chip" title="@T["Midnight to midnight"]"
+                            @onclick="@(() => ApplyExportPresetAsync("day"))">@T["Whole day"]</button>
                 </div>
 
-                <div class="tl-export-sec">Format</div>
+                <div class="tl-export-sec">@T["Format"]</div>
                 <div class="tl-export-format">
                     <button class="tl-export-card @(EffectiveFormat == "mp4" ? "sel" : "")" disabled="@(_exMp4Bytes == null)"
                             @onclick="@(() => _exFormat = "mp4")">
-                        <span class="tl-export-card-title">Single MP4</span>
+                        <span class="tl-export-card-title">@T["Single MP4"]</span>
                         <span class="tl-export-card-sub">
                             @(_exMp4Bytes == null && _exMp4Reason != null && _exFiles > 0
                                 ? _exMp4Reason
-                                : "one continuous video, trimmed to your range — starts on a keyframe, seconds early at most")
+                                : T["one continuous video, trimmed to your range — starts on a keyframe, seconds early at most"])
                         </span>
                     </button>
                     <button class="tl-export-card @(EffectiveFormat == "zip" ? "sel" : "")"
                             @onclick="@(() => _exFormat = "zip")">
-                        <span class="tl-export-card-title">Zip of segments</span>
-                        <span class="tl-export-card-sub">the untouched originals — whole segments, one file per roll, named by start time</span>
+                        <span class="tl-export-card-title">@T["Zip of segments"]</span>
+                        <span class="tl-export-card-sub">@T["the untouched originals — whole segments, one file per roll, named by start time"]</span>
                     </button>
                 </div>
 
@@ -239,33 +238,34 @@
                     }
                     else if (_exBusy)
                     {
-                        <span>sizing up the range…</span>
+                        <span>@T["sizing up the range…"]</span>
                     }
                     else if (_exFiles == 0)
                     {
-                        <span>no recorded footage in this range</span>
+                        <span>@T["no recorded footage in this range"]</span>
                     }
                     else
                     {
                         <span>
                             @(EffectiveFormat == "mp4"
-                                ? $"one video · {DurText(_exMp4DurMs ?? 0)} of footage"
-                                : $"{_exFiles} segment{(_exFiles == 1 ? "" : "s")} · whole originals")
+                                ? T.F("one video · {0} of footage", DurText(_exMp4DurMs ?? 0))
+                                : _exFiles == 1 ? T["1 segment · whole originals"]
+                                : T.F("{0} segments · whole originals", _exFiles))
                         </span>
                         @if (EffBytes > 2L * 1024 * 1024 * 1024)
                         {
-                            <span class="tl-export-warn">large download — leave this tab open until it finishes</span>
+                            <span class="tl-export-warn">@T["large download — leave this tab open until it finishes"]</span>
                         }
                     }
                 </div>
                 <div class="event-sub tl-export-hint">
-                    Footage still being recorded is left out until its segment closes.
+                    @T["Footage still being recorded is left out until its segment closes."]
                 </div>
                 <div class="tl-export-actions">
-                    <button class="chip" @onclick="() => _showExport = false">Cancel</button>
+                    <button class="chip" @onclick="() => _showExport = false">@T["Cancel"]</button>
                     <button class="tl-play tl-export-go" disabled="@(_exBusy || _exFiles == 0 || _exError != null)"
                             @onclick="StartExportAsync">
-                        @UiIcon.Render("download", 14) Export@(!_exBusy && _exFiles > 0 && _exError == null ? $" ≈ {SizeText(EffBytes)}" : "")
+                        @UiIcon.Render("download", 14) @T["Export"]@(!_exBusy && _exFiles > 0 && _exError == null ? $" ≈ {SizeText(EffBytes)}" : "")
                     </button>
                 </div>
             </div>
@@ -277,58 +277,58 @@
         <div class="tl-keys-backdrop" @onclick="() => _showBm = false">
             <div class="tl-keys-panel tl-bm-panel" @onclick:stopPropagation="true">
                 <div class="tl-keys-title">
-                    <span>BOOKMARKS</span>
-                    <button class="icon-btn" title="Close" @onclick="() => _showBm = false">✕</button>
+                    <span>@T["BOOKMARKS"]</span>
+                    <button class="icon-btn" title="@T["Close"]" @onclick="() => _showBm = false">✕</button>
                 </div>
 
-                <div class="tl-export-sec">Save a moment — @_date.ToString("ddd, d MMM yyyy")</div>
+                <div class="tl-export-sec">@T.F("Save a moment — {0}", DateText(_date))</div>
                 <input class="tl-bm-name" maxlength="80" spellcheck="false"
-                       placeholder="Name this moment — e.g. My son's first walk"
+                       placeholder="@T["Name this moment — e.g. My son's first walk"]"
                        @bind="_bmName" @bind:event="oninput" />
                 <div class="tl-export-range">
-                    <label>From <input class="tl-clock-edit" value="@_bmFrom" spellcheck="false" placeholder="HH:mm:ss"
+                    <label>@T["From"] <input class="tl-clock-edit" value="@_bmFrom" spellcheck="false" placeholder="HH:mm:ss"
                                        @onchange="e => BmRangeEdited(e, from: true)" /></label>
                     <span class="tl-export-arrow">→</span>
-                    <label>To <input class="tl-clock-edit" value="@_bmTo" spellcheck="false" placeholder="HH:mm:ss"
+                    <label>@T["To"] <input class="tl-clock-edit" value="@_bmTo" spellcheck="false" placeholder="HH:mm:ss"
                                      @onchange="e => BmRangeEdited(e, from: false)" /></label>
                     @if (RangeValid(_bmFrom, _bmTo, out var bmF, out var bmT))
                     {
-                        <span class="tl-export-window" title="Length of the chosen range">@SpanLabel((bmT - bmF).TotalSeconds)</span>
+                        <span class="tl-export-window" title="@T["Length of the chosen range"]">@SpanLabel((bmT - bmF).TotalSeconds)</span>
                     }
                 </div>
                 <div class="tl-export-presets">
                     @if (Zoomed)
                     {
-                        <button class="chip" title="The stretch of the day you are zoomed into"
-                                @onclick="@(() => { _bmFrom = TimeText(_viewStart); _bmTo = TimeText(Math.Min(_viewStart + _viewSpan, DaySeconds - 1)); })">Zoomed view</button>
+                        <button class="chip" title="@T["The stretch of the day you are zoomed into"]"
+                                @onclick="@(() => { _bmFrom = TimeText(_viewStart); _bmTo = TimeText(Math.Min(_viewStart + _viewSpan, DaySeconds - 1)); })">@T["Zoomed view"]</button>
                     }
-                    <button class="chip" title="Five minutes starting at the cursor"
-                            @onclick="@(() => { _bmFrom = TimeText(_t); _bmTo = TimeText(Math.Min(_t + 300, DaySeconds - 1)); })">Cursor + 5 min</button>
-                    <button class="chip" title="Half a minute either side of the cursor"
-                            @onclick="@(() => { _bmFrom = TimeText(Math.Max(0, _t - 30)); _bmTo = TimeText(Math.Min(_t + 30, DaySeconds - 1)); })">Cursor ± 30 s</button>
+                    <button class="chip" title="@T["Five minutes starting at the cursor"]"
+                            @onclick="@(() => { _bmFrom = TimeText(_t); _bmTo = TimeText(Math.Min(_t + 300, DaySeconds - 1)); })">@T["Cursor + 5 min"]</button>
+                    <button class="chip" title="@T["Half a minute either side of the cursor"]"
+                            @onclick="@(() => { _bmFrom = TimeText(Math.Max(0, _t - 30)); _bmTo = TimeText(Math.Min(_t + 30, DaySeconds - 1)); })">@T["Cursor ± 30 s"]</button>
                 </div>
                 @if (_bmError != null)
                 {
                     <div class="tl-export-est"><span class="tl-export-err">@_bmError</span></div>
                 }
                 <div class="tl-export-actions">
-                    <button class="chip" @onclick="() => _showBm = false">Close</button>
+                    <button class="chip" @onclick="() => _showBm = false">@T["Close"]</button>
                     <button class="tl-play tl-export-go" disabled="@_bmBusy" @onclick="SaveBookmarkAsync">
-                        @UiIcon.Render("bookmark", 14) Save bookmark
+                        @UiIcon.Render("bookmark", 14) @T["Save bookmark"]
                     </button>
                 </div>
 
                 @if (_bookmarks.Any())
                 {
-                    <div class="tl-export-sec">Saved — click one to jump to it</div>
+                    <div class="tl-export-sec">@T["Saved — click one to jump to it"]</div>
                     <div class="tl-bm-list">
                         @foreach (var b in _bookmarks)
                         {
-                            <div class="tl-bm-row" role="button" title="Jump to this moment"
+                            <div class="tl-bm-row" role="button" title="@T["Jump to this moment"]"
                                  @onclick="() => JumpToBookmarkAsync(b)" @key="b.Id">
                                 <span class="tl-bm-row-name">@b.Name</span>
                                 <span class="tl-bm-row-when">@BookmarkDay(b) · @TimeText(b.From)–@TimeText(b.To)</span>
-                                <button class="icon-btn tl-bm-del" title="Delete this bookmark (the footage stays)"
+                                <button class="icon-btn tl-bm-del" title="@T["Delete this bookmark (the footage stays)"]"
                                         @onclick="() => DeleteBookmarkAsync(b)" @onclick:stopPropagation="true">✕</button>
                             </div>
                         }
@@ -337,8 +337,7 @@
                 else
                 {
                     <div class="event-sub tl-export-hint">
-                        Nothing saved yet. Zoom or scrub to a moment worth keeping, set the range above, name it, save —
-                        it appears as a gold ribbon on the timeline from then on.
+                        @T["Nothing saved yet. Zoom or scrub to a moment worth keeping, set the range above, name it, save — it appears as a gold ribbon on the timeline from then on."]
                     </div>
                 }
             </div>
@@ -352,25 +351,24 @@
     else if (!_supported)
     {
         <div class="notice">
-            Recording is not enabled on this server — add a "recording" section to the config
-            to use the timeline.
+            @T["Recording is not enabled on this server — add a 'recording' section to the config to use the timeline."]
         </div>
     }
     else
     {
         <div class="tl-cams">
-            <span class="tool-label">CAMERAS</span>
+            <span class="tool-label">@T["CAMERAS"]</span>
             @foreach (var cam in _cameras)
             {
                 var name = cam.Name;
                 <button class="chip @(_included.Contains(name) ? "" : "chip-off")"
-                        title="@(_included.Contains(name) ? "Loaded — click to remove" : "Click to load this camera's footage")"
+                        title="@(_included.Contains(name) ? T["Loaded — click to remove"] : T["Click to load this camera's footage"])"
                         @onclick="() => ToggleCameraAsync(name)">@name</button>
             }
             <span class="event-sub">
                 @(_continuous
-                    ? "— pick the cameras to scrub; colored marks are events"
-                    : "— continuous recording is off, so only detection events (colored marks) play here")
+                    ? T["— pick the cameras to scrub; colored marks are events"]
+                    : T["— continuous recording is off, so only detection events (colored marks) play here"])
             </span>
         </div>
 
@@ -379,27 +377,27 @@
         @if (PresentKinds.Any())
         {
             <div class="tl-cams tl-evfilter">
-                <span class="tool-label">EVENTS</span>
+                <span class="tool-label">@T["EVENTS"]</span>
                 @foreach (var kind in PresentKinds)
                 {
                     var on = _eventKinds.Contains(kind);
                     <button class="chip tl-ev-chip @(on ? "" : "chip-off")"
                             style="@(on ? $"border-color:{KindColor(kind)};color:{KindColor(kind)}" : "")"
-                            title="@(on ? $"{KindLabel(kind)} events shown — click to hide them" : $"{KindLabel(kind)} events hidden — click to show them")"
+                            title="@(on ? T.F("{0} events shown — click to hide them", KindLabel(kind)) : T.F("{0} events hidden — click to show them", KindLabel(kind)))"
                             @onclick="() => ToggleEventKind(kind)">
                         <span class="tl-ev-swatch" style="background:@KindColor(kind)"></span>@KindLabel(kind)
                     </button>
                 }
                 @if (!_eventKinds.Any())
                 {
-                    <span class="event-sub">— every category hidden; the lanes show no marks</span>
+                    <span class="event-sub">@T["— every category hidden; the lanes show no marks"]</span>
                 }
             </div>
         }
 
         @if (!Included.Any())
         {
-            <div class="notice">Select cameras above to load their footage — colored marks on the lanes are events.</div>
+            <div class="notice">@T["Select cameras above to load their footage — colored marks on the lanes are events."]</div>
         }
         else
         {
@@ -451,7 +449,7 @@
                         {
                             @if (InView(b.From, b.To))
                             {
-                                <div class="tl-bm" title="@b.Name — @TimeText(b.From)–@TimeText(b.To) (click to jump there)"
+                                <div class="tl-bm" title="@T.F("{0} — {1}–{2} (click to jump there)", b.Name, TimeText(b.From), TimeText(b.To))"
                                      style="left:@Pct(b.From); width:@WMark(b.To - b.From)"
                                      @onclick="() => JumpToBookmarkAsync(b)" @key="b.Id"></div>
                             }
@@ -506,14 +504,14 @@
             {
                 @* Discovery nudge for the timeline's best trick; it bows out
                    the moment the user zooms (and returns at the full-day view). *@
-                <div class="tl-zoom-hint">@UiIcon.Render("zoom", 11) <span>Scroll or pinch here to zoom into the day</span></div>
+                <div class="tl-zoom-hint">@UiIcon.Render("zoom", 11) <span>@T["Scroll or pinch here to zoom into the day"]</span></div>
             }
         </div>
 
         @* Drag to trade height between the monitors and the tracks. JS owns the
            drag (see tlResizeInit) and hands back the height it landed on. *@
         <div class="tl-resizer" id="tl-resizer" role="separator" aria-orientation="horizontal"
-             title="Drag to make the timeline taller or shorter — double-click to reset"
+             title="@T["Drag to make the timeline taller or shorter — double-click to reset"]"
              @ondblclick="ResetBoardHeightAsync">
             <span class="tl-resizer-grip"></span>
         </div>
@@ -531,23 +529,23 @@
                    toggles the studio focus; a pan-drag swallows its click too). *@
                 <div class="tl-tile zoom-on @(focused ? "tl-tile-focus" : "") @(FocusActive && !focused ? "tl-tile-rail" : "")"
                      style="@TileStyle(cam.Name)"
-                     title="@(_studio ? (focused ? "Click to show all monitors again" : "Click to focus this monitor") : null)"
+                     title="@(_studio ? (focused ? T["Click to show all monitors again"] : T["Click to focus this monitor"]) : null)"
                      @onclick="() => ToggleFocus(cam.Name)" @key="cam.Name">
                     <video id="@VideoId(cam.Name)" muted playsinline preload="auto"></video>
                     @if (_noFootage.Contains(cam.Name))
                     {
-                        <div class="tl-nofootage">no footage at @TimeText(_t)</div>
+                        <div class="tl-nofootage">@T.F("no footage at {0}", TimeText(_t))</div>
                     }
                     <div class="tl-tile-name">@cam.Name</div>
                     @* Solo audio: this footage carries the camera's recorded sound.
                        Only one monitor plays at a time — unmuting one mutes the
                        rest, so a wall of cameras never becomes a wall of noise. *@
                     <button class="tl-snap tl-audio @(IsAudio(cam.Name) ? "on" : "")"
-                            title="@(IsAudio(cam.Name) ? "Mute this camera" : "Play this camera's sound (mutes the others)")"
+                            title="@(IsAudio(cam.Name) ? T["Mute this camera"] : T["Play this camera's sound (mutes the others)"])"
                             @onclick="() => ToggleAudioAsync(cam.Name)" @onclick:stopPropagation="true">
                         @UiIcon.Render(IsAudio(cam.Name) ? "volume" : "volume-x", 14)
                     </button>
-                    <button class="tl-snap" title="Save a still of this frame (PNG)"
+                    <button class="tl-snap" title="@T["Save a still of this frame (PNG)"]"
                             @onclick="() => SnapshotAsync(cam.Name)" @onclick:stopPropagation="true">
                         @UiIcon.Render("camera", 14)
                     </button>
@@ -561,7 +559,7 @@
                    JS-owned like the board divider's (see tlColResizeInit). *@
                 <div class="tl-vresizer" id="tl-vresizer" role="separator" aria-orientation="vertical"
                      style="grid-column: 2; grid-row: 1 / span @(Math.Max(1, Included.Count() - 1));"
-                     title="Drag to make the thumbnail rail wider or narrower — double-click to reset"
+                     title="@T["Drag to make the thumbnail rail wider or narrower — double-click to reset"]"
                      @ondblclick="ResetRailWidthAsync">
                     <span class="tl-vresizer-grip"></span>
                 </div>
@@ -819,11 +817,14 @@
     // Digital-zoom HUD, identical to the live view's: JS (neolink.zoomInit) owns
     // the clicks and the badge — Blazor only renders the shell once per monitor.
     private RenderFragment ZoomHud => @<div class="zoom-hud" @onclick:stopPropagation="true" @ondblclick:stopPropagation="true">
-        <button type="button" class="icon-btn zoom-btn" data-zoom="in" title="Zoom in (or mouse-wheel up on the video)">＋</button>
+        <button type="button" class="icon-btn zoom-btn" data-zoom="in" title="@T["Zoom in (or mouse-wheel up on the video)"]">＋</button>
         <span class="zoom-badge" data-zoom-badge>100%</span>
-        <button type="button" class="icon-btn zoom-btn" data-zoom="out" title="Zoom out (or mouse-wheel down)">−</button>
-        <button type="button" class="icon-btn zoom-btn zoom-reset" data-zoom="reset" title="Restore 1:1 (or double-click the video)">1:1</button>
+        <button type="button" class="icon-btn zoom-btn" data-zoom="out" title="@T["Zoom out (or mouse-wheel down)"]">−</button>
+        <button type="button" class="icon-btn zoom-btn zoom-reset" data-zoom="reset" title="@T["Restore 1:1 (or double-click the video)"]">1:1</button>
     </div>;
+
+    /// <summary>"Tue, 29 Jul 2026" — toolbar/dialog date, month names via the catalogue.</summary>
+    private string DateText(DateTime d) => $"{T.DayShort(d.DayOfWeek)}, {d.Day} {T.MonthShort(d.Month)} {d.Year}";
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -932,7 +933,7 @@
         string.IsNullOrEmpty(_token) ? "" : $"{sep}token={Uri.EscapeDataString(_token)}";
 
     /// <summary>Authenticated GET; null on failure (401 also sets the sign-in notice).</summary>
-    private async Task<T?> GetJsonAsync<T>(string path)
+    private async Task<TValue?> GetJsonAsync<TValue>(string path)
     {
         var req = new HttpRequestMessage(HttpMethod.Get, $"{ApiBase}{path}");
         if (!string.IsNullOrEmpty(_token))
@@ -940,11 +941,11 @@
         using var res = await Http.SendAsync(req);
         if (res.StatusCode == System.Net.HttpStatusCode.Unauthorized)
         {
-            _error = "Authentication required — sign in on the live view first.";
+            _error = T["Authentication required — sign in on the live view first."];
             return default;
         }
         if (!res.IsSuccessStatusCode) return default;
-        return await res.Content.ReadFromJsonAsync<T>();
+        return await res.Content.ReadFromJsonAsync<TValue>();
     }
 
     private async Task LoadCamerasAsync()
@@ -961,7 +962,7 @@
         }
         catch (Exception ex)
         {
-            _error = $"Cannot reach {_server}: {ex.Message}";
+            _error = T.F("Cannot reach {0}: {1}", _server, ex.Message);
         }
     }
 
@@ -1009,7 +1010,7 @@
                 if (!_marks.TryGetValue(ev.Camera, out var list))
                     _marks[ev.Camera] = list = new List<Mark>();
                 var evKind = EventKind(ev.Labels);
-                list.Add(new Mark(s, e, KindColor(evKind), $"{ev.Title} · {start:HH:mm:ss}", evKind));
+                list.Add(new Mark(s, e, KindColor(evKind), $"{ev.LocalTitle(k => T[k])} · {start:HH:mm:ss}", evKind));
 
                 // The clip (full main-stream) is what plays; the sub-stream preview
                 // is a lighter fallback. Offset into the file = cursor − event start.
@@ -1164,8 +1165,8 @@
     private static string KindColor(string kind) =>
         EventKindTable.FirstOrDefault(k => k.Kind == kind).Color ?? "#8a93a5";
 
-    private static string KindLabel(string kind) =>
-        EventKindTable.FirstOrDefault(k => k.Kind == kind).Label ?? kind;
+    private string KindLabel(string kind) =>
+        T[EventKindTable.FirstOrDefault(k => k.Kind == kind).Label ?? kind];
 
     private static string LabelColor(List<string> labels) => KindColor(EventKind(labels));
 
@@ -1783,7 +1784,7 @@
     {
         if (!ExportRangeValid(out _, out _))
         {
-            _exError = "times must be HH:mm[:ss] with From before To";
+            _exError = T["times must be HH:mm[:ss] with From before To"];
             _exFiles = 0;
             return;
         }
@@ -1807,13 +1808,13 @@
             }
             else
             {
-                _exError = "could not size the range — is the server reachable?";
+                _exError = T["could not size the range — is the server reachable?"];
                 _exFiles = 0;
             }
         }
         catch
         {
-            _exError = "could not size the range — is the server reachable?";
+            _exError = T["could not size the range — is the server reachable?"];
             _exFiles = 0;
         }
         finally
@@ -1903,12 +1904,12 @@
         if (_bmBusy) return;
         if (!RangeValid(_bmFrom, _bmTo, out var f, out var t))
         {
-            _bmError = "times must be HH:mm[:ss] with From before To";
+            _bmError = T["times must be HH:mm[:ss] with From before To"];
             return;
         }
         if (string.IsNullOrWhiteSpace(_bmName))
         {
-            _bmError = "give the moment a name";
+            _bmError = T["give the moment a name"];
             return;
         }
         _bmBusy = true;
@@ -1945,12 +1946,12 @@
                     if (el.TryGetProperty("error", out var err)) msg = err.GetString();
                 }
                 catch { }
-                _bmError = msg ?? "could not save the bookmark";
+                _bmError = msg ?? T["could not save the bookmark"];
             }
         }
         catch
         {
-            _bmError = "could not save — is the server reachable?";
+            _bmError = T["could not save — is the server reachable?"];
         }
         finally
         {
@@ -2002,10 +2003,10 @@
         StateHasChanged();
     }
 
-    private static string BookmarkDay(ApiBookmark b) =>
+    private string BookmarkDay(ApiBookmark b) =>
         DateTime.TryParseExact(b.Date, "yyyy-MM-dd", null,
             System.Globalization.DateTimeStyles.None, out var d)
-            ? d.ToString("ddd, d MMM yyyy")
+            ? DateText(d)
             : b.Date;
 
     private static string SizeText(long bytes) => bytes switch

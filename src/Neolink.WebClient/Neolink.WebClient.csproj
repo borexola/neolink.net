@@ -13,4 +13,12 @@
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 
+  <!-- Translation catalogues travel inside the assembly, so a language works the
+       same from a published folder, the docker image and the HA add-on without a
+       file to mount or a path to configure. English needs no catalogue: it is the
+       source language, kept in the components themselves. -->
+  <ItemGroup>
+    <EmbeddedResource Include="Localization\*.json" />
+  </ItemGroup>
+
 </Project>

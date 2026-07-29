@@ -14,6 +14,8 @@ public sealed class UserRecord
     /// <summary>"pbkdf2-sha256${iterations}${saltB64}${hashB64}"</summary>
     public string Hash { get; set; } = "";
     public bool Admin { get; set; }
+    /// <summary>UI language ("en", "fr"); null follows the server default.</summary>
+    public string? Lang { get; set; }
     public string? Settings { get; set; }
     /// <summary>Additional per-page settings blobs (raw JSON), keyed by page name
     /// (e.g. "timeline") — so each page owns its state without racing the main blob.</summary>
@@ -41,6 +43,7 @@ public sealed class UserStore
     private readonly string _file;
     private readonly object _gate = new();
     private byte[] _secret = RandomNumberGenerator.GetBytes(32);
+    private string? _defaultLanguage;
     private List<UserRecord> _users = new();
 
     private static readonly JsonSerializerOptions JsonOpts = new()
@@ -52,6 +55,11 @@ public sealed class UserStore
     private sealed class FileModel
     {
         public string Secret { get; set; } = "";
+        /// <summary>The UI language for anyone who has not chosen one: the sign-in
+        /// and first-run screens, and accounts that never picked. Kept here rather
+        /// than in config.json so changing it applies live — config edits need a
+        /// restart, and a language change must not.</summary>
+        public string? DefaultLanguage { get; set; }
         public List<UserRecord> Users { get; set; } = new();
     }
 
@@ -74,6 +82,7 @@ public sealed class UserStore
                 if (model != null)
                 {
                     if (model.Secret.Length > 0) _secret = Convert.FromBase64String(model.Secret);
+                    _defaultLanguage = model.DefaultLanguage;
                     _users = model.Users;
                 }
                 if (source != _file)
@@ -140,7 +149,7 @@ public sealed class UserStore
     }
 
     /// <summary>Creates an account. The very first one becomes the admin.</summary>
-    public UserRecord Add(string name, string password, bool admin)
+    public UserRecord Add(string name, string password, bool admin, string? language = null)
     {
         ValidateName(name);
         ValidatePassword(password);
@@ -148,10 +157,55 @@ public sealed class UserStore
         {
             if (Find(name) != null)
                 throw new ArgumentException($"user '{name}' already exists");
-            var user = new UserRecord { Name = name, Hash = HashPassword(password), Admin = admin };
+            var user = new UserRecord
+            {
+                Name = name,
+                Hash = HashPassword(password),
+                Admin = admin,
+                Lang = language,
+            };
             _users.Add(user);
             SaveLocked();
             return user;
+        }
+    }
+
+    // ------------------------------------------------------------------ language
+
+    /// <summary>The language for accounts that never chose one, and for anyone not
+    /// signed in. Null until someone sets it — the caller decides what that means
+    /// (the config file's ui.language seeds it at startup).</summary>
+    public string? DefaultLanguage
+    {
+        get { lock (_gate) return _defaultLanguage; }
+    }
+
+    public void SetDefaultLanguage(string? language)
+    {
+        lock (_gate)
+        {
+            if (_defaultLanguage == language) return;
+            _defaultLanguage = language;
+            SaveLocked();
+        }
+    }
+
+    /// <summary>The account's own language, or null to follow the server default.</summary>
+    public string? GetLanguage(string name)
+    {
+        lock (_gate) return Find(name)?.Lang;
+    }
+
+    public bool SetLanguage(string name, string? language)
+    {
+        lock (_gate)
+        {
+            var user = Find(name);
+            if (user == null) return false;
+            if (user.Lang == language) return true;
+            user.Lang = language;
+            SaveLocked();
+            return true;
         }
     }
 
@@ -310,7 +364,12 @@ public sealed class UserStore
 
     private void SaveLocked()
     {
-        var model = new FileModel { Secret = Convert.ToBase64String(_secret), Users = _users };
+        var model = new FileModel
+        {
+            Secret = Convert.ToBase64String(_secret),
+            DefaultLanguage = _defaultLanguage,
+            Users = _users,
+        };
         var tmp = _file + ".tmp";
         File.WriteAllText(tmp, JsonSerializer.Serialize(model, JsonOpts));
         // The file holds the token-signing secret: owner-only where the OS supports it.

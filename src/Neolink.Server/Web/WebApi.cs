@@ -97,6 +97,10 @@ public sealed class WebApiOptions
     public bool TalkEnabled { get; init; }
     /// <summary>Show the admin background-process strip in the web UI (ui.show_background_tasks).</summary>
     public bool ShowBackgroundTasks { get; init; } = true;
+    /// <summary>ui.language from the config file — the SEED for the default UI
+    /// language on a server whose state has none yet (a fresh provisioned deploy).
+    /// Once anyone picks a language in the UI, the stored choice wins.</summary>
+    public string? ConfigLanguage { get; init; }
     public required string Version { get; init; }
     public required string ConfigPath { get; init; }
     public UpdateChecker? Updates { get; init; }
@@ -229,7 +233,8 @@ public static class WebApi
         string? AnthropicEndpoint, string? AnthropicModel, string? AnthropicApiKey,
         string? Prompt, bool? NoThink, int? MaxFrames, int? TimeoutSeconds,
         int? SampleEverySeconds = null);
-    private sealed record CredentialsRequest(string? Username, string? Password);
+    private sealed record CredentialsRequest(string? Username, string? Password, string? Language = null);
+    private sealed record LanguageRequest(string? Language);
 
     /// <summary>
     /// Serves a recording segment or event clip. Old-format (fragmented) files —
@@ -285,6 +290,10 @@ public static class WebApi
         var userStore = o.UserStore;
         var resetAdminPassword = o.ResetAdminPassword;
         var trickleSpeed = o.TrickleSpeed;
+        var serverLanguage = new Neolink.WebClient.Localization.ServerLanguage
+        {
+            Code = userStore.DefaultLanguage ?? o.ConfigLanguage ?? Neolink.WebClient.Localization.Lang.Default,
+        };
 
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -308,6 +317,12 @@ public static class WebApi
             // Circuits must talk to THIS server via loopback, never back out through
             // a reverse proxy's public URL (TLS/hairpin failures behind HAProxy etc.).
             builder.Services.AddSingleton(new Neolink.WebClient.LocalApiInfo(LoopbackBase(bindAddr, port)));
+            // The UI language: one live singleton for the server default (so
+            // changing it never needs a restart) and one per-circuit translator,
+            // which is the granularity the setting actually has — one tab of one
+            // signed-in user.
+            builder.Services.AddSingleton(serverLanguage);
+            builder.Services.AddScoped<Neolink.WebClient.Localization.Translator>();
         }
         var app = builder.Build();
 
@@ -387,6 +402,10 @@ public static class WebApi
                 resetAvailable = resetAdminPassword && userStore.Enabled,
                 user = user?.Name,
                 admin = user?.Admin ?? false,
+                // The account's own language (null = follows the default) and the
+                // default itself, so the UI can show both without a second call.
+                language = user?.Lang,
+                defaultLanguage = serverLanguage.Code,
             });
         });
 
@@ -399,7 +418,18 @@ public static class WebApi
                 return Results.Json(new { error = "provide username and password" }, statusCode: 400);
             try
             {
-                var admin = userStore.Add(req.Username.Trim(), req.Password, admin: true);
+                // The language chosen on the first-run form is both the admin's own
+                // and the server default — it is the only language question a fresh
+                // install asks, so it has to answer for the sign-in screen too.
+                var language = Neolink.WebClient.Localization.Lang.IsSupported(req.Language)
+                    ? Neolink.WebClient.Localization.Lang.Normalize(req.Language)
+                    : null;
+                var admin = userStore.Add(req.Username.Trim(), req.Password, admin: true, language);
+                if (language != null)
+                {
+                    userStore.SetDefaultLanguage(language);
+                    serverLanguage.Code = language;
+                }
                 Log.Warn($"Web UI authentication ENABLED: admin account '{admin.Name}' created");
                 return Results.Json(new { token = userStore.IssueToken(admin), user = admin.Name, admin = true });
             }
@@ -407,6 +437,43 @@ public static class WebApi
             {
                 return Results.Json(new { error = ex.Message }, statusCode: 400);
             }
+        });
+
+        // ------------------------------------------------------------ UI language
+
+        // The list of languages needs no endpoint: the UI renders in this very
+        // process, so it reads Lang.All directly. What it cannot know on its own
+        // is who picked what — that rides on /api/auth/status above.
+
+        // The signed-in user's own language. Null clears it, i.e. follow the default.
+        app.MapPut("/api/me/language", (LanguageRequest req, HttpContext ctx) =>
+        {
+            var name = SessionName(ctx);
+            if (name == null)
+                return Results.Json(new { error = "sign in first" }, statusCode: 401);
+            if (req.Language != null && !Neolink.WebClient.Localization.Lang.IsSupported(req.Language))
+                return Results.Json(new { error = "unsupported language" }, statusCode: 400);
+            var language = req.Language == null
+                ? null
+                : Neolink.WebClient.Localization.Lang.Normalize(req.Language);
+            return userStore.SetLanguage(name, language)
+                ? Results.Json(new { ok = true, language })
+                : Results.Json(new { error = "unknown user" }, statusCode: 404);
+        });
+
+        // The server default, for everyone who has not chosen: admin only, and
+        // live — the singleton every new render reads is updated in the same
+        // breath, so nothing has to be restarted for it to take hold.
+        app.MapPut("/api/admin/language", (LanguageRequest req, HttpContext ctx) =>
+        {
+            if (AdminOnly(ctx) is { } denied) return denied;
+            if (!Neolink.WebClient.Localization.Lang.IsSupported(req.Language))
+                return Results.Json(new { error = "unsupported language" }, statusCode: 400);
+            var language = Neolink.WebClient.Localization.Lang.Normalize(req.Language);
+            userStore.SetDefaultLanguage(language);
+            serverLanguage.Code = language;
+            Log.Info($"Default web UI language set to '{language}'");
+            return Results.Json(new { ok = true, language });
         });
 
         app.MapPost("/api/auth/login", async (CredentialsRequest req) =>

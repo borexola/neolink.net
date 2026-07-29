@@ -1,5 +1,6 @@
 @using System.Globalization
 @using System.Text
+@inject Translator T
 
 @* One monitor time-series chart: hand-rolled SVG (no chart library), scrolling
    right-to-left as samples arrive. Series share the x (time) and y axes; the
@@ -20,7 +21,7 @@
     <div class="mon-chart-body" data-hover="@HoverJson()">
         @if (Series.All(s => Visible(s).Count < 2))
         {
-            <div class="mon-empty">gathering data…</div>
+            <div class="mon-empty">@T["gathering data…"]</div>
         }
         else
         {

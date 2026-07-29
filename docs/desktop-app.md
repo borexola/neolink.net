@@ -10,6 +10,26 @@ run it, and point it at your server. It is a **client**: the server keeps
 running wherever it already runs (Docker, the Home Assistant add-on, a NAS,
 bare metal). Nothing about your server setup changes.
 
+### "Windows protected your PC"
+
+The installer is **not code-signed**, so Windows has no publisher to check it
+against and warns twice: SmartScreen's blue *"Windows protected your PC"*
+screen, then a UAC prompt that says *Publisher: Unknown*. Neither means
+anything was found wrong with the file — only that it is unrecognised.
+
+To install anyway: on the blue screen click **More info** → **Run anyway**,
+then accept the UAC prompt. You can also clear the download mark first —
+right-click the MSI → **Properties** → tick **Unblock** → OK, or:
+
+```powershell
+Unblock-File .\Neolink.NET.Desktop-*.msi
+```
+
+If you would rather verify the download than trust it, every release MSI is
+built in public by GitHub Actions from the tagged source — the run that
+produced it is linked from the release, and you can rebuild it yourself with
+`installer/build-msi.ps1`.
+
 ## Why not just the browser?
 
 The web UI is already installable as a PWA, and for watching cameras that is

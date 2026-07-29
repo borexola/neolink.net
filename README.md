@@ -1,5 +1,7 @@
 # Neolink.NET
 
+**English** · [Français](README.fr.md) · [Deutsch](README.de.md) · [Español](README.es.md) · [Nederlands](README.nl.md) · [Polski](README.pl.md) · [Português](README.pt.md)
+
 **RTSP bridge + web viewer for Reolink cameras that speak the proprietary Baichuan protocol.**
 
 Neolink.NET is for Reolink IP cameras that talk the proprietary "Baichuan" protocol on
@@ -310,6 +312,11 @@ in exchange you get an integration light enough to leave running forever.
   **footage encryption at rest**, **email alerts** for critical
   conditions ([Email notifications](#email-notifications)) and per-user
   **browser alerts**
+- **Multiple languages** — English, French, German, Spanish, Dutch, Polish and
+  Portuguese. Picked at first-run setup or under ⚙ → Language, applied live
+  (no restart, no reload); each account keeps its own choice and the admin sets
+  the server default for the sign-in screen. Non-English languages are
+  AI-translated and cannot be fully verified — corrections welcome
 
 **Home Assistant / MQTT (optional)** — full guide in
 [docs/home-assistant.md](docs/home-assistant.md)
@@ -429,6 +436,7 @@ the original Rust neolink are also accepted.
 | `state_dir` | config dir | Where the UI's server-side state persists: `users.json` (sign-in accounts) and `settings.json` (per-user layouts/filters/recording switches) |
 | `reset_admin_password` | `false` | Recovery: while `true`, the login screen allows setting a new admin password. Turn it back off after use |
 | `trickle_speed` | `4` | Playback speed of the review strip's ambient clip previews |
+| `language` | *(none)* | Seeds the default UI language (`en`, `fr`, `de`, `es`, `nl`, `pl`, `pt`) on a server whose state has none yet. Only a seed: the first-run dialog and ⚙ → Language own the setting afterwards (stored in `users.json`, applied live) |
 
 > **Persistence across deployments** — three locations must live on volumes or
 > your state resets every deploy: **(1)** the config directory (or `ui.state_dir`)
@@ -905,6 +913,8 @@ rules are stored on your account, so they stay in step with the browser both
 ways; quiet hours, sound and cadence are per-machine.
 
 Grab the MSI from the [releases page](https://github.com/borexola/neolink.net/releases).
+It is not code-signed yet, so Windows shows *"Windows protected your PC"* —
+click **More info** → **Run anyway** (see the guide).
 Installing a newer build over an older one replaces it and shuts the running
 copy down by itself — no reboot, no duplicate entry in Add/Remove Programs.
 Linux and macOS keep the PWA for now; see the guide for what a port would take.

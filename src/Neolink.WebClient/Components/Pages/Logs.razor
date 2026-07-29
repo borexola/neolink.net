@@ -3,54 +3,53 @@
 @inject HttpClient Http
 @inject IJSRuntime JS
 @inject LocalApiInfo Local
+@inject Translator T
 @implements IAsyncDisposable
 
 @* Full-page live tail of the server log (admin only). The lines are appended
    straight into the DOM by neolink.js — see logsAttach — so a chatty server
    never churns the Blazor circuit. *@
 
-<PageTitle>Neolink.NET — Logs</PageTitle>
+<PageTitle>@T["Neolink.NET — Logs"]</PageTitle>
 
 <div class="logs-page">
     <div class="toolbar">
-        <a class="tool-btn" href="" title="Back to live view">‹ Live</a>
-        <a class="tool-btn" href="monitor" title="Resource monitor">@UiIcon.Render("activity", 14) <span class="tool-name">Monitor</span></a>
-        <span class="tool-label">SERVER LOGS</span>
+        <a class="tool-btn" href="" title="@T["Back to live view"]">‹ @T["Live"]</a>
+        <a class="tool-btn" href="monitor" title="@T["Resource monitor"]">@UiIcon.Render("activity", 14) <span class="tool-name">@T["Monitor"]</span></a>
+        <span class="tool-label">@T["SERVER LOGS"]</span>
         @if (_admin)
         {
-            <span class="mon-pulse" title="Streaming live"></span>
+            <span class="mon-pulse" title="@T["Streaming live"]"></span>
             <span class="tool-sep"></span>
-            <span class="tool-label">SHOW</span>
+            <span class="tool-label">@T["SHOW"]</span>
             @foreach (var lvl in LogLevelChips)
             {
                 <button class="chip @(_hiddenLevels.Contains(lvl) ? "chip-off" : "chip-active")"
-                        title="@(_hiddenLevels.Contains(lvl) ? "Hidden — click to show" : "Shown — click to hide")"
+                        title="@(_hiddenLevels.Contains(lvl) ? T["Hidden — click to show"] : T["Shown — click to hide"])"
                         @onclick="() => ToggleLevel(lvl)">@lvl</button>
             }
             <span class="tile-spacer"></span>
-            <button class="tool-btn" title="Empty the view (the server keeps its backlog)"
-                    @onclick="ClearAsync">Clear</button>
+            <button class="tool-btn" title="@T["Empty the view (the server keeps its backlog)"]"
+                    @onclick="ClearAsync">@T["Clear"]</button>
         }
     </div>
 
     @if (_admin)
     {
         <div class="event-sub logs-hint">
-            Scroll up to freeze the view, scroll back to the bottom to follow. The newest
-            ~500 lines are kept server-side, so a fresh page starts with history.
+            @T["Scroll up to freeze the view, scroll back to the bottom to follow. The newest ~500 lines are kept server-side, so a fresh page starts with history."]
         </div>
         <div id="logs-view" class="mon-logs logs-full @HiddenClasses()"></div>
     }
     else if (_checked && !_authEnabled)
     {
         <div class="notice">
-            Live server logs are admin-only — and with authentication off there is no admin yet.
-            Create the admin account from the live view, then come back here.
+            @T["Live server logs are admin-only — and with authentication off there is no admin yet. Create the admin account from the live view, then come back here."]
         </div>
     }
     else if (_checked)
     {
-        <div class="notice">Live server logs are visible to the admin account only.</div>
+        <div class="notice">@T["Live server logs are visible to the admin account only."]</div>
     }
 </div>
 

@@ -218,9 +218,11 @@ public sealed class ApiNotifications
     public List<string> Cameras { get; set; } = new();
 }
 
-/// <summary>GET /api/auth/status — whether/how the UI must authenticate.</summary>
+/// <summary>GET /api/auth/status — whether/how the UI must authenticate.
+/// Language is the signed-in account's own choice (null = follows the server's);
+/// DefaultLanguage is what everyone else gets, including the sign-in screen.</summary>
 public sealed record ApiAuthStatus(bool Enabled, bool SetupRequired, bool ResetAvailable,
-    string? User, bool Admin);
+    string? User, bool Admin, string? Language = null, string? DefaultLanguage = null);
 
 /// <summary>POST /api/auth/login|setup reply.</summary>
 public sealed record ApiAuthToken(string Token, string User, bool Admin);
@@ -350,20 +352,23 @@ public sealed record ApiEvent(string Id, string Camera, DateTime Start, DateTime
         Known.FirstOrDefault(k => Labels.Contains(k.Label)).Icon ?? "👁";
 
     /// <summary>"Human detected", "Human + Vehicle detected", ...</summary>
-    public string Title
+    public string Title => LocalTitle(s => s);
+
+    /// <summary>The title through a translator — every display name and the
+    /// sentence pattern go through <paramref name="tr"/>, so "Human detected"
+    /// can become "Humain détecté" without this record knowing any French.
+    /// The identity function reproduces the English <see cref="Title"/>.</summary>
+    public string LocalTitle(Func<string, string> tr)
     {
-        get
-        {
-            var names = Known.Where(k => Labels.Contains(k.Label)).Select(k => k.Name)
-                .Concat(Labels.Where(l => Known.All(k => k.Label != l)).Select(Cap))
-                .Distinct().ToList();
-            if (names.Count == 0) names.Add("Motion");
-            // A lone doorbell event is a button press, not a detection.
-            if (names.Count == 1 && names[0] == "Doorbell") return "Doorbell pressed";
-            // A lone external event was commanded (HA's Record switch), not detected.
-            if (names.Count == 1 && names[0] == "External") return "Externally triggered";
-            return string.Join(" + ", names) + " detected";
-        }
+        var names = Known.Where(k => Labels.Contains(k.Label)).Select(k => tr(k.Name))
+            .Concat(Labels.Where(l => Known.All(k => k.Label != l)).Select(Cap))
+            .Distinct().ToList();
+        if (names.Count == 0) names.Add(tr("Motion"));
+        // A lone doorbell event is a button press, not a detection.
+        if (names.Count == 1 && names[0] == tr("Doorbell")) return tr("Doorbell pressed");
+        // A lone external event was commanded (HA's Record switch), not detected.
+        if (names.Count == 1 && names[0] == tr("External")) return tr("Externally triggered");
+        return string.Format(tr("{0} detected"), string.Join(" + ", names));
     }
 
     public TimeSpan Duration => End > Start ? End - Start : TimeSpan.Zero;
@@ -438,6 +443,9 @@ public static class UiIcon
             "bell" => "<path d=\"M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9\"/><path d=\"M13.73 21a2 2 0 0 1-3.46 0\"/>",
             // The classic ribbon bookmark.
             "bookmark" => "<path d=\"M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z\"/>",
+            // Globe with meridians — the UI language.
+            "globe" => "<circle cx=\"12\" cy=\"12\" r=\"10\"/><line x1=\"2\" y1=\"12\" x2=\"22\" y2=\"12\"/>"
+                + "<path d=\"M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z\"/>",
             // AI features (a big and a small four-point star).
             "sparkles" => "<path d=\"M11 3l1.7 4.6L17.3 9.3l-4.6 1.7L11 15.6 9.3 11 4.7 9.3 9.3 7.6z\"/>"
                 + "<path d=\"M18.5 14l.9 2.4 2.4.9-2.4.9-.9 2.4-.9-2.4-2.4-.9 2.4-.9z\"/>",

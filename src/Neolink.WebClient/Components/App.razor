@@ -1,5 +1,6 @@
+@using Neolink.WebClient.Localization
 <!DOCTYPE html>
-<html lang="en">
+<html lang="@InitialLang">
 
 <head>
     <meta charset="utf-8" />
@@ -27,7 +28,7 @@
 </head>
 
 <body>
-    <Routes @rendermode="InteractiveServer" />
+    <Routes @rendermode="InteractiveServer" Language="@InitialLang" />
 
     @* Custom reconnect overlay: when this element exists, Blazor toggles its
        state classes (components-reconnect-show/failed/rejected) here instead
@@ -36,24 +37,24 @@
         <div class="reconnect-box">
             <div class="reconnect-spinner" aria-hidden="true"></div>
             <div class="reconnect-when-show">
-                <div class="reconnect-title">Connection lost</div>
+                <div class="reconnect-title">@L("Connection lost")</div>
                 <div class="reconnect-sub">
-                    Reconnecting to the server…
-                    <span class="reconnect-attempts">(attempt
-                        <span id="components-reconnect-current-attempt"></span> of
+                    @L("Reconnecting to the server…")
+                    <span class="reconnect-attempts">(@L("attempt")
+                        <span id="components-reconnect-current-attempt"></span> @L("of")
                         <span id="components-reconnect-max-retries"></span>)</span>
                 </div>
             </div>
             <div class="reconnect-when-failed">
-                <div class="reconnect-title">Server unreachable</div>
-                <div class="reconnect-sub">The connection could not be re-established.</div>
-                <button class="chip chip-active" onclick="(window.Blazor &amp;&amp; Blazor.reconnect) ? Blazor.reconnect() : location.reload()">Try again</button>
-                <button class="chip" onclick="location.reload()">Reload page</button>
+                <div class="reconnect-title">@L("Server unreachable")</div>
+                <div class="reconnect-sub">@L("The connection could not be re-established.")</div>
+                <button class="chip chip-active" onclick="(window.Blazor &amp;&amp; Blazor.reconnect) ? Blazor.reconnect() : location.reload()">@L("Try again")</button>
+                <button class="chip" onclick="location.reload()">@L("Reload page")</button>
             </div>
             <div class="reconnect-when-rejected">
-                <div class="reconnect-title">Session expired</div>
-                <div class="reconnect-sub">The server restarted — the page needs a reload.</div>
-                <button class="chip chip-active" onclick="location.reload()">Reload page</button>
+                <div class="reconnect-title">@L("Session expired")</div>
+                <div class="reconnect-sub">@L("The server restarted — the page needs a reload.")</div>
+                <button class="chip chip-active" onclick="location.reload()">@L("Reload page")</button>
             </div>
         </div>
     </div>
@@ -65,6 +66,28 @@
 </html>
 
 @code {
+    [Inject] public ServerLanguage ServerLang { get; set; } = default!;
+
+    // This page is rendered STATICALLY, before any circuit exists, so it cannot
+    // use the scoped Translator — it resolves the language itself and looks
+    // strings up directly. It matters for the reconnect overlay above: that
+    // markup is what a user sees when the circuit is gone, so it is the one part
+    // of the UI that can never be re-rendered into their language later.
+    private string L(string text) => Translations.Get(InitialLang, text);
+
+    /// <summary>The language this page paints in, and the one the circuit adopts.
+    /// The cookie is the user's own choice (written the moment they pick one);
+    /// absent it, the server default applies — which is what a first visit, the
+    /// sign-in screen and a fresh browser all get.</summary>
+    private string InitialLang
+    {
+        get
+        {
+            var cookie = HttpContext?.Request.Cookies[Translator.CookieName];
+            return Lang.IsSupported(cookie) ? Lang.Normalize(cookie) : ServerLang.Code;
+        }
+    }
+
     // The entry assembly's informational version (e.g. "0.9.8" or "0.9.8-beta.3")
     // — the same value -p:Version stamps at release/beta build time, so asset
     // URLs change exactly when the shipped assets can have.

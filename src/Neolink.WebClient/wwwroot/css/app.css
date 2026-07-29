@@ -5334,6 +5334,22 @@ body.tl-colresizing, body.tl-colresizing * { cursor: col-resize !important; user
 
 .stream-chip.chip-active:hover { border-color: var(--accent); color: var(--accent); }
 
+/* Language picker: one chip per language, wrapping on narrow screens rather
+   than pushing the settings panel into a horizontal scroll. */
+.lang-choice {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 4px 0 2px;
+}
+
+/* Marks a language whose catalogue is empty — it would render as English. */
+.lang-empty {
+    margin-left: 5px;
+    font-weight: 700;
+    color: #e8b054;
+}
+
 /* Small BETA pill for features still proving themselves on real hardware. */
 .beta-tag {
     font-size: 9px;

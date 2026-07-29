@@ -87,3 +87,24 @@ full, overload, write failures). Clicking a detection alert opens the exact
 clip. Fires while the app is open (tab or PWA, foreground or minimized),
 with per-camera cooldowns; preferences follow your account. Needs HTTPS or
 localhost, like two-way talk.
+
+## Language
+
+The UI ships in English, French, German, Spanish, Dutch, Polish and
+Portuguese. Every language beyond English is AI-translated and cannot be fully
+verified for accuracy — corrections are very welcome (the catalogues are plain
+JSON). The first-run "Secure this server" dialog
+asks for the language alongside the admin account — that choice becomes both
+the admin's own and the server default. Afterwards it lives under
+⚙ → *Language*, a tab every account gets: your pick applies to the whole UI
+**instantly** (no restart, no reload) and is saved to your account, so it
+follows you to other browsers. The admin separately sets the *server default*
+— what the sign-in screen uses and what accounts that never chose follow. A
+cookie carries the choice into the first frame of the next page load, so
+there is no English flash. For provisioned deploys, `ui.language` in
+`config.json` seeds the default on a server whose state has none yet.
+
+A string a catalogue does not cover falls back to its English original, so a
+partial translation is still a working UI. Adding a language is one embedded
+JSON file (`src/Neolink.WebClient/Localization/{code}.json`, keyed by the
+English source text) plus one entry in `Localization/Lang.cs`.

@@ -8,6 +8,37 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Added
 
+- **The web UI speaks seven languages.** Every label, notice, warning, tooltip
+  and error in the UI now goes through a translation layer, and complete
+  catalogues for **French, German, Spanish, Dutch, Polish and Portuguese** ship
+  embedded in the app — pick one and the whole UI follows instantly, live: no
+  container restart, no page reload, not even a reconnect. Spelled-out dates
+  (day and month names) follow too, without touching the server's
+  invariant-globalization build. All languages beyond English are AI-translated
+  and cannot be fully verified for accuracy (the Language tab says so) —
+  corrections are welcome; the catalogues are plain JSON. Condensed translated
+  READMEs (`README.fr.md`, `README.de.md`, `README.es.md`, `README.nl.md`,
+  `README.pl.md`, `README.pt.md`) link from the main README, which remains the
+  authoritative English documentation.
+
+  The language is chosen where it is first needed: the initial "Secure this
+  server" dialog asks alongside the admin username and password (and applies to
+  the form the moment it is picked, so the rest of it reads in the language
+  just chosen), and afterwards it lives under **Server settings → Language** —
+  a tab every account gets, not just the admin. A signed-in user's choice is
+  saved to their account (`users.json`) and follows them to other browsers; the
+  admin separately sets the **server default**, which is what the sign-in
+  screen and never-chose accounts use. A cookie carries the choice into the
+  very first frame of the next page load, so a French user never sees an
+  English flash — including the reconnect overlay, which renders before any
+  live circuit exists. `ui.language` in `config.json` can seed the default for
+  provisioned deploys; once anyone picks in the UI, the stored choice wins.
+
+  English is the source language and needs no catalogue; a language whose
+  catalogue is missing a string falls back to the English original rather than
+  a placeholder, so partial translations degrade gracefully. Adding another
+  language is one embedded JSON file plus one line in the language list.
+
 - **Neolink.NET Desktop for Windows (BETA) — an MSI-installed app that is
   there when you are not looking.** The same web UI in its own window, in the
   system tray, starting with Windows. It is a client: the server keeps running
@@ -189,6 +220,12 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Fixed
 
+- **The desktop MSI's SmartScreen warning is explained rather than left to
+  guess.** The installer is not code-signed, so Windows shows *"Windows
+  protected your PC"* and then a UAC prompt reading *Publisher: Unknown*. The
+  README and the desktop guide now say so plainly, give the two-click way
+  through (**More info** → **Run anyway**), and mention `Unblock-File` for
+  anyone who prefers clearing the download mark first.
 - **HA add-on: a camera whose name is a substring of another's is added, not
   swallowed.** The launcher's "is this camera already in config.json?" test
   used jq's `inside()`, which compares strings by SUBSTRING — so adding a

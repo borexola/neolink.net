@@ -306,6 +306,7 @@ public sealed class NeolinkConfig
                 case "tricklespeed": config.Ui.TrickleSpeed = prop.Value.GetDouble(); break;
                 case "talk": config.Ui.Talk = prop.Value.GetBoolean(); break;
                 case "showbackgroundtasks": config.Ui.ShowBackgroundTasks = prop.Value.GetBoolean(); break;
+                case "language": config.Ui.Language = prop.Value.GetString(); break;
                 default:
                     Log.Warn($"Config: ignoring unknown ui option '{prop.Name}'");
                     break;
@@ -378,6 +379,7 @@ public sealed class NeolinkConfig
             if (MiniToml.GetInt(ui, "trickle_speed") is { } ts) config.Ui.TrickleSpeed = ts;
             config.Ui.Talk = MiniToml.GetBool(ui, "talk") ?? false;
             config.Ui.ShowBackgroundTasks = MiniToml.GetBool(ui, "show_background_tasks") ?? true;
+            config.Ui.Language = MiniToml.GetString(ui, "language");
         }
 
         if (MiniToml.GetTable(root, "recording") is { } rec)
@@ -591,6 +593,10 @@ public sealed class NeolinkConfig
             throw new FormatException("ui.trickle_speed must be 0.25..16");
         if (Ui.StateDir is { Length: 0 })
             throw new FormatException("ui.state_dir must not be empty when set");
+        if (Ui.Language is { Length: > 0 } lang && !Neolink.WebClient.Localization.Lang.IsSupported(lang))
+            throw new FormatException(
+                $"ui.language '{lang}' is not one of: " +
+                string.Join(", ", Neolink.WebClient.Localization.Lang.All.Select(l => l.Code)));
 
         if (Mqtt != null)
         {
@@ -675,6 +681,14 @@ public sealed class UiConfig
     /// <summary>Show the admin background-process strip (archiving progress, ...) in
     /// the sidebar. On by default; turn off to hide it for everyone.</summary>
     public bool ShowBackgroundTasks { get; set; } = true;
+    /// <summary>
+    /// Seeds the default UI language ("en", "fr") on a server that has never had
+    /// one set, so a provisioned deployment (docker compose, the HA add-on) comes
+    /// up in the right language. It is only a SEED: once anyone picks a language
+    /// in the UI that choice lives in users.json and wins, because a language must
+    /// be changeable without editing a file and restarting.
+    /// </summary>
+    public string? Language { get; set; }
 }
 
 /// <summary>MQTT / Home Assistant integration settings ("mqtt" in the config).</summary>

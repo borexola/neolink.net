@@ -1,5 +1,18 @@
+@using Neolink.WebClient.Localization
+@inject Translator T
+
 <Router AppAssembly="typeof(Routes).Assembly">
     <Found Context="routeData">
         <RouteView RouteData="routeData" />
     </Found>
 </Router>
+
+@code {
+    /// <summary>The language the host page resolved (cookie, else the server
+    /// default). Passing it as a parameter of the interactive root is what carries
+    /// it across the static-render boundary, so the prerendered HTML and the live
+    /// circuit agree from the first frame instead of flashing English.</summary>
+    [Parameter] public string? Language { get; set; }
+
+    protected override void OnParametersSet() => T.Initialize(Language);
+}

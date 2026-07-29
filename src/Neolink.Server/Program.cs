@@ -810,6 +810,7 @@ if (config.WebPort > 0)
         TrickleSpeed = config.Ui.TrickleSpeed,
         TalkEnabled = config.Ui.Talk,
         ShowBackgroundTasks = config.Ui.ShowBackgroundTasks,
+        ConfigLanguage = config.Ui.Language,
         Version = Version,
         ConfigPath = Path.GetFullPath(configPath),
         Updates = updates,
