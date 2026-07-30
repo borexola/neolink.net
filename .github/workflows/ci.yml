@@ -47,9 +47,11 @@ jobs:
 
       - name: Self-tests
         run: |
+          # WinExe (GUI subsystem): PowerShell does not wait for it and never
+          # sets $LASTEXITCODE — only Start-Process -Wait sees the real result.
           $exe = "src/Neolink.Desktop/bin/Release/net10.0-windows10.0.19041.0/Neolink.Desktop.exe"
-          & $exe --selftest
-          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $p = Start-Process -FilePath $exe -ArgumentList '--selftest' -NoNewWindow -Wait -PassThru
+          if ($p.ExitCode -ne 0) { exit 1 }
         shell: pwsh
 
       # Proves the installer still builds and that the app publishes

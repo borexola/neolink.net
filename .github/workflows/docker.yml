@@ -128,8 +128,12 @@ jobs:
         run: |
           dotnet build src/Neolink.Desktop/Neolink.Desktop.csproj -c Release -warnaserror -nologo
           if ($LASTEXITCODE -ne 0) { exit 1 }
-          & "src/Neolink.Desktop/bin/Release/net10.0-windows10.0.19041.0/Neolink.Desktop.exe" --selftest
-          if ($LASTEXITCODE -ne 0) { exit 1 }
+          # WinExe (GUI subsystem): PowerShell does not wait for it and never
+          # sets $LASTEXITCODE, so the build's 0 above would mask a failing
+          # selftest — only Start-Process -Wait sees the real result.
+          $p = Start-Process -FilePath "src/Neolink.Desktop/bin/Release/net10.0-windows10.0.19041.0/Neolink.Desktop.exe" `
+            -ArgumentList '--selftest' -NoNewWindow -Wait -PassThru
+          if ($p.ExitCode -ne 0) { exit 1 }
 
       # Same version rules as the docker image: the tag IS the version; beta
       # builds report "<csproj version>-beta.<run>" (build-msi.ps1 reduces that
