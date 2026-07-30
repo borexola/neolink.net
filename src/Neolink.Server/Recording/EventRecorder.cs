@@ -462,6 +462,26 @@ public sealed class EventRecorder
             buffer.RemoveRange(0, buffer.Count - 8192);
     }
 
+    /// <summary>Seconds of footage the pre-roll actually holds right now, measured
+    /// from its RTP timestamps. A steadily streaming camera holds at least
+    /// PreSeconds (TrimPreroll's floor); a freshly woken battery camera holds only
+    /// what arrived since the wake.</summary>
+    private double PrerollSpanSeconds()
+    {
+        lock (_mediaGate)
+        {
+            uint first = 0, last = 0;
+            bool any = false;
+            foreach (var (p, _) in _preroll)
+            {
+                if (p is not HubVideo v) continue;
+                if (!any) { first = v.RtpTs; any = true; }
+                last = v.RtpTs;
+            }
+            return any ? unchecked(last - first) / (double)FMp4.Timescale : 0;
+        }
+    }
+
     // ------------------------------------------------------------------ event lifecycle
 
     private async Task EventLoopAsync(CancellationToken ct)
@@ -553,8 +573,15 @@ public sealed class EventRecorder
 
     private async Task RunEventAsync(List<string> initialLabels, bool provisional, CancellationToken ct)
     {
+        // The stored start reaches back only as far as footage actually exists.
+        // A battery camera's wake event has almost nothing buffered — its stream
+        // began at the wake — and stamping start-minus-PreSeconds there promises
+        // footage that never left the camera: the tile claims a time half a
+        // minute before the clip's first frame, and the duration counts the
+        // fiction too (reported live from a Video Doorbell as "missing" video).
         var rec = _store.Create(_camera,
-            DateTime.UtcNow - TimeSpan.FromSeconds(_cfg.PreSeconds), initialLabels);
+            DateTime.UtcNow - TimeSpan.FromSeconds(Math.Min(_cfg.PreSeconds, PrerollSpanSeconds())),
+            initialLabels);
         if (provisional)
         {
             // A self-wake: footage is being captured, but nothing is announced —

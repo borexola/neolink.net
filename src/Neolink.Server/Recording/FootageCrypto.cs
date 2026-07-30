@@ -85,8 +85,14 @@ public static class FootageVault
             bool encrypted = got == 8 && EncryptedFootageStream.IsMagic(head)
                 && RandomAccess.GetLength(handle) >= EncryptedFootageStream.HeaderLen;
             if (!encrypted)
+            {
                 // Large buffer: fewer, bigger reads are what serving video wants.
-                return new FileStream(handle, access, bufferSize: writable ? 1 : 1 << 20);
+                // Position pinned to 0: a positional sniff that short-reads at EOF
+                // (file smaller than the magic) leaves the handle's pointer at the
+                // end, and a stream served from there writes 0 of Length bytes —
+                // Kestrel turns that mismatch into a 500.
+                return new FileStream(handle, access, bufferSize: writable ? 1 : 1 << 20) { Position = 0 };
+            }
             if (_master == null)
                 throw new InvalidDataException(
                     $"{Path.GetFileName(path)} is encrypted footage but no key is available — " +

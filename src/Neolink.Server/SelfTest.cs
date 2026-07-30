@@ -4710,6 +4710,13 @@ public static class SelfTest
             Directory.CreateDirectory(evDir);
             File.WriteAllText(Path.Combine(evDir, "event.json"),
                 $$"""{"id":"{{evId}}","camera":"apicam","startUtc":"2026-01-05T10:11:12Z","endUtc":"2026-01-05T10:11:30Z","labels":["person"]}""");
+            // A thumbnail artifact: the event-media endpoints accept RTSP Basic
+            // credentials (like snapshots), and that contract needs a file to serve.
+            // Deliberately SHORTER than the vault's 8-byte magic sniff: a short read
+            // at EOF used to leave the handle's pointer at the end, and the served
+            // stream wrote 0 of Length bytes — Kestrel answered 500 for a file that
+            // opens fine. FootageVault pins Position back to 0; this file keeps it so.
+            File.WriteAllBytes(Path.Combine(evDir, "thumb.jpg"), new byte[] { 0xFF, 0xD8, 0xFF, 0xD9 });
             // A real config file: /api/admin/config reads and describes it. The
             // stored camera lets the connection test be exercised the way the list
             // row uses it — by name alone, resolving every field from config.json.
@@ -4891,6 +4898,42 @@ public static class SelfTest
                         "Basic", BasicHdr("rtspuser", "wrong pass"));
                     using var res = http.Send(req);
                     AssertEq((int)res.StatusCode, 401);
+                }
+                // Event footage takes the same RTSP Basic credentials (HA shows an
+                // event's thumbnail in a notification with the credentials it already
+                // holds); wrong password stays out, and the JSON endpoints stay
+                // session-only even with valid Basic credentials attached.
+                using (var res = http.GetAsync($"/api/events/{Uri.EscapeDataString(evId)}/thumb").Result)
+                    AssertEq((int)res.StatusCode, 401);
+                using (var req = new HttpRequestMessage(HttpMethod.Get, $"/api/events/{Uri.EscapeDataString(evId)}/thumb"))
+                {
+                    req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
+                        "Basic", BasicHdr("rtspuser", "rtsp pass"));
+                    using var res = http.Send(req);
+                    AssertEq((int)res.StatusCode, 200);
+                    AssertEq(res.Content.Headers.ContentType!.MediaType!, "image/jpeg");
+                    AssertEq(res.Content.ReadAsByteArrayAsync().Result.Length, 4); // full tiny file served (vault position pin)
+                }
+                using (var req = new HttpRequestMessage(HttpMethod.Get, $"/api/events/{Uri.EscapeDataString(evId)}/clip"))
+                {
+                    req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
+                        "Basic", BasicHdr("rtspuser", "rtsp pass"));
+                    using var res = http.Send(req);
+                    AssertEq((int)res.StatusCode, 404); // creds accepted, no clip staged
+                }
+                using (var req = new HttpRequestMessage(HttpMethod.Get, $"/api/events/{Uri.EscapeDataString(evId)}/thumb"))
+                {
+                    req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
+                        "Basic", BasicHdr("rtspuser", "wrong pass"));
+                    using var res = http.Send(req);
+                    AssertEq((int)res.StatusCode, 401);
+                }
+                using (var req = new HttpRequestMessage(HttpMethod.Get, "/api/events"))
+                {
+                    req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
+                        "Basic", BasicHdr("rtspuser", "rtsp pass"));
+                    using var res = http.Send(req);
+                    AssertEq((int)res.StatusCode, 401); // metadata stays session-only
                 }
                 AssertEq((int)http.GetAsync("/api/auth/status").Result.StatusCode, 200);
 

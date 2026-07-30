@@ -254,3 +254,19 @@ http://neolink:8655/api/cameras/Driveway/snapshot.jpg
   RTSP users nor accounts configured the URL is open, exactly like the
   streams. (HA users with MQTT also get a **Snapshot** `camera` entity for
   free — `image: /api/camera_proxy/camera.{name}_snapshot` in a notification.)
+
+### Event footage over HTTP
+
+An event's media takes the same RTSP Basic credentials as the snapshot — it is
+footage, so the footage rules apply (per-camera `permitted` included):
+
+```
+http://user:pass@neolink:8655/api/events/{id}/thumb     (JPEG thumbnail)
+http://user:pass@neolink:8655/api/events/{id}/preview   (low-res MP4)
+http://user:pass@neolink:8655/api/events/{id}/clip      (full clip MP4)
+```
+
+The event `id` arrives in the MQTT **Last event** payload, so an HA automation
+can attach the exact thumbnail of the event that fired it to a notification.
+The JSON endpoints (`/api/events`, `/api/cameras`, …) are metadata, not
+footage: those stay web-account only.

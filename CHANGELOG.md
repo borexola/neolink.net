@@ -4,6 +4,41 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
+## 0.9.9 — unreleased
+
+### Added
+
+- **Event footage over HTTP with RTSP credentials.** An event's thumbnail,
+  preview and clip (`/api/events/{id}/thumb` `/preview` `/clip`) now accept
+  the RTSP user credentials over HTTP Basic, exactly like the snapshot
+  endpoint always has — they are footage, so the footage rules apply,
+  per-camera `permitted` lists included. The concrete win: a Home Assistant
+  notification can attach the exact thumbnail of the event that fired it
+  (the event id rides the MQTT "Last event" payload) using the credentials
+  HA already holds, with no web-session token to mint or renew. The JSON
+  endpoints (`/api/events`, `/api/cameras`, …) are metadata, not footage,
+  and stay web-account only.
+
+### Fixed
+
+- **A battery camera's wake event no longer claims footage from before the
+  wake.** Events were stamped `start - pre_seconds` unconditionally, but the
+  pre-roll is cut from a buffer of the live stream — and a sleeping camera's
+  stream begins at the wake, so there was nothing to reach back into: the
+  event tile promised a start half a minute before the clip's first frame
+  and counted the fiction into the duration, reading as "missing" video
+  (reported live from a Video Doorbell, whose complete SD copy made the gap
+  obvious). The stored start now reaches back only as far as the footage the
+  pre-roll actually holds; cameras that stream continuously are unaffected —
+  their buffer always spans the full `pre_seconds`.
+- **A footage file smaller than 8 bytes no longer serves as a 500.** The
+  footage vault sniffs every file's first 8 bytes for the encryption magic;
+  on a shorter file that read stops at EOF and left the file position there,
+  so the HTTP response announced the full length, wrote zero bytes, and
+  Kestrel turned the mismatch into an empty 500. Found by the new selftest's
+  4-byte thumbnail; real artifacts are never that small, which is why nobody
+  hit it. The position is pinned back to the start after the sniff.
+
 ## 0.9.8
 
 ### Added

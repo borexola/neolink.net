@@ -145,7 +145,8 @@ public sealed class WebApiOptions
 ///   quick replies/auto-track/SD); POST .../image /volume /ptzpreset /quickreply /autotrack
 ///   GET /api/cameras/{name}/snapshot.jpg     — a current still (server-cached; ?maxAge= seconds)
 ///   GET /api/events[?camera=&amp;reviewed=&amp;limit=] — recorded detection events (when enabled)
-///   GET /api/events/{id}[/clip /thumb]      — one event / its artifacts; POST .../review to (un)dismiss
+///   GET /api/events/{id}[/clip /thumb /preview] — one event / its artifacts; POST .../review to (un)dismiss
+///   (footage URLs — snapshot + event clip/thumb/preview — also take RTSP Basic credentials)
 ///   POST /api/events/delete {ids[],estimate} — bulk delete events + files (admin; ?estimate summarizes)
 ///   GET/POST /api/cameras/{name}/recording  — per-camera recording switches + event-type filter
 ///   POST /api/cameras/{name}/record         — start/stop an on-demand clip (one clip, auto-capped)
@@ -357,11 +358,13 @@ public static class WebApi
 
         // Once any account exists, every /api call (except the auth handshake
         // itself) requires a valid session. The Blazor UI shell stays public so
-        // the login screen can render. Exception: snapshot URLs may instead carry
-        // RTSP Basic credentials — they are the still-image twin of the rtsp://
-        // stream URLs, consumed by the same kind of client (HA generic camera,
-        // scripts) that already holds those credentials; the endpoint validates
-        // them itself (per-camera permissions included).
+        // the login screen can render. Exception: FOOTAGE urls — snapshots and an
+        // event's media (thumbnail, clip, preview) — may instead carry RTSP Basic
+        // credentials: they serve what the rtsp:// stream URLs already serve, to
+        // the same kind of client (HA generic camera, notification templates,
+        // scripts) that already holds those credentials; the endpoints validate
+        // them themselves (per-camera permissions included). The JSON endpoints
+        // stay session-only.
         app.Use(async (ctx, next) =>
         {
             if (userStore.Enabled
@@ -371,14 +374,15 @@ public static class WebApi
                 var user = SessionUser(ctx);
                 if (user == null)
                 {
-                    if (IsSnapshotPath(ctx.Request.Path)
+                    bool footage = IsSnapshotPath(ctx.Request.Path) || IsEventMediaPath(ctx.Request.Path);
+                    if (footage
                         && ctx.Request.Headers.Authorization.ToString()
                             .StartsWith("Basic ", StringComparison.OrdinalIgnoreCase))
                     {
-                        await next(); // the snapshot handler checks the Basic credentials
+                        await next(); // the footage handler checks the Basic credentials
                         return;
                     }
-                    if (IsSnapshotPath(ctx.Request.Path))
+                    if (footage)
                         ChallengeBasic(ctx);
                     ctx.Response.StatusCode = 401;
                     await ctx.Response.WriteAsJsonAsync(new { error = "authentication required" });
@@ -2522,16 +2526,42 @@ public static class WebApi
                     : Results.Json(Shape(rec));
             });
 
-            app.MapGet("/api/events/{id}/clip", (string id) =>
+            // Event footage follows the snapshot rule: the RTSP users may fetch it
+            // over HTTP Basic — an HA notification shows an event's thumbnail with
+            // the credentials its camera entities already hold, no session token to
+            // mint or renew. permitted_users applies through the event's camera; an
+            // event whose camera left the config falls back to any valid RTSP user
+            // (same rule as the review endpoint). The JSON endpoints stay session-only.
+            IResult? EventMediaAuth(HttpContext ctx, string id)
             {
+                if (!userStore.Enabled || ctx.Items.ContainsKey("authUser"))
+                    return null;
+                var creds = NetUtil.DecodeBasicAuth(ctx.Request.Headers.Authorization);
+                if (creds != null
+                    && users.TryGetValue(creds.Value.User, out var expected)
+                    && NetUtil.FixedTimeEquals(expected, creds.Value.Pass))
+                {
+                    var cam = cameras.FirstOrDefault(c =>
+                        string.Equals(c.Name, events.Find(id)?.Camera, StringComparison.OrdinalIgnoreCase));
+                    if (cam?.PermittedUsers == null || cam.PermittedUsers.Contains(creds.Value.User))
+                        return null;
+                }
+                ChallengeBasic(ctx);
+                return Results.Json(new { error = "authentication required" }, statusCode: 401);
+            }
+
+            app.MapGet("/api/events/{id}/clip", (string id, HttpContext ctx) =>
+            {
+                if (EventMediaAuth(ctx, id) is { } denied) return denied;
                 var path = events.ArtifactPath(id, "clip.mp4");
                 return path == null
                     ? Results.Json(new { error = "no clip for this event" }, statusCode: 404)
                     : ServeMp4(path);
             });
 
-            app.MapGet("/api/events/{id}/thumb", (string id) =>
+            app.MapGet("/api/events/{id}/thumb", (string id, HttpContext ctx) =>
             {
+                if (EventMediaAuth(ctx, id) is { } denied) return denied;
                 var path = events.ArtifactPath(id, "thumb.jpg");
                 return path == null
                     ? Results.Json(new { error = "no thumbnail for this event" }, statusCode: 404)
@@ -2539,8 +2569,9 @@ public static class WebApi
             });
 
             // The clip's low-res sub-stream twin, used by the strip's ambient previews.
-            app.MapGet("/api/events/{id}/preview", (string id) =>
+            app.MapGet("/api/events/{id}/preview", (string id, HttpContext ctx) =>
             {
+                if (EventMediaAuth(ctx, id) is { } denied) return denied;
                 var path = events.ArtifactPath(id, "preview.mp4");
                 return path == null
                     ? Results.Json(new { error = "no preview for this event" }, statusCode: 404)
@@ -3303,6 +3334,14 @@ public static class WebApi
         path.StartsWithSegments("/api/cameras")
         && (path.Value!.EndsWith("/snapshot.jpg", StringComparison.OrdinalIgnoreCase)
             || path.Value.EndsWith("/snapshot", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>True for /api/events/{id}/clip|thumb|preview — event footage, whose
+    /// auth (like snapshots') additionally accepts RTSP Basic credentials.</summary>
+    private static bool IsEventMediaPath(PathString path) =>
+        path.StartsWithSegments("/api/events")
+        && (path.Value!.EndsWith("/clip", StringComparison.OrdinalIgnoreCase)
+            || path.Value.EndsWith("/thumb", StringComparison.OrdinalIgnoreCase)
+            || path.Value.EndsWith("/preview", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>Offers the Basic challenge only where it helps: headerless clients
     /// (HA, scripts) and address-bar navigations. A browser answering 401+Basic on
