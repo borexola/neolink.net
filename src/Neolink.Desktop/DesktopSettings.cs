@@ -53,6 +53,12 @@ internal sealed class DesktopSettings
     /// the ✕. Turn it off and ✕ means quit.</summary>
     public bool CloseToTray { get; set; } = true;
 
+    /// <summary>While the window is hidden or minimised, the web page drops every
+    /// live video stream and picks them back up on show — the bandwidth and
+    /// decoding of a camera wall nobody is looking at. Alerts are unaffected:
+    /// the shell polls the server itself, outside the page.</summary>
+    public bool PauseVideoWhenHidden { get; set; } = true;
+
     public int WindowX { get; set; } = -1;
     public int WindowY { get; set; } = -1;
     public int WindowWidth { get; set; } = 1360;

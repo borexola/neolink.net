@@ -1,6 +1,6 @@
 # Neolink.NET
 
-**English** · [Français](README.fr.md) · [Deutsch](README.de.md) · [Español](README.es.md) · [Nederlands](README.nl.md) · [Polski](README.pl.md) · [Português](README.pt.md)
+**English** · [Français](docs/translations/README.fr.md) · [Deutsch](docs/translations/README.de.md) · [Español](docs/translations/README.es.md) · [Nederlands](docs/translations/README.nl.md) · [Polski](docs/translations/README.pl.md) · [Português](docs/translations/README.pt.md)
 
 **RTSP bridge + web viewer for Reolink cameras that speak the proprietary Baichuan protocol.**
 

@@ -25,6 +25,7 @@ internal sealed class MainForm : Form
     private readonly Label _errorText;
     private readonly ToolStripMenuItem _autostartItem;
     private readonly ToolStripMenuItem _notificationsItem;
+    private readonly ToolStripMenuItem _pauseVideoItem;
 
     private bool _reallyClosing;
     private bool _webReady;
@@ -87,6 +88,20 @@ internal sealed class MainForm : Form
             UpdateTrayText();
         };
 
+        _pauseVideoItem = new ToolStripMenuItem("Pause video when hidden")
+        {
+            CheckOnClick = true,
+            Checked = _settings.PauseVideoWhenHidden,
+            ToolTipText = "While this window is hidden or minimised, live streams stop " +
+                          "to save bandwidth and CPU. Notifications are not affected.",
+        };
+        _pauseVideoItem.Click += (_, _) =>
+        {
+            _settings.PauseVideoWhenHidden = _pauseVideoItem.Checked;
+            _settings.Save();
+            _ = ApplyPauseVideoAsync();
+        };
+
         var menu = new ContextMenuStrip();
         var open = new ToolStripMenuItem("Open Neolink.NET", null, (_, _) => ShowWindow(null))
         {
@@ -97,6 +112,7 @@ internal sealed class MainForm : Form
         menu.Items.Add(_notificationsItem);
         menu.Items.Add(new ToolStripMenuItem("Notification settings...", null, (_, _) => OpenNotificationSettings()));
         menu.Items.Add(_autostartItem);
+        menu.Items.Add(_pauseVideoItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem("Server connection...", null, (_, _) => OpenConnectDialog()));
         menu.Items.Add(new ToolStripMenuItem("Reload", null, (_, _) => Reload())
@@ -255,6 +271,11 @@ internal sealed class MainForm : Form
             else if (!_webReady)
                 ShowError($"Can't reach {_settings.ServerUrl}\r\n\r\n{Describe(args.WebErrorStatus)}");
             _webReady |= args.IsSuccess;
+            // A fresh document knows nothing of the window's state; if it loaded
+            // hidden (started minimised to the tray), say so or its players
+            // would stream to a window nobody can see.
+            _reportedHidden = false;
+            _ = ReportVisibilityAsync();
         };
 
         // The window is the server's UI and nothing else: any top-level navigation
@@ -405,7 +426,8 @@ internal sealed class MainForm : Form
     private async Task ApplyBootstrapAsync(CoreWebView2 core)
     {
         var token = _link.Token;
-        var id = await core.AddScriptToExecuteOnDocumentCreatedAsync(BuildBootstrapScript(token, _origin));
+        var id = await core.AddScriptToExecuteOnDocumentCreatedAsync(
+            BuildBootstrapScript(token, _origin, _settings.PauseVideoWhenHidden));
         if (_bootstrapId != null)
             try { core.RemoveScriptToExecuteOnDocumentCreated(_bootstrapId); } catch { }
         _bootstrapId = id;
@@ -422,7 +444,9 @@ internal sealed class MainForm : Form
     /// pages out of this window entirely, but a script carrying a session token
     /// does not get to ASSUME that: it refuses to run anywhere but the server.
     ///
-    /// Two jobs. It hands the web UI the session token the shell already holds, in
+    /// It marks the document as shell-hosted and carries the "pause video when
+    /// hidden" choice, which the page's live players act on by themselves.
+    /// Two bigger jobs. It hands the web UI the session token the shell already holds, in
     /// the exact shape the UI stores it — so the app opens signed in rather than
     /// on a login form, without a token ever appearing in a URL. And it hides the
     /// service worker's registration from the UI's notification helper, which
@@ -431,7 +455,7 @@ internal sealed class MainForm : Form
     /// an https server would go out through the worker and the shell could
     /// neither style it nor stop it duplicating its own.
     /// </summary>
-    internal static string BuildBootstrapScript(string? token, string origin)
+    internal static string BuildBootstrapScript(string? token, string origin, bool pauseVideoWhenHidden)
     {
         var auth = token == null
             ? ""
@@ -440,6 +464,7 @@ internal sealed class MainForm : Form
             (() => {
               if (location.origin !== {{JsonSerializer.Serialize(origin)}}) return;
               window.__neolinkShell = true;
+              window.__neolinkShellPauseHidden = {{(pauseVideoWhenHidden ? "true" : "false")}};
               {{auth}}
               try {
                 const sw = navigator.serviceWorker;
@@ -573,6 +598,49 @@ internal sealed class MainForm : Form
         _ => "The connection failed.",
     };
 
+    // ---- pause video while hidden ------------------------------------------
+
+    /// <summary>What the page was last told about its visibility. A fresh
+    /// document starts from "visible", so NavigationCompleted resets this.</summary>
+    private bool _reportedHidden;
+
+    /// <summary>Tells the page whether anyone can see it, so its live players can
+    /// stop and restart streams (when the setting is on). Explicit rather than
+    /// trusting the WebView to flip document.hidden: minimising, for one, does
+    /// not. Only speaks on a change — OnResize fires constantly.</summary>
+    private async Task ReportVisibilityAsync()
+    {
+        var core = _web.CoreWebView2;
+        if (core == null || IsDisposed) return;
+        bool hidden = !Visible || WindowState == FormWindowState.Minimized;
+        if (hidden == _reportedHidden) return;
+        _reportedHidden = hidden;
+        try
+        {
+            await core.ExecuteScriptAsync(
+                $"window.neolink?.shellVisibility?.({(hidden ? "true" : "false")})");
+        }
+        catch { /* mid-navigation or shutting down: the next report catches up */ }
+    }
+
+    /// <summary>The tray-menu toggle: re-registers the bootstrap so every later
+    /// page load carries the new choice, and tells the page that is already open.</summary>
+    private async Task ApplyPauseVideoAsync()
+    {
+        var core = _web.CoreWebView2;
+        if (core == null) return;
+        await ApplyBootstrapAsync(core);
+        var on = _settings.PauseVideoWhenHidden ? "true" : "false";
+        try { await core.ExecuteScriptAsync($"window.neolink?.shellPauseWhenHidden?.({on})"); }
+        catch { /* no page yet: the bootstrap already covers the next load */ }
+    }
+
+    protected override void OnVisibleChanged(EventArgs e)
+    {
+        base.OnVisibleChanged(e);
+        _ = ReportVisibilityAsync();
+    }
+
     // ---- window behaviour --------------------------------------------------
 
     /// <summary>Brings the window up, optionally on a specific page.</summary>
@@ -645,6 +713,9 @@ internal sealed class MainForm : Form
             Visible = false;
             ShowInTaskbar = false;
         }
+        // Minimising does not change Visible, so OnVisibleChanged stays silent;
+        // report from here too (deduplicated inside).
+        _ = ReportVisibilityAsync();
     }
 
     protected override void OnFormClosing(FormClosingEventArgs e)

@@ -21,6 +21,15 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        // Invariant FORMATTING without invariant MODE: the csproj must not set
+        // InvariantGlobalization (WinForms crashes on keyboard-layout switches
+        // under it — see the csproj note), so the culture is pinned here instead
+        // and every format/parse behaves the same on every machine.
+        System.Globalization.CultureInfo.DefaultThreadCurrentCulture =
+            System.Globalization.CultureInfo.InvariantCulture;
+        System.Globalization.CultureInfo.DefaultThreadCurrentUICulture =
+            System.Globalization.CultureInfo.InvariantCulture;
+
         if (args.Any(a => a.Equals("--selftest", StringComparison.OrdinalIgnoreCase)))
         {
             AttachConsole(-1);

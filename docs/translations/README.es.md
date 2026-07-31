@@ -1,9 +1,9 @@
 # Neolink.NET
 
-[English](README.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · **Español** · [Nederlands](README.nl.md) · [Polski](README.pl.md) · [Português](README.pt.md)
+[English](../../README.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · **Español** · [Nederlands](README.nl.md) · [Polski](README.pl.md) · [Português](README.pt.md)
 
 > **Nota**: esta traducción fue generada por IA y no ha podido verificarse por
-> completo. La [documentación en inglés](README.md) es la referencia; las
+> completo. La [documentación en inglés](../../README.md) es la referencia; las
 > correcciones son bienvenidas.
 
 **Puente RTSP + visor web para cámaras Reolink que hablan el protocolo propietario Baichuan.**
@@ -64,4 +64,4 @@ recarga.
 
 La documentación detallada (configuración, Home Assistant, cámaras de batería,
 almacenamiento por niveles, aplicación de escritorio de Windows…) está en el
-[README en inglés](README.md) y en la carpeta [docs/](docs/).
+[README en inglés](../../README.md) y en la carpeta [docs/](../).

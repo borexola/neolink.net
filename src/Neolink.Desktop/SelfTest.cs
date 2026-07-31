@@ -30,6 +30,7 @@ internal static class SelfTest
         PrefsRoundTrip();
         SecretRoundTrip();
         DialogsConstruct();
+        RealCulturesAvailable();
 
         Console.WriteLine();
         if (Failures.Count == 0)
@@ -49,6 +50,25 @@ internal static class SelfTest
     }
 
     private static void Section(string name) => Console.WriteLine($"-- {name}");
+
+    /// <summary>The build must NOT be globalization-invariant: WinForms resolves a
+    /// real culture on every keyboard-layout switch (WM_INPUTLANGCHANGE), and in
+    /// invariant mode that lookup throws inside WndProc and takes the app down —
+    /// seen live with an en-CA layout (LCID 0x1009). The csproj must never get
+    /// the server's InvariantGlobalization flag; this is the tripwire.</summary>
+    private static void RealCulturesAvailable()
+    {
+        Section("real cultures (input-language switch survival)");
+        try
+        {
+            var c = System.Globalization.CultureInfo.GetCultureInfo(0x1009);
+            Assert(c.Name.Length > 0, "LCID 0x1009 resolves to a real culture");
+        }
+        catch (System.Globalization.CultureNotFoundException)
+        {
+            Assert(false, "globalization-invariant build: a keyboard-layout switch would crash the app");
+        }
+    }
 
     // ---- settings ----------------------------------------------------------
 
@@ -343,13 +363,18 @@ internal static class SelfTest
     {
         Section("webview bootstrap");
         const string origin = "http://10.1.0.60:8655";
-        var withToken = MainForm.BuildBootstrapScript("abc123", origin);
+        var withToken = MainForm.BuildBootstrapScript("abc123", origin, pauseVideoWhenHidden: true);
         Assert(withToken.Contains("neolink.auth"), "the session is seeded into the web UI's own storage");
         Assert(withToken.Contains("abc123"), "the token is the one the shell holds");
         Assert(withToken.Contains("getRegistration"),
             "the service worker is hidden so notifications take the interceptable path");
-        Assert(!MainForm.BuildBootstrapScript(null, origin).Contains("neolink.auth"),
+        Assert(!MainForm.BuildBootstrapScript(null, origin, true).Contains("neolink.auth"),
             "no token means nothing is seeded");
+        Assert(withToken.Contains("__neolinkShellPauseHidden = true"),
+            "pause-when-hidden ON reaches the page before any of its scripts run");
+        Assert(MainForm.BuildBootstrapScript(null, origin, pauseVideoWhenHidden: false)
+            .Contains("__neolinkShellPauseHidden = false"),
+            "pause-when-hidden OFF is stated, not merely absent — the page must not guess");
 
         // The origin guard is the security boundary: the token-seeding script runs
         // on every document, so it must refuse to run anywhere but the server.

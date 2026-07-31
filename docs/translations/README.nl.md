@@ -1,9 +1,9 @@
 # Neolink.NET
 
-[English](README.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Español](README.es.md) · **Nederlands** · [Polski](README.pl.md) · [Português](README.pt.md)
+[English](../../README.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Español](README.es.md) · **Nederlands** · [Polski](README.pl.md) · [Português](README.pt.md)
 
 > **Let op**: deze vertaling is door AI gegenereerd en kon niet volledig op
-> juistheid worden gecontroleerd. De [Engelse documentatie](README.md) is
+> juistheid worden gecontroleerd. De [Engelse documentatie](../../README.md) is
 > leidend; correcties zijn welkom.
 
 **RTSP-brug + webviewer voor Reolink-camera's die het propriëtaire Baichuan-protocol spreken.**
@@ -65,4 +65,4 @@ herladen.
 
 De uitgebreide documentatie (configuratie, Home Assistant, accucamera's,
 gelaagde opslag, Windows-desktopapp…) staat in de
-[Engelse README](README.md) en de map [docs/](docs/).
+[Engelse README](../../README.md) en de map [docs/](../).

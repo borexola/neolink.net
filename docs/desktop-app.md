@@ -72,6 +72,11 @@ on the tray menu, which also has:
 - **Notifications on this PC** — a quick mute for this machine
 - **Notification settings** — the full panel, below
 - **Start with Windows** — see below
+- **Pause video when hidden** — on by default: while the window sits in the
+  tray or minimised, live streams stop entirely (no bandwidth, no decoding)
+  and resume the moment the window shows. Notifications are unaffected — the
+  shell watches for events on its own, outside the page. Turn it off to keep
+  streams warm for an instant picture on open.
 - **Server connection** — change server or account
 - **Reload** (F5), **Full reload** (Ctrl+F5), **Quit**
 

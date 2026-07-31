@@ -18,6 +18,25 @@
     const MIN_LATENCY = 1.0;   // floor for the adaptive target (s)
     const MAX_LATENCY = 12.0;  // ceiling (s)
 
+    // ---- desktop-shell cooperation: stop live video while nobody can see it ----
+    // The desktop app hides to the tray rather than closing, and a hidden window
+    // decoding a whole camera wall is bandwidth and CPU spent on nobody. When the
+    // shell turns this on (a desktop setting), every live player closes its
+    // socket while the page is hidden and reconnects the moment it shows again.
+    // A plain browser never sets the flag, so tabs behave exactly as before.
+    // The shell also reports hide/show itself (shellVisibility) rather than
+    // trusting the WebView to flip document.hidden — either signal counts.
+    let shellPauseHidden = window.__neolinkShellPauseHidden === true;
+    let shellHidden = false;
+    const liveHidden = () => document.hidden === true || shellHidden;
+    const syncLiveSleep = () => {
+        const want = shellPauseHidden && liveHidden();
+        for (const id in players) {
+            try { want ? players[id].sleep() : players[id].wake(); } catch { }
+        }
+    };
+    document.addEventListener('visibilitychange', () => syncLiveSleep());
+
     class Player {
         constructor(video, wsUrl) {
             this.video = video;
@@ -28,6 +47,10 @@
             video.muted = true;
             this.wsUrl = wsUrl;
             this.alive = true;
+            // Born hidden (the page re-rendered tiles while the shell sits in
+            // the tray): start asleep and let the show wake it, instead of
+            // streaming to a window nobody can see.
+            this.sleeping = shellPauseHidden && liveHidden();
             this.queue = [];
             this.sb = null;
             this.ms = null;
@@ -77,7 +100,7 @@
         }
 
         connect() {
-            if (!this.alive) return;
+            if (!this.alive || this.sleeping) return;
             try {
                 this.ws = new WebSocket(this.wsUrl);
             } catch {
@@ -113,7 +136,7 @@
         }
 
         retry() {
-            if (!this.alive) return;
+            if (!this.alive || this.sleeping) return;
             this.reconnects++;
             delete this.video.dataset.live;
             clearTimeout(this.timer);
@@ -356,6 +379,27 @@
             this.video.removeEventListener('waiting', this.onWaiting);
             try { this.ws && this.ws.close(); } catch { }
             this.teardownMse();
+        }
+
+        /// The shell's nap: the window is hidden, so stop the STREAM, not just
+        /// the rendering — the socket closes and the server stops sending.
+        sleep() {
+            if (this.sleeping || !this.alive) return;
+            this.sleeping = true;
+            clearTimeout(this.timer);
+            if (this.ws) {
+                this.ws.onclose = null;   // closed by choice, not a failure: no retry loop
+                this.ws.onerror = null;
+                try { this.ws.close(); } catch { }
+                this.ws = null;
+            }
+            this.teardownMse();
+        }
+
+        wake() {
+            if (!this.sleeping) return;
+            this.sleeping = false;
+            if (this.alive) this.connect();   // straight away, no 3 s retry wait
         }
     }
 
@@ -1641,9 +1685,23 @@
         },
 
         // Is the tab hidden? Battery tiles ask on each poll tick: "keep awake" must
-        // not hold a camera awake for a dashboard nobody is looking at.
+        // not hold a camera awake for a dashboard nobody is looking at. The
+        // shell's own hide/show report counts too — a window in the tray is
+        // hidden even if the WebView never flipped document.hidden.
         pageHidden() {
-            return document.hidden === true;
+            return liveHidden();
+        },
+
+        // Desktop-shell hooks; in a plain browser nothing ever calls them.
+        // The "pause video when hidden" setting, live from the tray menu:
+        shellPauseWhenHidden(on) {
+            shellPauseHidden = on === true;
+            syncLiveSleep();
+        },
+        // The shell saying the window was hidden or shown:
+        shellVisibility(hidden) {
+            shellHidden = hidden === true;
+            syncLiveSleep();
         },
 
         // Right-click on a single-camera view opens this instead of the tile's

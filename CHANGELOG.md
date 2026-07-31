@@ -18,6 +18,21 @@ in the README). Paste the matching section below into the GitHub release.
   HA already holds, with no web-session token to mint or renew. The JSON
   endpoints (`/api/events`, `/api/cameras`, …) are metadata, not footage,
   and stay web-account only.
+- **Desktop app: live video pauses while the window is hidden.** A tray app
+  spends most of its life minimised, and until now the hidden page kept
+  every camera streaming and decoding for nobody. A new tray-menu setting,
+  **Pause video when hidden** (on by default), makes the live players drop
+  their connections the moment the window hides — to the tray or minimised —
+  and reconnect instantly on show. Notifications are untouched: the shell
+  watches for events itself, outside the page. Needs a server on this
+  version or later; against an older server the shell simply behaves as
+  before.
+
+### Changed
+
+- **The translated READMEs moved to `docs/translations/`** — six language
+  files were cluttering the repository root; only the English README (the
+  authoritative one) stays there. All cross-links updated.
 
 ### Fixed
 
@@ -31,6 +46,14 @@ in the README). Paste the matching section below into the GitHub release.
   obvious). The stored start now reaches back only as far as the footage the
   pre-roll actually holds; cameras that stream continuously are unaffected —
   their buffer always spans the full `pre_seconds`.
+- **Desktop app: switching keyboard layout no longer crashes it.** The shell
+  shipped with the server's globalization-invariant build flag, and WinForms
+  resolves a real culture on every input-language switch — under invariant
+  mode that lookup throws inside the window procedure and takes the whole app
+  down (seen live with an English (Canada) layout, LCID 0x1009). The flag is
+  gone from the desktop build; formatting stays byte-identical because the
+  thread cultures are pinned to invariant at startup instead, and the desktop
+  selftest now trips if the flag ever returns.
 - **A footage file smaller than 8 bytes no longer serves as a 500.** The
   footage vault sniffs every file's first 8 bytes for the encryption magic;
   on a shorter file that read stops at EOF and left the file position there,

@@ -31,7 +31,13 @@
     <Company>Oluwabori Olaleye</Company>
     <ApplicationIcon>neolink.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- NO InvariantGlobalization here, unlike the server: WinForms maps every
+         keyboard-layout switch (WM_INPUTLANGCHANGE) to a real culture, and in
+         invariant mode that lookup throws inside WndProc — switching input
+         language with the window focused crashed the whole app (seen live,
+         LCID 0x1009). Program.Main pins the thread cultures to invariant
+         instead, so formatting behaves identically without disabling the
+         globalization data Windows always has anyway. -->
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <!-- WinForms designers are not used here; every window is built in code. -->
     <EnableDefaultApplicationDefinition>false</EnableDefaultApplicationDefinition>
