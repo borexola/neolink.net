@@ -146,6 +146,14 @@ Both the shell and the web UI inside it can decide to raise the same alert. They
 tag notifications with the event id, and the shell collapses matching tags, so
 one event notifies once.
 
+### Clicking a notification
+
+Opens the app on that event — from the live banner, from the Action Center
+sidebar hours later, and even if the app was quit in between (the click starts
+it). This works through a per-user `neolink-desktop:` link protocol the app
+registers and keeps repaired automatically; no setup needed. "Clicking opens
+the event" can be turned off in Notification settings.
+
 ## Start with Windows
 
 The toggle writes a per-user `Run` entry — no administrator rights, no scheduled

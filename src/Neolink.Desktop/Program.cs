@@ -52,6 +52,10 @@ internal static class Program
         if (args.Any(a => a.Equals("--test-notification", StringComparison.OrdinalIgnoreCase)))
             return TestNotification();
 
+        // A toast clicked in the Action Center launches this exe through the
+        // neolink-desktop: protocol — usually while another instance runs.
+        var deepLink = ProtocolLink.FromArgs(args);
+
         // A second launch (double-clicking the shortcut while it sits in the tray)
         // should raise the window that already exists, not start a rival that
         // fights it for the same WebView2 data folder. Held in a field, not a
@@ -60,7 +64,7 @@ internal static class Program
         _instanceMutex = new Mutex(initiallyOwned: true, MutexName, out var isFirst);
         if (!isFirst)
         {
-            WakeExistingInstance();
+            WakeExistingInstance(deepLink);
             return 0;
         }
 
@@ -74,6 +78,8 @@ internal static class Program
         // An upgrade can move the executable; a Run entry pointing at the old path
         // would silently stop starting the app. Rewrite it on every launch.
         Autostart.RepairIfStale(settings.StartWithWindows, Application.ExecutablePath);
+        // Same story for the toast-click protocol handler.
+        ProtocolLink.RepairRegistration(Application.ExecutablePath);
 
         if (!settings.Configured)
         {
@@ -86,7 +92,10 @@ internal static class Program
         bool startHidden = settings.StartMinimized
                            && args.Any(a => a.Equals("--minimized", StringComparison.OrdinalIgnoreCase));
 
-        using var form = new MainForm(settings, link, startHidden);
+        // A protocol launch with no instance running: start straight on the
+        // event the notification pointed at (never hidden — a click asked for it).
+        startHidden &= deepLink == null;
+        using var form = new MainForm(settings, link, startHidden, deepLink);
         using var wake = ListenForWake(form);
 
         // ApplicationContext rather than Run(form): the window can be hidden for
@@ -163,11 +172,21 @@ internal static class Program
     [System.Runtime.InteropServices.DllImport("kernel32.dll")]
     private static extern bool AttachConsole(int processId);
 
-    /// <summary>Signals the running instance to come to the front.</summary>
-    private static void WakeExistingInstance()
+    /// <summary>The wake event carries no payload, so a deep link travels beside
+    /// it in a file the listener reads and deletes.</summary>
+    private static string WakeLinkPath => Path.Combine(DesktopSettings.Dir, "wake.link");
+
+    /// <summary>Signals the running instance to come to the front — on the event
+    /// it points at, when the launch carried one (a clicked notification).</summary>
+    private static void WakeExistingInstance(string? deepLink)
     {
         try
         {
+            if (deepLink != null)
+            {
+                Directory.CreateDirectory(DesktopSettings.Dir);
+                File.WriteAllText(WakeLinkPath, deepLink);
+            }
             using var wake = EventWaitHandle.OpenExisting(WakeEventName);
             wake.Set();
         }
@@ -184,7 +203,17 @@ internal static class Program
             while (!cts.IsCancellationRequested)
             {
                 if (!wake.WaitOne(500)) continue;
-                try { form.BeginInvoke(() => form.ShowFromAnotherInstance()); }
+                string? link = null;
+                try
+                {
+                    if (File.Exists(WakeLinkPath))
+                    {
+                        link = ProtocolLink.Sanitize(File.ReadAllText(WakeLinkPath));
+                        File.Delete(WakeLinkPath);
+                    }
+                }
+                catch { /* a plain wake with no link */ }
+                try { form.BeginInvoke(() => form.ShowFromAnotherInstance(link)); }
                 catch { /* the form is going away */ }
             }
         })

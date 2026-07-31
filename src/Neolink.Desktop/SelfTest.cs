@@ -344,12 +344,30 @@ internal static class SelfTest
         var loud = Toaster.BuildToastXml(alert, new DesktopSettings { Sound = true, ClickOpensEvent = true }, null);
         Assert(loud.Contains("Human &amp; Vehicle detected"), "the title is XML-escaped");
         Assert(loud.Contains("FrontDoor &lt;test&gt;"), "the body is XML-escaped");
-        Assert(loud.Contains("launch=\"/events?event=e1\""), "the deep link rides the toast");
+        Assert(loud.Contains("launch=\"neolink-desktop:/events?event=e1\""),
+            "the deep link rides the toast as a protocol URI");
+        Assert(loud.Contains("activationType=\"protocol\""),
+            "click-to-open toasts use protocol activation — the only kind an Action Center click can deliver");
         Assert(loud.Contains("ms-winsoundevent"), "sound on means a sound is named");
 
         var quiet = Toaster.BuildToastXml(alert, new DesktopSettings { Sound = false, ClickOpensEvent = false }, null);
         Assert(quiet.Contains("silent=\"true\""), "sound off means a silent toast");
         Assert(!quiet.Contains("launch="), "click-to-open off means no launch target");
+        Assert(quiet.Contains("activationType=\"foreground\""),
+            "a linkless toast stays a plain foreground one");
+
+        // The protocol handler is invokable by anything on the machine, so the
+        // payload is held to one in-app path; everything else opens the dashboard.
+        Assert(ProtocolLink.Sanitize("/events?event=Front~2026-07-31~abcd") == "/events?event=Front~2026-07-31~abcd",
+            "a real event link passes through untouched");
+        Assert(ProtocolLink.Sanitize("https://evil.example/x") == "/", "an absolute URL is refused");
+        Assert(ProtocolLink.Sanitize("//evil.example/x") == "/", "a protocol-relative URL is refused");
+        Assert(ProtocolLink.Sanitize(@"/..\..\x") == "/", "backslashes are refused");
+        Assert(ProtocolLink.Sanitize("") == "/", "an empty payload opens the dashboard");
+        Assert(ProtocolLink.FromArgs(new[] { "neolink-desktop:/events?event=e1" }) == "/events?event=e1",
+            "a protocol launch yields its deep link");
+        Assert(ProtocolLink.FromArgs(new[] { "--minimized" }) == null,
+            "an ordinary launch carries no deep link");
 
         var withImage = Toaster.BuildToastXml(alert,
             new DesktopSettings { ShowThumbnail = true }, @"C:\temp\thumb one.jpg");

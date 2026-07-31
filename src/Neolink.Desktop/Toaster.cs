@@ -14,8 +14,10 @@ namespace Neolink.Desktop;
 /// toasts once an AUMID shortcut exists, and there is no reason to lose
 /// notifications over it.
 ///
-/// Clicking either kind raises <see cref="Activated"/> with the alert's deep
-/// link, which the shell turns into "show the window on that event".
+/// Click-to-open toasts activate through the neolink-desktop: protocol, so a
+/// click works from the Action Center too — even hours later, even if the app
+/// quit meanwhile. <see cref="Activated"/> still carries balloon clicks and
+/// the no-deep-link foreground case.
 /// </summary>
 internal sealed class Toaster : IDisposable
 {
@@ -106,9 +108,16 @@ internal sealed class Toaster : IDisposable
     {
         var sb = new StringBuilder();
         sb.Append("<toast");
+        // Protocol activation, not "foreground": the in-process click event only
+        // reaches a toast while its banner is up. A card clicked later in the
+        // Action Center needs Windows to LAUNCH something — the neolink-desktop:
+        // URI — and the single-instance machinery routes it to the live window.
         if (settings.ClickOpensEvent && alert.DeepLink != null)
-            sb.Append(" launch=\"").Append(Escape(alert.DeepLink)).Append('"');
-        sb.Append(" activationType=\"foreground\"><visual><binding template=\"ToastGeneric\">");
+            sb.Append(" launch=\"").Append(Escape(ProtocolLink.Scheme + ":" + alert.DeepLink))
+              .Append("\" activationType=\"protocol\"");
+        else
+            sb.Append(" activationType=\"foreground\"");
+        sb.Append("><visual><binding template=\"ToastGeneric\">");
         sb.Append("<text>").Append(Escape(alert.Title)).Append("</text>");
         sb.Append("<text>").Append(Escape(alert.Body)).Append("</text>");
         if (settings.ShowThumbnail && imageFile != null)

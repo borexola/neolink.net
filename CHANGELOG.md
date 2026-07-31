@@ -54,6 +54,33 @@ in the README). Paste the matching section below into the GitHub release.
   gone from the desktop build; formatting stays byte-identical because the
   thread cultures are pinned to invariant at startup instead, and the desktop
   selftest now trips if the flag ever returns.
+- **Desktop app: a black window now recovers by itself.** Three silent
+  failure modes each left "web content gone, window still up" with no way
+  back but a manual reload. A page load that fails mid-session — a reload
+  racing a server restart — showed nothing at all, because the can't-reach
+  screen only ever appeared before the first successful load; it now appears
+  for every failed load, Retry button included. A WebView that navigated
+  while hidden in the tray can come back with a live page behind an
+  unpainted surface; every show now nudges the compositor and, if the
+  document is genuinely empty, reloads it fresh. And a WebView2 process
+  death now reloads the page — or cleanly restarts the shell when the
+  browser process itself died — instead of leaving a dead window that looks
+  alive. Underneath them all: hiding to the tray and showing again no longer
+  toggles the taskbar-button style, which silently recreated the window
+  handle every cycle — the one operation WebView2's composition survives
+  worst, and the likeliest source of the black windows in the first place
+  (a hidden window has no taskbar button; the toggle bought nothing). Each
+  recovery and every hide/show now writes a timed line to desktop.log, so
+  any future black window names its own cause.
+- **Desktop app: notifications clicked in the Action Center now open the
+  app on their event.** A missed toast slides into the sidebar, and clicks
+  there never reached the app — an unpackaged app's in-process click event
+  only works while the banner is on screen. Toasts now activate through a
+  per-user `neolink-desktop:` link protocol (registered and kept repaired
+  automatically), so a click works from the banner, from the Action Center
+  hours later, and even when the app has quit meanwhile — Windows launches
+  it and it opens straight on the event. The protocol accepts nothing but
+  in-app paths; anything else lands on the dashboard.
 - **A footage file smaller than 8 bytes no longer serves as a 500.** The
   footage vault sniffs every file's first 8 bytes for the encryption magic;
   on a shorter file that read stops at EOF and left the file position there,

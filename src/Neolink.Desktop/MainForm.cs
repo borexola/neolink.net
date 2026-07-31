@@ -36,8 +36,13 @@ internal sealed class MainForm : Form
     private string? _bootstrapId;
     private string? _bootstrapToken;
 
-    public MainForm(DesktopSettings settings, ServerLink link, bool startHidden)
+    /// <summary>Where the first navigation goes — "/" normally, or the event a
+    /// clicked notification pointed at when that click had to LAUNCH the app.</summary>
+    private readonly string? _initialLink;
+
+    public MainForm(DesktopSettings settings, ServerLink link, bool startHidden, string? initialLink = null)
     {
+        _initialLink = initialLink;
         _settings = settings;
         _link = link;
         _origin = new Uri(link.BaseUrl).GetLeftPart(UriPartial.Authority);
@@ -268,8 +273,16 @@ internal sealed class MainForm : Form
         core.NavigationCompleted += (_, args) =>
         {
             if (args.IsSuccess) HideError();
-            else if (!_webReady)
+            // EVERY failed top-level load gets the error screen, not just the
+            // first: a reload that races a server restart used to fail silently
+            // after the session was up, leaving whatever the WebView last showed
+            // - sometimes nothing at all. OperationCanceled is the shell's own
+            // doing (external links bounced to the real browser), not a failure.
+            else if (args.WebErrorStatus != CoreWebView2WebErrorStatus.OperationCanceled)
+            {
+                DesktopLog.Write($"page load failed: {args.WebErrorStatus}");
                 ShowError($"Can't reach {_settings.ServerUrl}\r\n\r\n{Describe(args.WebErrorStatus)}");
+            }
             _webReady |= args.IsSuccess;
             // A fresh document knows nothing of the window's state; if it loaded
             // hidden (started minimised to the tray), say so or its players
@@ -289,6 +302,23 @@ internal sealed class MainForm : Form
             if (args.IsRedirected || IsServerOrigin(args.Uri)) return;
             args.Cancel = true;
             OpenExternally(args.Uri);
+        };
+
+        // A WebView2 process death with no handler is a permanently black window
+        // that still looks alive. Render/GPU deaths recover with a reload; a dead
+        // BROWSER process cannot run anything ever again, so the only honest
+        // recovery is the same clean restart a changed server address gets.
+        core.ProcessFailed += (_, args) =>
+        {
+            DesktopLog.Write($"webview process failed: {args.ProcessFailedKind} ({args.Reason})");
+            try
+            {
+                if (args.ProcessFailedKind == CoreWebView2ProcessFailedKind.BrowserProcessExited)
+                    BeginInvoke(() => Program.RestartSelf());
+                else
+                    BeginInvoke(() => Reload());
+            }
+            catch { /* shutting down */ }
         };
 
         // A self-signed certificate on a LAN server: honour the same explicit
@@ -418,7 +448,7 @@ internal sealed class MainForm : Form
             catch { /* shutting down */ }
         };
 
-        Navigate("/");
+        Navigate(_initialLink ?? "/");
     }
 
     /// <summary>Registers the current bootstrap script and retires the previous
@@ -647,13 +677,45 @@ internal sealed class MainForm : Form
     private void ShowWindow(string? deepLink)
     {
         if (IsDisposed) return;   // a toast can outlive the app and still be clicked
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         if (deepLink != null && _settings.ClickOpensEvent) Navigate(deepLink);
         Opacity = 1;                 // undo the start-hidden suppression, once
-        ShowInTaskbar = true;
+        // Only ever true once, after a start-hidden boot (the constructor set it
+        // false before the handle existed): later shows must not touch it - the
+        // toggle recreates the window handle, which WebView2 survives worst.
+        if (!ShowInTaskbar) ShowInTaskbar = true;
         Visible = true;
         WindowState = _settings.WindowMaximized ? FormWindowState.Maximized : FormWindowState.Normal;
         Activate();
         BringToFront();
+        DesktopLog.Write($"window shown in {sw.ElapsedMilliseconds} ms");
+        _ = EnsurePaintedAsync();
+    }
+
+    /// <summary>Black-window insurance, run on every show. A WebView that
+    /// navigated while hidden can come back with a live DOM behind an unpainted
+    /// surface; flipping the control's visibility makes the compositor present
+    /// again. Then the document is checked for actual content — a load that died
+    /// on the way can leave a truly empty page — and an empty one is hard-reloaded.
+    /// Either way desktop.log records what was found, so any future black window
+    /// names its own cause.</summary>
+    private async Task EnsurePaintedAsync()
+    {
+        var core = _web.CoreWebView2;
+        if (core == null || !_webReady || _error.Visible) return;
+        _web.Visible = false;   // the wrapper mirrors this to CoreWebView2Controller.IsVisible
+        _web.Visible = true;
+        try
+        {
+            var kids = await core.ExecuteScriptAsync(
+                "document.body ? document.body.children.length : -1");
+            if (kids is "0" or "-1")
+            {
+                DesktopLog.Write($"window shown onto an empty document (children={kids}) — reloading fresh");
+                await HardReloadAsync();
+            }
+        }
+        catch { /* a navigation is underway; it will paint on its own */ }
     }
 
     // ---- HTML fullscreen -> a truly fullscreen window ----------------------
@@ -683,8 +745,10 @@ internal sealed class MainForm : Form
         }
     }
 
-    /// <summary>A second launch of the shortcut asked for the window.</summary>
-    public void ShowFromAnotherInstance() => ShowWindow(null);
+    /// <summary>A second launch asked for the window — plain (shortcut double-click)
+    /// or on a specific event (a notification clicked in the Action Center, which
+    /// reaches the app as a neolink-desktop: protocol launch).</summary>
+    public void ShowFromAnotherInstance(string? deepLink = null) => ShowWindow(deepLink);
 
     private void QuitApp()
     {
@@ -708,10 +772,11 @@ internal sealed class MainForm : Form
             // Minimise means "get out of the way", and in a tray app the tray is
             // where out of the way is. Remember the geometry on the way down, so
             // restoring from the tray brings back the window that was put there
-            // rather than the one that was last saved on exit.
+            // rather than the one that was last saved on exit. No ShowInTaskbar
+            // here either - see OnFormClosing.
             if (Visible) SaveGeometry();
             Visible = false;
-            ShowInTaskbar = false;
+            DesktopLog.Write("minimised: hidden to tray");
         }
         // Minimising does not change Visible, so OnVisibleChanged stays silent;
         // report from here too (deduplicated inside).
@@ -725,9 +790,16 @@ internal sealed class MainForm : Form
         if (!_reallyClosing && _settings.CloseToTray && e.CloseReason == CloseReason.UserClosing)
         {
             e.Cancel = true;
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             SaveGeometry();
+            // Visible=false is the WHOLE hide: a hidden window has no taskbar
+            // button, so the old ShowInTaskbar=false here was redundant - and
+            // costly, because toggling it RECREATES the window handle, the one
+            // operation WebView2 survives worst (its composition must re-host
+            // onto the new handle; losing that race is a black window). The
+            // handle is left alone on every hide and show.
             Visible = false;
-            ShowInTaskbar = false;
+            DesktopLog.Write($"close button: hidden to tray in {sw.ElapsedMilliseconds} ms");
             return;
         }
         SaveGeometry();
