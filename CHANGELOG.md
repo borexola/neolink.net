@@ -27,6 +27,16 @@ in the README). Paste the matching section below into the GitHub release.
   watches for events itself, outside the page. Needs a server on this
   version or later; against an older server the shell simply behaves as
   before.
+- **Timeline: "Events only" playback (beta).** A new toolbar toggle for days
+  with hours of nothing between the moments that matter: playback hops from
+  event to event — from wherever the cursor stands it jumps to the next
+  event, plays through it, and skips the quiet stretch to the one after —
+  and pauses after the day's last event (pressing Play there starts the reel
+  over from the first). It follows the EVENTS filter, so hiding a category
+  skips its events too, and back-to-back detections play as one stretch
+  instead of stuttering through sub-second hops. Off by default and per-visit
+  while it proves itself; the classic continuous play-through — the right
+  tool for 24/7 recordings — is untouched.
 
 ### Changed
 

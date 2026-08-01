@@ -59,6 +59,12 @@ RTSP, ONVIF…) read live, and can enable HTTP/ONVIF right from Neolink
   video-editor arrangement (monitors on top, tracks docked below); the
   divider between monitors and tracks drags to taste, and every tile's
   camera button (or `S`) saves the frame under the cursor as a PNG.
+- **Events only** (beta), on the timeline's toolbar, plays the day as just
+  its incidents: from wherever the cursor stands, playback hops to the next
+  event, plays through it, hops again, and pauses after the day's last
+  event (Play at that point starts the reel over). It obeys the EVENTS
+  filter — hide a category and it is skipped too. Off by default; the
+  classic continuous play-through is untouched.
 - **Export** downloads a chosen period of one camera's day — one combined
   MP4 (joined without re-encoding, trimmed to the range) or a zip of the
   original segments. The dialog pre-fills the zoomed window and shows the

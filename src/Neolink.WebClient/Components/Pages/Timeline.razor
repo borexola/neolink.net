@@ -44,6 +44,17 @@
             <button class="tool-btn tl-step" title="@T["Next event   —   ]"]" @onclick="() => JumpEventAsync(1)">@UiIcon.Render("skip-fwd", 13)</button>
         </div>
 
+        @* --- Events-only playback (beta): the day plays as just its incidents. --- *@
+        <div class="tl-group">
+            <button class="chip tl-evonly @(_skipEvents ? "chip-active" : "chip-off")"
+                    title="@(_skipEvents
+                        ? T["Events only is on — playback skips the quiet stretches and pauses after the day's last event. Click for normal playback."]
+                        : T["Events only: playback hops from event to event — the quiet stretches in between are skipped, and after the day's last event it pauses. Categories hidden in the EVENTS filter are skipped too."])"
+                    @onclick="ToggleSkipEvents">
+                @UiIcon.Render("skip-fwd", 12) @T["Events only"] <span class="beta-tag">@T["BETA"]</span>
+            </button>
+        </div>
+
         @* --- Speed group: slow motion through fast skim; the choice sticks. --- *@
         <div class="tl-group tl-speed-group">
             @foreach (var s in SpeedOptions)
@@ -1293,8 +1304,87 @@
     private async Task TogglePlayAsync()
     {
         _playing = !_playing;
+        if (_playing && _skipEvents)
+        {
+            // Play pressed at (or past) the end of the reel: start it over from
+            // the first event — the video-player idiom for "play again".
+            var windows = EventWindows();
+            if (windows.Count > 0 && _t >= windows[^1].End - 0.25)
+            {
+                _t = windows[0].Start;
+                EnsureCursorVisible(center: true);
+            }
+        }
         _lastTick = DateTime.UtcNow;
         await SyncVideosAsync();
+    }
+
+    // ------------------------------------------------------------ events-only playback (beta)
+    //
+    // The day plays as just its incidents: whenever the moving cursor is not
+    // inside an event, it hops to the next one, and after the day's last event
+    // it pauses. Classic playback is untouched — the mode only ever steers the
+    // already-advancing clock, so scrubbing, stepping, speeds and the event
+    // hop buttons all behave exactly as before. Off by default and per-visit
+    // like the EVENTS filter (deliberately not persisted while beta).
+
+    private bool _skipEvents;
+
+    /// <summary>Gaps this small play through instead of hopping — back-to-back
+    /// detections read as one incident, and a sub-second seek would stutter.</summary>
+    private const double SkipBridge = 2;
+
+    private void ToggleSkipEvents() => _skipEvents = !_skipEvents;
+
+    /// <summary>The visible events of the included cameras merged into sorted,
+    /// non-overlapping play windows — what events-only playback hops between.
+    /// Obeys the EVENTS filter, like the [ and ] hops. Recomputed per call: the
+    /// clock ticks twice a second and a day caps at 10k events, so a cache
+    /// would buy invalidation bugs, not time.</summary>
+    private List<(double Start, double End)> EventWindows()
+    {
+        var merged = new List<(double Start, double End)>();
+        var marks = Included
+            .SelectMany(c => _marks.TryGetValue(c.Name, out var m) ? VisibleMarks(m) : Array.Empty<Mark>())
+            .OrderBy(m => m.Start);
+        foreach (var m in marks)
+        {
+            if (merged.Count > 0 && m.Start <= merged[^1].End + SkipBridge)
+            {
+                if (m.End > merged[^1].End) merged[^1] = (merged[^1].Start, m.End);
+            }
+            else
+            {
+                merged.Add((m.Start, m.End));
+            }
+        }
+        return merged;
+    }
+
+    /// <summary>Events-only steering, applied right after the clock advanced:
+    /// dead air hops the cursor to the next event's start, and running past the
+    /// day's last event parks the cursor on its final frame and pauses. With no
+    /// visible events at all playback stays classic, so the toggle can never
+    /// make Play look broken on an empty day.</summary>
+    private void SkipToEventsTick(double advance)
+    {
+        var windows = EventWindows();
+        if (windows.Count == 0) return;
+        foreach (var (start, end) in windows)
+        {
+            if (_t < start)
+            {
+                _t = start;
+                EnsureCursorVisible(center: true);
+                return;
+            }
+            if (_t <= end) return; // inside this event: play on
+        }
+        // Past the last event. A cursor that just crossed its end parks on the
+        // final frame; one parked further out (placed there by hand) stays put.
+        double lastEnd = windows[^1].End;
+        if (_t - lastEnd <= advance + 0.001) _t = lastEnd;
+        _playing = false;
     }
 
     /// <summary>Nudge the cursor and keep it on screen. Fine steps (0.1 s) pair
@@ -1467,6 +1557,7 @@
                     advance *= Math.Clamp(1 - (_maxLag - LagSoft) / (LagHard - LagSoft), 0.1, 1.0);
                 }
                 _t += advance;
+                if (_skipEvents) SkipToEventsTick(advance);
                 if (_t >= DaySeconds - 1)
                 {
                     _t = DaySeconds - 1;
