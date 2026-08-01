@@ -44,6 +44,7 @@ public sealed class UserStore
     private readonly object _gate = new();
     private byte[] _secret = RandomNumberGenerator.GetBytes(32);
     private string? _defaultLanguage;
+    private LoginGuardSettings _security = new();
     private List<UserRecord> _users = new();
 
     private static readonly JsonSerializerOptions JsonOpts = new()
@@ -60,6 +61,9 @@ public sealed class UserStore
         /// than in config.json so changing it applies live — config edits need a
         /// restart, and a language change must not.</summary>
         public string? DefaultLanguage { get; set; }
+        /// <summary>Sign-in protection (lockouts); null in files from before the
+        /// feature, which reads as the defaults with Enabled = false.</summary>
+        public LoginGuardSettings? Security { get; set; }
         public List<UserRecord> Users { get; set; } = new();
     }
 
@@ -83,6 +87,7 @@ public sealed class UserStore
                 {
                     if (model.Secret.Length > 0) _secret = Convert.FromBase64String(model.Secret);
                     _defaultLanguage = model.DefaultLanguage;
+                    _security = model.Security ?? new LoginGuardSettings();
                     _users = model.Users;
                 }
                 if (source != _file)
@@ -186,6 +191,34 @@ public sealed class UserStore
         {
             if (_defaultLanguage == language) return;
             _defaultLanguage = language;
+            SaveLocked();
+        }
+    }
+
+    // ------------------------------------------------------------------ sign-in protection
+
+    /// <summary>The persisted sign-in protection settings (a copy — mutate via
+    /// <see cref="SetSecurity"/> so changes always hit disk).</summary>
+    public LoginGuardSettings GetSecurity()
+    {
+        lock (_gate) return new LoginGuardSettings
+        {
+            Enabled = _security.Enabled,
+            MaxAttempts = _security.MaxAttempts,
+            LockMinutes = _security.LockMinutes,
+        };
+    }
+
+    public void SetSecurity(LoginGuardSettings settings)
+    {
+        lock (_gate)
+        {
+            _security = new LoginGuardSettings
+            {
+                Enabled = settings.Enabled,
+                MaxAttempts = Math.Clamp(settings.MaxAttempts, 3, 20),
+                LockMinutes = Math.Clamp(settings.LockMinutes, 1, 24 * 60),
+            };
             SaveLocked();
         }
     }
@@ -368,6 +401,7 @@ public sealed class UserStore
         {
             Secret = Convert.ToBase64String(_secret),
             DefaultLanguage = _defaultLanguage,
+            Security = _security,
             Users = _users,
         };
         var tmp = _file + ".tmp";

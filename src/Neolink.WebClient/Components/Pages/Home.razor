@@ -1275,6 +1275,55 @@
                             <div class="notice small">
                                 @T["New accounts are normal users: they can view and control cameras and review events, but cannot manage users or server settings. Each account keeps its own layout and filters."]
                             </div>
+                            @if (_security != null)
+                            {
+                                <div class="campanel-divider"></div>
+                                <div class="campanel-subtitle">@UiIcon.Render("shield", 12) @T["SIGN-IN PROTECTION"]</div>
+                                <div class="notice small">
+                                    @T["Locks an account for a while after repeated failed sign-ins, and blocks an address that keeps failing across accounts (password spraying). Most useful on a server reachable from the internet; restarting the server clears every lock."]
+                                </div>
+                                <div class="control-row">
+                                    <span>@T["Lock accounts after failed sign-ins"]</span>
+                                    <button class="chip @(_security.Enabled ? "" : "chip-off")" disabled="@_securityBusy"
+                                            @onclick="ToggleSecurityAsync">@(_security.Enabled ? T["on"] : T["off"])</button>
+                                </div>
+                                @if (_security.Enabled)
+                                {
+                                    <div class="control-row"><span>@T["Failed attempts before lockout"]</span>
+                                        <input class="ret-input" type="number" min="3" max="20"
+                                               @bind="_security.MaxAttempts" @bind:after="SaveSecurityAsync" /></div>
+                                    <div class="control-row"><span>@T["Lock for (minutes)"]</span>
+                                        <input class="ret-input" type="number" min="1" max="1440"
+                                               @bind="_security.LockMinutes" @bind:after="SaveSecurityAsync" /></div>
+                                    <div class="notice small">
+                                        @T["Behind a reverse proxy every sign-in appears to come from the proxy's address, so the address block can trigger for everyone at once — account lockouts are unaffected."]
+                                    </div>
+                                    @* Prefixed key: the account list above keys its rows by the
+                                       same names, and sibling keys must be unique or the diff throws. *@
+                                    @foreach (var l in _security.Locked)
+                                    {
+                                        <div class="control-row user-row" @key="@("lock:" + l.Name)">
+                                            <span>🔒 @l.Name</span>
+                                            <span class="event-sub">@T.F("{0} min left", l.MinutesLeft)</span>
+                                        </div>
+                                    }
+                                    @if (_security.BlockedAddresses > 0)
+                                    {
+                                        <div class="notice small">@T.F("Blocked addresses: {0}", _security.BlockedAddresses)</div>
+                                    }
+                                    @if (_security.Locked.Any() || _security.BlockedAddresses > 0)
+                                    {
+                                        <div class="control-row">
+                                            <span></span>
+                                            <button class="chip" disabled="@_securityBusy" @onclick="UnlockAllAsync">@T["Unlock everything now"]</button>
+                                        </div>
+                                    }
+                                }
+                                @if (_securityStatus != null)
+                                {
+                                    <div class="notice small">@_securityStatus</div>
+                                }
+                            }
                         </div>
                     }
 
@@ -3330,6 +3379,71 @@
         await LoadUsersAsync();
     }
 
+    // ------------------------------------------------------------ sign-in protection
+
+    private ApiSecuritySettings? _security;
+    private bool _securityBusy;
+    private string? _securityStatus;
+
+    private async Task ToggleSecurityAsync()
+    {
+        if (_security == null) return;
+        _security.Enabled = !_security.Enabled;
+        await SaveSecurityAsync();
+    }
+
+    /// <summary>Instant-save, like everything else on this tab: the server clamps,
+    /// persists, and answers with the settings plus the live lock state.</summary>
+    private async Task SaveSecurityAsync()
+    {
+        if (_security == null || _securityBusy) return;
+        _securityBusy = true;
+        _securityStatus = null;
+        try
+        {
+            var req = ApiRequest(HttpMethod.Put, "/api/admin/security");
+            req.Content = JsonContent.Create(new
+            {
+                enabled = _security.Enabled,
+                maxAttempts = _security.MaxAttempts,
+                lockMinutes = _security.LockMinutes,
+            });
+            using var res = await Http.SendAsync(req);
+            if (res.IsSuccessStatusCode)
+                _security = await res.Content.ReadFromJsonAsync<ApiSecuritySettings>() ?? _security;
+            else
+                _securityStatus = await ApiErrorAsync(res) ?? T.F("Cannot load settings ({0})", (int)res.StatusCode);
+        }
+        catch (Exception ex)
+        {
+            _securityStatus = ex.Message;
+        }
+        finally
+        {
+            _securityBusy = false;
+        }
+    }
+
+    private async Task UnlockAllAsync()
+    {
+        if (_securityBusy) return;
+        _securityBusy = true;
+        try
+        {
+            using var res = await Http.SendAsync(ApiRequest(HttpMethod.Post, "/api/admin/security/unlock"));
+            if (res.IsSuccessStatusCode)
+                _security = await res.Content.ReadFromJsonAsync<ApiSecuritySettings>() ?? _security;
+        }
+        catch (Exception ex)
+        {
+            _securityStatus = ex.Message;
+        }
+        finally
+        {
+            _securityBusy = false;
+        }
+    }
+
     // ------------------------------------------------------------ admin: server settings
 
     private bool UpdateAvailable =>
@@ -3362,6 +3476,7 @@
         _adminCams = null; _camEdit = null; _camTestResult = null; _camDeleteConfirm = null;
         _notif = null; _notifStatus = null; _notifPassword = "";
         _ai = null; _aiStatus = null; _aiApiKey = ""; _aiAnthropicKey = "";
+        _security = null; _securityStatus = null;
         // Non-admins (and open installs) get the Connection tab; the admin-only
         // tabs and their loads are skipped entirely.
         if (!_authAdmin)
@@ -3391,6 +3506,13 @@
             }
         }
         catch { /* AI tab just stays hidden */ }
+        try
+        {
+            using var sres = await Http.SendAsync(ApiRequest(HttpMethod.Get, "/api/admin/security"));
+            if (sres.IsSuccessStatusCode)
+                _security = await sres.Content.ReadFromJsonAsync<ApiSecuritySettings>();
+        }
+        catch { /* the sign-in protection section just stays hidden */ }
         try
         {
             using var res = await Http.SendAsync(ApiRequest(HttpMethod.Get, "/api/admin/config"));

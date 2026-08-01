@@ -6,6 +6,23 @@ in the README). Paste the matching section below into the GitHub release.
 
 ## 0.9.10 — unreleased
 
+### Added
+
+- **Sign-in protection (opt-in).** A new section on the server settings
+  Users tab: after a configurable number of failed sign-ins an account
+  locks for a configurable time, and an address that keeps failing across
+  accounts — the password-spraying shape, where no single account trips its
+  own limit — is blocked outright. Locked-out callers get one generic
+  answer whether the account exists or not (no username oracle), the lock
+  is checked before the password so a locked-out attacker costs no hashing,
+  and every lock and block is logged with its source address for
+  fail2ban-style tooling. The settings panel shows live lockouts with an
+  "unlock everything now" button; a server restart also clears every lock —
+  the break-glass path for locking yourself out. Off by default: it mostly
+  matters for servers reachable from the internet, and behind a reverse
+  proxy the per-address block sees only the proxy's address (account
+  lockouts are unaffected there).
+
 ### Fixed
 
 - **Desktop app: clicking a notification no longer also opens the browser.**

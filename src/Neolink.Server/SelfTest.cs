@@ -2171,6 +2171,65 @@ public static class SelfTest
             }
         });
 
+        Test("sign-in protection: lockout, spray blocking, expiry", () =>
+        {
+            var settings = new Web.LoginGuardSettings { Enabled = false, MaxAttempts = 3, LockMinutes = 10 };
+            var guard = new Web.LoginGuard(() => settings);
+            var now = new DateTime(2026, 8, 1, 12, 0, 0, DateTimeKind.Utc);
+            guard.Clock = () => now;
+
+            for (int i = 0; i < 10; i++) guard.RecordFailure("admin", "10.0.0.9");
+            Assert(!guard.Blocked("admin", "10.0.0.9", out _), "disabled guard never blocks");
+
+            settings.Enabled = true;
+            guard.RecordFailure("admin", "10.0.0.9");
+            guard.RecordFailure("admin", "10.0.0.9");
+            Assert(!guard.Blocked("admin", "10.0.0.9", out _), "below the limit stays open");
+            guard.RecordFailure("admin", "10.0.0.9");
+            Assert(guard.Blocked("admin", "10.0.0.9", out var retry), "reaching the limit locks the account");
+            Assert(retry is > 0 and <= 600, "retry-after spans the lock window");
+            Assert(guard.Blocked("ADMIN", null, out _), "the lock is case-insensitive and address-independent");
+            Assert(guard.LockedAccounts().Count == 1, "a locked account is listed for the UI");
+
+            now = now.AddMinutes(11);
+            Assert(!guard.Blocked("admin", "10.0.0.9", out _), "a lock expires on its own");
+
+            // Password spraying: many usernames from one address, no single
+            // account ever reaching its own limit — the address trips instead.
+            for (int i = 0; i < 12; i++) guard.RecordFailure($"ghost{i}", "10.0.0.66");
+            Assert(guard.Blocked("admin", "10.0.0.66", out _), "a spraying address is blocked for every account");
+            Assert(!guard.Blocked("admin", "10.0.0.1", out _), "other addresses are unaffected");
+            Assert(guard.BlockedAddressCount() == 1, "the blocked address is counted for the UI");
+
+            guard.RecordFailure("viewer", "10.0.0.1");
+            guard.RecordFailure("viewer", "10.0.0.1");
+            guard.RecordSuccess("viewer");
+            guard.RecordFailure("viewer", "10.0.0.1");
+            Assert(!guard.Blocked("viewer", "10.0.0.1", out _), "a correct sign-in clears the account's slate");
+
+            guard.UnlockAll();
+            Assert(guard.LockedAccounts().Count == 0 && guard.BlockedAddressCount() == 0,
+                "unlock-all forgives accounts and addresses alike");
+
+            // Settings persist in users.json, clamped to sane bounds.
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var store = new Web.UserStore(dir);
+                Assert(!store.GetSecurity().Enabled, "sign-in protection is opt-in (off by default)");
+                store.SetSecurity(new Web.LoginGuardSettings { Enabled = true, MaxAttempts = 99, LockMinutes = 0 });
+                var reloaded = new Web.UserStore(dir).GetSecurity();
+                Assert(reloaded.Enabled, "the setting persists across restart");
+                AssertEq(reloaded.MaxAttempts, 20);
+                AssertEq(reloaded.LockMinutes, 1);
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+        });
+
         Test("mqtt packet codec", () =>
         {
             // CONNECT: fixed header, remaining length, protocol name, level, flags.

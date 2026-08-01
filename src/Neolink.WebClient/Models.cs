@@ -261,6 +261,23 @@ public sealed record ApiRecordingSettings(bool Events, bool Continuous,
 
 /// <summary>GET/PUT /api/admin/ai — AI event-description settings (admin only).
 /// The API key is write-only; HasApiKey just says one is stored.</summary>
+/// <summary>Sign-in protection: settings plus the live lock state, as served by
+/// /api/admin/security (the users tab's SIGN-IN PROTECTION section).</summary>
+public sealed class ApiSecuritySettings
+{
+    public bool Enabled { get; set; }
+    public int MaxAttempts { get; set; } = 5;
+    public int LockMinutes { get; set; } = 15;
+    public List<ApiLockedAccount> Locked { get; set; } = new();
+    public int BlockedAddresses { get; set; }
+}
+
+public sealed class ApiLockedAccount
+{
+    public string Name { get; set; } = "";
+    public int MinutesLeft { get; set; }
+}
+
 public sealed class ApiAiSettings
 {
     public bool Enabled { get; set; }

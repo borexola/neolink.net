@@ -99,6 +99,21 @@ clip. Fires while the app is open (tab or PWA, foreground or minimized),
 with per-camera cooldowns; preferences follow your account. Needs HTTPS or
 localhost, like two-way talk.
 
+## Accounts & sign-in protection
+
+Accounts live on the *Users* tab (admin): the admin manages users and
+passwords, and normal users view, control and review without touching server
+settings. The same tab holds **sign-in protection**, off by default: when
+enabled, an account locks for a set time after a set number of failed
+sign-ins, and an address that keeps failing across accounts (password
+spraying) is blocked outright. Locked-out callers get one generic answer
+whether the account exists or not, every lock is logged with its source
+address (fail2ban-friendly), and the panel lists live lockouts with an
+"unlock everything now" button. A server restart also clears every lock —
+the way back in if you lock yourself out. Behind a reverse proxy all
+sign-ins share the proxy's address, so leave the per-address side to the
+proxy's own tooling there; account lockouts still work as designed.
+
 ## Language
 
 The UI ships in English, French, German, Spanish, Dutch, Polish and

@@ -236,6 +236,8 @@ public static class WebApi
         int? SampleEverySeconds = null);
     private sealed record CredentialsRequest(string? Username, string? Password, string? Language = null);
     private sealed record LanguageRequest(string? Language);
+    /// <summary>Partial like the AI request: null fields keep their stored value.</summary>
+    private sealed record SecuritySettingsRequest(bool? Enabled, int? MaxAttempts, int? LockMinutes);
 
     /// <summary>
     /// Serves a recording segment or event clip. Old-format (fragmented) files —
@@ -289,6 +291,9 @@ public static class WebApi
         var events = o.Events;
         var recordingSettings = o.RecordingSettings;
         var userStore = o.UserStore;
+        // Sign-in protection (opt-in): reads its live settings from the store, so
+        // an admin's save applies to the very next attempt with no restart.
+        var loginGuard = new LoginGuard(userStore.GetSecurity);
         var resetAdminPassword = o.ResetAdminPassword;
         var trickleSpeed = o.TrickleSpeed;
         var serverLanguage = new Neolink.WebClient.Localization.ServerLanguage
@@ -307,7 +312,8 @@ public static class WebApi
             // Load the static web asset manifest (serves the UI's _content/* files when
             // running from the build output; published output has them physically in wwwroot).
             builder.WebHost.UseStaticWebAssets();
-            builder.Services.AddRazorComponents().AddInteractiveServerComponents();
+            builder.Services.AddRazorComponents().AddInteractiveServerComponents(o =>
+                o.DetailedErrors = Environment.GetEnvironmentVariable("NEOLINK_CIRCUIT_ERRORS") == "1");
             // The UI's camera-list fetches run server-side (Blazor Server circuits).
             // 100s is a CAP, not the working budget: call sites bound themselves
             // with per-request tokens (settings 30s, SD-card file search 95s).
@@ -480,17 +486,73 @@ public static class WebApi
             return Results.Json(new { ok = true, language });
         });
 
-        app.MapPost("/api/auth/login", async (CredentialsRequest req) =>
+        app.MapPost("/api/auth/login", async (CredentialsRequest req, HttpContext ctx) =>
         {
+            var name = req.Username?.Trim() ?? "";
+            var address = ctx.Connection.RemoteIpAddress?.ToString();
+            // The lock check runs BEFORE the password does: a locked-out caller
+            // gets the same answer for right and wrong guesses (no oracle), and
+            // costs the server no PBKDF2 work.
+            if (loginGuard.Blocked(name, address, out var retryAfter))
+            {
+                ctx.Response.Headers.RetryAfter = retryAfter.ToString();
+                await Task.Delay(Random.Shared.Next(250, 500));
+                return Results.Json(new { error = "too many failed sign-ins — try again later" }, statusCode: 429);
+            }
             var user = req.Username == null || req.Password == null
                 ? null
-                : userStore.Verify(req.Username.Trim(), req.Password);
+                : userStore.Verify(name, req.Password);
             if (user == null)
             {
+                Log.Info($"Failed web sign-in for '{name}'" + (address == null ? "" : $" from {address}"));
+                loginGuard.RecordFailure(name, address);
                 await Task.Delay(Random.Shared.Next(250, 500)); // blunt brute-force pacing
                 return Results.Json(new { error = "wrong username or password" }, statusCode: 401);
             }
+            loginGuard.RecordSuccess(user.Name);
             return Results.Json(new { token = userStore.IssueToken(user), user = user.Name, admin = user.Admin });
+        });
+
+        // ---- sign-in protection: admin settings + live lock state -------------
+
+        object ShapeSecurity()
+        {
+            var s = userStore.GetSecurity();
+            return new
+            {
+                enabled = s.Enabled,
+                maxAttempts = s.MaxAttempts,
+                lockMinutes = s.LockMinutes,
+                locked = loginGuard.LockedAccounts()
+                    .Select(l => new { name = l.Name, minutesLeft = l.MinutesLeft }),
+                blockedAddresses = loginGuard.BlockedAddressCount(),
+            };
+        }
+
+        app.MapGet("/api/admin/security", (HttpContext ctx) =>
+            AdminOnly(ctx) ?? Results.Json(ShapeSecurity()));
+
+        app.MapPut("/api/admin/security", (SecuritySettingsRequest req, HttpContext ctx) =>
+        {
+            if (AdminOnly(ctx) is { } denied) return denied;
+            var cur = userStore.GetSecurity();
+            userStore.SetSecurity(new LoginGuardSettings
+            {
+                Enabled = req.Enabled ?? cur.Enabled,
+                MaxAttempts = req.MaxAttempts ?? cur.MaxAttempts,
+                LockMinutes = req.LockMinutes ?? cur.LockMinutes,
+            });
+            var s = userStore.GetSecurity();
+            Log.Info($"Sign-in protection {(s.Enabled ? "ON" : "off")}: " +
+                     $"{s.MaxAttempts} attempts, {s.LockMinutes} min lock");
+            return Results.Json(ShapeSecurity());
+        });
+
+        app.MapPost("/api/admin/security/unlock", (HttpContext ctx) =>
+        {
+            if (AdminOnly(ctx) is { } denied) return denied;
+            loginGuard.UnlockAll();
+            return Results.Json(ShapeSecurity());
         });
 
         // Recovery: only while reset_admin_password=true in the config.
