@@ -93,8 +93,11 @@ internal sealed class Toaster : IDisposable
             };
             toast.Activated += (_, args) =>
             {
-                var link = (args as ToastActivatedEventArgs)?.Arguments;
-                Activated?.Invoke(string.IsNullOrEmpty(link) ? alert.DeepLink : link);
+                // Arguments echoes the launch string, so a protocol toast reports
+                // its full neolink-desktop: URI here — reduce it to the in-app
+                // path before anything downstream treats it as one.
+                var link = ProtocolLink.FromToastArguments((args as ToastActivatedEventArgs)?.Arguments);
+                Activated?.Invoke(link ?? alert.DeepLink);
             };
             ToastNotificationManager.CreateToastNotifier(AppShortcut.AppUserModelId).Show(toast);
             return true;

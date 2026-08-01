@@ -369,6 +369,20 @@ internal static class SelfTest
         Assert(ProtocolLink.FromArgs(new[] { "--minimized" }) == null,
             "an ordinary launch carries no deep link");
 
+        // The in-process click of a protocol toast reports the LAUNCH string as
+        // its arguments — navigating that raw form lands in the system browser
+        // (origin guard), so it must reduce to the in-app path here.
+        Assert(ProtocolLink.FromToastArguments("neolink-desktop:/events?event=e1") == "/events?event=e1",
+            "a protocol toast click reduces to its in-app path");
+        Assert(ProtocolLink.FromToastArguments("/events?event=e1") == "/events?event=e1",
+            "an old foreground toast's plain path passes through");
+        Assert(ProtocolLink.FromToastArguments("neolink-desktop:https://evil.example/x") == "/",
+            "a protocol click smuggling an absolute URL opens the dashboard");
+        Assert(ProtocolLink.FromToastArguments("") == null && ProtocolLink.FromToastArguments(null) == null,
+            "an argumentless click carries no link");
+        Assert(ProtocolLink.FromToastArguments("garbage") == null,
+            "non-path arguments carry no link");
+
         var withImage = Toaster.BuildToastXml(alert,
             new DesktopSettings { ShowThumbnail = true }, @"C:\temp\thumb one.jpg");
         Assert(withImage.Contains("file:///C:/temp/thumb%20one.jpg"),

@@ -4,6 +4,21 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
+## 0.9.10 — unreleased
+
+### Fixed
+
+- **Desktop app: clicking a notification no longer also opens the browser.**
+  The 0.9.9 protocol toasts deliver a click to a running app twice — Windows
+  performs the protocol launch, and the in-process click event fires too.
+  That second path reported the toast's raw `neolink-desktop:` launch string
+  as if it were an in-app path; glued onto the server origin it made an
+  off-origin URL, and the origin guard did exactly what it is for and sent
+  it to the system browser. The click now reduces to its in-app path before
+  navigation, the duplicate delivery is recognised and ignored (each leg
+  still works alone if the other breaks), and the selftest pins the
+  reduction down so the raw form can never reach navigation again.
+
 ## 0.9.9
 
 ### Added

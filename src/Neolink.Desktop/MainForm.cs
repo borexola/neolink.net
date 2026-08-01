@@ -674,11 +674,32 @@ internal sealed class MainForm : Form
     // ---- window behaviour --------------------------------------------------
 
     /// <summary>Brings the window up, optionally on a specific page.</summary>
+    /// <summary>One toast click reaches a RUNNING app twice: Windows performs the
+    /// protocol launch (second instance → wake) and the in-process Activated
+    /// event fires too, milliseconds apart. Both legs stay — either alone still
+    /// opens the event if the other breaks — but the second identical link within
+    /// this window must not load the page a second time.</summary>
+    private string? _lastDeepLink;
+    private DateTime _lastDeepLinkAt;
+
     private void ShowWindow(string? deepLink)
     {
         if (IsDisposed) return;   // a toast can outlive the app and still be clicked
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        if (deepLink != null && _settings.ClickOpensEvent) Navigate(deepLink);
+        if (deepLink != null && _settings.ClickOpensEvent)
+        {
+            var now = DateTime.UtcNow;
+            if (deepLink == _lastDeepLink && now - _lastDeepLinkAt < TimeSpan.FromSeconds(3))
+            {
+                DesktopLog.Write($"deep link {deepLink}: duplicate delivery ignored");
+            }
+            else
+            {
+                _lastDeepLink = deepLink;
+                _lastDeepLinkAt = now;
+                Navigate(deepLink);
+            }
+        }
         Opacity = 1;                 // undo the start-hidden suppression, once
         // Only ever true once, after a start-hidden boot (the constructor set it
         // false before the handle existed): later shows must not touch it - the
