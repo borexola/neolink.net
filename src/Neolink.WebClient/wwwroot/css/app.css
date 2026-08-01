@@ -5362,6 +5362,21 @@ body.tl-colresizing, body.tl-colresizing * { cursor: col-resize !important; user
     vertical-align: 1px;
 }
 
+/* NEW pill: the louder sibling of the BETA pill — filled, not outlined, so a
+   just-shipped control stands out on a busy toolbar until it has earned its
+   keep (then it graduates to plain, or to beta-tag if still proving itself). */
+.new-tag {
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    color: #0b1220;
+    background: var(--ok);
+    border: 1px solid var(--ok);
+    border-radius: 4px;
+    padding: 1px 5px;
+    vertical-align: 1px;
+}
+
 /* The beta/feedback note in the AI settings tab: same amber as the BETA pill,
    with a left rule so it reads as a callout, not body copy. */
 .notice.ai-beta-note {

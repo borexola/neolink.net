@@ -51,7 +51,7 @@
                         ? T["Events only is on — playback skips the quiet stretches and pauses after the day's last event. Click for normal playback."]
                         : T["Events only: playback hops from event to event — the quiet stretches in between are skipped, and after the day's last event it pauses. Categories hidden in the EVENTS filter are skipped too."])"
                     @onclick="ToggleSkipEvents">
-                @UiIcon.Render("skip-fwd", 12) @T["Events only"] <span class="beta-tag">@T["BETA"]</span>
+                @UiIcon.Render("skip-fwd", 12) @T["Events only"] <span class="new-tag">@T["NEW"]</span>
             </button>
         </div>
 
@@ -1382,8 +1382,12 @@
         }
         // Past the last event. A cursor that just crossed its end parks on the
         // final frame; one parked further out (placed there by hand) stays put.
+        // The park lands a whisker INSIDE the event: its clip covers [start, end)
+        // — half-open — so exactly `end` has no footage under the cursor, and an
+        // event-only camera (no continuous recording) would pause on a
+        // "no footage" tile instead of the incident's last frame.
         double lastEnd = windows[^1].End;
-        if (_t - lastEnd <= advance + 0.001) _t = lastEnd;
+        if (_t - lastEnd <= advance + 0.001) _t = Math.Max(windows[^1].Start, lastEnd - 0.1);
         _playing = false;
     }
 
