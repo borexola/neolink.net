@@ -21,7 +21,11 @@ in the README). Paste the matching section below into the GitHub release.
   the break-glass path for locking yourself out. Off by default: it mostly
   matters for servers reachable from the internet, and behind a reverse
   proxy the per-address block sees only the proxy's address (account
-  lockouts are unaffected there).
+  lockouts are unaffected there). Alongside it, the sign-in timing
+  equalizer was corrected: an unknown username used to cost two PBKDF2
+  passes against a real account's one — a statistical signature that kept
+  usernames enumerable by timing. Both now cost exactly one pass, against
+  a precomputed hash that belongs to nobody.
 
 ### Fixed
 

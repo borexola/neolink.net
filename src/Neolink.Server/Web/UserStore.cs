@@ -139,6 +139,14 @@ public sealed class UserStore
 
     // ------------------------------------------------------------------ accounts
 
+    /// <summary>A stored hash belonging to nobody, built once at startup: unknown
+    /// users verify against THIS, so their attempt costs exactly one PBKDF2 pass —
+    /// the same as a wrong password on a real account. Hashing a fresh dummy per
+    /// attempt (the previous equalizer) cost two passes, which skewed the timing
+    /// the other way and kept usernames statistically enumerable.</summary>
+    private static readonly string DummyHash =
+        HashPassword(Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)));
+
     /// <summary>Login check. Null on unknown user or wrong password (constant-time).</summary>
     public UserRecord? Verify(string name, string password)
     {
@@ -146,8 +154,8 @@ public sealed class UserStore
         lock (_gate) { user = Find(name); }
         if (user == null)
         {
-            // Burn comparable CPU for unknown users so timing can't enumerate names.
-            VerifyPassword(password, HashPassword("timing-equalizer"));
+            // Burn the same CPU for unknown users so timing can't enumerate names.
+            VerifyPassword(password, DummyHash);
             return null;
         }
         return VerifyPassword(password, user.Hash) ? user : null;

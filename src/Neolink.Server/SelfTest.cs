@@ -2141,6 +2141,8 @@ public static class SelfTest
                 Assert(store.Enabled, "auth on once an account exists");
                 Assert(store.Verify("admin", "correct horse") != null, "right password verifies");
                 Assert(store.Verify("admin", "wrong horse") == null, "wrong password fails");
+                Assert(store.Verify("nobody", "any password") == null,
+                    "unknown user fails closed (against the one-pass timing-equalizer hash)");
                 Assert(store.Verify("ADMIN", "correct horse") != null, "usernames are case-insensitive");
                 Assert(admin.Hash.StartsWith("pbkdf2-sha256$210000$"), "PBKDF2 format with strong iteration count");
 
