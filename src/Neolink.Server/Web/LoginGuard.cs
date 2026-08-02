@@ -1,36 +1,32 @@
 // Copyright (c) 2026 Oluwabori Olaleye
 // Licensed under the GNU Affero General Public License v3.0; see the LICENSE file
 // in the repository root.
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
+
 namespace Neolink.Web;
 
-/// <summary>Sign-in protection settings — opt-in, persisted in users.json next
-/// to the accounts they protect. Off by default: a LAN server behind a firewall
-/// gets no benefit from lockouts, and an accidental lockout there is pure
-/// annoyance; an internet-facing server turns it on in one click.</summary>
+/// <summary>Sign-in protection settings, persisted in users.json. Opt-in: an
+/// upgrade must not start refusing valid passwords by itself.</summary>
 public sealed class LoginGuardSettings
 {
     public bool Enabled { get; set; }
     /// <summary>Failed sign-ins on one account before it locks.</summary>
-    public int MaxAttempts { get; set; } = 5;
-    /// <summary>How long an account lock (and an address block) lasts. Doubles
-    /// as the rolling window in which failures are counted.</summary>
+    public int MaxAttempts { get; set; } = 10;
+    /// <summary>How long a lock lasts, and the window failures are counted in.</summary>
     public int LockMinutes { get; set; } = 15;
 }
 
 /// <summary>
-/// Brute-force protection for the web sign-in, entirely in memory: repeated
-/// failures on one ACCOUNT lock that account for a while, and an ADDRESS that
-/// keeps failing across accounts — the password-spray / credential-stuffing
-/// shape, where no single account ever reaches its own limit — is blocked
-/// outright. Blocked callers get one generic answer whether the account exists
-/// or not, so the guard never becomes a username oracle; the lock also
-/// short-circuits BEFORE password verification, so a locked-out attacker cannot
-/// keep burning PBKDF2 work or testing guesses against a slow clock.
+/// Brute-force protection for the web sign-in: repeated failures lock an
+/// ACCOUNT, and an ADDRESS failing across many accounts (password spraying) is
+/// blocked outright. Callers get one generic answer whether the account exists
+/// or not, and the check runs before password verification, so a locked-out
+/// attacker learns nothing and costs no PBKDF2 work.
 ///
-/// State is deliberately not persisted: a restart clears every lock, which is
-/// also the admin's break-glass path if they lock themselves out. Every lock
-/// and block is written to the log with its source address, so fail2ban-style
-/// tooling can act on the same signal.
+/// State is in memory only: a restart clears every lock, which is also the
+/// break-glass path out of an accidental lockout.
 /// </summary>
 public sealed class LoginGuard
 {
@@ -41,22 +37,24 @@ public sealed class LoginGuard
         public DateTime BlockedUntil;
     }
 
-    /// <summary>An address gets this many times an account's allowance before it
-    /// is blocked — room for a shared NAT with several fat-fingered humans, but
-    /// far below any useful spray rate.</summary>
+    /// <summary>An address gets this many times an account's allowance — room
+    /// for a shared NAT, far below any useful spray rate.</summary>
     private const int IpFactor = 4;
 
-    /// <summary>Tracking cap per map. An attacker inventing usernames (or a
-    /// botnet of addresses) stops being TRACKED beyond this, never evicts live
-    /// state, and per-account locking is unaffected — real accounts are few.</summary>
+    /// <summary>Tracking cap per map: beyond it new keys stop being tracked
+    /// rather than evicting live state.</summary>
     private const int MaxTracked = 4096;
+
+    /// <summary>Accounts are created with 1-32 characters, so this never touches
+    /// a real name; it bounds what an anonymous caller can pin in memory.</summary>
+    private const int MaxKeyChars = 64;
 
     private readonly object _gate = new();
     private readonly Dictionary<string, Entry> _accounts = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Entry> _addresses = new();
     private readonly Func<LoginGuardSettings> _settings;
 
-    /// <summary>Testable time source; the selftest winds it forward.</summary>
+    /// <summary>Test seam; the selftest winds it forward.</summary>
     internal Func<DateTime> Clock = () => DateTime.UtcNow;
 
     public LoginGuard(Func<LoginGuardSettings> settings) => _settings = settings;
@@ -64,10 +62,66 @@ public sealed class LoginGuard
     private static TimeSpan LockSpan(LoginGuardSettings s) =>
         TimeSpan.FromMinutes(Math.Clamp(s.LockMinutes, 1, 24 * 60));
 
-    /// <summary>Whether this attempt must be refused outright (locked account or
-    /// blocked address), and for how many more seconds. Checked before the
-    /// password is, so a lock always answers the same way regardless of the
-    /// guess — and costs no hashing.</summary>
+    /// <summary>The tracked/logged form of a submitted username. Control
+    /// characters would forge log lines and unbounded length would pin memory;
+    /// unknown names are still tracked exactly like real ones, which is what
+    /// stops enumeration.</summary>
+    public static string TrackKey(string? raw)
+    {
+        if (string.IsNullOrEmpty(raw)) return "";
+        var sb = new StringBuilder(Math.Min(raw.Length, MaxKeyChars));
+        foreach (var c in raw)
+        {
+            if (sb.Length >= MaxKeyChars) break;
+            sb.Append(char.IsControl(c) ? '?' : c);
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// The address to hold responsible for an attempt. Behind a local proxy every
+    /// caller shares its address, so the forwarded header names the real client.
+    /// The LAST hop is taken, never the first: proxies append the peer they saw,
+    /// so only the trailing entry is one this deployment's proxy vouched for —
+    /// earlier entries may be caller-supplied. A peer that is not a local proxy
+    /// is used as-is and its header ignored.
+    /// </summary>
+    public static string? ClientAddress(IPAddress? peer, string? forwardedFor)
+    {
+        if (peer == null) return null;
+        if (IsLocalProxy(peer) && !string.IsNullOrWhiteSpace(forwardedFor))
+        {
+            var hops = forwardedFor.Split(',');
+            for (int i = hops.Length - 1; i >= 0; i--)
+                if (IPAddress.TryParse(hops[i].Trim(), out var real))
+                    return Normalize(real);
+        }
+        return Normalize(peer);
+    }
+
+    /// <summary>Dual-stack listeners report IPv4 callers as ::ffff:a.b.c.d; fold
+    /// those back so one client never occupies two tallies.</summary>
+    private static string Normalize(IPAddress ip) =>
+        (ip.IsIPv4MappedToIPv6 ? ip.MapToIPv4() : ip).ToString();
+
+    private static bool IsLocalProxy(IPAddress ip)
+    {
+        if (IPAddress.IsLoopback(ip)) return true;
+        if (ip.IsIPv4MappedToIPv6) ip = ip.MapToIPv4();
+        if (ip.AddressFamily == AddressFamily.InterNetwork)
+        {
+            var b = ip.GetAddressBytes();
+            return b[0] == 10
+                || (b[0] == 172 && b[1] is >= 16 and <= 31)
+                || (b[0] == 192 && b[1] == 168)
+                || (b[0] == 169 && b[1] == 254);
+        }
+        if (ip.IsIPv6LinkLocal) return true;
+        return (ip.GetAddressBytes()[0] & 0xFE) == 0xFC; // fc00::/7 unique local
+    }
+
+    /// <summary>Whether this attempt must be refused outright, and for how many
+    /// more seconds. Must be checked before the password is verified.</summary>
     public bool Blocked(string account, string? address, out int retryAfterSeconds)
     {
         retryAfterSeconds = 0;
@@ -87,10 +141,9 @@ public sealed class LoginGuard
         }
     }
 
-    /// <summary>A wrong password (or unknown username) landed. Counts against
-    /// both the account name AND the source address — unknown names never lock
-    /// an account (there is none), but they still burn the address's allowance,
-    /// which is what catches enumeration and spraying.</summary>
+    /// <summary>A wrong password or unknown username landed. Unknown names lock
+    /// no account but still burn the address's allowance, which is what catches
+    /// enumeration and spraying.</summary>
     public void RecordFailure(string account, string? address)
     {
         var s = _settings();
@@ -109,14 +162,14 @@ public sealed class LoginGuard
         }
     }
 
-    /// <summary>A correct sign-in clears the account's slate. The address keeps
-    /// its tally: one valid login must not launder a spray in progress.</summary>
+    /// <summary>The address keeps its tally: one valid login must not launder a
+    /// spray in progress.</summary>
     public void RecordSuccess(string account)
     {
         lock (_gate) _accounts.Remove(account);
     }
 
-    /// <summary>Returns true when this failure crossed the limit and started a block.</summary>
+    /// <summary>True when this failure crossed the limit and started a block.</summary>
     private bool Bump(Dictionary<string, Entry> map, string key, DateTime now, TimeSpan span, int limit)
     {
         if (!map.TryGetValue(key, out var e))
@@ -124,14 +177,14 @@ public sealed class LoginGuard
             if (map.Count >= MaxTracked)
             {
                 Prune(map, now);
-                if (map.Count >= MaxTracked) return false; // full of live state: stop tracking new keys
+                if (map.Count >= MaxTracked) return false;
             }
             map[key] = e = new Entry { WindowStart = now };
         }
-        if (e.BlockedUntil > now) return false;           // already blocked: nothing new to declare
+        if (e.BlockedUntil > now) return false;
         if (now - e.WindowStart > span)
         {
-            e.Count = 0;                                   // stale window: start counting afresh
+            e.Count = 0;
             e.WindowStart = now;
         }
         e.Count++;
@@ -149,7 +202,6 @@ public sealed class LoginGuard
             map.Remove(key);
     }
 
-    /// <summary>Currently locked accounts, for the settings UI.</summary>
     public List<(string Name, int MinutesLeft)> LockedAccounts()
     {
         var now = Clock();
@@ -160,15 +212,12 @@ public sealed class LoginGuard
                 .ToList();
     }
 
-    /// <summary>How many source addresses are blocked right now.</summary>
     public int BlockedAddressCount()
     {
         var now = Clock();
         lock (_gate) return _addresses.Count(kv => kv.Value.BlockedUntil > now);
     }
 
-    /// <summary>Admin lever: forgive everything at once — the fix for "I locked
-    /// myself out of my own camera server while standing at the door".</summary>
     public void UnlockAll()
     {
         lock (_gate)

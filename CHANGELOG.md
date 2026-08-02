@@ -8,24 +8,45 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Added
 
-- **Sign-in protection (opt-in).** A new section on the server settings
-  Users tab: after a configurable number of failed sign-ins an account
-  locks for a configurable time, and an address that keeps failing across
+- **Sign-in protection (opt-in).** Switched on from the server settings
+  Users tab, it locks an account after a configurable number of failed
+  sign-ins (default 10) and blocks an address that keeps failing across
   accounts — the password-spraying shape, where no single account trips its
-  own limit — is blocked outright. Locked-out callers get one generic
-  answer whether the account exists or not (no username oracle), the lock
-  is checked before the password so a locked-out attacker costs no hashing,
-  and every lock and block is logged with its source address for
-  fail2ban-style tooling. The settings panel shows live lockouts with an
-  "unlock everything now" button; a server restart also clears every lock —
-  the break-glass path for locking yourself out. Off by default: it mostly
-  matters for servers reachable from the internet, and behind a reverse
-  proxy the per-address block sees only the proxy's address (account
-  lockouts are unaffected there). Alongside it, the sign-in timing
+  own limit. Locked-out callers get one generic answer whether the account
+  exists or not (no username oracle), the lock is checked before the
+  password so a locked-out attacker costs no hashing, and every lock and
+  block is logged with its source address for fail2ban-style tooling. It
+  stays OFF until you ask for it: refusing a valid password is not something
+  an upgrade should start doing by itself. The Users tab section shows live
+  lockouts with an "unlock everything now" button, and a server restart also
+  a reverse proxy (Home Assistant ingress, nginx, Caddy) the real client
+  address is read from the forwarded-for header the proxy adds, so one
+  person's failures never block everyone sharing that proxy; the header is
+  believed only from a local/private peer, and only its last hop — the one
+  the proxy itself vouched for — so a caller cannot mint a fresh address by
+  sending the header themselves. A submitted username is neutralised and
+  length-capped before it reaches the log or the tracking maps: a newline in
+  a username could otherwise forge a whole "address blocked" audit line and
+  aim fail2ban-style tooling at any address the attacker named, and an
+  unbounded name could pin memory per attempt. Alongside it, the sign-in timing
   equalizer was corrected: an unknown username used to cost two PBKDF2
   passes against a real account's one — a statistical signature that kept
   usernames enumerable by timing. Both now cost exactly one pass, against
   a precomputed hash that belongs to nobody.
+
+- **Esc closes the event playback dialog.** It routes through the dialog's
+  own ✕, so closing by key and by click do exactly the same thing — the
+  event is marked reviewed either way. In passing, the Esc handler now finds
+  a dialog's close button by a stable marker instead of its localized
+  tooltip text, which repairs Esc on the camera quick view for the five
+  non-English languages (it silently did nothing there).
+
+### Changed
+
+- **The sidebar's battery-camera badge dropped its BETA.** Baichuan-over-UDP
+  has carried the Argus family through enough releases to stop apologising;
+  the compact UDP pill stays so the transport is still visible at a glance.
+  The camera panel's PORTS/transport details are unchanged.
 
 ### Fixed
 

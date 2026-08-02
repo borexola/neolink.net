@@ -103,16 +103,23 @@ localhost, like two-way talk.
 
 Accounts live on the *Users* tab (admin): the admin manages users and
 passwords, and normal users view, control and review without touching server
-settings. The same tab holds **sign-in protection**, off by default: when
-enabled, an account locks for a set time after a set number of failed
-sign-ins, and an address that keeps failing across accounts (password
-spraying) is blocked outright. Locked-out callers get one generic answer
+settings. The same tab holds **sign-in protection**, off until you switch it
+on: an account then locks for a set time after a set number of failed
+sign-ins (10 unless changed), and an address that keeps failing across
+accounts (password spraying) is blocked outright. It is opt-in on purpose —
+refusing a valid password is not something an upgrade should start doing by
+itself. Locked-out callers get one generic answer
 whether the account exists or not, every lock is logged with its source
 address (fail2ban-friendly), and the panel lists live lockouts with an
 "unlock everything now" button. A server restart also clears every lock —
-the way back in if you lock yourself out. Behind a reverse proxy all
-sign-ins share the proxy's address, so leave the per-address side to the
-proxy's own tooling there; account lockouts still work as designed.
+the way back in if you lock yourself out.
+
+Behind a reverse proxy (Home Assistant ingress, nginx, Caddy) the caller's
+real address comes from the forwarded-for header the proxy adds — the last
+hop, the only one the proxy itself vouched for, so a caller cannot forge a
+fresh address by sending the header themselves. A proxy that adds no such
+header leaves every sign-in looking like the proxy, in which case account
+lockouts carry the load and the per-address block is best left off.
 
 ## Language
 

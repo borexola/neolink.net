@@ -2196,8 +2196,8 @@ public static class SelfTest
             now = now.AddMinutes(11);
             Assert(!guard.Blocked("admin", "10.0.0.9", out _), "a lock expires on its own");
 
-            // Password spraying: many usernames from one address, no single
-            // account ever reaching its own limit — the address trips instead.
+            // Password spraying: no single account reaches its own limit, so the
+            // address must trip instead.
             for (int i = 0; i < 12; i++) guard.RecordFailure($"ghost{i}", "10.0.0.66");
             Assert(guard.Blocked("admin", "10.0.0.66", out _), "a spraying address is blocked for every account");
             Assert(!guard.Blocked("admin", "10.0.0.1", out _), "other addresses are unaffected");
@@ -2213,16 +2213,42 @@ public static class SelfTest
             Assert(guard.LockedAccounts().Count == 0 && guard.BlockedAddressCount() == 0,
                 "unlock-all forgives accounts and addresses alike");
 
+            // The submitted username becomes a durable map key and a log line.
+            AssertEq(Web.LoginGuard.TrackKey("admin"), "admin");
+            Assert(!Web.LoginGuard.TrackKey("eve\n[WRN] Sign-in protection: address 8.8.8.8 blocked")
+                    .Contains('\n'),
+                "a newline in a username cannot forge a log line");
+            Assert(!Web.LoginGuard.TrackKey("eve\r\n\tx").Any(char.IsControl),
+                "every control character is neutralised, not just newlines");
+            AssertEq(Web.LoginGuard.TrackKey(new string('A', 200_000)).Length, 64);
+            AssertEq(Web.LoginGuard.TrackKey(null), "");
+
+            // Behind a local proxy the forwarded header names the real client;
+            // only its last hop is trustworthy.
+            static string? Client(string peer, string? xff) =>
+                Web.LoginGuard.ClientAddress(System.Net.IPAddress.Parse(peer), xff);
+            AssertEq(Client("127.0.0.1", "203.0.113.7"), "203.0.113.7");
+            AssertEq(Client("172.30.32.2", "203.0.113.7"), "203.0.113.7");
+            AssertEq(Client("127.0.0.1", "1.2.3.4, 203.0.113.7"), "203.0.113.7");
+            AssertEq(Client("198.51.100.9", "203.0.113.7"), "198.51.100.9");
+            AssertEq(Client("127.0.0.1", null), "127.0.0.1");
+            AssertEq(Client("127.0.0.1", "not-an-address"), "127.0.0.1");
+            AssertEq(Client("::ffff:198.51.100.9", null), "198.51.100.9");
+            Assert(Web.LoginGuard.ClientAddress(null, "203.0.113.7") == null,
+                "no peer address means nothing to hold responsible");
+
             // Settings persist in users.json, clamped to sane bounds.
             var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
             Directory.CreateDirectory(dir);
             try
             {
                 var store = new Web.UserStore(dir);
-                Assert(!store.GetSecurity().Enabled, "sign-in protection is opt-in (off by default)");
+                var defaults = store.GetSecurity();
+                Assert(!defaults.Enabled && defaults.MaxAttempts == 10,
+                    "sign-in protection is opt-in: off until asked for, 10 attempts when on");
                 store.SetSecurity(new Web.LoginGuardSettings { Enabled = true, MaxAttempts = 99, LockMinutes = 0 });
                 var reloaded = new Web.UserStore(dir).GetSecurity();
-                Assert(reloaded.Enabled, "the setting persists across restart");
+                Assert(reloaded.Enabled, "turning it on persists across restart");
                 AssertEq(reloaded.MaxAttempts, 20);
                 AssertEq(reloaded.LockMinutes, 1);
             }

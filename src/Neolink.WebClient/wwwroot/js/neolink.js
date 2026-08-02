@@ -816,11 +816,9 @@
             update();
         },
 
-        // Esc dismisses the quick view. The key routes through the dialog's own
-        // Close button, so every Blazor-side close effect runs exactly as if it
-        // was clicked. The EVENT PLAYER is deliberately NOT on this list:
-        // closing it marks the event reviewed (it leaves the strip), so it must
-        // never vanish on a stray Esc — only its explicit ✕ closes it.
+        // Esc dismisses the quick view and the event player by clicking the
+        // dialog's own [data-esc-close] button, so every Blazor-side close effect
+        // runs. Target by that marker, never by the title text: it is localized.
         escInit() {
             if (document.body.dataset.escInit) return;
             document.body.dataset.escInit = '1';
@@ -833,9 +831,9 @@
                     ctx.click();
                     return;
                 }
-                const dialogs = document.querySelectorAll('.quick-view');
+                const dialogs = document.querySelectorAll('.quick-view, .event-player');
                 const btn = dialogs.length
-                    ? dialogs[dialogs.length - 1].querySelector('.icon-btn[title="Close"]')
+                    ? dialogs[dialogs.length - 1].querySelector('[data-esc-close]')
                     : null;
                 if (btn) {
                     e.preventDefault();

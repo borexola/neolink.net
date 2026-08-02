@@ -42,13 +42,11 @@ internal static class ProtocolLink
         return raw == null ? null : Sanitize(raw[(Scheme.Length + 1)..]);
     }
 
-    /// <summary>The in-app path carried by a toast's in-process click, or null when
-    /// it has none. A protocol toast's Activated event reports the LAUNCH string
-    /// (neolink-desktop:/events?...) as its arguments — the raw form must never
-    /// reach navigation: appended to the server origin it makes an off-origin URL
-    /// that the WebView hands to the system browser (seen live: every banner click
-    /// opened the app AND a browser). Older foreground toasts carried the plain
-    /// path, so that shape passes through sanitized.</summary>
+    /// <summary>The in-app path carried by a toast's in-process click, or null.
+    /// A protocol toast reports its full launch URI as the arguments; that form
+    /// must never reach navigation, where appending it to the server origin makes
+    /// an off-origin URL the WebView hands to the system browser. Pre-0.9.9
+    /// foreground toasts carried a plain path, so that shape also passes.</summary>
     public static string? FromToastArguments(string? arguments)
     {
         if (string.IsNullOrEmpty(arguments)) return null;

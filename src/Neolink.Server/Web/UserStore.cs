@@ -62,7 +62,8 @@ public sealed class UserStore
         /// restart, and a language change must not.</summary>
         public string? DefaultLanguage { get; set; }
         /// <summary>Sign-in protection (lockouts); null in files from before the
-        /// feature, which reads as the defaults with Enabled = false.</summary>
+        /// feature, which reads as the defaults — off, so upgrading never changes
+        /// how an existing install answers a sign-in.</summary>
         public LoginGuardSettings? Security { get; set; }
         public List<UserRecord> Users { get; set; } = new();
     }
@@ -139,11 +140,10 @@ public sealed class UserStore
 
     // ------------------------------------------------------------------ accounts
 
-    /// <summary>A stored hash belonging to nobody, built once at startup: unknown
-    /// users verify against THIS, so their attempt costs exactly one PBKDF2 pass —
-    /// the same as a wrong password on a real account. Hashing a fresh dummy per
-    /// attempt (the previous equalizer) cost two passes, which skewed the timing
-    /// the other way and kept usernames statistically enumerable.</summary>
+    /// <summary>A hash belonging to nobody, built once. Unknown users verify
+    /// against it so their attempt costs exactly one PBKDF2 pass — the same as a
+    /// wrong password on a real account, which is what keeps timing uninformative.
+    /// Must stay a single stored hash: hashing per attempt costs two passes.</summary>
     private static readonly string DummyHash =
         HashPassword(Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)));
 

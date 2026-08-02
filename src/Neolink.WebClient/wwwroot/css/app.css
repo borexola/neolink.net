@@ -5362,9 +5362,8 @@ body.tl-colresizing, body.tl-colresizing * { cursor: col-resize !important; user
     vertical-align: 1px;
 }
 
-/* NEW pill: the louder sibling of the BETA pill — filled, not outlined, so a
-   just-shipped control stands out on a busy toolbar until it has earned its
-   keep (then it graduates to plain, or to beta-tag if still proving itself). */
+/* NEW pill: filled rather than outlined like .beta-tag, so a just-shipped
+   control stands out on a busy toolbar. */
 .new-tag {
     font-size: 9px;
     font-weight: 700;

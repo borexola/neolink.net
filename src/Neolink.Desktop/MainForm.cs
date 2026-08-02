@@ -674,11 +674,10 @@ internal sealed class MainForm : Form
     // ---- window behaviour --------------------------------------------------
 
     /// <summary>Brings the window up, optionally on a specific page.</summary>
-    /// <summary>One toast click reaches a RUNNING app twice: Windows performs the
-    /// protocol launch (second instance → wake) and the in-process Activated
-    /// event fires too, milliseconds apart. Both legs stay — either alone still
-    /// opens the event if the other breaks — but the second identical link within
-    /// this window must not load the page a second time.</summary>
+    /// <summary>One toast click reaches a running app twice, milliseconds apart:
+    /// the protocol launch and the in-process Activated event. Both legs are kept
+    /// so either alone still opens the event; the second delivery of the same
+    /// link within this window must not load the page again.</summary>
     private string? _lastDeepLink;
     private DateTime _lastDeepLinkAt;
 

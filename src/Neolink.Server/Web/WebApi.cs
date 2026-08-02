@@ -488,11 +488,14 @@ public static class WebApi
 
         app.MapPost("/api/auth/login", async (CredentialsRequest req, HttpContext ctx) =>
         {
-            var name = req.Username?.Trim() ?? "";
-            var address = ctx.Connection.RemoteIpAddress?.ToString();
-            // The lock check runs BEFORE the password does: a locked-out caller
-            // gets the same answer for right and wrong guesses (no oracle), and
-            // costs the server no PBKDF2 work.
+            var submitted = req.Username?.Trim() ?? "";
+            // Only the sanitized name may reach the guard's maps or the log;
+            // Verify still sees the original, which a sanitized name cannot match.
+            var name = LoginGuard.TrackKey(submitted);
+            var address = LoginGuard.ClientAddress(ctx.Connection.RemoteIpAddress,
+                ctx.Request.Headers["X-Forwarded-For"]);
+            // Before the password, so a locked-out caller learns nothing from the
+            // answer and costs no PBKDF2 work.
             if (loginGuard.Blocked(name, address, out var retryAfter))
             {
                 ctx.Response.Headers.RetryAfter = retryAfter.ToString();
@@ -501,7 +504,7 @@ public static class WebApi
             }
             var user = req.Username == null || req.Password == null
                 ? null
-                : userStore.Verify(name, req.Password);
+                : userStore.Verify(submitted, req.Password);
             if (user == null)
             {
                 Log.Info($"Failed web sign-in for '{name}'" + (address == null ? "" : $" from {address}"));

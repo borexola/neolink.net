@@ -186,8 +186,7 @@
                     <span class="cam-name">@cam.Name</span>
                     @if (cam.Udp)
                     {
-                        @* Baichuan-over-UDP battery camera: beta transport, badge it. *@
-                        <span class="beta-tag" title="@T["Connected over UDP (Baichuan-over-UDP) — beta support for battery-only models like the Argus family"]">UDP @T["BETA"]</span>
+                        <span class="beta-tag" title="@T["Connected over UDP (Baichuan-over-UDP) — used by battery-only models like the Argus family"]">UDP</span>
                     }
                     @if (cam.Battery is { } bat)
                     {
@@ -941,7 +940,7 @@
                 }
                 <button class="icon-btn fs-toggle" title="@T["Browser fullscreen (click again to exit)"]"
                         @onclick="QuickFullscreenAsync"><span class="fs-enter">@UiIcon.Render("fs-enter", 14)</span><span class="fs-exit">@UiIcon.Render("fs-exit", 14)</span></button>
-                <button class="icon-btn" title="@T["Close"]" @onclick="CloseQuickView">✕</button>
+                <button class="icon-btn" title="@T["Close"]" data-esc-close @onclick="CloseQuickView">✕</button>
             </div>
             <div class="quick-view-media zoom-on" id="quick-view-media">
                 <video id="vid-quick" muted playsinline></video>
@@ -1109,8 +1108,8 @@
     @if (_showServerSettings)
     {
         @* No @onclick on the dim wall (and Esc is ignored — escInit only targets
-           .quick-view): staged edits must not be lost to a stray click, so only
-           the header ✕ closes this panel. *@
+           .quick-view and .event-player): staged edits must not be lost to a
+           stray click, so only the header ✕ closes this panel. *@
         <div class="backdrop panel-backdrop"></div>
         @* Head and foot are pinned; only the sections scroll. The unsaved state
            lives in BOTH: a badge in the header and the save bar in the footer,
@@ -1296,10 +1295,10 @@
                                         <input class="ret-input" type="number" min="1" max="1440"
                                                @bind="_security.LockMinutes" @bind:after="SaveSecurityAsync" /></div>
                                     <div class="notice small">
-                                        @T["Behind a reverse proxy every sign-in appears to come from the proxy's address, so the address block can trigger for everyone at once — account lockouts are unaffected."]
+                                        @T["Behind a reverse proxy the caller's real address is taken from the forwarded-for header the proxy adds. A proxy that sets no such header leaves every sign-in looking like the proxy itself, so the address block would apply to everyone at once — account lockouts are unaffected either way."]
                                     </div>
-                                    @* Prefixed key: the account list above keys its rows by the
-                                       same names, and sibling keys must be unique or the diff throws. *@
+                                    @* Key must not collide with the account rows above: duplicate
+                                       sibling keys throw during the render diff. *@
                                     @foreach (var l in _security.Locked)
                                     {
                                         <div class="control-row user-row" @key="@("lock:" + l.Name)">
@@ -2221,8 +2220,8 @@
 
     @if (_playEvent != null)
     {
-        @* No @onclick: closing marks the event reviewed, so a stray click on the
-           dim wall (or Esc — see escInit) must never dismiss it. Only ✕ closes. *@
+        @* No @onclick on the dim wall: closing marks the event reviewed, so only
+           ✕ and Esc may dismiss it. *@
         <div class="backdrop player-backdrop"></div>
         <div class="event-player" role="dialog" aria-label="@T["Event playback"]">
             <div class="event-player-head">
@@ -2232,7 +2231,7 @@
                         @_playEvent.Camera · @T.DateShort(_playEvent.Start.ToLocalTime()) @_playEvent.Start.ToLocalTime().ToString("HH:mm:ss") · @DurationText(_playEvent)
                     </span>
                 </div>
-                <button class="icon-btn" title="@T["Close"]" @onclick="ClosePlayerAsync">✕</button>
+                <button class="icon-btn" title="@T["Close"]" data-esc-close @onclick="ClosePlayerAsync">✕</button>
             </div>
             @if (_playEvent.AiDescription != null || _playEvent.AiLevel != null)
             {
@@ -3392,8 +3391,8 @@
         await SaveSecurityAsync();
     }
 
-    /// <summary>Instant-save, like everything else on this tab: the server clamps,
-    /// persists, and answers with the settings plus the live lock state.</summary>
+    /// <summary>Instant-save: the server clamps, persists, and answers with the
+    /// settings plus the live lock state.</summary>
     private async Task SaveSecurityAsync()
     {
         if (_security == null || _securityBusy) return;

@@ -1306,8 +1306,7 @@
         _playing = !_playing;
         if (_playing && _skipEvents)
         {
-            // Play pressed at (or past) the end of the reel: start it over from
-            // the first event — the video-player idiom for "play again".
+            // Play at the end of the reel starts it over.
             var windows = EventWindows();
             if (windows.Count > 0 && _t >= windows[^1].End - 0.25)
             {
@@ -1321,26 +1320,20 @@
 
     // ------------------------------------------------------------ events-only playback (beta)
     //
-    // The day plays as just its incidents: whenever the moving cursor is not
-    // inside an event, it hops to the next one, and after the day's last event
-    // it pauses. Classic playback is untouched — the mode only ever steers the
-    // already-advancing clock, so scrubbing, stepping, speeds and the event
-    // hop buttons all behave exactly as before. Off by default and per-visit
-    // like the EVENTS filter (deliberately not persisted while beta).
+    // Steers the already-advancing clock only, so scrubbing, stepping, speeds
+    // and the event hop buttons behave exactly as in classic playback. Per-visit
+    // like the EVENTS filter, deliberately not persisted while beta.
 
     private bool _skipEvents;
 
-    /// <summary>Gaps this small play through instead of hopping — back-to-back
+    /// <summary>Gaps this small play through instead of hopping: back-to-back
     /// detections read as one incident, and a sub-second seek would stutter.</summary>
     private const double SkipBridge = 2;
 
     private void ToggleSkipEvents() => _skipEvents = !_skipEvents;
 
-    /// <summary>The visible events of the included cameras merged into sorted,
-    /// non-overlapping play windows — what events-only playback hops between.
-    /// Obeys the EVENTS filter, like the [ and ] hops. Recomputed per call: the
-    /// clock ticks twice a second and a day caps at 10k events, so a cache
-    /// would buy invalidation bugs, not time.</summary>
+    /// <summary>The visible events merged into sorted, non-overlapping play
+    /// windows. Obeys the EVENTS filter, like the [ and ] hops.</summary>
     private List<(double Start, double End)> EventWindows()
     {
         var merged = new List<(double Start, double End)>();
@@ -1361,11 +1354,9 @@
         return merged;
     }
 
-    /// <summary>Events-only steering, applied right after the clock advanced:
-    /// dead air hops the cursor to the next event's start, and running past the
-    /// day's last event parks the cursor on its final frame and pauses. With no
-    /// visible events at all playback stays classic, so the toggle can never
-    /// make Play look broken on an empty day.</summary>
+    /// <summary>Applied right after the clock advanced: dead air hops to the next
+    /// event, and running past the last one pauses. A day with no visible events
+    /// keeps classic playback, so the toggle can never strand Play.</summary>
     private void SkipToEventsTick(double advance)
     {
         var windows = EventWindows();
@@ -1378,14 +1369,11 @@
                 EnsureCursorVisible(center: true);
                 return;
             }
-            if (_t <= end) return; // inside this event: play on
+            if (_t <= end) return;
         }
-        // Past the last event. A cursor that just crossed its end parks on the
-        // final frame; one parked further out (placed there by hand) stays put.
-        // The park lands a whisker INSIDE the event: its clip covers [start, end)
-        // — half-open — so exactly `end` has no footage under the cursor, and an
-        // event-only camera (no continuous recording) would pause on a
-        // "no footage" tile instead of the incident's last frame.
+        // The park lands just inside the event: a clip covers [start, end), so
+        // exactly `end` has no footage under the cursor on an event-only camera.
+        // A cursor placed far past the end by hand stays where it is.
         double lastEnd = windows[^1].End;
         if (_t - lastEnd <= advance + 0.001) _t = Math.Max(windows[^1].Start, lastEnd - 0.1);
         _playing = false;

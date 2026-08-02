@@ -369,9 +369,8 @@ internal static class SelfTest
         Assert(ProtocolLink.FromArgs(new[] { "--minimized" }) == null,
             "an ordinary launch carries no deep link");
 
-        // The in-process click of a protocol toast reports the LAUNCH string as
-        // its arguments — navigating that raw form lands in the system browser
-        // (origin guard), so it must reduce to the in-app path here.
+        // Navigating a raw launch string lands in the system browser, so a click's
+        // arguments must reduce to an in-app path.
         Assert(ProtocolLink.FromToastArguments("neolink-desktop:/events?event=e1") == "/events?event=e1",
             "a protocol toast click reduces to its in-app path");
         Assert(ProtocolLink.FromToastArguments("/events?event=e1") == "/events?event=e1",

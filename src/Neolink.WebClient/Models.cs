@@ -266,7 +266,7 @@ public sealed record ApiRecordingSettings(bool Events, bool Continuous,
 public sealed class ApiSecuritySettings
 {
     public bool Enabled { get; set; }
-    public int MaxAttempts { get; set; } = 5;
+    public int MaxAttempts { get; set; } = 10;
     public int LockMinutes { get; set; } = 15;
     public List<ApiLockedAccount> Locked { get; set; } = new();
     public int BlockedAddresses { get; set; }
