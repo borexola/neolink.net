@@ -2258,6 +2258,21 @@ public static class SelfTest
             }
         });
 
+        Test("every shipped language catalogue parses", () =>
+        {
+            // A malformed catalogue is caught and returns empty, so the language
+            // silently renders in English instead of failing: nothing but a count
+            // tells the difference.
+            foreach (var lang in WebClient.Localization.Lang.All)
+            {
+                if (lang.Code == WebClient.Localization.Lang.Default) continue;
+                Assert(WebClient.Localization.Translations.Count(lang.Code) > 500,
+                    $"{lang.English} catalogue parses and is populated");
+                Assert(WebClient.Localization.Translations.Get(lang.Code, "Enable recording") != "Enable recording",
+                    $"{lang.English} translates a key added by hand this cycle");
+            }
+        });
+
         Test("mqtt packet codec", () =>
         {
             // CONNECT: fixed header, remaining length, protocol name, level, flags.

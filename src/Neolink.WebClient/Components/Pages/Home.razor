@@ -580,6 +580,18 @@
             </div>
         }
 
+        @if (_showCodecFallback)
+        {
+            <div class="perf-toast" role="status">
+                <span>
+                    @T.F("This browser cannot decode {0}, so the tile switched to the sub stream.",
+                         _codecFallbackCodec ?? "H.265")
+                    @T["H.265 needs hardware decoding, which Chromium browsers only use when graphics acceleration is working — check your browser's GPU status. Other browsers on this account are unaffected."]
+                </span>
+                <button class="chip" @onclick="() => _showCodecFallback = false">@T["Got it"]</button>
+            </div>
+        }
+
         @if (_showMainWarn)
         {
             <div class="perf-toast" role="status">
@@ -1072,10 +1084,14 @@
                 </div>
                 @if (!_resetMode)
                 {
+                    @* Bound on input, not change: keydown fires BEFORE the change
+                       event, so an Enter pressed straight after typing would sign
+                       in with the previous value. *@
                     <label>@T["Username"]</label>
-                    <input @bind="_loginUser" autocomplete="username" />
+                    <input @bind="_loginUser" @bind:event="oninput" autocomplete="username"
+                           @onkeydown='e => { if (e.Key == "Enter") _ = LoginAsync(); }' />
                     <label>@T["Password"]</label>
-                    <input type="password" @bind="_loginPass" autocomplete="current-password"
+                    <input type="password" @bind="_loginPass" @bind:event="oninput" autocomplete="current-password"
                            @onkeydown='e => { if (e.Key == "Enter") _ = LoginAsync(); }' />
                     @if (_loginError != null)
                     {
@@ -1146,11 +1162,10 @@
                        server's, and a non-admin must be able to change their own. *@
                     <button class="settings-tab @(_settingsTab == "language" ? "active" : "")" role="tab"
                             @onclick='() => { _settingsTab = "language"; _langError = null; }'>@UiIcon.Render("globe", 13) @T["Language"]</button>
-                    @if (_adminHasRecording)
-                    {
-                        <button class="settings-tab @(_settingsTab == "recording" ? "active" : "")" role="tab"
-                                @onclick='() => _settingsTab = "recording"'>@UiIcon.Render("rec", 13) @T["Recording"]</button>
-                    }
+                    @* Shown even with no recording section in config.json — that IS
+                       the off state, and the tab is where someone looks to turn it on. *@
+                    <button class="settings-tab @(_settingsTab == "recording" ? "active" : "")" role="tab"
+                            @onclick='() => _settingsTab = "recording"'>@UiIcon.Render("rec", 13) @T["Recording"]</button>
                     @if (_adminHasMqtt)
                     {
                         <button class="settings-tab @(_settingsTab == "mqtt" ? "active" : "")" role="tab"
@@ -1740,6 +1755,42 @@
                         </div>
                     }
 
+                    @if (_settingsTab == "recording" && _adminConfig != null && !_adminHasRecording)
+                    {
+                        <div class="campanel-section">
+                            <div class="campanel-section-title">@T["RECORDING"]</div>
+                            <div class="notice">
+                                @T["Recording is off — this server keeps no footage. Switch it on to record detection events (clips, previews and thumbnails) for cameras that report detections. Continuous 24/7 recording stays off until you enable it per camera."]
+                            </div>
+                            <div class="control-row">
+                                <span>@T["Storage path"]</span>
+                                <input class="notif-input" placeholder="/recordings" spellcheck="false"
+                                       @bind="_recEnablePath" @bind:event="oninput" />
+                            </div>
+                            <div class="notice small">
+                                @((MarkupString)T["Where clips and 24/7 footage are written. <b>In Docker, this must be a mounted volume</b> — an unmapped path is created inside the container and its footage is lost when the container is recreated."])
+                            </div>
+                            @if (_recEnableError != null)
+                            {
+                                <div class="notice error">@_recEnableError</div>
+                            }
+                            @if (!_adminWritable)
+                            {
+                                <div class="notice warn small">
+                                    @((MarkupString)T["<code>config.json</code> is not writable by the server, so recording cannot be switched on from here — add a <code>recording</code> section to the file instead."])
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="control-row">
+                                    <span></span>
+                                    <button class="chip" disabled="@(_recEnableBusy || _recEnablePath.Trim().Length == 0)"
+                                            @onclick="EnableRecordingAsync">@UiIcon.Render("rec", 13) @T["Enable recording"]</button>
+                                </div>
+                            }
+                        </div>
+                    }
+
                     @if (_settingsTab == "recording" && _adminHasRecording)
                     {
                         <div class="campanel-section">
@@ -1794,6 +1845,36 @@
                                     <div class="notice warn small">
                                         ⚠ @((MarkupString)T["The key file sits on the <b>same disk</b> as the footage it protects — a stolen disk would carry its own key. Point <code>ui.state_dir</code> at a different disk, or supply the key via <code>NEOLINK_SECRET_KEY</code> so it never touches disk."])
                                     </div>
+                                }
+                            }
+                            @if (_adminWritable)
+                            {
+                                <div class="campanel-divider"></div>
+                                <div class="campanel-subtitle">@T["TURN RECORDING OFF"]</div>
+                                <div class="notice small">
+                                    @T["Removes the recording section from config.json: no events, no 24/7 footage, and the Timeline and Events pages go quiet. Footage already on disk is left untouched — nothing is deleted."]
+                                </div>
+                                @if (_recDisableConfirm)
+                                {
+                                    <div class="control-row">
+                                        <span>@T["Stop recording on this server?"]</span>
+                                        <span class="row-actions">
+                                            <button class="chip chip-danger" disabled="@_recEnableBusy"
+                                                    @onclick="DisableRecordingAsync">@T["Yes, turn it off"]</button>
+                                            <button class="chip chip-off" @onclick="() => _recDisableConfirm = false">@T["Cancel"]</button>
+                                        </span>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <div class="control-row">
+                                        <span></span>
+                                        <button class="chip chip-off" @onclick="() => { _recDisableConfirm = true; _recEnableError = null; }">@T["Disable recording…"]</button>
+                                    </div>
+                                }
+                                @if (_recEnableError != null)
+                                {
+                                    <div class="notice error">@_recEnableError</div>
                                 }
                             }
                         </div>
@@ -2816,6 +2897,7 @@
         _selfRef ??= DotNetObjectReference.Create(this);
         await JS.InvokeVoidAsync("neolink.dndInit");
         await JS.InvokeVoidAsync("neolink.tileResizeInit", _selfRef);
+        await JS.InvokeVoidAsync("neolink.playerHostInit", _selfRef);
         // Blazor's `muted` attribute only sets defaultMuted on dynamically created
         // elements, which blocks autoplay — the helper mutes for real and plays.
         if (_eventsSupported && _events.Any(e => !e.Reviewed))
@@ -2958,6 +3040,45 @@
         _showMainWarn = true;
         _ = JS.InvokeVoidAsync("neolink.lsSet", MainWarnKey, "1");
         _ = AutoHideMainWarnAsync();
+    }
+
+    // ---- codec fallback ----------------------------------------------------
+
+    private bool _showCodecFallback;
+    private string? _codecFallbackCodec;
+
+    /// <summary>A tile's stream carries a codec this browser cannot decode —
+    /// H.265 where Chromium has no hardware decoder is the usual case. Puts the
+    /// tile on the camera's sub stream, which is H.264 on every model that
+    /// offers H.265 on the main one.
+    ///
+    /// Never saved: the limitation belongs to this device, and a layout follows
+    /// the account to browsers that can decode the main stream perfectly well.</summary>
+    [JSInvokable]
+    public Task OnCodecUnsupported(string videoId, string? codec) => InvokeAsync(() =>
+    {
+        var slot = videoId == QuickVideoId ? _quickView
+            : videoId.StartsWith("vid-") && int.TryParse(videoId[4..], out var i)
+              && i >= 0 && i < _slots.Count ? _slots[i]
+            : null;
+        if (slot?.Camera == null) return;
+        var cam = _cameras.FirstOrDefault(c => string.Equals(c.Name, slot.Camera, StringComparison.OrdinalIgnoreCase));
+        var sub = cam?.Streams.FirstOrDefault(s => s.Kind == "subStream");
+        if (sub == null || sub.Path == slot.Path) return;
+        slot.Kind = sub.Kind;
+        slot.Path = sub.Path;
+        _codecFallbackCodec = string.IsNullOrWhiteSpace(codec) ? null : codec;
+        _showCodecFallback = true;
+        StateHasChanged();
+        _ = AutoHideCodecFallbackAsync();
+    });
+
+    private async Task AutoHideCodecFallbackAsync()
+    {
+        await Task.Delay(TimeSpan.FromSeconds(20));
+        if (!_showCodecFallback) return;
+        _showCodecFallback = false;
+        await InvokeAsync(StateHasChanged);
     }
 
     private async Task AutoHideMainWarnAsync()
@@ -3203,8 +3324,14 @@
         ApplyRoute();
     }
 
+    private bool _loginBusy;
+
     private async Task LoginAsync()
     {
+        // A held Enter repeats the keydown, and every attempt spends one of the
+        // account's sign-in allowance.
+        if (_loginBusy) return;
+        _loginBusy = true;
         _loginError = null;
         try
         {
@@ -3221,6 +3348,10 @@
         catch (Exception ex)
         {
             _loginError = T.F("Cannot reach {0}: {1}", _server, ex.Message);
+        }
+        finally
+        {
+            _loginBusy = false;
         }
     }
 
@@ -4062,6 +4193,76 @@
         builder.CloseElement();
         builder.CloseElement();
     };
+
+    // The PRESENCE of the recording section is what enables recording, to the
+    // loader as well as to this panel: there is no separate flag, so enabling
+    // must write the section and disabling must remove it.
+
+    private string _recEnablePath = "";
+    private bool _recEnableBusy;
+    private bool _recDisableConfirm;
+    private string? _recEnableError;
+
+    private async Task EnableRecordingAsync()
+    {
+        var path = _recEnablePath.Trim();
+        if (_recEnableBusy || path.Length == 0) return;
+        _recEnableBusy = true;
+        _recEnableError = null;
+        try
+        {
+            var req = ApiRequest(HttpMethod.Put, "/api/admin/config");
+            req.Content = JsonContent.Create(new { recording = new { path } });
+            using var res = await Http.SendAsync(req);
+            if (!res.IsSuccessStatusCode)
+            {
+                _recEnableError = await ApiErrorAsync(res) ?? T.F("Cannot load settings ({0})", (int)res.StatusCode);
+                return;
+            }
+            _recEnablePath = "";
+            await OpenServerSettingsAsync();
+            _settingsTab = "recording";
+            _adminStatus = T["Recording enabled. Restart the service to start recording."];
+        }
+        catch (Exception ex)
+        {
+            _recEnableError = ex.Message;
+        }
+        finally
+        {
+            _recEnableBusy = false;
+        }
+    }
+
+    private async Task DisableRecordingAsync()
+    {
+        if (_recEnableBusy) return;
+        _recEnableBusy = true;
+        _recEnableError = null;
+        try
+        {
+            var req = ApiRequest(HttpMethod.Put, "/api/admin/config");
+            req.Content = JsonContent.Create(new { removeRecording = true });
+            using var res = await Http.SendAsync(req);
+            if (!res.IsSuccessStatusCode)
+            {
+                _recEnableError = await ApiErrorAsync(res) ?? T.F("Cannot load settings ({0})", (int)res.StatusCode);
+                return;
+            }
+            _recDisableConfirm = false;
+            await OpenServerSettingsAsync();
+            _settingsTab = "recording";
+            _adminStatus = T["Recording disabled. Restart the service to apply."];
+        }
+        catch (Exception ex)
+        {
+            _recEnableError = ex.Message;
+        }
+        finally
+        {
+            _recEnableBusy = false;
+        }
+    }
 
     private Task SaveServerSettingsAsync() => SaveServerSettingsCoreAsync();
 

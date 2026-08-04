@@ -162,10 +162,15 @@
                 return;
             }
             if (!MS.isTypeSupported(meta.mime)) {
-                // Codec not playable in this browser (typically H.265 without HW support).
-                this.setStatus('⚠ ' + meta.codec + ' not supported by this browser — try the sub stream');
+                // Typically H.265 where the browser has no hardware decoder.
+                this.setStatus('⚠ ' + meta.codec + ' not supported by this browser');
                 this.alive = false;
                 try { this.ws.close(); } catch { }
+                // The host owns the slot, so it decides whether another stream
+                // of this camera is playable here.
+                try {
+                    playerHost?.invokeMethodAsync('OnCodecUnsupported', this.video.id, meta.codec || '');
+                } catch { }
                 return;
             }
             this.setStatus('connecting…');
@@ -404,6 +409,9 @@
     }
 
     const players = {};
+    // The Blazor host that owns tile stream selection, so a codec this browser
+    // cannot decode can be answered with one it can.
+    let playerHost = null;
 
     // ---------- "stats for nerds": the live stream's technical readout ----------
     // A DOM-side overlay (no Blazor circuit traffic at 1 Hz) that answers the two
@@ -1670,6 +1678,8 @@
                 }
             }
         },
+
+        playerHostInit(ref) { playerHost = ref; },
 
         attach(videoId, wsUrl) {
             this.detach(videoId);

@@ -690,6 +690,23 @@ public static class WebApi
                 var current = NeolinkConfig.Load(o.ConfigPath);
                 if ((req.BindPort ?? current.BindPort) == (req.WebPort ?? current.WebPort))
                     throw new FormatException("RTSP port and web port must differ");
+                // The loader only reports an unusable path at the next start, by
+                // which time nobody is watching: reject it while the admin is here.
+                if (req.Recording?.Path is { Length: > 0 } recPath)
+                {
+                    try
+                    {
+                        var full = Path.GetFullPath(recPath);
+                        Directory.CreateDirectory(full);
+                        var probe = Path.Combine(full, ".neolink-write-test");
+                        File.WriteAllBytes(probe, Array.Empty<byte>());
+                        File.Delete(probe);
+                    }
+                    catch (Exception ex)
+                    {
+                        throw new FormatException($"storage path '{recPath}' cannot be written: {ex.Message}");
+                    }
+                }
 
                 ConfigEditor.Apply(o.ConfigPath, root =>
                 {

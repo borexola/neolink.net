@@ -65,6 +65,12 @@ RTSP, ONVIF…) read live, and can enable HTTP/ONVIF right from Neolink
   event (Play at that point starts the reel over). It obeys the EVENTS
   filter — hide a category and it is skipped too. Off by default; the
   classic continuous play-through is untouched.
+- **Recording is switched on from Settings → Recording.** The example config
+  ships with the `recording` section commented out, so a fresh server keeps
+  no footage; the tab asks for a storage path and enables it, and offers a
+  confirmed **Disable recording** to remove the section again. Footage
+  already on disk is never touched either way, and a restart applies the
+  change. Under Docker the storage path must be a mounted volume.
 - **Export** downloads a chosen period of one camera's day — one combined
   MP4 (joined without re-encoding, trimmed to the range) or a zip of the
   original segments. The dialog pre-fills the zoomed window and shows the

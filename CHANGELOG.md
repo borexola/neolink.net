@@ -19,6 +19,7 @@ in the README). Paste the matching section below into the GitHub release.
   stays OFF until you ask for it: refusing a valid password is not something
   an upgrade should start doing by itself. The Users tab section shows live
   lockouts with an "unlock everything now" button, and a server restart also
+  clears every lock — the break-glass way back in. Behind
   a reverse proxy (Home Assistant ingress, nginx, Caddy) the real client
   address is read from the forwarded-for header the proxy adds, so one
   person's failures never block everyone sharing that proxy; the header is
@@ -41,8 +42,33 @@ in the README). Paste the matching section below into the GitHub release.
   tooltip text, which repairs Esc on the camera quick view for the five
   non-English languages (it silently did nothing there).
 
+- **Recording can be switched on from the server settings.** A server whose
+  `config.json` has no `recording` section — the state anyone gets by
+  starting from the example config, where it is commented out — had no way
+  to enable it short of editing the file, because the Recording tab was
+  hidden precisely when it was needed. The tab is now always there: with no
+  section it asks for a storage path and offers **Enable recording**, and
+  with one it gains a **Disable recording** button that removes the section
+  again. Presence of the section stays the only on/off signal, so nothing
+  about existing installs changes and the file round-trips exactly. Enabling
+  writes only the path — every other setting keeps its default — and the
+  path is checked for writability before it is saved, rather than failing
+  silently at the next start.
+
 ### Changed
 
+- **Pressing Enter on the sign-in screen signs in.** It previously worked
+  only from the password field, and even there it could submit the value
+  from before the last keystroke, because the fields committed on change
+  while the key handler ran first. Both fields now update as you type, both
+  accept Enter, and a held key can no longer spend several sign-in attempts.
+- **A tile whose codec this browser cannot decode falls back to the sub
+  stream** instead of stopping with a codec string on it. H.265 needs a
+  hardware decoder, and Chromium browsers refuse it outright when graphics
+  acceleration is unavailable — a blocklisted GPU driver is enough — while
+  Firefox on the same machine plays it in software. The tile now switches to
+  the camera's sub stream and says why. The fallback is per-device and never
+  saved to the layout, so other browsers on the account keep the main stream.
 - **The sidebar's battery-camera badge dropped its BETA.** Baichuan-over-UDP
   has carried the Argus family through enough releases to stop apologising;
   the compact UDP pill stays so the transport is still visible at a glance.
