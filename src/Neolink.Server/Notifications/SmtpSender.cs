@@ -24,6 +24,9 @@ internal static class SmtpSender
     public static async Task SendAsync(NotificationSettings s, string password,
         string subject, string htmlBody, string textBody, CancellationToken outerCt)
     {
+        RequireAddress(s.EffectiveFrom, "sender address");
+        RequireAddress(s.Recipient, "recipient address");
+
         using var timeout = new CancellationTokenSource(Overall);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(outerCt, timeout.Token);
         var ct = linked.Token;
@@ -68,6 +71,18 @@ internal static class SmtpSender
         Check(await ReadReplyAsync(stream, buf, ct).ConfigureAwait(false), 250, "message body");
 
         try { await CommandAsync(stream, buf, "QUIT", ct).ConfigureAwait(false); } catch { /* best effort */ }
+    }
+
+    /// <summary>An address is spliced verbatim into MAIL FROM/RCPT TO and into the
+    /// From/To headers, so a control character in one injects an SMTP command or a
+    /// header of the sender's choosing (a silent Bcc, say). Only those characters
+    /// are refused: a blank sender is legal (EffectiveFrom falls back to the SMTP
+    /// username, which need not be an address at all).</summary>
+    private static void RequireAddress(string? value, string what)
+    {
+        var v = value ?? "";
+        if (v.Length > 320 || v.Any(c => char.IsControl(c) || c is '<' or '>'))
+            throw new FormatException($"{what} contains characters that are not allowed in an address");
     }
 
     private static async Task<SslStream> UpgradeAsync(Stream inner, string host, CancellationToken ct)

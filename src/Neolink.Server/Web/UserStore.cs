@@ -44,6 +44,7 @@ public sealed class UserStore
     private readonly object _gate = new();
     private byte[] _secret = RandomNumberGenerator.GetBytes(32);
     private string? _defaultLanguage;
+    private readonly bool _loadFailed;
     private LoginGuardSettings _security = new();
     private List<UserRecord> _users = new();
 
@@ -92,22 +93,32 @@ public sealed class UserStore
                     _users = model.Users;
                 }
                 if (source != _file)
-                    lock (_gate) { SaveLocked(); }
+                {
+                    // A failed migration copy is not a broken account list: the
+                    // accounts are loaded and usable from the old location.
+                    try { lock (_gate) { SaveLocked(); } }
+                    catch (Exception ex) { Log.Warn($"users.json could not be migrated to {_file}: {ex.Message}"); }
+                }
             }
         }
         catch (Exception ex)
         {
-            // Refuse half-read credentials: better to run open (and log loudly)
-            // than to lock people out with a broken account list.
-            Log.Error($"users.json unreadable ({ex.Message}); web-UI authentication is OFF until it is fixed or removed");
+            // Fail CLOSED. A half-read account list used to leave the web UI with
+            // no accounts, which is indistinguishable from a fresh install and
+            // therefore turns authentication OFF — a silent bypass on a server
+            // that had accounts a moment ago.
+            _loadFailed = true;
             _users = new List<UserRecord>();
+            Log.Error($"users.json unreadable ({ex.Message}); web-UI sign-in is LOCKED until the file is " +
+                      "repaired or removed — removing it starts first-run setup over");
         }
     }
 
-    /// <summary>Authentication is enforced once any account exists.</summary>
+    /// <summary>Authentication is enforced once any account exists — and while the
+    /// account list is unreadable, when nobody may sign in at all.</summary>
     public bool Enabled
     {
-        get { lock (_gate) return _users.Count > 0; }
+        get { lock (_gate) return _users.Count > 0 || _loadFailed; }
     }
 
     // ------------------------------------------------------------------ passwords
@@ -405,6 +416,9 @@ public sealed class UserStore
 
     private void SaveLocked()
     {
+        // The file still holds accounts the admin has to recover; never replace it
+        // with what this process managed to read, which is nothing.
+        if (_loadFailed) return;
         var model = new FileModel
         {
             Secret = Convert.ToBase64String(_secret),
@@ -413,10 +427,16 @@ public sealed class UserStore
             Users = _users,
         };
         var tmp = _file + ".tmp";
-        File.WriteAllText(tmp, JsonSerializer.Serialize(model, JsonOpts));
-        // The file holds the token-signing secret: owner-only where the OS supports it.
-        if (!OperatingSystem.IsWindows())
-            File.SetUnixFileMode(tmp, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        // The file holds the token-signing secret and every password hash, so it is
+        // made owner-only while still EMPTY: writing first and tightening after
+        // leaves both readable for the window in between.
+        using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))
+        {
+            if (!OperatingSystem.IsWindows())
+                File.SetUnixFileMode(tmp, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            using var w = new StreamWriter(fs);
+            w.Write(JsonSerializer.Serialize(model, JsonOpts));
+        }
         File.Move(tmp, _file, overwrite: true);
     }
 }

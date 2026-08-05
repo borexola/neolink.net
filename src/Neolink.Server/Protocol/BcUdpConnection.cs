@@ -80,6 +80,7 @@ public sealed class BcUdpConnection : IBcConnection
     private readonly object _rxGate = new();
     private uint _rxNext;
     private readonly SortedDictionary<uint, byte[]> _rxBuffer = new();
+    private const int RxBufferMax = 4096;
     // ---- Diagnostics (all Debug-level; silent unless NEOLINK_LOG=debug). The UDP
     // battery transport is hard to reproduce here, so the session is heavily
     // instrumented to pin down camera-initiated closes from one capture.
@@ -109,6 +110,22 @@ public sealed class BcUdpConnection : IBcConnection
     // ones we released with a C2D_DISC, and foreign disconnects we logged.
     private readonly HashSet<int> _orphansReleased = new();
     private readonly HashSet<int> _foreignDiscLogged = new();
+    private readonly HashSet<string> _foreignSources = new();
+    // Foreign source addresses are attacker-chosen (UDP spoofs freely), so the
+    // once-per-source log dedup set is capped like the reorder buffer is.
+    private const int ForeignSourcesMax = 64;
+
+    /// <summary>The camera answers from varying PORTS (its control and data
+    /// sockets differ), so a session is pinned to its address, never its port.
+    /// Normalized once: this runs per datagram, and MapToIPv4 allocates.</summary>
+    private readonly IPAddress _cameraNormalized;
+
+    private bool IsCameraSource(IPAddress from)
+    {
+        var a = from.IsIPv4MappedToIPv6 ? from.MapToIPv4() : from;
+        return a.Equals(_cameraNormalized);
+    }
+
     private readonly Task _recvLoop, _readLoop, _hbLoop, _retxLoop, _ackLoop, _diagLoop;
 
     private string El => $"+{(DateTime.UtcNow - _t0).TotalMilliseconds:0}ms";
@@ -118,6 +135,7 @@ public sealed class BcUdpConnection : IBcConnection
     {
         _udp = session.Socket;
         _camera = session.Camera;
+        _cameraNormalized = _camera.Address.IsIPv4MappedToIPv6 ? _camera.Address.MapToIPv4() : _camera.Address;
         _cid = session.ClientId;
         _did = session.DeviceId;
         _tid = session.Tid;
@@ -225,6 +243,21 @@ public sealed class BcUdpConnection : IBcConnection
                 catch (SocketException se) // transient (e.g. ICMP) — keep listening
                 {
                     if (Dbg) Log.Debug($"{_tag}: udp {El} recv socket signal {se.SocketErrorCode}");
+                    continue;
+                }
+                if (!IsCameraSource(r.RemoteEndPoint.Address))
+                {
+                    // The socket is unconnected, so without this any host could
+                    // inject session data or pile up reorder state.
+                    if (_foreignSources.Count < ForeignSourcesMax
+                        && _foreignSources.Add(r.RemoteEndPoint.Address.ToString()))
+                    {
+                        Log.Warn($"{_tag}: ignoring UDP from {r.RemoteEndPoint.Address}, " +
+                                 $"which is not this session's camera ({_camera.Address})");
+                        if (_foreignSources.Count == ForeignSourcesMax)
+                            Log.Warn($"{_tag}: {ForeignSourcesMax} foreign UDP sources seen; " +
+                                     "further ones will be ignored without notice");
+                    }
                     continue;
                 }
                 _lastRxUtc = DateTime.UtcNow;
@@ -355,7 +388,9 @@ public sealed class BcUdpConnection : IBcConnection
                 {
                     _pidSeen[pid] = (now, 1);
                     if (_pidSeen.Count > 4096)
-                        foreach (var k in _pidSeen.Keys.Where(k => k + 2048 < pid).ToList())
+                        // Distance, not k+2048: that sum wraps and evicts live keys.
+                        foreach (var k in _pidSeen.Keys
+                                     .Where(k => unchecked(pid - k) is > 2048u and < 0x80000000u).ToList())
                             _pidSeen.Remove(k);
                 }
                 // One-time diagnosis, no debug level needed: over half the packets the
@@ -386,8 +421,10 @@ public sealed class BcUdpConnection : IBcConnection
                     _rxNext++;
                 }
             }
-            else if (pid > _rxNext)
+            else if (pid > _rxNext && _rxBuffer.Count < RxBufferMax)
             {
+                // Bounded: a gap this deep means the stream is already lost, and
+                // an unbounded hold is memory anyone on the path could grow.
                 _rxBuffer[pid] = payload; // out of order — hold until the gap fills
             }
             // pid < _rxNext: already delivered; drop. The ack timer re-acks anyway.

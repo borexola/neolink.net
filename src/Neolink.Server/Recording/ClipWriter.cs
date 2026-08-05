@@ -123,6 +123,8 @@ public sealed class ClipWriter : IDisposable
         var pps = hub.Pps;
         if (codec == null || sps == null || pps == null)
             return null;
+        if (codec == VideoCodec.H265 && hub.Vps == null)
+            return null; // an hvcC without the VPS is not a decodable configuration
         var audio = hub.Audio is { IsAac: true, AudioSpecificConfig: not null } a ? a : null;
         var init = FMp4.BuildInit(codec.Value, sps, pps, hub.Vps, hub.Width, hub.Height,
             audio?.AudioSpecificConfig, audio?.SampleRate ?? 0, audio?.Channels ?? 0);
@@ -541,6 +543,13 @@ public sealed class ClipWriter : IDisposable
             ? (int)BinaryPrimitives.ReadUInt32BigEndian(init.AsSpan(layout.Traks[1].MdhdOff + 20))
             : 0;
 
+        // A big segment holds tens of thousands of fragments, so the per-moof walk
+        // below allocates nothing: the buffer is reused (its bytes are consumed
+        // before the next read) and box types compare as bytes — which is why it
+        // does not go through Boxes(), whose iterator names every box as a string.
+        static bool IsBox(byte[] head, ReadOnlySpan<byte> type) => head.AsSpan(4, 4).SequenceEqual(type);
+        byte[] moofBuf = Array.Empty<byte>();
+
         var samples = new List<SampleRec>();
         while (pos + 8 <= end)
         {
@@ -548,35 +557,45 @@ public sealed class ClipWriter : IDisposable
             file.ReadExactly(boxHead);
             pos += 8;
             uint size = BinaryPrimitives.ReadUInt32BigEndian(boxHead);
-            var type = Encoding.ASCII.GetString(boxHead, 4, 4);
             if (size < 8 || boxStart + size > end) { pos = boxStart; break; } // truncated tail
-            if (type == "mfra") { pos = boxStart; break; } // legacy index; not media
-            if (type == "moof")
+            if (IsBox(boxHead, "mfra"u8)) { pos = boxStart; break; } // legacy index; not media
+            if (IsBox(boxHead, "moof"u8))
             {
-                var moof = new byte[size];
+                if (moofBuf.Length < size) moofBuf = new byte[size];
+                var moof = moofBuf;
                 boxHead.CopyTo(moof, 0);
-                file.ReadExactly(moof.AsSpan(8));
+                file.ReadExactly(moof.AsSpan(8, (int)size - 8));
                 pos += size - 8;
                 byte track = 0; bool key = false; uint dur = 0, sampleSize = 0, dataOff = 0; ulong dt = 0;
-                foreach (var (t1, s1, l1) in Boxes(moof, 8, moof.Length))
+                int p1 = 8;
+                while (p1 + 8 <= (int)size)
                 {
-                    if (t1 != "traf") continue;
-                    foreach (var (t2, s2, l2) in Boxes(moof, s1 + 8, s1 + l1))
+                    uint s1 = BinaryPrimitives.ReadUInt32BigEndian(moof.AsSpan(p1));
+                    if (s1 < 8 || p1 + s1 > size) break;
+                    if (moof.AsSpan(p1 + 4, 4).SequenceEqual("traf"u8))
                     {
-                        switch (t2)
+                        int trafEnd = p1 + (int)s1;
+                        int p2 = p1 + 8;
+                        while (p2 + 8 <= trafEnd)
                         {
-                            case "tfhd": track = moof[s2 + 15]; break;
-                            case "tfdt": dt = BinaryPrimitives.ReadUInt64BigEndian(moof.AsSpan(s2 + 12)); break;
-                            case "trun":
-                                if (BinaryPrimitives.ReadUInt32BigEndian(moof.AsSpan(s2 + 12)) != 1)
+                            uint s2 = BinaryPrimitives.ReadUInt32BigEndian(moof.AsSpan(p2));
+                            if (s2 < 8 || p2 + s2 > trafEnd) break;
+                            var t2 = moof.AsSpan(p2 + 4, 4);
+                            if (t2.SequenceEqual("tfhd"u8)) track = moof[p2 + 15];
+                            else if (t2.SequenceEqual("tfdt"u8)) dt = BinaryPrimitives.ReadUInt64BigEndian(moof.AsSpan(p2 + 12));
+                            else if (t2.SequenceEqual("trun"u8))
+                            {
+                                if (BinaryPrimitives.ReadUInt32BigEndian(moof.AsSpan(p2 + 12)) != 1)
                                     throw new InvalidOperationException("not a single-sample fragment");
-                                dataOff = BinaryPrimitives.ReadUInt32BigEndian(moof.AsSpan(s2 + 16));
-                                key = BinaryPrimitives.ReadUInt32BigEndian(moof.AsSpan(s2 + 20)) == 0x02000000u;
-                                dur = BinaryPrimitives.ReadUInt32BigEndian(moof.AsSpan(s2 + 24));
-                                sampleSize = BinaryPrimitives.ReadUInt32BigEndian(moof.AsSpan(s2 + 28));
-                                break;
+                                dataOff = BinaryPrimitives.ReadUInt32BigEndian(moof.AsSpan(p2 + 16));
+                                key = BinaryPrimitives.ReadUInt32BigEndian(moof.AsSpan(p2 + 20)) == 0x02000000u;
+                                dur = BinaryPrimitives.ReadUInt32BigEndian(moof.AsSpan(p2 + 24));
+                                sampleSize = BinaryPrimitives.ReadUInt32BigEndian(moof.AsSpan(p2 + 28));
+                            }
+                            p2 += (int)s2;
                         }
                     }
+                    p1 += (int)s1;
                 }
                 if (track == 0 || sampleSize == 0)
                     throw new InvalidOperationException("unexpected fragment layout");
@@ -594,8 +613,14 @@ public sealed class ClipWriter : IDisposable
 
     internal static byte[] BuildClassicMoov(byte[] init, InitLayout layout, List<SampleRec> samples, int audioRate)
     {
-        var video = samples.Where(s => s.Track == 1).ToList();
-        var audio = samples.Where(s => s.Track == FMp4.AudioTrackId).ToList();
+        // One pass: this list runs to tens of thousands of entries per segment.
+        var video = new List<SampleRec>(samples.Count);
+        var audio = new List<SampleRec>();
+        foreach (var rec in samples)
+        {
+            if (rec.Track == 1) video.Add(rec);
+            else if (rec.Track == FMp4.AudioTrackId) audio.Add(rec);
+        }
 
         static ulong TotalTicks(List<SampleRec> s) => s.Count == 0 ? 0 : s[^1].DecodeTime + s[^1].Duration;
         ulong videoTicks = TotalTicks(video);

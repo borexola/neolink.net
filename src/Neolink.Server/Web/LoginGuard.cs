@@ -91,10 +91,12 @@ public sealed class LoginGuard
         if (peer == null) return null;
         if (IsLocalProxy(peer) && !string.IsNullOrWhiteSpace(forwardedFor))
         {
+            // Strictly the trailing entry, never a scan back through the list: an
+            // earlier hop is caller-written, so an unparseable last entry means
+            // the peer is answerable, not that a spoofable one further back is.
             var hops = forwardedFor.Split(',');
-            for (int i = hops.Length - 1; i >= 0; i--)
-                if (IPAddress.TryParse(hops[i].Trim(), out var real))
-                    return Normalize(real);
+            if (IPAddress.TryParse(hops[^1].Trim(), out var real))
+                return Normalize(real);
         }
         return Normalize(peer);
     }

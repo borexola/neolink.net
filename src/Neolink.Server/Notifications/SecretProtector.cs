@@ -134,9 +134,14 @@ public sealed class SecretProtector
                 Log.Warn($"Secret key file {path} is malformed ({existing.Length} bytes) — regenerating.");
             }
             var key = RandomNumberGenerator.GetBytes(32);
-            File.WriteAllBytes(path, key);
-            if (!OperatingSystem.IsWindows())
-                File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            // Locked down while the file is still empty: writing first and
+            // tightening after leaves the key world-readable in between.
+            using (var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None))
+            {
+                if (!OperatingSystem.IsWindows())
+                    File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+                fs.Write(key);
+            }
             KeySource = "file";
             KeyFile = Path.GetFullPath(path);
             return key;

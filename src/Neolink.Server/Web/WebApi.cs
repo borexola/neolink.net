@@ -1829,10 +1829,13 @@ public static class WebApi
                 return Results.Json(new { error = $"unknown camera '{name}'" }, statusCode: 404);
             if (SnapshotAuth(ctx, cam) is { } denied)
                 return denied;
+            // Both windows are bounded: past an hour a cached frame misinforms a
+            // dashboard rather than standing in for one.
+            const double MaxCacheWindow = 3600;
             double maxAge = 5;
             if (double.TryParse(ctx.Request.Query["maxAge"], System.Globalization.NumberStyles.Float,
                     System.Globalization.CultureInfo.InvariantCulture, out var q) && q >= 0)
-                maxAge = q;
+                maxAge = Math.Min(q, MaxCacheWindow);
             // How old the FALLBACK frame may be when the camera can't produce a fresh
             // one. This used to be unbounded, which is how a dashboard tile ended up
             // painting an hours-old scene: the poster is fetched exactly when a
@@ -1842,7 +1845,7 @@ public static class WebApi
             double maxStale = 300;
             if (double.TryParse(ctx.Request.Query["maxStale"], System.Globalization.NumberStyles.Float,
                     System.Globalization.CultureInfo.InvariantCulture, out var qs) && qs >= 0)
-                maxStale = qs;
+                maxStale = Math.Min(qs, MaxCacheWindow);
 
             IResult? Cached(bool allowStale)
             {
@@ -3405,11 +3408,6 @@ public static class WebApi
         return null;
     }
 
-    /// <summary>
-    /// Generic camera-XML to JSON-friendly conversion, so newly discovered settings
-    /// reach clients without a typed model. Leaves: numbers stay numbers; repeated
-    /// element names become arrays; attributes are prefixed with '@'.
-    /// </summary>
     /// <summary>True for /api/cameras/{name}/snapshot[.jpg] — the paths whose auth
     /// additionally accepts RTSP Basic credentials (see the session middleware).</summary>
     private static bool IsSnapshotPath(PathString path) =>

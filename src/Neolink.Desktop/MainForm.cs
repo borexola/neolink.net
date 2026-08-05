@@ -599,11 +599,24 @@ internal sealed class MainForm : Form
         }
     }
 
+    /// <summary>Hands a link to the system browser. ShellExecute launches whatever
+    /// a scheme is registered to, so only web addresses may reach it: a page in
+    /// the WebView naming file:, a UNC path or a handler protocol would otherwise
+    /// be asking this app to start a local program on its behalf.</summary>
     private static void OpenExternally(string uri)
     {
+        if (!Uri.TryCreate(uri, UriKind.Absolute, out var u)
+            || (u.Scheme != Uri.UriSchemeHttp && u.Scheme != Uri.UriSchemeHttps))
+        {
+            // The refused string is page-controlled: control characters could forge
+            // desktop.log lines, and an absurd length could flood the file.
+            var shown = new string(uri.Where(c => !char.IsControl(c)).Take(200).ToArray());
+            DesktopLog.Write($"refused to open a non-web link externally: {shown}");
+            return;
+        }
         try
         {
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(uri)
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(u.AbsoluteUri)
             {
                 UseShellExecute = true,
             });

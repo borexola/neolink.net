@@ -72,12 +72,18 @@ public static class Ffmpeg
             psi.ArgumentList.Add("encoder=libopus");
             using var p = Process.Start(psi);
             if (p == null) return false;
-            string output = p.StandardOutput.ReadToEnd() + p.StandardError.ReadToEnd();
+            // Both pipes are drained concurrently: draining one to the end while
+            // the other fills its buffer deadlocks rather than running slowly.
+            var stdout = p.StandardOutput.ReadToEndAsync();
+            var stderr = p.StandardError.ReadToEndAsync();
             if (!p.WaitForExit(5000))
             {
                 try { p.Kill(); } catch { /* already gone */ }
                 return false;
             }
+            Task.WaitAll(new Task[] { stdout, stderr }, 2000);
+            var output = (stdout.IsCompletedSuccessfully ? stdout.Result : "")
+                       + (stderr.IsCompletedSuccessfully ? stderr.Result : "");
             return output.Contains("Encoder libopus", StringComparison.OrdinalIgnoreCase);
         }
         catch { return false; }

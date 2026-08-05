@@ -203,6 +203,7 @@ public static class Mp4Export
             }
             else
             {
+                if (s.AudioRate <= 0) continue; // no audio track: nothing to rebase against
                 ulong dt90 = rec.DecodeTime * FMp4.Timescale / (ulong)s.AudioRate;
                 if (dt90 < cutIn || dt90 >= toTicks) continue;
                 kept.Add(rec with { DecodeTime = rec.DecodeTime - audioCutIn });

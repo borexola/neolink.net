@@ -6,32 +6,32 @@ namespace Neolink.Media;
 /// <summary>Utilities for H.264/H.265 Annex-B elementary streams.</summary>
 public static class H26x
 {
+    /// <summary>The three-byte start-code core. Every Annex-B start code contains
+    /// it: the four-byte form is this with one more leading zero.</summary>
+    private static ReadOnlySpan<byte> StartCode => new byte[] { 0, 0, 1 };
+
     /// <summary>Splits an Annex-B buffer into NAL units (without start codes).</summary>
     public static List<ReadOnlyMemory<byte>> SplitNals(ReadOnlyMemory<byte> annexB)
     {
         var result = new List<ReadOnlyMemory<byte>>();
         var span = annexB.Span;
-        int i = 0;
+        int from = 0;      // where the search for the next start code begins
         int nalStart = -1;
 
-        while (i + 2 < span.Length)
+        // Searched, not walked: this runs over the full payload of every recorded
+        // frame, and IndexOf over a byte span is vectorized where a per-byte test
+        // is not.
+        while (from <= span.Length - 3)
         {
-            if (span[i] == 0 && span[i + 1] == 0 && (span[i + 2] == 1 || (i + 3 < span.Length && span[i + 2] == 0 && span[i + 3] == 1)))
-            {
-                int scLen = span[i + 2] == 1 ? 3 : 4;
-                if (nalStart >= 0)
-                {
-                    int end = i;
-                    // Trim trailing zero bytes belonging to the next start code prefix
-                    result.Add(annexB[nalStart..end]);
-                }
-                nalStart = i + scLen;
-                i += scLen;
-            }
-            else
-            {
-                i++;
-            }
+            int rel = span[from..].IndexOf(StartCode);
+            if (rel < 0) break;
+            int sc = from + rel;
+            int scLen = 3;
+            if (sc > from && span[sc - 1] == 0) { sc--; scLen = 4; }
+            if (nalStart >= 0)
+                result.Add(annexB[nalStart..sc]);
+            nalStart = sc + scLen;
+            from = nalStart;
         }
         if (nalStart >= 0 && nalStart < annexB.Length)
             result.Add(annexB[nalStart..]);

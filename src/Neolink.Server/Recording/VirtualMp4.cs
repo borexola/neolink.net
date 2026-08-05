@@ -64,6 +64,9 @@ public static class VirtualMp4
                 entry = new CacheEntry(info.Length, info.LastWriteTimeUtc,
                     ClipWriter.BuildClassicMoov(scan.Init, scan.Layout, scan.Samples, scan.AudioRate),
                     scan.FragEnd, scan.Layout.MoovOff);
+                // Stamped before publishing: an entry inserted with LastUse 0 sorts
+                // as the oldest and a concurrent Open would trim it straight back out.
+                entry.LastUse = Environment.TickCount64;
                 Cache[key] = entry;
                 TrimCache(key);
             }
@@ -101,6 +104,7 @@ public static class VirtualMp4
         private readonly byte[] _patch;
         private readonly long _patchPos;
         private long _pos;
+        private long _filePos = -1;
 
         public VirtualClassicStream(Stream file, long moovOff, long fragEnd, byte[] moov)
         {
@@ -133,14 +137,11 @@ public static class VirtualMp4
             if (_pos < _fragEnd)
             {
                 int want = (int)Math.Min(buffer.Length, _fragEnd - _pos);
-                _file.Seek(_pos, SeekOrigin.Begin);
+                SeekFileIfNeeded();
                 n = _file.Read(buffer[..want]);
                 if (n <= 0) return 0; // file shrank underneath us — treat as EOF
-                // Overlay the free-box head over whatever the disk still says.
-                long overlayStart = Math.Max(_pos, _patchPos);
-                long overlayEnd = Math.Min(_pos + n, _patchPos + _patch.Length);
-                for (long p = overlayStart; p < overlayEnd; p++)
-                    buffer[(int)(p - _pos)] = _patch[p - _patchPos];
+                _filePos = _pos + n;
+                ApplyPatch(buffer, _pos, n);
             }
             else
             {
@@ -150,6 +151,54 @@ public static class VirtualMp4
             }
             _pos += n;
             return n;
+        }
+
+        // Serving is overwhelmingly sequential, and Stream's own async fallback
+        // would run each of these reads on a pool thread. Both matter on the
+        // export path, which copies gigabytes through here one sample at a time.
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken ct) =>
+            ReadAsync(buffer.AsMemory(offset, count), ct).AsTask();
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default)
+        {
+            if (_pos >= Length || buffer.Length == 0) return 0;
+
+            int n;
+            if (_pos < _fragEnd)
+            {
+                int want = (int)Math.Min(buffer.Length, _fragEnd - _pos);
+                SeekFileIfNeeded();
+                n = await _file.ReadAsync(buffer[..want], ct).ConfigureAwait(false);
+                if (n <= 0) return 0;
+                _filePos = _pos + n;
+                ApplyPatch(buffer.Span, _pos, n);
+            }
+            else
+            {
+                int start = (int)(_pos - _fragEnd);
+                n = Math.Min(buffer.Length, _moov.Length - start);
+                _moov.AsSpan(start, n).CopyTo(buffer.Span);
+            }
+            _pos += n;
+            return n;
+        }
+
+        /// <summary>A FileStream drops its read-ahead buffer on every seek, so the
+        /// underlying position is tracked and only corrected when it has actually
+        /// drifted. -1 means unknown (a read failed, or we have not read yet).</summary>
+        private void SeekFileIfNeeded()
+        {
+            if (_filePos != _pos) _file.Seek(_pos, SeekOrigin.Begin);
+            _filePos = -1; // unknown until the read reports how far it got
+        }
+
+        /// <summary>Overlays the free-box head over whatever the disk still says.</summary>
+        private void ApplyPatch(Span<byte> buffer, long at, int n)
+        {
+            long start = Math.Max(at, _patchPos);
+            long end = Math.Min(at + n, _patchPos + _patch.Length);
+            for (long p = start; p < end; p++)
+                buffer[(int)(p - at)] = _patch[p - _patchPos];
         }
 
         public override long Seek(long offset, SeekOrigin origin)

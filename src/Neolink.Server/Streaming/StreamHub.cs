@@ -45,6 +45,9 @@ public sealed class StreamHub : IStreamHub, IMediaSink
     // publish so no packet can slip between a new subscriber's prime and its
     // registration (that would open a one-packet gap right at startup).
     private readonly object _castGate = new();
+    // Fan-out snapshot, rebuilt under _castGate whenever the set changes: iterating
+    // the ConcurrentDictionary itself allocates an enumerator on every packet.
+    private Channel<HubPacket>[] _cast = Array.Empty<Channel<HubPacket>>();
     private readonly List<HubPacket> _gop = new();
     private int _gopBytes;
     private bool _gopOpen;
@@ -186,7 +189,10 @@ public sealed class StreamHub : IStreamHub, IMediaSink
             }
         }
 
-        bool ready = Codec == VideoCodec.H264 ? (Sps != null && Pps != null) : (Sps != null && Pps != null);
+        // H.265 needs the VPS too: an hvcC built without it is not a decodable
+        // configuration, and MSE rejects the init segment outright.
+        bool ready = Sps != null && Pps != null
+                     && (frame.Codec == VideoCodec.H264 || Vps != null);
         if (ready)
             _videoReady.TrySetResult();
 
@@ -290,8 +296,9 @@ public sealed class StreamHub : IStreamHub, IMediaSink
                     _gopBytes += payloadBytes;
                 }
             }
-            foreach (var (_, sub) in _subscribers)
-                sub.Ch.Writer.TryWrite(packet); // bounded DropOldest: never blocks
+            var cast = _cast;
+            for (int i = 0; i < cast.Length; i++)
+                cast[i].Writer.TryWrite(packet); // bounded DropOldest: never blocks
         }
     }
 
@@ -337,6 +344,7 @@ public sealed class StreamHub : IStreamHub, IMediaSink
             foreach (var p in _gop)
                 ch.Writer.TryWrite(p);
             _subscribers[id] = (ch, viewer);
+            RebuildCastLocked();
         }
         if (viewer) Interlocked.Increment(ref _viewerCount);
         return (id, ch.Reader);
@@ -346,9 +354,23 @@ public sealed class StreamHub : IStreamHub, IMediaSink
     {
         if (_subscribers.TryRemove(id, out var sub))
         {
+            lock (_castGate) RebuildCastLocked();
             if (sub.Viewer) Interlocked.Decrement(ref _viewerCount);
             sub.Ch.Writer.TryComplete();
         }
+    }
+
+    private void RebuildCastLocked()
+    {
+        var next = new Channel<HubPacket>[_subscribers.Count];
+        int n = 0;
+        foreach (var (_, sub) in _subscribers)
+        {
+            if (n == next.Length) break;
+            next[n++] = sub.Ch;
+        }
+        // Unsubscribe removes before taking the gate, so the count can be stale-high.
+        _cast = n == next.Length ? next : next[..n];
     }
 
     // Ticks (UTC) of the last DESCRIBE/init attempt — the wake signal for

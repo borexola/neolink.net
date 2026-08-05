@@ -122,6 +122,11 @@ public sealed class MediaFrameReader
         uint microseconds = BinaryPrimitives.ReadUInt32LittleEndian(hs[12..]);
         _stream.Consume(20); // 16-byte header + 4 unknown
 
+        // Bounded like the payload below: unchecked, this length feeds the
+        // buffered reader, which grows to whatever the header claims.
+        if (additionalHeaderSize > 64 * 1024)
+            throw new InvalidDataException($"Implausible additional header size {additionalHeaderSize}");
+
         uint? unixTime = null;
         if (additionalHeaderSize >= 4)
         {

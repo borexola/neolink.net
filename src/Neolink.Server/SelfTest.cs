@@ -970,6 +970,18 @@ public static class SelfTest
             AssertEq(H26x.H264NalType(nals[0].Span), H26x.H264Sps);
             AssertEq(H26x.H264NalType(nals[1].Span), H26x.H264Pps);
             AssertEq(H26x.H264NalType(nals[2].Span), H26x.H264Idr);
+
+            // A 3-byte code at offset 0, then a run of zeros ahead of a 4-byte one:
+            // the start code claims the zero immediately before it, the rest are
+            // trailing padding on the NAL that ends there.
+            var padded = new byte[] { 0, 0, 1, 0x67, 0xAA, 0, 0, 0, 0, 1, 0x68, 0xBB };
+            var pnals = H26x.SplitNals(padded);
+            AssertEq(pnals.Count, 2);
+            AssertEq(H26x.H264NalType(pnals[0].Span), H26x.H264Sps);
+            AssertEq(pnals[0].Length, 2); // 67 AA — the padding zero is trimmed
+            AssertEq(H26x.H264NalType(pnals[1].Span), H26x.H264Pps);
+            AssertEq(pnals[1].Length, 2); // 68 BB
+            AssertEq(H26x.SplitNals(new byte[] { 0, 0 }).Count, 0); // too short to hold a start code
         });
 
         Test("rtp h264 fragmentation", () =>
@@ -2233,6 +2245,7 @@ public static class SelfTest
             AssertEq(Client("198.51.100.9", "203.0.113.7"), "198.51.100.9");
             AssertEq(Client("127.0.0.1", null), "127.0.0.1");
             AssertEq(Client("127.0.0.1", "not-an-address"), "127.0.0.1");
+            AssertEq(Client("127.0.0.1", "203.0.113.7, junk"), "127.0.0.1");
             AssertEq(Client("::ffff:198.51.100.9", null), "198.51.100.9");
             Assert(Web.LoginGuard.ClientAddress(null, "203.0.113.7") == null,
                 "no peer address means nothing to hold responsible");

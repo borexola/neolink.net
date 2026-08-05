@@ -562,6 +562,26 @@ public sealed class NeolinkConfig
         if (dupes.Count > 0)
             throw new FormatException($"Duplicate camera names: {string.Join(", ", dupes.Select(g => g.Key))}");
 
+        // A camera name also becomes a Home Assistant object id and a recordings
+        // folder name — by DIFFERENT reductions (HA lowercases and collapses
+        // non-alphanumerics to '_'; the folder only replaces characters the
+        // filesystem refuses), so each collision is checked on its own. Warnings,
+        // not errors, because an install already running that way must keep starting.
+        foreach (var g in Cameras
+                     .GroupBy(c => new string(c.Name
+                         .Select(ch => char.IsAsciiLetterOrDigit(ch) ? char.ToLowerInvariant(ch) : '_')
+                         .ToArray()))
+                     .Where(g => g.Count() > 1))
+            Log.Warn($"Camera names {string.Join(" and ", g.Select(c => $"\"{c.Name}\""))} both reduce to " +
+                     $"\"{g.Key}\": they will share one Home Assistant device. " +
+                     "Rename one so they differ in letters or digits.");
+        foreach (var g in Cameras
+                     .GroupBy(c => Neolink.Recording.EventStore.SafeName(c.Name),
+                         OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal)
+                     .Where(g => g.Count() > 1))
+            Log.Warn($"Camera names {string.Join(" and ", g.Select(c => $"\"{c.Name}\""))} map to the same " +
+                     $"recordings folder \"{g.Key}\": their footage will interleave. Rename one.");
+
         var missing = Cameras
             .SelectMany(c => c.PermittedUsers ?? new List<string>())
             .Where(p => p is not ("anyone" or "anonymous") && Users.All(u => u.Name != p))

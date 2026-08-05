@@ -567,7 +567,8 @@
         @if (_missingCamera != null)
         {
             <div class="perf-toast" role="status">
-                <span>@((MarkupString)T.F("Camera \"<b>{0}</b>\" doesn't exist on this server — showing the camera wall instead.", _missingCamera))</span>
+                @* The name arrives from the URL and this notice renders as markup. *@
+                <span>@((MarkupString)T.F("Camera \"<b>{0}</b>\" doesn't exist on this server — showing the camera wall instead.", System.Net.WebUtility.HtmlEncode(_missingCamera)))</span>
                 <button class="chip" @onclick="() => _missingCamera = null">@T["Got it"]</button>
             </div>
         }

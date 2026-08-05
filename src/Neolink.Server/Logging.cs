@@ -1,6 +1,8 @@
 ﻿// Copyright (c) 2026 Oluwabori Olaleye
 // Licensed under the GNU Affero General Public License v3.0; see the LICENSE file
 // in the repository root.
+using System.Text;
+
 namespace Neolink;
 
 public enum LogLevel
@@ -67,22 +69,59 @@ public static class Log
     private static void Write(LogLevel level, string msg)
     {
         if (level < Level) return;
+        msg = Sanitize(msg);
         try { Tap?.Invoke(level, msg); } catch { /* the tap must never break logging */ }
         var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] [{LevelTag(level)}] {msg}";
         lock (Gate)
         {
-            var prev = Console.ForegroundColor;
-            Console.ForegroundColor = level switch
+            // Redirected output (Docker, systemd, a pipe) renders no colour, and
+            // each get/set of the console colour is a syscall on Windows.
+            if (Colorize)
             {
-                LogLevel.Error => ConsoleColor.Red,
-                LogLevel.Warn => ConsoleColor.Yellow,
-                LogLevel.Debug => ConsoleColor.DarkGray,
-                LogLevel.Trace => ConsoleColor.DarkGray,
-                _ => prev,
-            };
-            Console.WriteLine(line);
-            Console.ForegroundColor = prev;
+                var prev = Console.ForegroundColor;
+                Console.ForegroundColor = level switch
+                {
+                    LogLevel.Error => ConsoleColor.Red,
+                    LogLevel.Warn => ConsoleColor.Yellow,
+                    LogLevel.Debug => ConsoleColor.DarkGray,
+                    LogLevel.Trace => ConsoleColor.DarkGray,
+                    _ => prev,
+                };
+                Console.WriteLine(line);
+                Console.ForegroundColor = prev;
+            }
+            else
+            {
+                Console.WriteLine(line);
+            }
         }
+    }
+
+    private static readonly bool Colorize = !Console.IsOutputRedirected;
+
+    /// <summary>
+    /// Camera XML, event text and submitted usernames all reach the log, and a
+    /// bare newline in any of them would forge a whole line — including the
+    /// "intrusion attempt" line users are told to point fail2ban at. Multi-line
+    /// content (stack traces) keeps its shape, indented, so that untrusted text
+    /// can never begin a line and be read as a record of its own.
+    /// </summary>
+    private static string Sanitize(string msg)
+    {
+        bool clean = true;
+        foreach (var c in msg)
+            if (char.IsControl(c) && c != '\t') { clean = false; break; }
+        if (clean) return msg;
+
+        var sb = new StringBuilder(msg.Length + 16);
+        foreach (var c in msg)
+        {
+            if (c == '\n') sb.Append("\n    ");
+            else if (c == '\r') { /* CRLF folds into the newline above */ }
+            else if (c == '\t' || !char.IsControl(c)) sb.Append(c);
+            else sb.Append('?');
+        }
+        return sb.ToString();
     }
 
     /// <summary>Three-letter console tag for a level ("INF", "WRN", ...).</summary>
