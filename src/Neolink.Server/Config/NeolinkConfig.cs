@@ -97,6 +97,10 @@ public sealed class NeolinkConfig
                 case "recording":
                     config.Recording = ParseJsonRecording(prop.Value);
                     break;
+                case "recordingdisabled":
+                    // The UI's Disable recording parks the section here so its
+                    // settings survive; it is deliberately not configuration.
+                    break;
                 case "resetadminpassword":
                     config.ResetAdminPassword = prop.Value.GetBoolean();
                     break;

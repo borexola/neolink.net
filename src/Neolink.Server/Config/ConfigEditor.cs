@@ -40,6 +40,19 @@ public static class ConfigEditor
     public static object Describe(string path, object? encryption = null)
     {
         var cfg = NeolinkConfig.Load(path);
+        // Load drops unknown keys, and the stash a "Disable recording" leaves
+        // behind is one: read it raw so the UI can prefill the enable form.
+        string? disabledPath = null;
+        try
+        {
+            if (JsonNode.Parse(File.ReadAllText(path), documentOptions: new JsonDocumentOptions
+                {
+                    CommentHandling = JsonCommentHandling.Skip,
+                    AllowTrailingCommas = true,
+                }) is JsonObject raw && TryGetSection(raw, "recording_disabled") is { } stash)
+                disabledPath = GetString(stash, "path");
+        }
+        catch { /* a TOML config has no stash; the prefill is a nicety */ }
         return new
         {
             path = Path.GetFullPath(path),
@@ -60,6 +73,7 @@ public static class ConfigEditor
                     talk = cfg.Ui.Talk,
                     showBackgroundTasks = cfg.Ui.ShowBackgroundTasks,
                 },
+                recordingDisabledPath = disabledPath,
                 recording = cfg.Recording == null ? null : new
                 {
                     path = cfg.Recording.Path,

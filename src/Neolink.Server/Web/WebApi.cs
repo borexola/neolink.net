@@ -734,10 +734,26 @@ public static class WebApi
 
                     if (req.RemoveRecording == true)
                     {
+                        // Stash, never delete: the section moves aside under a key every
+                        // loader ignores, so retention, rolls and tiers survive the off
+                        // period. Section PRESENCE stays the only on/off signal any
+                        // version ever shipped reads.
+                        var off = ConfigEditor.TryGetSection(root, "recording");
                         ConfigEditor.Set(root, "recording", null);
+                        if (off != null)
+                            ConfigEditor.Set(root, "recording_disabled", off);
                     }
                     else if (req.Recording is { } r)
                     {
+                        // Enabling after a disable restores the stashed section first,
+                        // so this request's fields land on top of the settings the
+                        // admin had before switching off.
+                        if (ConfigEditor.TryGetSection(root, "recording") == null
+                            && ConfigEditor.TryGetSection(root, "recording_disabled") is { } stash)
+                        {
+                            ConfigEditor.Set(root, "recording_disabled", null);
+                            ConfigEditor.Set(root, "recording", stash);
+                        }
                         var rec = ConfigEditor.Section(root, "recording");
                         if (r.Path != null) ConfigEditor.Set(rec, "path", r.Path);
                         if (r.RetentionDays != null) ConfigEditor.Set(rec, "retention_days", r.RetentionDays);

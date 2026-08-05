@@ -5080,6 +5080,40 @@ public static class SelfTest
                 Assert(encInfo.GetProperty("file").GetString()!.EndsWith("secret.key"),
                     "file-based key reports its path");
 
+                // Recording on/off from the UI. Disabling STASHES the section under
+                // recording_disabled instead of deleting it — retention and friends
+                // survive the off period — and the stash's path is reported so the
+                // enable form prefills. Enabling restores the stash, then applies
+                // the request on top. The storage path is write-probed on enable.
+                System.Text.Json.JsonElement AdminPut(string body, int expect)
+                {
+                    using var req = new HttpRequestMessage(HttpMethod.Put, $"/api/admin/config{tokenQ}")
+                    { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+                    using var res = http.Send(req);
+                    AssertEq((int)res.StatusCode, expect);
+                    return GetJson(http, $"/api/admin/config{tokenQ}").GetProperty("settings");
+                }
+                var recDir = Path.Combine(dir, "rec-enable");
+                var recDirJson = System.Text.Json.JsonSerializer.Serialize(recDir);
+                var on = AdminPut("""{"recording":{"path":""" + recDirJson + ""","retentionDays":9}}""", 200);
+                AssertEq(on.GetProperty("recording").GetProperty("retentionDays").GetInt32(), 9);
+                var off = AdminPut("""{"removeRecording":true}""", 200);
+                Assert(off.GetProperty("recording").ValueKind == System.Text.Json.JsonValueKind.Null,
+                    "recording section absent while disabled");
+                AssertEq(off.GetProperty("recordingDisabledPath").GetString()!, recDir);
+                Assert(File.ReadAllText(Path.Combine(dir, "config.json")).Contains("recording_disabled"),
+                    "disable stashes the section in the file");
+                var back = AdminPut("""{"recording":{"path":""" + recDirJson + "}}", 200);
+                AssertEq(back.GetProperty("recording").GetProperty("retentionDays").GetInt32(), 9);
+                Assert(back.GetProperty("recordingDisabledPath").ValueKind == System.Text.Json.JsonValueKind.Null,
+                    "the stash is consumed by the enable");
+                // A path that cannot be written is refused while the admin is here
+                // to read the reason, not at the next start.
+                var blocker = Path.Combine(dir, "rec-blocker.txt");
+                File.WriteAllText(blocker, "in the way");
+                AdminPut("""{"recording":{"path":"""
+                    + System.Text.Json.JsonSerializer.Serialize(Path.Combine(blocker, "sub")) + "}}", 400);
+
                 // Camera connection test: a UDP camera must be tested the way the
                 // server actually connects to it. These models never listen on TCP,
                 // so testing them the TCP way timed out however healthy they were.
