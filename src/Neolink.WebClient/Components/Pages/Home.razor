@@ -609,7 +609,8 @@
                 var camera = slot.Camera == null ? null : _cameras.FirstOrDefault(c => c.Name == slot.Camera);
 
                 @* Maximizing hides the other tiles (CSS display) instead of unmounting
-                   them, so their players keep running and restore is instant.
+                   them — the DOM survives so restore keeps every slot's state, but
+                   their players detach: only the watched camera holds a stream.
                    zoom-on marks the surfaces where digital zoom is available
                    (theater layout / maximized tile; JS checks fullscreen itself). *@
                 @* Tiles are drag-and-drop surfaces: drag one onto another to swap
@@ -2415,9 +2416,10 @@
     private ViewSnapshot? _backup; // legacy theater-detour maximize (old persisted states)
 
     // In-place maximize: the tile at _maxIndex fills the stage while the OTHER
-    // tiles stay mounted (CSS-hidden) so their players keep running — restoring
-    // never reconnects the background feeds. _maxPrev* remembers the stream the
-    // card showed before the automatic sub→main switch.
+    // tiles stay mounted (CSS-hidden) but hold no stream — an invisible tile
+    // must not cost the server a fan-out, the network a feed, or this device
+    // a decoder (see ReconcilePlayersAsync). _maxPrev* remembers the stream
+    // the card showed before the automatic sub→main switch.
     private int? _maxIndex;
     private string? _maxPrevKind;
     private string? _maxPrevPath;
@@ -2888,8 +2890,6 @@
         // Digital zoom (theater/fullscreen/quick view). Re-invoked per render so
         // zoom resets when a surface stops being zoomable (e.g. un-maximized).
         await JS.InvokeVoidAsync("neolink.zoomInit");
-        // Phones: pause the hidden tiles while one is maximized (resume on restore).
-        await JS.InvokeVoidAsync("neolink.maxSync");
         // Speaker toggles: re-sync glyphs/visibility after every render.
         await JS.InvokeVoidAsync("neolink.audioInit");
         // Esc closes the event player / quick view pop-ups (and the tile menu).
@@ -6230,6 +6230,13 @@
         {
             // Locked: force every tile to detach — a signed-out user sees no video.
             string? desired = (!Locked && i < _slots.Count) ? WsUrl(_slots[i]) : null;
+            // While one tile is maximized (or /cameras/{name} is open) the others
+            // are invisible, and an invisible tile holds NO stream: the server
+            // fans out and the network carries only what is actually watched.
+            // Restore reattaches — recording/always-on cameras resume instantly
+            // from the GOP prime, on-demand ones within the server's demand grace.
+            if (desired != null && _maxIndex is { } max && max < _slots.Count && i != max)
+                desired = null;
             // A sleeping battery camera is NEVER woken just by being on screen:
             // attaching is what connects, and connecting is what wakes it. These
             // tiles stream only when the camera is already awake, or when the user
