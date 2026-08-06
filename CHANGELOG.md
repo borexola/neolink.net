@@ -69,12 +69,86 @@ in the README). Paste the matching section below into the GitHub release.
   Firefox on the same machine plays it in software. The tile now switches to
   the camera's sub stream and says why. The fallback is per-device and never
   saved to the layout, so other browsers on the account keep the main stream.
+- **Recording and playback got cheaper.** Four hot paths found in the same
+  review. Splitting an Annex-B frame into its units — which runs over the
+  whole payload of every frame that gets recorded — searched byte by byte
+  where the platform offers a vectorised search; the fan-out to viewers
+  allocated on every media packet; serving a recording made before the
+  indexed format seeked the file on every read, throwing away its read-ahead
+  each time, and went through a thread hop for want of a real async read;
+  and walking such a file's fragments allocated an array and a string per
+  fragment, tens of thousands of them. The visible effects are lower CPU per
+  recording camera, quicker timeline scrubbing over older footage
+  (especially on spinning disks and across a network) and faster exports.
 - **The sidebar's battery-camera badge dropped its BETA.** Baichuan-over-UDP
   has carried the Argus family through enough releases to stop apologising;
   the compact UDP pill stays so the transport is still visible at a glance.
   The camera panel's PORTS/transport details are unchanged.
 
 ### Fixed
+
+- **A camera link could carry script into the web UI.** Opening
+  `/cameras/{name}` for a camera the server does not have shows a notice
+  naming it, and that notice rendered the name as markup. A link crafted to
+  put a tag in the name therefore ran script in the browser of whoever
+  clicked it — on the app's own origin, alongside a signed-in session. The
+  name is escaped now. Every other place the UI renders markup was checked;
+  all of them are fixed wording from the translation catalogues, never
+  anything a camera, a URL or an event can influence.
+- **An unreadable `users.json` no longer turns authentication off.** A file
+  that could not be parsed — a truncated write, a bad hand-edit, a damaged
+  disk — left the account list empty, and an empty list is exactly what a
+  fresh install looks like, so the server dropped the sign-in gate and
+  served everything to anyone. It now refuses sign-ins and says so, and it
+  no longer rewrites the file it could not read, so whatever is in there
+  survives for you to repair. Removing the file still starts first-run setup.
+- **Visiting a camera no longer takes a tile off another one.** Opening a
+  camera that is not on the wall has to put it somewhere; with the wall full
+  it used the last tile, and the camera that lived there was simply gone
+  — Restore view brought back the stream it had switched, never the camera
+  it had replaced. A tile is now borrowed rather than taken: whatever it
+  held is remembered and put back when the detour ends, including across a
+  chain of camera-to-camera visits, and a page reload mid-visit comes back
+  to the wall you arranged. A tile you reassign by hand while maximized is
+  yours and is left alone.
+- **The server log cannot be forged through camera or sign-in text.** Text
+  that arrives from outside — a camera's XML, a submitted username, an event
+  description — reached the log unescaped, so a newline in any of it could
+  write a whole line of the attacker's choosing, including the "address
+  blocked" line users are told to point fail2ban at. Control characters are
+  now neutralised centrally, for every message rather than one call site at
+  a time; multi-line entries such as stack traces keep their shape, indented,
+  so nothing untrusted can begin a line.
+- **A UDP battery-camera session only accepts its own camera's packets.**
+  The socket took datagrams from anyone who found the port, so another
+  device on the network could inject into the video stream or grow the
+  reordering buffer until the server ran out of memory. Sessions are pinned
+  to the camera's address (never its port — the Argus family answers from
+  several), the buffer is bounded, and a rejected source is named in the log
+  once rather than dropped in silence.
+- **H.265 cameras wait for the parameter set that makes them playable.** The
+  readiness check had two identical branches where one was meant to require
+  the video parameter set, so an HEVC stream could be declared ready without
+  it and produce a decoder configuration browsers reject. Streams and
+  recordings now wait for it.
+- **Desktop app: only web links go to the system browser.** A link the app
+  declined to open in its own window was handed to Windows whatever its
+  scheme, so a page could name a local file or a handler protocol and have
+  the shell start it. Only `http` and `https` are passed on now.
+- **A snapshot cannot be asked to serve arbitrarily old footage.** The
+  freshness and staleness windows took any value from the URL, which put
+  back the very "hours-old scene on a dashboard tile" the bounded fallback
+  exists to prevent. Both are capped at an hour.
+- Smaller ones from the same review: an email address is refused if it
+  carries the characters that would inject an SMTP command or a mail header;
+  the secret key and `users.json` are made owner-only while still empty
+  rather than a moment after they are written; the ffmpeg capability probe
+  no longer risks hanging on a build with a lot to say; a combined-MP4
+  export cannot divide by a missing audio rate; the forwarded-for header is
+  read strictly as its last hop rather than scanning back into entries a
+  caller could have written; and two camera names that differ only in
+  punctuation now warn at startup instead of silently sharing one Home
+  Assistant device and one recordings folder.
 
 - **Desktop app: clicking a notification no longer also opens the browser.**
   The 0.9.9 protocol toasts deliver a click to a running app twice — Windows

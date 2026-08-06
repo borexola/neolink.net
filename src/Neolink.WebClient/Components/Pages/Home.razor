@@ -2424,6 +2424,12 @@
     private string? _maxPrevKind;
     private string? _maxPrevPath;
     private string? _maxPrevCamera;
+    // A deep link to a camera the wall has no room for BORROWS a tile: the
+    // displaced camera is remembered here and put back when the detour ends,
+    // so visiting a camera never costs the user one they had arranged.
+    private int? _borrowIndex;
+    private ViewSlot? _borrowSaved;
+    private string? _borrowCamera;
     /// <summary>The stream kind the maximize flow itself put on the card (auto main
     /// or the URL's explicit choice) — only that exact kind is reverted on restore,
     /// so a stream picked by hand in the dropdown is respected.</summary>
@@ -3101,7 +3107,7 @@
     private PersistedView SnapshotView() => new()
     {
         Server = ServerIsDefault ? "" : _server, User = _user, Pass = _pass,
-        Mode = _mode, Count = _count, Slots = _slots, Backup = _backup,
+        Mode = _mode, Count = _count, Slots = SlotsToRemember(), Backup = _backup,
         MaxIndex = _maxIndex, MaxPrevKind = _maxPrevKind, MaxPrevPath = _maxPrevPath,
         MaxPrevCamera = _maxPrevCamera, MaxSetKind = _maxSetKind,
         HiddenTypes = _hiddenTypes.ToList(), HiddenCams = _hiddenCams.ToList(),
@@ -3109,6 +3115,18 @@
         Layouts = _layouts, ActiveLayout = _activeLayout,
         CamOrder = _camOrder,
     };
+
+    /// <summary>The wall as it should be REMEMBERED: a tile on loan to a deep link
+    /// is saved as its owner, so reloading the page while visiting a camera comes
+    /// back to the arrangement the user built rather than to the detour.</summary>
+    private List<ViewSlot> SlotsToRemember()
+    {
+        if (_borrowIndex is not int i || _borrowSaved == null || i < 0 || i >= _slots.Count)
+            return _slots;
+        var remembered = _slots.Select(s => s.Clone()).ToList();
+        remembered[i] = _borrowSaved.Clone();
+        return remembered;
+    }
 
     private async Task SaveAsync()
     {
@@ -5656,6 +5674,7 @@
         _count = ClampCount(_mode, l.Count);
         _slots = l.Slots.Select(s => s.Clone()).ToList();
         EnsureSlots();
+        ForgetBorrowedSlot(); // these are different tiles; the old index means nothing
         _backup = null; // loading a layout replaces any maximize detour
         _activeLayout = l.Name;
         await SaveAsync();
@@ -5755,6 +5774,12 @@
             return;
         }
         _missingCamera = null;
+        // A previous deep link may still be holding someone else's tile. Give it
+        // back before this route picks one, or the second borrow would overwrite
+        // the record of the first and lose that camera for good. Re-entering the
+        // SAME camera (a re-render) keeps the borrow it already made.
+        if (_borrowCamera != null && !string.Equals(_borrowCamera, cam.Name, StringComparison.OrdinalIgnoreCase))
+            ReturnBorrowedSlot();
         _ = EnsureSurfaceCapsAsync(cam.Name); // decides whether the mic button and PTZ pad show
 
         // An explicit /main|/sub|/ext segment pins the stream; without one the
@@ -5775,6 +5800,14 @@
                 int grown = ClampCount(_mode, _count + 1);
                 if (grown > _count) { _count = grown; EnsureSlots(); }
                 slot = _slots.FirstOrDefault(s => s.Camera == null) ?? _slots[^1];
+            }
+            // A tile that already holds a camera is BORROWED, not taken: the wall
+            // is the user's arrangement, and a visit must not edit it.
+            if (slot.Camera != null)
+            {
+                _borrowIndex = _slots.IndexOf(slot);
+                _borrowSaved = slot.Clone();
+                _borrowCamera = cam.Name;
             }
             slot.Camera = cam.Name;
             slot.Kind = stream.Kind;
@@ -5885,9 +5918,38 @@
         _maxPrevKind = _maxPrevPath = _maxPrevCamera = _maxSetKind = null;
     }
 
+    /// <summary>Hands a borrowed tile back to the camera that had it — but only
+    /// while it still shows the camera the deep link put there. A tile the user
+    /// re-assigned by hand during the detour is theirs now, not ours to undo.</summary>
+    private void ReturnBorrowedSlot()
+    {
+        if (_borrowIndex is int i && _borrowSaved is { } saved
+            && _slots.ElementAtOrDefault(i) is { } slot
+            && string.Equals(slot.Camera, _borrowCamera, StringComparison.OrdinalIgnoreCase))
+        {
+            slot.Camera = saved.Camera;
+            slot.Kind = saved.Kind;
+            slot.Path = saved.Path;
+            slot.Cols = saved.Cols;
+            slot.Rows = saved.Rows;
+        }
+        ForgetBorrowedSlot();
+    }
+
+    /// <summary>Drops the borrow record without acting on it — for the paths that
+    /// replace the whole tile list, where the remembered index addresses tiles
+    /// that no longer exist.</summary>
+    private void ForgetBorrowedSlot()
+    {
+        _borrowIndex = null;
+        _borrowSaved = null;
+        _borrowCamera = null;
+    }
+
     private void RestoreMaximized()
     {
         RevertAutoMainSwitch();
+        ReturnBorrowedSlot();
         _maxIndex = null;
         _ptzPadOpen = false;
         _ = SaveAsync();
@@ -6148,6 +6210,7 @@
         _slots = _backup.Slots;
         _backup = null;
         EnsureSlots();
+        ForgetBorrowedSlot(); // these are different tiles; the old index means nothing
         _ = SaveAsync();
     }
 
