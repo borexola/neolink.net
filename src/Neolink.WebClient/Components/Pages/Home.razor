@@ -917,7 +917,7 @@
 
     @if (_panelCamera != null)
     {
-        <CameraPanel Server="@ApiBase" CameraName="@_panelCamera"
+        <CameraPanel Server="@ApiBase" MediaServer="@_server" CameraName="@_panelCamera"
                      Camera="_cameras.FirstOrDefault(c => c.Name == _panelCamera)"
                      User="@_user" Pass="@_pass" Token="@_authToken"
                      CanEditRecording="@(!_authEnabled || _authAdmin)"

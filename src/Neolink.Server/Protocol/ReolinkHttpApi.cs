@@ -365,6 +365,26 @@ public sealed class ReolinkHttpApi : IDisposable
             ?? throw new ReolinkApiException("GetAlarm reply carries no Alarm settings"), false);
     }
 
+    /// <summary>The LEGACY motion config (GetAlarm type "md") specifically, or null
+    /// when the firmware rejects the command. Some newer firmwares (the Video
+    /// Doorbell line) answer GetMdAlarm for sensitivity but keep the ZONE grid —
+    /// one grid, shared by every detection type — only in this object, so the
+    /// zone reader needs the legacy shape even when the new dialect exists.</summary>
+    public async Task<JsonObject?> TryGetLegacyMdConfigAsync(CancellationToken ct)
+    {
+        try
+        {
+            var alarm = await ExecAsync("GetAlarm",
+                new JsonObject { ["Alarm"] = new JsonObject { ["channel"] = _channelId, ["type"] = "md" } },
+                ct).ConfigureAwait(false);
+            return alarm?["Alarm"] as JsonObject;
+        }
+        catch (ReolinkApiException)
+        {
+            return null;
+        }
+    }
+
     /// <summary>Writes the motion-detection config; pass the (modified) object and
     /// dialect flag from <see cref="GetMdConfigAsync"/>.</summary>
     public Task SetMdConfigAsync(JsonObject cfg, bool isMdAlarm, CancellationToken ct) =>

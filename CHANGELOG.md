@@ -22,13 +22,23 @@ in the README). Paste the matching section below into the GitHub release.
   the camera untouched, same read-modify-write discipline as the
   sensitivity sliders. Exposed as GET/POST
   `/api/cameras/{name}/detectionzone` for scripting. Needs the camera's
-  HTTP API, like the sensitivity sliders it sits beside; a camera that is
-  asleep or offline still opens the editor, just without the snapshot
-  behind the grid. In all six languages. Beta note: the grid is written the
-  way the API documents it ('1' = watched, '0' = ignored) — before trusting
-  an edit, open the editor on a camera that has a zone painted in the
-  Reolink app and confirm the shading matches the app's; a firmware that
-  inverted the convention would mean a saved zone ignores the wrong cells.
+  HTTP API, like the sensitivity sliders it sits beside; a camera that
+  can't produce a frame still opens the editor — the grid works over a
+  blank background labelled "no snapshot available". Firmwares that answer
+  the newer motion-config command but keep the zone grid only in the
+  legacy one (the Video Doorbell line — one grid there, shared by every
+  detection type) are read and written through the legacy object; when a
+  camera has a zone in the Reolink app but neither motion object carries a
+  grid, the server logs the firmware's actual field names once so the
+  missing dialect can be reported and added. In all six languages. First
+  beta round also fixed: the snapshot behind the grid was requested from
+  the server's own loopback address (the circuit's view of the server, not
+  the browser's), so it only ever appeared when the browser ran on the
+  server machine. Beta note: the grid is written the way the API documents
+  it ('1' = watched, '0' = ignored) — before trusting an edit, open the
+  editor on a camera that has a zone painted in the Reolink app and
+  confirm the shading matches the app's; a firmware that inverted the
+  convention would mean a saved zone ignores the wrong cells.
 
 - **Sign-in protection (opt-in).** Switched on from the server settings
   Users tab, it locks an account after a configurable number of failed

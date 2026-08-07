@@ -2209,12 +2209,14 @@
         // A canvas painting the camera's watched/ignored cell grid over its
         // latest snapshot. All paint interaction stays in the browser — the
         // circuit only sees the final table string when the user saves.
-        zoneInit(canvas, cols, rows, table, imgUrl) {
+        zoneInit(canvas, cols, rows, table, imgUrl, noSnapLabel) {
             if (!canvas) return;
             const st = {
                 cols, rows,
                 cells: Array.from(table, ch => ch === '1'),
                 img: null,
+                failed: false, // snapshot fetch failed: say so on the canvas
+                label: noSnapLabel || '',
                 painting: false,
                 paint: false, // the value being dragged onto cells
             };
@@ -2235,7 +2237,16 @@
                 const { width: w, height: h } = canvas;
                 ctx.clearRect(0, 0, w, h);
                 if (st.img) ctx.drawImage(st.img, 0, 0, w, h);
-                else { ctx.fillStyle = '#1a1d21'; ctx.fillRect(0, 0, w, h); }
+                else {
+                    ctx.fillStyle = '#1a1d21';
+                    ctx.fillRect(0, 0, w, h);
+                    if (st.failed && st.label) {
+                        const dpr = window.devicePixelRatio || 1;
+                        ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+                        ctx.font = `${Math.round(12 * dpr)}px system-ui, sans-serif`;
+                        ctx.fillText(st.label, Math.round(10 * dpr), Math.round(20 * dpr));
+                    }
+                }
                 const cw = w / st.cols, ch = h / st.rows;
                 ctx.fillStyle = 'rgba(10, 10, 14, 0.62)';
                 for (let r = 0; r < st.rows; r++)
@@ -2286,7 +2297,11 @@
             if (imgUrl) {
                 const img = new Image();
                 img.onload = () => { if (canvas.isConnected) { st.img = img; resize(); } };
+                img.onerror = () => { if (canvas.isConnected) { st.failed = true; draw(); } };
                 img.src = imgUrl;
+            } else {
+                st.failed = true;
+                draw();
             }
         },
         zoneRead(canvas) {

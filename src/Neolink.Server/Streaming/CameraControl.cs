@@ -1877,11 +1877,35 @@ public sealed class CameraControl : ICameraControl
     public Task<DetectionZone?> GetDetectionZoneAsync(string type, CancellationToken ct) =>
         HttpTryAsync<DetectionZone?>(async c =>
         {
-            var cfg = type == "md"
-                ? (await _httpApi!.GetMdConfigAsync(c).ConfigureAwait(false)).Cfg
-                : await _httpApi!.GetAiAlarmAsync(type, c).ConfigureAwait(false);
-            return ParseZone(type, cfg);
+            if (type != "md")
+                return ParseZone(type, await _httpApi!.GetAiAlarmAsync(type, c).ConfigureAwait(false));
+            var (cfg, isMdAlarm) = await _httpApi!.GetMdConfigAsync(c).ConfigureAwait(false);
+            if (ParseZone(type, cfg) is { } zone)
+                return zone;
+            // Newer firmware (the Video Doorbell line) answers GetMdAlarm for
+            // sensitivity but keeps the zone grid — ONE grid, shared by every
+            // detection type — only in the legacy Alarm object.
+            var legacy = isMdAlarm ? await _httpApi!.TryGetLegacyMdConfigAsync(c).ConfigureAwait(false) : null;
+            if (legacy != null && ParseZone(type, legacy) is { } shared)
+                return shared;
+            LogZoneShapeOnce(cfg, legacy);
+            return null;
         }, ct);
+
+    /// <summary>Neither motion object carried a grid: name their fields once, so a
+    /// firmware whose zone hides under yet another shape can be reported and added
+    /// instead of dead-ending at "no zone".</summary>
+    private bool _zoneShapeLogged;
+
+    private void LogZoneShapeOnce(JsonObject cfg, JsonObject? legacy)
+    {
+        if (_zoneShapeLogged) return;
+        _zoneShapeLogged = true;
+        static string Keys(JsonObject? o) => o == null ? "(rejected)" : string.Join(",", o.Select(kv => kv.Key));
+        Log.Info($"{CameraName}: no zone grid in the motion config — MdAlarm carries [{Keys(cfg)}], " +
+                 $"legacy Alarm carries [{Keys(legacy)}]. If the Reolink app shows a detection zone " +
+                 "for this camera, report these field names so the dialect can be added.");
+    }
 
     internal static DetectionZone? ParseZone(string type, JsonObject cfg)
     {
@@ -1901,10 +1925,26 @@ public sealed class CameraControl : ICameraControl
         if (type == "md")
         {
             // Read-modify-write like the sensitivity paths: the surrounding config
-            // (schedules, sensitivities, target sizes) goes back untouched.
+            // (schedules, sensitivities, target sizes) goes back untouched. The
+            // write goes out the same dialect the grid was READ from — a doorbell
+            // keeps it only in the legacy Alarm object (see GetDetectionZoneAsync).
             var (cfg, isMdAlarm) = await _httpApi.GetMdConfigAsync(ct).ConfigureAwait(false);
-            ApplyZoneChecked(type, cfg, table);
-            await _httpApi.SetMdConfigAsync(cfg, isMdAlarm, ct).ConfigureAwait(false);
+            if (ParseZone(type, cfg) != null)
+            {
+                ApplyZoneChecked(type, cfg, table);
+                await _httpApi.SetMdConfigAsync(cfg, isMdAlarm, ct).ConfigureAwait(false);
+            }
+            else if (isMdAlarm
+                && await _httpApi.TryGetLegacyMdConfigAsync(ct).ConfigureAwait(false) is { } legacy
+                && ParseZone(type, legacy) != null)
+            {
+                ApplyZoneChecked(type, legacy, table);
+                await _httpApi.SetMdConfigAsync(legacy, isMdAlarm: false, ct).ConfigureAwait(false);
+            }
+            else
+            {
+                throw new NotSupportedException($"{CameraName} reports no {type} detection zone");
+            }
         }
         else
         {

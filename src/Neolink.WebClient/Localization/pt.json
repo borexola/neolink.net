@@ -1060,6 +1060,7 @@
  "no outages in {0}": "sem quedas em {0}",
  "no recorded footage in this range": "sem gravações neste intervalo",
  "no reply ({0})": "sem resposta ({0})",
+ "no snapshot available": "nenhum instantâneo disponível",
  "no unreviewed events match these filters — the strip hides itself when you close the filter editor": "nenhum evento não visto corresponde a estes filtros — a faixa se esconde quando você fecha o editor de filtros",
  "not filling at the current rate": "não está enchendo no ritmo atual",
  "not formatted": "não formatado",

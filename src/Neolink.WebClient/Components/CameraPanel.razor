@@ -1294,6 +1294,11 @@
 
 @code {
     [Parameter] public string Server { get; set; } = "";
+    /// <summary>The server as the BROWSER reaches it. <see cref="Server"/> is the
+    /// circuit's view and may resolve to the host's loopback, which the visitor's
+    /// browser cannot fetch — URLs handed to media elements must use this one so
+    /// they traverse the same proxy the page came through.</summary>
+    [Parameter] public string? MediaServer { get; set; }
     [Parameter] public string CameraName { get; set; } = "";
     /// <summary>Live stream state (from /api/cameras) used to highlight the active encode profile.</summary>
     [Parameter] public ApiCamera? Camera { get; set; }
@@ -1788,14 +1793,16 @@
             _zoneNeedsInit = false;
             try
             {
-                await JS.InvokeVoidAsync("neolink.zoneInit", _zoneCanvas, z.Cols, z.Rows, z.Table, SnapshotUrl());
+                await JS.InvokeVoidAsync("neolink.zoneInit", _zoneCanvas, z.Cols, z.Rows, z.Table,
+                    SnapshotUrl(), T["no snapshot available"]);
             }
             catch { /* circuit tearing down */ }
         }
     }
 
     private string SnapshotUrl() =>
-        $"{Server.TrimEnd('/')}/api/cameras/{Uri.EscapeDataString(CameraName)}/snapshot.jpg?maxAge=15&maxStale=600"
+        $"{(string.IsNullOrEmpty(MediaServer) ? Server : MediaServer).TrimEnd('/')}"
+        + $"/api/cameras/{Uri.EscapeDataString(CameraName)}/snapshot.jpg?maxAge=15&maxStale=600"
         + (string.IsNullOrEmpty(Token) ? "" : $"&token={Uri.EscapeDataString(Token)}");
 
     private async Task ZoneClearAsync()
