@@ -1,5 +1,6 @@
 @using System.Text.Json
 @using System.Net.Http.Headers
+@using Microsoft.JSInterop
 @implements IDisposable
 @inject HttpClient Http
 @inject IJSRuntime JS
@@ -796,7 +797,7 @@
                     </div>
                 }
                 <div class="control-row">
-                    <span>@T["Detection zone"]</span>
+                    <span>@T["Detection zone"] <span class="new-tag">@T["NEW"]</span></span>
                     <button class="chip" @onclick="OpenZoneAsync">@T["Edit zone…"]</button>
                 </div>
                 <div class="notice small">
@@ -1215,6 +1216,9 @@
                         <span class="campanel-title">@T["DETECTION ZONE"] · @CameraName</span>
                         <button class="icon-btn" title="@T["Close"]" @onclick="CloseZone">✕</button>
                     </div>
+                    @* Type chips only when the camera really keeps a grid per type.
+                       Most keep ONE zone for everything; offering tabs there would
+                       promise a split the camera doesn't have. *@
                     @if (ZoneTypes().Count > 1)
                     {
                         <div class="zone-types">
@@ -1227,29 +1231,53 @@
                             }
                         </div>
                     }
-                    @if (_zoneLoading)
-                    {
-                        <div class="notice small">@T["Reading the zone from the camera…"]</div>
-                    }
-                    else if (_zone == null)
-                    {
-                        <div class="notice small">@T["This camera doesn't report a zone for this detection type."]</div>
-                    }
-                    else
-                    {
-                        <canvas class="zone-canvas" @key="_zoneType" @ref="_zoneCanvas"></canvas>
-                        <div class="notice small">
-                            @T["Drag to paint the cells the camera should ignore — no motion or AI alarms fire there. Drag over painted cells to watch them again. The grid overlays the camera's latest snapshot."]
-                        </div>
-                        <div class="row-actions zone-actions">
-                            <button class="chip" disabled="@_zoneSaving" @onclick="ZoneClearAsync">@T["Watch everywhere"]</button>
-                            <span class="tile-spacer"></span>
-                            <button class="chip" disabled="@_zoneSaving" @onclick="CloseZone">@T["Cancel"]</button>
+                    @* The frame is FIXED: head, type chips and the button row keep their
+                       places whether a grid loaded or not, so switching types can't
+                       resize the dialog under the pointer. Only this middle flexes. *@
+                    <div class="zone-body">
+                        @if (_zoneLoading)
+                        {
+                            <div class="notice small">@T["Reading the zone from the camera…"]</div>
+                        }
+                        else if (_zone == null)
+                        {
+                            <div class="notice small">
+                                @(_zoneError ?? T["This camera doesn't report a zone for this detection type."])
+                            </div>
+                            @if (_zoneError != null)
+                            {
+                                <button class="chip zone-retry" @onclick="() => SwitchZoneAsync(_zoneType)">@T["Try again"]</button>
+                            }
+                        }
+                        else
+                        {
+                            <canvas class="zone-canvas" @key="_zoneType" @ref="_zoneCanvas"></canvas>
+                            <div class="notice small">
+                                @T["Drag a box over an area the camera should ignore — no motion or AI alarms fire there. Start the drag on an already-ignored area to watch it again. Build any shape from a few boxes; the grid overlays the camera's latest snapshot."]
+                                @if (_zone.IsGlobal)
+                                {
+                                    <text> </text>@T["This camera keeps one zone for every detection type, so it governs motion, person, vehicle and the rest alike."]
+                                }
+                            </div>
+                        }
+                    </div>
+                    <div class="row-actions zone-actions">
+                        @if (_zone != null)
+                        {
+                            <button class="chip" disabled="@_zoneSaving" @onclick="() => ZoneFillAsync(true)">@T["Watch everywhere"]</button>
+                            <button class="chip" disabled="@_zoneSaving" @onclick="() => ZoneFillAsync(false)">@T["Block everywhere"]</button>
+                        }
+                        <span class="tile-spacer"></span>
+                        <button class="chip" disabled="@_zoneSaving" @onclick="CloseZone">
+                            @(_zone == null ? T["Close"] : T["Cancel"])
+                        </button>
+                        @if (_zone != null)
+                        {
                             <button class="chip chip-active" disabled="@_zoneSaving" @onclick="SaveZoneAsync">
                                 @(_zoneSaving ? T["Applying…"] : T["Apply to camera"])
                             </button>
-                        </div>
-                    }
+                        }
+                    </div>
                     @if (_toast != null)
                     {
                         <div class="campanel-toast @(_toastError ? "toast-err" : "toast-ok")" role="status">@_toast</div>
@@ -1747,16 +1775,24 @@
     private bool _zoneOpen;
     private string _zoneType = "md";
     private ApiDetectionZone? _zone;
+    private string? _zoneError;
     private bool _zoneLoading;
     private bool _zoneSaving;
     private bool _zoneNeedsInit;
     private ElementReference _zoneCanvas;
 
+    /// <summary>The tabs to offer. Driven by what the CAMERA reports a separate grid
+    /// for — not by which types it can score, which is a different question: nearly
+    /// every model tunes sensitivity per type while governing them all with one zone.</summary>
     private List<(string Key, string Label)> ZoneTypes()
     {
-        var list = new List<(string, string)> { ("md", "Motion") };
-        foreach (var ai in _http?.AiSensitivities ?? new List<ApiAiSensitivity>())
-            list.Add((ai.Type, ai.Label));
+        var types = _zone?.ZoneTypes;
+        if (types is not { Count: > 1 })
+            return new List<(string, string)> { ("md", "Motion") };
+        var list = new List<(string, string)>();
+        foreach (var t in types)
+            list.Add((t, t == "md" ? "Motion"
+                : _http?.AiSensitivities?.FirstOrDefault(a => a.Type == t)?.Label ?? t));
         return list;
     }
 
@@ -1770,9 +1806,29 @@
     {
         _zoneType = type;
         _zone = null;
+        _zoneError = null;
         _zoneLoading = true;
         StateHasChanged();
-        _zone = await GetAsync<ApiDetectionZone?>($"detectionzone?type={Uri.EscapeDataString(type)}");
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            using var res = await Http.SendAsync(
+                NewRequest(HttpMethod.Get, $"detectionzone?type={Uri.EscapeDataString(type)}"), cts.Token);
+            if (res.IsSuccessStatusCode)
+                _zone = await res.Content.ReadFromJsonAsync<ApiDetectionZone>(cancellationToken: cts.Token);
+            // 404 is "this camera has no such zone" and speaks for itself; anything
+            // else carries a reason the reader can act on (and a retry worth taking).
+            else if (res.StatusCode != System.Net.HttpStatusCode.NotFound)
+                _zoneError = await ReadErrorAsync(res) ?? T.F("Request failed ({0})", (int)res.StatusCode);
+        }
+        catch (OperationCanceledException)
+        {
+            _zoneError = T["The camera is taking too long to answer."];
+        }
+        catch (Exception ex)
+        {
+            _zoneError = T.F("Cannot reach {0}: {1}", Server, ex.Message);
+        }
         _zoneLoading = false;
         _zoneNeedsInit = _zone != null;
         StateHasChanged();
@@ -1782,6 +1838,7 @@
     {
         _zoneOpen = false;
         _zone = null;
+        _zoneError = null;
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -1791,12 +1848,17 @@
         if (_zoneNeedsInit && _zone is { } z)
         {
             _zoneNeedsInit = false;
+            // A cancelled call means the circuit went away, not that the editor is
+            // broken; anything else escaping here would tear the circuit down and
+            // discard the grid the user is painting.
             try
             {
                 await JS.InvokeVoidAsync("neolink.zoneInit", _zoneCanvas, z.Cols, z.Rows, z.Table,
                     SnapshotUrl(), T["no snapshot available"]);
             }
-            catch { /* circuit tearing down */ }
+            catch (Exception ex) when (ex is JSDisconnectedException or TaskCanceledException)
+            {
+            }
         }
     }
 
@@ -1805,9 +1867,11 @@
         + $"/api/cameras/{Uri.EscapeDataString(CameraName)}/snapshot.jpg?maxAge=15&maxStale=600"
         + (string.IsNullOrEmpty(Token) ? "" : $"&token={Uri.EscapeDataString(Token)}");
 
-    private async Task ZoneClearAsync()
+    /// <summary>Paints every cell watched or ignored. Staged like any other edit —
+    /// nothing reaches the camera until Apply.</summary>
+    private async Task ZoneFillAsync(bool watch)
     {
-        try { await JS.InvokeVoidAsync("neolink.zoneFill", _zoneCanvas, true); }
+        try { await JS.InvokeVoidAsync("neolink.zoneFill", _zoneCanvas, watch); }
         catch { }
     }
 
@@ -2169,6 +2233,7 @@
         _confirmSuspend = _suspendBusy = _suspendSkipFuture = false;
         _zoneOpen = _zoneLoading = _zoneSaving = _zoneNeedsInit = false;
         _zone = null;
+        _zoneError = null;
         _zoneType = "md";
         // The suspend-warning opt-out loads in the background; until it lands the
         // warning shows, which is the safe default.

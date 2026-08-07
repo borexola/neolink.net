@@ -2445,9 +2445,24 @@ public static class WebApi
                     return Results.Json(new { error = $"provide type: md, {string.Join(", ", CameraControl.AiAlarmTypes)}" },
                         statusCode: 400);
                 var zone = await control.GetDetectionZoneAsync(t, reqCt);
-                return zone == null
-                    ? Results.Json(new { error = $"this camera reports no {t} detection zone" }, statusCode: 404)
-                    : Results.Json(new { type = zone.Type, cols = zone.Cols, rows = zone.Rows, table = zone.Table });
+                if (zone != null)
+                    return Results.Json(new
+                    {
+                        type = zone.Type,
+                        cols = zone.Cols,
+                        rows = zone.Rows,
+                        table = zone.Table,
+                        // The types with a grid of their own. One entry ("md") means
+                        // this camera keeps a single zone governing every type.
+                        zoneTypes = control.ZoneTypes(),
+                    });
+                // "Has no zone" is a lasting answer; "couldn't ask" is not, and
+                // reporting the second as the first is how a grid that was on
+                // screen a moment ago reads back as a camera without zones.
+                return control.HttpPaused
+                    ? Results.Json(new { error = "the camera could not be asked just now (it is asleep, or its HTTP API is backing off after a failure) — try again shortly" },
+                        statusCode: 503)
+                    : Results.Json(new { error = $"this camera reports no {t} detection zone" }, statusCode: 404);
             }));
 
         app.MapPost("/api/cameras/{name}/detectionzone", (string name, DetectionZoneRequest req, HttpContext ctx) =>

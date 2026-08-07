@@ -2218,24 +2218,59 @@
                 failed: false, // snapshot fetch failed: say so on the canvas
                 label: noSnapLabel || '',
                 painting: false,
-                paint: false, // the value being dragged onto cells
+                paint: false, // the value the pending box will apply
+                // The box being dragged, in cell coordinates. Shading cell by cell
+                // is unusable on a dense grid — a 4K camera reports ~23000 cells, so
+                // clearing a driveway would mean dragging over hundreds of them.
+                // A drag marks a RECTANGLE (a click is a 1x1 one) and any shape is
+                // composed from a few of those, which is how the camera's own app
+                // works too.
+                box: null, // {r0, c0, r1, c1} while dragging
             };
             canvas._zone = st;
             const resize = () => {
-                const w = canvas.clientWidth;
-                if (!w) return;
+                const box = canvas.parentElement;
+                if (!box) return;
                 // Display aspect follows the snapshot; 16:9 until (unless) it loads.
                 const aspect = st.img ? st.img.naturalHeight / st.img.naturalWidth : 9 / 16;
+                // Fit the WHOLE frame in the space available: a painting surface you
+                // have to scroll is worse than a smaller one. Height is bounded by
+                // what's left of the body after the note below the canvas.
+                let w = box.clientWidth;
+                if (!w) return;
+                let h = w * aspect;
+                // clientHeight INCLUDES the box's own padding, which is not usable
+                // space — counting it would size the canvas a few pixels too tall
+                // and push the note under it out of a box that does not scroll.
+                const cs = getComputedStyle(box);
+                const gap = parseFloat(cs.rowGap) || 0;
+                let avail = box.clientHeight
+                    - (parseFloat(cs.paddingTop) || 0) - (parseFloat(cs.paddingBottom) || 0);
+                for (const sib of box.children)
+                    if (sib !== canvas) avail -= sib.offsetHeight + gap;
+                avail = Math.floor(avail);
+                if (avail > 80 && h > avail) { h = avail; w = h / aspect; }
                 const dpr = window.devicePixelRatio || 1;
-                canvas.style.height = Math.round(w * aspect) + 'px';
+                canvas.style.width = Math.round(w) + 'px';
+                canvas.style.height = Math.round(h) + 'px';
                 canvas.width = Math.round(w * dpr);
-                canvas.height = Math.round(w * aspect * dpr);
+                canvas.height = Math.round(h * dpr);
+                buildBackdrop();
                 draw();
             };
-            const draw = () => {
-                const ctx = canvas.getContext('2d');
+
+            // The picture and the grid lines never change while painting, but
+            // rescaling a 4K snapshot and re-stroking every line on each pointer
+            // move is what made dragging crawl on high-resolution cameras. Both
+            // are rendered ONCE per resize into an offscreen layer; a paint then
+            // costs one blit plus the shaded runs.
+            const backdrop = document.createElement('canvas');
+            const buildBackdrop = () => {
                 const { width: w, height: h } = canvas;
-                ctx.clearRect(0, 0, w, h);
+                if (!w || !h) return;
+                backdrop.width = w;
+                backdrop.height = h;
+                const ctx = backdrop.getContext('2d');
                 if (st.img) ctx.drawImage(st.img, 0, 0, w, h);
                 else {
                     ctx.fillStyle = '#1a1d21';
@@ -2247,60 +2282,134 @@
                         ctx.fillText(st.label, Math.round(10 * dpr), Math.round(20 * dpr));
                     }
                 }
+                // Fine grids turn a line-per-cell into visual noise (and cost);
+                // past that density the shading alone reads the boundaries.
+                const cw = w / st.cols, ch = h / st.rows;
+                if (Math.min(cw, ch) >= 4) {
+                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.14)';
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    for (let c = 1; c < st.cols; c++) { ctx.moveTo(c * cw, 0); ctx.lineTo(c * cw, h); }
+                    for (let r = 1; r < st.rows; r++) { ctx.moveTo(0, r * ch); ctx.lineTo(w, r * ch); }
+                    ctx.stroke();
+                }
+            };
+
+            const draw = () => {
+                const ctx = canvas.getContext('2d');
+                const { width: w, height: h } = canvas;
+                if (!w || !h) return;
+                ctx.clearRect(0, 0, w, h);
+                ctx.drawImage(backdrop, 0, 0);
+                // Shade whole RUNS of ignored cells: a row of 160 ignored cells is
+                // one rectangle, not 160 — the difference a 4K grid feels.
                 const cw = w / st.cols, ch = h / st.rows;
                 ctx.fillStyle = 'rgba(10, 10, 14, 0.62)';
-                for (let r = 0; r < st.rows; r++)
-                    for (let c = 0; c < st.cols; c++)
-                        if (!st.cells[r * st.cols + c])
-                            ctx.fillRect(c * cw, r * ch, cw + 0.5, ch + 0.5);
-                ctx.strokeStyle = 'rgba(255, 255, 255, 0.14)';
-                ctx.lineWidth = 1;
-                ctx.beginPath();
-                for (let c = 1; c < st.cols; c++) { ctx.moveTo(c * cw, 0); ctx.lineTo(c * cw, h); }
-                for (let r = 1; r < st.rows; r++) { ctx.moveTo(0, r * ch); ctx.lineTo(w, r * ch); }
-                ctx.stroke();
+                for (let r = 0; r < st.rows; r++) {
+                    const row = r * st.cols;
+                    let start = -1;
+                    for (let c = 0; c <= st.cols; c++) {
+                        const off = c < st.cols && !st.cells[row + c];
+                        if (off && start < 0) start = c;
+                        else if (!off && start >= 0) {
+                            ctx.fillRect(start * cw, r * ch, (c - start) * cw + 0.5, ch + 0.5);
+                            start = -1;
+                        }
+                    }
+                }
+                // The box under the pointer, previewed but not yet committed.
+                if (st.box) {
+                    const { r0, c0, r1, c1 } = st.box;
+                    const x = Math.min(c0, c1) * cw, y = Math.min(r0, r1) * ch;
+                    const bw = (Math.abs(c1 - c0) + 1) * cw, bh = (Math.abs(r1 - r0) + 1) * ch;
+                    ctx.fillStyle = st.paint
+                        ? 'rgba(91, 157, 255, 0.25)'   // about to be watched again
+                        : 'rgba(10, 10, 14, 0.62)';    // about to be ignored
+                    ctx.fillRect(x, y, bw, bh);
+                    ctx.strokeStyle = 'rgba(91, 157, 255, 0.95)';
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(x, y, bw, bh);
+                }
             };
-            st.draw = draw;
+
+            // Coalesce to one paint per frame: a fast drag fires pointermove far
+            // more often than the display refreshes, and painting per event is
+            // work thrown away.
+            let frame = 0;
+            const scheduleDraw = () => {
+                if (frame) return;
+                frame = requestAnimationFrame(() => { frame = 0; draw(); });
+            };
+            st.draw = scheduleDraw;
+            // Cell under the pointer, CLAMPED to the grid: dragging past the edge
+            // should extend the box to it, not abandon the drag.
             const cellAt = (e) => {
                 const rect = canvas.getBoundingClientRect();
-                if (!rect.width || !rect.height) return -1;
+                if (!rect.width || !rect.height) return null;
                 const c = Math.floor(((e.clientX - rect.left) / rect.width) * st.cols);
                 const r = Math.floor(((e.clientY - rect.top) / rect.height) * st.rows);
-                if (c < 0 || c >= st.cols || r < 0 || r >= st.rows) return -1;
-                return r * st.cols + c;
+                return {
+                    c: Math.min(st.cols - 1, Math.max(0, c)),
+                    r: Math.min(st.rows - 1, Math.max(0, r)),
+                };
             };
             canvas.addEventListener('pointerdown', (e) => {
-                const i = cellAt(e);
-                if (i < 0) return;
+                const p = cellAt(e);
+                if (!p) return;
                 st.painting = true;
-                st.paint = !st.cells[i]; // drag spreads the first cell's new value
-                st.cells[i] = st.paint;
+                // The first cell decides the direction for the whole box: start on a
+                // watched cell to ignore an area, on an ignored one to take it back.
+                st.paint = !st.cells[p.r * st.cols + p.c];
+                st.box = { r0: p.r, c0: p.c, r1: p.r, c1: p.c };
                 try { canvas.setPointerCapture(e.pointerId); } catch { }
-                draw();
+                scheduleDraw();
                 e.preventDefault();
             });
             canvas.addEventListener('pointermove', (e) => {
-                if (!st.painting) return;
-                const i = cellAt(e);
-                if (i >= 0 && st.cells[i] !== st.paint) { st.cells[i] = st.paint; draw(); }
+                if (!st.painting || !st.box) return;
+                const p = cellAt(e);
+                if (!p || (p.r === st.box.r1 && p.c === st.box.c1)) return;
+                st.box.r1 = p.r;
+                st.box.c1 = p.c;
+                scheduleDraw();
             });
-            for (const evt of ['pointerup', 'pointercancel'])
-                canvas.addEventListener(evt, () => { st.painting = false; });
+            const commit = () => {
+                if (!st.painting) return;
+                st.painting = false;
+                if (st.box) {
+                    const { r0, c0, r1, c1 } = st.box;
+                    const ra = Math.min(r0, r1), rb = Math.max(r0, r1);
+                    const ca = Math.min(c0, c1), cb = Math.max(c0, c1);
+                    for (let r = ra; r <= rb; r++)
+                        for (let c = ca; c <= cb; c++) st.cells[r * st.cols + c] = st.paint;
+                    st.box = null;
+                }
+                scheduleDraw();
+            };
+            for (const evt of ['pointerup', 'pointercancel']) canvas.addEventListener(evt, commit);
             // Re-fit when the dialog (or window) changes size; self-detaches with
-            // the canvas when the editor closes.
+            // the canvas when the editor closes. Watch the BOX, not the canvas:
+            // the canvas sizes itself now, so observing it would never see the
+            // dialog grow and the size buttons would do nothing.
             const ro = new ResizeObserver(() => {
                 if (!canvas.isConnected) { ro.disconnect(); return; }
                 resize();
             });
-            ro.observe(canvas);
+            ro.observe(canvas.parentElement || canvas);
             resize();
             if (imgUrl) {
                 const img = new Image();
                 img.onload = () => { if (canvas.isConnected) { st.img = img; resize(); } };
-                img.onerror = () => { if (canvas.isConnected) { st.failed = true; draw(); } };
+                img.onerror = () => {
+                    if (!canvas.isConnected) return;
+                    st.failed = true;
+                    buildBackdrop(); // the "no snapshot" notice lives in that layer
+                    draw();
+                };
                 img.src = imgUrl;
             } else {
                 st.failed = true;
+                buildBackdrop();
                 draw();
             }
         },

@@ -5460,11 +5460,17 @@ select.input-pending {
     padding: 12px;
 }
 
+/* FIXED size from the moment it opens, like the camera dialog it comes from:
+   a type whose grid the camera doesn't report must not collapse the dialog to
+   a strip, and switching types must not resize it under the pointer.
+   The three sizes exist because the cell count is the CAMERA's: an 80x60 grid
+   in a small dialog gives ~10px cells, which is a chore to drag accurately.
+   Scaling the dialog is what makes a cell big enough to hit. */
 .zone-dialog {
     position: relative; /* anchors the toast */
-    width: min(860px, 96vw);
-    max-height: 94vh;
-    overflow-y: auto;
+    width: min(1180px, 96vw);
+    height: min(820px, 92vh);
+    overflow: hidden;
     background: var(--panel);
     border: 1px solid var(--line);
     border-radius: 14px;
@@ -5475,24 +5481,43 @@ select.input-pending {
     box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
 }
 
+/* The only part that flexes; the head, type chips and button row hold still. */
+.zone-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden; /* the canvas fits itself to this box — nothing to scroll */
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 2px; /* focus rings aren't clipped by the scroll edge */
+}
+
+.zone-retry { align-self: flex-start; }
+
 .zone-head {
     display: flex;
     align-items: center;
     gap: 8px;
     font-weight: 700;
     letter-spacing: 1px;
+    flex: 0 0 auto;
 }
 
 .zone-types {
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
+    flex: 0 0 auto;
 }
 
 /* touch-action: none — a touch drag must paint cells, not scroll the dialog */
+/* Width and height are set by the script, which fits the whole frame into the
+   space available; this is only the pre-init state and the centring. */
 .zone-canvas {
     display: block;
     width: 100%;
+    margin: 0 auto;
+    flex: 0 0 auto;
     border: 1px solid var(--line);
     border-radius: 8px;
     touch-action: none;
@@ -5506,6 +5531,7 @@ select.input-pending {
     flex-wrap: wrap;
     gap: 6px;
     align-items: center;
+    flex: 0 0 auto;
 }
 
 /* Zoom/focus + floodlight-brightness sliders in the camera panel */

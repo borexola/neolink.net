@@ -85,8 +85,14 @@ public sealed record ApiAiSensitivity(string Type, int Sensitivity, int? StayTim
 }
 
 /// <summary>GET/POST /api/cameras/{name}/detectionzone — the camera's own grid of
-/// watched ('1') vs ignored ('0') cells, row by row from the top-left.</summary>
-public sealed record ApiDetectionZone(string Type, int Cols, int Rows, string Table);
+/// watched ('1') vs ignored ('0') cells, row by row from the top-left. ZoneTypes
+/// lists the types with a grid of their own; a single entry means this camera keeps
+/// ONE zone that governs every detection type.</summary>
+public sealed record ApiDetectionZone(string Type, int Cols, int Rows, string Table,
+    List<string>? ZoneTypes = null)
+{
+    public bool IsGlobal => ZoneTypes is not { Count: > 1 };
+}
 
 /// <summary>The camera's on-screen-display overlay (name/timestamp/watermark).</summary>
 public sealed record ApiOsd(bool ShowName, string? Name, string? NamePos,

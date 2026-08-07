@@ -8,13 +8,37 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Added
 
+- **A dropped browser connection no longer takes the page with it.** The
+  per-render JS wiring on the camera wall — eleven interop calls that
+  re-attach the zoom, audio, drag-and-drop, Esc and event-strip helpers —
+  ran unguarded. When the circuit went away mid-render (tab closed,
+  navigation, a reconnect after a network blip) the cancelled call escaped
+  the render lifecycle, which tears the circuit down for real: the page
+  drops and anything unsaved on screen goes with it, which is how a
+  detection zone being painted could vanish. Cancellations and
+  disconnections are now absorbed there and in the zone editor; a genuine
+  JavaScript fault still surfaces rather than being swallowed.
+
 - **Detection-zone editor.** The camera dialog's detection-sensitivity
   section gains an Edit zone button: the camera's own watched/ignored cell
   grid, painted over its latest snapshot. Drag to paint the cells the camera
   should ignore — no motion or AI alarms fire there, in the Reolink app and
-  in this server's event recording alike — and drag over painted cells to
-  watch them again. Cameras with per-type AI zones (person, vehicle, animal,
-  …) get a chip per type; the grid's dimensions are whatever the camera
+  in this server's event recording alike — and start a drag on an
+  already-ignored area to watch it again. A drag marks a RECTANGLE, the way
+  the camera's own app does, because shading cell by cell does not scale:
+  a 4K camera reports a grid of some 23000 cells, so clearing a driveway
+  would mean dragging across hundreds of them one at a time. Any shape is
+  composed from a few boxes, and one drag now does what a long serpentine
+  drag did before. The picture and grid lines are also rendered once into a
+  cached layer rather than on every pointer move, and shaded runs go out as
+  one rectangle per run instead of one per cell, so a dense grid stays
+  responsive while dragging. Most cameras govern every detection type with ONE zone,
+  and those get a single grid with a line saying so; a camera that really
+  does keep a separate grid per type gets a chip per type. Which it is comes
+  from what the camera reports a grid for — not from which types it can
+  score, a different question that nearly every model answers "all of them"
+  to, and the reason an earlier beta offered person/vehicle/animal tabs that
+  could only ever say "no zone". The grid's dimensions are whatever the camera
   reports, and the write is refused rather than scrambled if they changed
   under a stale editor (firmware update mid-edit). Painting is entirely
   browser-side — the server sees one table string on save, and the
@@ -30,11 +54,37 @@ in the README). Paste the matching section below into the GitHub release.
   detection type) are read and written through the legacy object; when a
   camera has a zone in the Reolink app but neither motion object carries a
   grid, the server logs the firmware's actual field names once so the
-  missing dialect can be reported and added. In all six languages. First
-  beta round also fixed: the snapshot behind the grid was requested from
-  the server's own loopback address (the circuit's view of the server, not
-  the browser's), so it only ever appeared when the browser ran on the
-  server machine. Beta note: the grid is written the way the API documents
+  missing dialect can be reported and added. In all six languages. Fixed
+  during the first beta rounds: the snapshot behind the grid was requested
+  from the server's own loopback address (the circuit's view of the server,
+  not the browser's), so it only ever appeared when the browser ran on the
+  server machine; and the editor could not tell "this camera has no zone"
+  from "the camera could not be asked", reporting both as the former. A
+  zone read is a live camera round trip, so one slow answer armed the 60s
+  transport backoff and a grid that was on screen a moment earlier came
+  back as a camera without zones — the trap the HTTP feature sweep already
+  keeps a cache against. Zones are now cached per type and stand in while
+  the camera cannot be reached, the answer says which of the two it is
+  (with a Try again button), a type the camera already rejected is no
+  longer re-asked, and the firmware dialect is remembered so a doorbell
+  costs one round trip per read instead of two. Two things could arm that
+  backoff in the first place and are now fixed at the source: the
+  speculative look for a zone in the legacy config object — which only runs
+  after the camera has already answered, so it proves nothing about
+  reachability — can no longer arm it by stalling, and opening the editor
+  is treated as the explicit user action it is, so an armed backoff is
+  bypassed rather than silently answering "nothing". A battery camera
+  parked asleep still gets radio silence; forcing packets at one would fake
+  a wake edge for the scanner. The editor is also bigger, because the cell
+  COUNT is the camera's (commonly 80x60) and how big one is on screen is
+  therefore the only thing that decides whether painting is a chore — the
+  first beta left cells about ten pixels across, now around fourteen. The
+  grid is fitted to the space available rather than overflowing it, so the
+  whole frame stays in view instead of needing a scroll mid-paint. The
+  dialog keeps a fixed size from the moment it opens, the way the camera dialog it comes
+  from does: a type the camera reports no grid for used to collapse it to
+  a strip, so switching types resized it under the pointer.
+  Beta note: the grid is written the way the API documents
   it ('1' = watched, '0' = ignored) — before trusting an edit, open the
   editor on a camera that has a zone painted in the Reolink app and
   confirm the shading matches the app's; a firmware that inverted the

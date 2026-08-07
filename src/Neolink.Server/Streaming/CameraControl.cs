@@ -360,6 +360,16 @@ public interface ICameraControl
     Task SetAiSensitivityAsync(string aiType, int sensitivity, CancellationToken ct) =>
         throw new NotSupportedException("AI sensitivity is not available for this camera");
 
+    /// <summary>The camera's HTTP API cannot be asked at this moment — the transport
+    /// backoff is armed after a failure, or the camera is parked asleep. Distinguishes
+    /// "this camera has no such feature" (a lasting answer) from "ask again shortly".</summary>
+    bool HttpPaused => false;
+
+    /// <summary>The detection types with a separately editable zone. Most cameras
+    /// govern every type with ONE zone and answer just "md"; a camera with per-type
+    /// grids lists those too.</summary>
+    IReadOnlyList<string> ZoneTypes() => new[] { "md" };
+
     /// <summary>The zone grid for "md" or an AI type, or null when the camera has none.</summary>
     Task<DetectionZone?> GetDetectionZoneAsync(string type, CancellationToken ct) =>
         Task.FromResult<DetectionZone?>(null);
@@ -1842,8 +1852,15 @@ public sealed class CameraControl : ICameraControl
         foreach (var type in _aiAlarmTypes ?? AiAlarmTypes)
         {
             var one = await HttpTryAsync<AiSensitivity?>(async c =>
-                ParseAiSensitivity(type, await _httpApi!.GetAiAlarmAsync(type, c).ConfigureAwait(false)), ct)
-                .ConfigureAwait(false);
+            {
+                var cfg = await _httpApi!.GetAiAlarmAsync(type, c).ConfigureAwait(false);
+                // The same reply says whether this type carries its OWN grid. Most
+                // cameras keep one zone for everything, so noting it here — free,
+                // in a sweep that already ran — is what stops the editor offering
+                // a per-type tab that would only ever report "no zone".
+                NoteAiZoneSupport(type, ParseZone(type, cfg) != null);
+                return ParseAiSensitivity(type, cfg);
+            }, ct).ConfigureAwait(false);
             if (one != null) list.Add(one);
             // Transport backoff armed mid-sweep — the rest would no-op anyway.
             if (DateTime.UtcNow < _httpRetryAt) return list.Count > 0 ? list : null;
@@ -1874,23 +1891,111 @@ public sealed class CameraControl : ICameraControl
 
     // ------------------------------------------------- detection zones (HTTP)
 
-    public Task<DetectionZone?> GetDetectionZoneAsync(string type, CancellationToken ct) =>
-        HttpTryAsync<DetectionZone?>(async c =>
+    public bool HttpPaused => _httpApi != null && (DateTime.UtcNow < _httpRetryAt || SleepingOnPurpose);
+
+    /// <summary>The last grid read for each type. A zone is near-static config, and
+    /// the panel re-reads it on every tab click: without this, one slow answer arms
+    /// the 60s transport backoff and a grid the user was looking at a second ago
+    /// reads back as "this camera has no zone" — the same trap the HTTP feature
+    /// sweep already keeps a cache for.</summary>
+    private readonly Dictionary<string, DetectionZone> _zoneCache = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Whether the md grid lives in the LEGACY Alarm object (doorbells), so
+    /// later reads and the write go straight there instead of paying for the probe.</summary>
+    private bool? _mdZoneIsLegacy;
+
+    /// <summary>AI types this camera reports a zone of their OWN for. Most cameras
+    /// keep a single zone that governs every detection type, and answer per-type
+    /// alarm queries with sensitivities but no grid — for those this stays empty and
+    /// the editor offers one zone rather than a tab per type.</summary>
+    private readonly HashSet<string> _aiZoneTypes = new(StringComparer.OrdinalIgnoreCase);
+
+    private void NoteAiZoneSupport(string type, bool hasOwnZone)
+    {
+        lock (_aiZoneTypes)
+        {
+            if (hasOwnZone) _aiZoneTypes.Add(type);
+            else _aiZoneTypes.Remove(type);
+        }
+    }
+
+    /// <summary>The detection types with a zone the user can edit separately. "md" is
+    /// always offered — it is the camera's zone, shared or not.</summary>
+    public IReadOnlyList<string> ZoneTypes()
+    {
+        lock (_aiZoneTypes)
+            return _aiZoneTypes.Count == 0
+                ? new[] { "md" }
+                : new[] { "md" }.Concat(AiAlarmTypes.Where(_aiZoneTypes.Contains)).ToArray();
+    }
+
+    public async Task<DetectionZone?> GetDetectionZoneAsync(string type, CancellationToken ct)
+    {
+        // A type this camera already rejected costs a doomed round trip, and a
+        // failed one arms the backoff that blanks everything else.
+        if (type != "md" && _aiAlarmTypes != null && !_aiAlarmTypes.Contains(type))
+            return null;
+        // Opening the editor is the user asking NOW, so an armed transport backoff
+        // must not silently answer "nothing" — but a battery camera parked asleep
+        // still gets radio silence: forcing packets at it would fake a wake edge.
+        var fresh = await HttpTryAsync<DetectionZone?>(async c =>
         {
             if (type != "md")
                 return ParseZone(type, await _httpApi!.GetAiAlarmAsync(type, c).ConfigureAwait(false));
-            var (cfg, isMdAlarm) = await _httpApi!.GetMdConfigAsync(c).ConfigureAwait(false);
-            if (ParseZone(type, cfg) is { } zone)
-                return zone;
             // Newer firmware (the Video Doorbell line) answers GetMdAlarm for
             // sensitivity but keeps the zone grid — ONE grid, shared by every
-            // detection type — only in the legacy Alarm object.
-            var legacy = isMdAlarm ? await _httpApi!.TryGetLegacyMdConfigAsync(c).ConfigureAwait(false) : null;
+            // detection type — only in the legacy Alarm object. Which object holds
+            // it is remembered, so this costs one round trip after the first read.
+            if (_mdZoneIsLegacy == true)
+                return await _httpApi!.TryGetLegacyMdConfigAsync(c).ConfigureAwait(false) is { } known
+                    ? ParseZone(type, known) : null;
+            var (cfg, isMdAlarm) = await _httpApi!.GetMdConfigAsync(c).ConfigureAwait(false);
+            if (ParseZone(type, cfg) is { } zone)
+            {
+                _mdZoneIsLegacy = false;
+                return zone;
+            }
+            var legacy = isMdAlarm ? await ProbeLegacyMdAsync(c).ConfigureAwait(false) : null;
             if (legacy != null && ParseZone(type, legacy) is { } shared)
+            {
+                _mdZoneIsLegacy = true;
                 return shared;
+            }
             LogZoneShapeOnce(cfg, legacy);
             return null;
-        }, ct);
+        }, ct, force: !SleepingOnPurpose).ConfigureAwait(false);
+
+        if (fresh != null)
+        {
+            lock (_zoneCache) _zoneCache[type] = fresh;
+            return fresh;
+        }
+        // Nothing came back. While the camera cannot be asked at all, the last
+        // known grid beats claiming it has none — the caller reports staleness.
+        if (HttpPaused)
+            lock (_zoneCache)
+                if (_zoneCache.TryGetValue(type, out var cached)) return cached;
+        return null;
+    }
+
+    /// <summary>The speculative look for a zone in the legacy Alarm object. It runs
+    /// only after GetMdAlarm already answered, so the API is known reachable — and a
+    /// firmware that stalls on this ONE command must not arm the transport backoff
+    /// that would then blank every other HTTP-backed panel section for a minute.</summary>
+    private async Task<JsonObject?> ProbeLegacyMdAsync(CancellationToken ct)
+    {
+        try
+        {
+            return await _httpApi!.TryGetLegacyMdConfigAsync(ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested
+            && ex is IOException or TimeoutException or OperationCanceledException
+                  or System.Net.Http.HttpRequestException or System.Net.Sockets.SocketException)
+        {
+            Log.Debug($"{CameraName}: legacy motion-config probe did not answer ({ex.GetType().Name})");
+            return null;
+        }
+    }
 
     /// <summary>Neither motion object carried a grid: name their fields once, so a
     /// firmware whose zone hides under yet another shape can be reported and added
@@ -1928,8 +2033,10 @@ public sealed class CameraControl : ICameraControl
             // (schedules, sensitivities, target sizes) goes back untouched. The
             // write goes out the same dialect the grid was READ from — a doorbell
             // keeps it only in the legacy Alarm object (see GetDetectionZoneAsync).
-            var (cfg, isMdAlarm) = await _httpApi.GetMdConfigAsync(ct).ConfigureAwait(false);
-            if (ParseZone(type, cfg) != null)
+            var (cfg, isMdAlarm) = _mdZoneIsLegacy == true
+                ? (null, true)
+                : await _httpApi.GetMdConfigAsync(ct).ConfigureAwait(false);
+            if (cfg != null && ParseZone(type, cfg) != null)
             {
                 ApplyZoneChecked(type, cfg, table);
                 await _httpApi.SetMdConfigAsync(cfg, isMdAlarm, ct).ConfigureAwait(false);
@@ -1945,6 +2052,7 @@ public sealed class CameraControl : ICameraControl
             {
                 throw new NotSupportedException($"{CameraName} reports no {type} detection zone");
             }
+            lock (_zoneCache) _zoneCache.Remove(type);
         }
         else
         {

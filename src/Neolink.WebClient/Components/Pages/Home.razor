@@ -2,6 +2,7 @@
 @page "/cameras/{Camera}"
 @page "/cameras/{Camera}/{Stream}"
 @using System.Text.Json
+@using Microsoft.JSInterop
 @inject HttpClient Http
 @inject IJSRuntime JS
 @inject LocalApiInfo Local
@@ -2891,6 +2892,23 @@
         }
         await ReconcilePlayersAsync();
         StopTalkIfOrphaned(); // talk ends when its surface (maximize/quick view) goes away
+        // A circuit that goes away mid-render (tab closed, navigation, a reconnect
+        // after a network blip) cancels whatever interop was in flight. That is not
+        // a fault — but letting it escape a lifecycle method tears the circuit down
+        // for real, and takes any unsaved edit on screen with it.
+        try
+        {
+            await WireJsAsync();
+        }
+        catch (Exception ex) when (ex is JSDisconnectedException or TaskCanceledException)
+        {
+        }
+    }
+
+    /// <summary>The per-render JS wiring: helpers that must re-attach after every
+    /// render because the elements they drive come and go.</summary>
+    private async Task WireJsAsync()
+    {
         if (_mode == "free")
             await JS.InvokeVoidAsync("neolink.freeInit", "stage-grid");
         // Digital zoom (theater/fullscreen/quick view). Re-invoked per render so
