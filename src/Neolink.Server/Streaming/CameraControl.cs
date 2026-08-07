@@ -66,6 +66,12 @@ public sealed record SdCardInfo(int Id, long TotalMb, long FreeMb, bool Formatte
 /// alarm fires — is null when the firmware doesn't report one for the type.</summary>
 public sealed record AiSensitivity(string Type, int Sensitivity, int? StayTime);
 
+/// <summary>One detection type's zone grid (the HTTP API's "scope"): Table is
+/// Cols*Rows characters, row by row from the top-left — '1' = the camera watches
+/// that cell, '0' = detections there are ignored. Type is "md" (motion) or an
+/// <see cref="CameraControl.AiAlarmTypes"/> entry.</summary>
+public sealed record DetectionZone(string Type, int Cols, int Rows, string Table);
+
 /// <summary>The on-screen-display overlay config (HTTP API): camera-name and
 /// timestamp visibility + position and the Reolink watermark. PosOptions is the
 /// firmware's own list of valid positions (empty when it didn't provide one).</summary>
@@ -353,6 +359,15 @@ public interface ICameraControl
     /// <summary>Sets one AI type's sensitivity (0-100, higher = more sensitive).</summary>
     Task SetAiSensitivityAsync(string aiType, int sensitivity, CancellationToken ct) =>
         throw new NotSupportedException("AI sensitivity is not available for this camera");
+
+    /// <summary>The zone grid for "md" or an AI type, or null when the camera has none.</summary>
+    Task<DetectionZone?> GetDetectionZoneAsync(string type, CancellationToken ct) =>
+        Task.FromResult<DetectionZone?>(null);
+
+    /// <summary>Writes a zone grid; Table dimensions must match what
+    /// <see cref="GetDetectionZoneAsync"/> reported.</summary>
+    Task SetDetectionZoneAsync(string type, string table, CancellationToken ct) =>
+        throw new NotSupportedException("detection zones are not available for this camera");
 
     /// <summary>Sets the ISP HDR value (0 = off; the camera's range caps it).</summary>
     Task SetHdrAsync(int value, CancellationToken ct) =>
@@ -1855,6 +1870,72 @@ public sealed class CameraControl : ICameraControl
         cfg["sensitivity"] = Math.Clamp(sensitivity, 0, 100);
         await _httpApi.SetAiAlarmAsync(cfg, ct).ConfigureAwait(false);
         Log.Info($"{CameraName}: {aiType} detection sensitivity set to {Math.Clamp(sensitivity, 0, 100)}/100");
+    }
+
+    // ------------------------------------------------- detection zones (HTTP)
+
+    public Task<DetectionZone?> GetDetectionZoneAsync(string type, CancellationToken ct) =>
+        HttpTryAsync<DetectionZone?>(async c =>
+        {
+            var cfg = type == "md"
+                ? (await _httpApi!.GetMdConfigAsync(c).ConfigureAwait(false)).Cfg
+                : await _httpApi!.GetAiAlarmAsync(type, c).ConfigureAwait(false);
+            return ParseZone(type, cfg);
+        }, ct);
+
+    internal static DetectionZone? ParseZone(string type, JsonObject cfg)
+    {
+        if (cfg["scope"] is not JsonObject scope) return null;
+        int cols = (int?)scope["cols"] ?? 0, rows = (int?)scope["rows"] ?? 0;
+        var table = (string?)scope["table"];
+        if (cols <= 0 || rows <= 0 || table == null || table.Length != cols * rows
+            || table.Any(ch => ch is not ('0' or '1')))
+            return null;
+        return new DetectionZone(type, cols, rows, table);
+    }
+
+    public async Task SetDetectionZoneAsync(string type, string table, CancellationToken ct)
+    {
+        if (_httpApi == null)
+            throw new NotSupportedException($"detection zones need the camera's HTTP API ('{CameraName}' has none)");
+        if (type == "md")
+        {
+            // Read-modify-write like the sensitivity paths: the surrounding config
+            // (schedules, sensitivities, target sizes) goes back untouched.
+            var (cfg, isMdAlarm) = await _httpApi.GetMdConfigAsync(ct).ConfigureAwait(false);
+            ApplyZoneChecked(type, cfg, table);
+            await _httpApi.SetMdConfigAsync(cfg, isMdAlarm, ct).ConfigureAwait(false);
+        }
+        else
+        {
+            if (!AiAlarmTypes.Contains(type))
+                throw new ArgumentException($"unknown AI type '{type}'");
+            var cfg = await _httpApi.GetAiAlarmAsync(type, ct).ConfigureAwait(false);
+            ApplyZoneChecked(type, cfg, table);
+            await _httpApi.SetAiAlarmAsync(cfg, ct).ConfigureAwait(false);
+        }
+        Log.Info($"{CameraName}: {type} detection zone set " +
+                 $"({table.Count(ch => ch == '0')} of {table.Length} cells ignored)");
+    }
+
+    private void ApplyZoneChecked(string type, JsonObject cfg, string table)
+    {
+        if (ParseZone(type, cfg) is not { } zone)
+            throw new NotSupportedException($"{CameraName} reports no {type} detection zone");
+        // Dimensions come from the camera, never the client — a stale editor
+        // (resolution change, firmware update) must fail, not scramble the grid.
+        if (!ApplyZone(cfg, table))
+            throw new ArgumentException(
+                $"table must be {zone.Cols}x{zone.Rows} = {zone.Cols * zone.Rows} cells of '0'/'1'");
+    }
+
+    internal static bool ApplyZone(JsonObject cfg, string table)
+    {
+        if (ParseZone("md", cfg) is not { } zone || table.Length != zone.Cols * zone.Rows
+            || table.Any(ch => ch is not ('0' or '1')))
+            return false;
+        ((JsonObject)cfg["scope"]!)["table"] = table;
+        return true;
     }
 
     // ------------------------------------------------------- HDR + OSD (HTTP, beta)

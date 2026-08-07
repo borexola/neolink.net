@@ -143,6 +143,7 @@ public sealed class WebApiOptions
 ///   POST .../ptz /reboot; GET .../battery   — camera control
 ///   GET .../httpfeatures — combined HTTP-API extras (picture/volume/Wi-Fi/presets/
 ///   quick replies/auto-track/SD); POST .../image /volume /ptzpreset /quickreply /autotrack
+///   GET/POST .../detectionzone[?type=]      — the camera's watched/ignored cell grid
 ///   GET /api/cameras/{name}/snapshot.jpg     — a current still (server-cached; ?maxAge= seconds)
 ///   GET /api/events[?camera=&amp;reviewed=&amp;limit=] — recorded detection events (when enabled)
 ///   GET /api/events/{id}[/clip /thumb /preview] — one event / its artifacts; POST .../review to (un)dismiss
@@ -196,6 +197,7 @@ public static class WebApi
     private sealed record AutoTrackRequest(bool? On);
     private sealed record MdSensitivityRequest(int? Sensitivity);
     private sealed record AiSensitivityRequest(string? Type, int? Sensitivity);
+    private sealed record DetectionZoneRequest(string? Type, string? Table);
     private sealed record HdrRequest(int? Value);
     private sealed record OsdRequest(bool? ShowName, string? NamePos, bool? ShowTime, string? TimePos, bool? Watermark);
     private sealed record SirenRequest(bool? On);
@@ -2430,6 +2432,40 @@ public static class WebApi
                 await control.SetAiSensitivityAsync(req.Type, sens, reqCt);
                 NudgeHa(name);
                 return Results.Json(new { ok = true, type = req.Type, sensitivity = sens });
+            }));
+
+        // Detection zone: the camera's own grid of watched ('1') vs ignored ('0')
+        // cells, row by row from the top-left. ?type= is "md" (default) or an AI
+        // type; dimensions are whatever the camera reports and vary per model.
+        app.MapGet("/api/cameras/{name}/detectionzone", (string name, string? type, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: false, async (control, reqCt) =>
+            {
+                var t = string.IsNullOrEmpty(type) ? "md" : type;
+                if (t != "md" && !CameraControl.AiAlarmTypes.Contains(t))
+                    return Results.Json(new { error = $"provide type: md, {string.Join(", ", CameraControl.AiAlarmTypes)}" },
+                        statusCode: 400);
+                var zone = await control.GetDetectionZoneAsync(t, reqCt);
+                return zone == null
+                    ? Results.Json(new { error = $"this camera reports no {t} detection zone" }, statusCode: 404)
+                    : Results.Json(new { type = zone.Type, cols = zone.Cols, rows = zone.Rows, table = zone.Table });
+            }));
+
+        app.MapPost("/api/cameras/{name}/detectionzone", (string name, DetectionZoneRequest req, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: true, async (control, reqCt) =>
+            {
+                var t = string.IsNullOrEmpty(req.Type) ? "md" : req.Type;
+                if (t != "md" && !CameraControl.AiAlarmTypes.Contains(t))
+                    return Results.Json(new { error = $"provide type: md, {string.Join(", ", CameraControl.AiAlarmTypes)}" },
+                        statusCode: 400);
+                // Cell-level validation happens against the camera's own cols*rows
+                // inside the write; this only rejects the obviously malformed.
+                if (req.Table is not { Length: > 0 and <= 65536 } table
+                    || table.Any(ch => ch is not ('0' or '1')))
+                    return Results.Json(new { error = "provide table: the zone's cols*rows cells as '0'/'1'" },
+                        statusCode: 400);
+                await control.SetDetectionZoneAsync(t, table, reqCt);
+                NudgeHa(name);
+                return Results.Json(new { ok = true, type = t });
             }));
 
         // ISP HDR: 0 = off; the top value comes from httpfeatures.image.hdrMax

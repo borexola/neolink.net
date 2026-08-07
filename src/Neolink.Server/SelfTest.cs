@@ -2871,6 +2871,27 @@ public static class SelfTest
             Assert(Streaming.CameraControl.ParseAiSensitivity("vehicle", Obj("""{"channel":0}""")) == null,
                 "no sensitivity -> null");
 
+            // Detection zone: the scope grid rides inside the same objects; '1' =
+            // watched cell, '0' = ignored. Dimensions are the camera's to declare.
+            var zoneCfg = Obj("""
+                {"channel":0,"scope":{"cols":4,"rows":2,"table":"11101111"}}
+                """);
+            var zone = Streaming.CameraControl.ParseZone("md", zoneCfg);
+            Assert(zone is { Type: "md", Cols: 4, Rows: 2, Table: "11101111" }, "zone parsed from scope");
+            Assert(Streaming.CameraControl.ParseZone("md", Obj("""{"channel":0}""")) == null,
+                "no scope -> feature absent");
+            Assert(Streaming.CameraControl.ParseZone("md",
+                Obj("""{"scope":{"cols":4,"rows":2,"table":"111"}}""")) == null,
+                "table shorter than cols*rows -> rejected");
+            Assert(Streaming.CameraControl.ParseZone("md",
+                Obj("""{"scope":{"cols":4,"rows":2,"table":"1110111x"}}""")) == null,
+                "non-binary cell -> rejected");
+            Assert(Streaming.CameraControl.ApplyZone(zoneCfg, "00001111"), "zone write accepted");
+            AssertEq((string?)zoneCfg["scope"]?["table"], "00001111");
+            Assert(!Streaming.CameraControl.ApplyZone(zoneCfg, "0000"), "wrong-size write refused");
+            Assert(!Streaming.CameraControl.ApplyZone(zoneCfg, "00002111"), "non-binary write refused");
+            AssertEq((string?)zoneCfg["scope"]?["table"], "00001111"); // refused writes change nothing
+
             // HDR range: {"min","max"} object on most firmwares, option array on some.
             AssertEq(Streaming.CameraControl.HdrRangeMax(Obj("""{"hdr":{"min":0,"max":2}}""")), 2);
             AssertEq(Streaming.CameraControl.HdrRangeMax(Obj("""{"hdr":[0,1]}""")), 1);

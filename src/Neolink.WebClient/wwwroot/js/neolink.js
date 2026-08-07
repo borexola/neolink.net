@@ -2205,6 +2205,101 @@
             a.remove();
         },
 
+        // ---- Detection-zone editor ------------------------------------------
+        // A canvas painting the camera's watched/ignored cell grid over its
+        // latest snapshot. All paint interaction stays in the browser — the
+        // circuit only sees the final table string when the user saves.
+        zoneInit(canvas, cols, rows, table, imgUrl) {
+            if (!canvas) return;
+            const st = {
+                cols, rows,
+                cells: Array.from(table, ch => ch === '1'),
+                img: null,
+                painting: false,
+                paint: false, // the value being dragged onto cells
+            };
+            canvas._zone = st;
+            const resize = () => {
+                const w = canvas.clientWidth;
+                if (!w) return;
+                // Display aspect follows the snapshot; 16:9 until (unless) it loads.
+                const aspect = st.img ? st.img.naturalHeight / st.img.naturalWidth : 9 / 16;
+                const dpr = window.devicePixelRatio || 1;
+                canvas.style.height = Math.round(w * aspect) + 'px';
+                canvas.width = Math.round(w * dpr);
+                canvas.height = Math.round(w * aspect * dpr);
+                draw();
+            };
+            const draw = () => {
+                const ctx = canvas.getContext('2d');
+                const { width: w, height: h } = canvas;
+                ctx.clearRect(0, 0, w, h);
+                if (st.img) ctx.drawImage(st.img, 0, 0, w, h);
+                else { ctx.fillStyle = '#1a1d21'; ctx.fillRect(0, 0, w, h); }
+                const cw = w / st.cols, ch = h / st.rows;
+                ctx.fillStyle = 'rgba(10, 10, 14, 0.62)';
+                for (let r = 0; r < st.rows; r++)
+                    for (let c = 0; c < st.cols; c++)
+                        if (!st.cells[r * st.cols + c])
+                            ctx.fillRect(c * cw, r * ch, cw + 0.5, ch + 0.5);
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.14)';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                for (let c = 1; c < st.cols; c++) { ctx.moveTo(c * cw, 0); ctx.lineTo(c * cw, h); }
+                for (let r = 1; r < st.rows; r++) { ctx.moveTo(0, r * ch); ctx.lineTo(w, r * ch); }
+                ctx.stroke();
+            };
+            st.draw = draw;
+            const cellAt = (e) => {
+                const rect = canvas.getBoundingClientRect();
+                if (!rect.width || !rect.height) return -1;
+                const c = Math.floor(((e.clientX - rect.left) / rect.width) * st.cols);
+                const r = Math.floor(((e.clientY - rect.top) / rect.height) * st.rows);
+                if (c < 0 || c >= st.cols || r < 0 || r >= st.rows) return -1;
+                return r * st.cols + c;
+            };
+            canvas.addEventListener('pointerdown', (e) => {
+                const i = cellAt(e);
+                if (i < 0) return;
+                st.painting = true;
+                st.paint = !st.cells[i]; // drag spreads the first cell's new value
+                st.cells[i] = st.paint;
+                try { canvas.setPointerCapture(e.pointerId); } catch { }
+                draw();
+                e.preventDefault();
+            });
+            canvas.addEventListener('pointermove', (e) => {
+                if (!st.painting) return;
+                const i = cellAt(e);
+                if (i >= 0 && st.cells[i] !== st.paint) { st.cells[i] = st.paint; draw(); }
+            });
+            for (const evt of ['pointerup', 'pointercancel'])
+                canvas.addEventListener(evt, () => { st.painting = false; });
+            // Re-fit when the dialog (or window) changes size; self-detaches with
+            // the canvas when the editor closes.
+            const ro = new ResizeObserver(() => {
+                if (!canvas.isConnected) { ro.disconnect(); return; }
+                resize();
+            });
+            ro.observe(canvas);
+            resize();
+            if (imgUrl) {
+                const img = new Image();
+                img.onload = () => { if (canvas.isConnected) { st.img = img; resize(); } };
+                img.src = imgUrl;
+            }
+        },
+        zoneRead(canvas) {
+            const st = canvas?._zone;
+            return st ? st.cells.map(b => (b ? '1' : '0')).join('') : null;
+        },
+        zoneFill(canvas, watch) {
+            const st = canvas?._zone;
+            if (!st) return;
+            st.cells.fill(!!watch);
+            st.draw();
+        },
+
         lsGet(key) { return localStorage.getItem(key); },
         lsSet(key, value) { localStorage.setItem(key, value); },
         // Session-scoped flags: things that must NOT survive to the next visit

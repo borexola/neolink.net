@@ -795,6 +795,10 @@
                         <span class="zf-pos">@(aiPending ?? ai.Sensitivity)/100</span>
                     </div>
                 }
+                <div class="control-row">
+                    <span>@T["Detection zone"]</span>
+                    <button class="chip" @onclick="OpenZoneAsync">@T["Edit zone…"]</button>
+                </div>
                 <div class="notice small">
                     @((MarkupString)T["Higher = more sensitive (more alerts). These tune the <b>camera's own</b> detection thresholds — they affect its app notifications and this server's event recording alike."])
                 </div>
@@ -1198,6 +1202,60 @@
         @if (_toast != null)
         {
             <div class="campanel-toast @(_toastError ? "toast-err" : "toast-ok")" role="status">@_toast</div>
+        }
+
+        @* Detection-zone editor: its own layer above the panel — the grid wants
+           all the width it can get. Painting is pure browser-side (see
+           neolink.zoneInit); the circuit only sees the final table on save. *@
+        @if (_zoneOpen)
+        {
+            <div class="zone-editor">
+                <div class="zone-dialog">
+                    <div class="zone-head">
+                        <span class="campanel-title">@T["DETECTION ZONE"] · @CameraName</span>
+                        <button class="icon-btn" title="@T["Close"]" @onclick="CloseZone">✕</button>
+                    </div>
+                    @if (ZoneTypes().Count > 1)
+                    {
+                        <div class="zone-types">
+                            @foreach (var zt in ZoneTypes())
+                            {
+                                var key = zt.Key;
+                                <button class="chip @(key == _zoneType ? "chip-active" : "")"
+                                        disabled="@(_zoneLoading || _zoneSaving)"
+                                        @onclick="() => SwitchZoneAsync(key)">@T[zt.Label]</button>
+                            }
+                        </div>
+                    }
+                    @if (_zoneLoading)
+                    {
+                        <div class="notice small">@T["Reading the zone from the camera…"]</div>
+                    }
+                    else if (_zone == null)
+                    {
+                        <div class="notice small">@T["This camera doesn't report a zone for this detection type."]</div>
+                    }
+                    else
+                    {
+                        <canvas class="zone-canvas" @key="_zoneType" @ref="_zoneCanvas"></canvas>
+                        <div class="notice small">
+                            @T["Drag to paint the cells the camera should ignore — no motion or AI alarms fire there. Drag over painted cells to watch them again. The grid overlays the camera's latest snapshot."]
+                        </div>
+                        <div class="row-actions zone-actions">
+                            <button class="chip" disabled="@_zoneSaving" @onclick="ZoneClearAsync">@T["Watch everywhere"]</button>
+                            <span class="tile-spacer"></span>
+                            <button class="chip" disabled="@_zoneSaving" @onclick="CloseZone">@T["Cancel"]</button>
+                            <button class="chip chip-active" disabled="@_zoneSaving" @onclick="SaveZoneAsync">
+                                @(_zoneSaving ? T["Applying…"] : T["Apply to camera"])
+                            </button>
+                        </div>
+                    }
+                    @if (_toast != null)
+                    {
+                        <div class="campanel-toast @(_toastError ? "toast-err" : "toast-ok")" role="status">@_toast</div>
+                    }
+                </div>
+            </div>
         }
 
         @* Staged device edits: nothing above is sent to the camera until Apply.
@@ -1679,6 +1737,88 @@
         else _pendingAiSens[type] = v;
     }
 
+    // -------------------------------------------------------------- zone editor
+
+    private bool _zoneOpen;
+    private string _zoneType = "md";
+    private ApiDetectionZone? _zone;
+    private bool _zoneLoading;
+    private bool _zoneSaving;
+    private bool _zoneNeedsInit;
+    private ElementReference _zoneCanvas;
+
+    private List<(string Key, string Label)> ZoneTypes()
+    {
+        var list = new List<(string, string)> { ("md", "Motion") };
+        foreach (var ai in _http?.AiSensitivities ?? new List<ApiAiSensitivity>())
+            list.Add((ai.Type, ai.Label));
+        return list;
+    }
+
+    private Task OpenZoneAsync()
+    {
+        _zoneOpen = true;
+        return SwitchZoneAsync(_zoneType);
+    }
+
+    private async Task SwitchZoneAsync(string type)
+    {
+        _zoneType = type;
+        _zone = null;
+        _zoneLoading = true;
+        StateHasChanged();
+        _zone = await GetAsync<ApiDetectionZone?>($"detectionzone?type={Uri.EscapeDataString(type)}");
+        _zoneLoading = false;
+        _zoneNeedsInit = _zone != null;
+        StateHasChanged();
+    }
+
+    private void CloseZone()
+    {
+        _zoneOpen = false;
+        _zone = null;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // The canvas exists only after the render that shows it; painting state
+        // lives entirely in the browser from here on.
+        if (_zoneNeedsInit && _zone is { } z)
+        {
+            _zoneNeedsInit = false;
+            try
+            {
+                await JS.InvokeVoidAsync("neolink.zoneInit", _zoneCanvas, z.Cols, z.Rows, z.Table, SnapshotUrl());
+            }
+            catch { /* circuit tearing down */ }
+        }
+    }
+
+    private string SnapshotUrl() =>
+        $"{Server.TrimEnd('/')}/api/cameras/{Uri.EscapeDataString(CameraName)}/snapshot.jpg?maxAge=15&maxStale=600"
+        + (string.IsNullOrEmpty(Token) ? "" : $"&token={Uri.EscapeDataString(Token)}");
+
+    private async Task ZoneClearAsync()
+    {
+        try { await JS.InvokeVoidAsync("neolink.zoneFill", _zoneCanvas, true); }
+        catch { }
+    }
+
+    private async Task SaveZoneAsync()
+    {
+        string? table = null;
+        try { table = await JS.InvokeAsync<string?>("neolink.zoneRead", _zoneCanvas); }
+        catch { }
+        if (table == null || _zone == null) return;
+        _zoneSaving = true;
+        if (await PostAsync("detectionzone", new { type = _zoneType, table }))
+        {
+            _zone = _zone with { Table = table };
+            ShowToast(T["Zone saved to the camera."]);
+        }
+        _zoneSaving = false;
+    }
+
     private void StageOsdNameToggle()
     {
         var cur = _http?.Osd?.ShowName ?? false;
@@ -2020,6 +2160,9 @@
         _camTab = "controls";
         _confirmReboot = _confirmSiren = _confirmPrivacy = _privacyBusy = false;
         _confirmSuspend = _suspendBusy = _suspendSkipFuture = false;
+        _zoneOpen = _zoneLoading = _zoneSaving = _zoneNeedsInit = false;
+        _zone = null;
+        _zoneType = "md";
         // The suspend-warning opt-out loads in the background; until it lands the
         // warning shows, which is the safe default.
         _ = LoadConfirmPrefsAsync();

@@ -84,6 +84,10 @@ public sealed record ApiAiSensitivity(string Type, int Sensitivity, int? StayTim
     };
 }
 
+/// <summary>GET/POST /api/cameras/{name}/detectionzone — the camera's own grid of
+/// watched ('1') vs ignored ('0') cells, row by row from the top-left.</summary>
+public sealed record ApiDetectionZone(string Type, int Cols, int Rows, string Table);
+
 /// <summary>The camera's on-screen-display overlay (name/timestamp/watermark).</summary>
 public sealed record ApiOsd(bool ShowName, string? Name, string? NamePos,
     bool ShowTime, string? TimePos, bool? Watermark, List<string>? PosOptions);

@@ -8,6 +8,28 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Added
 
+- **Detection-zone editor.** The camera dialog's detection-sensitivity
+  section gains an Edit zone button: the camera's own watched/ignored cell
+  grid, painted over its latest snapshot. Drag to paint the cells the camera
+  should ignore — no motion or AI alarms fire there, in the Reolink app and
+  in this server's event recording alike — and drag over painted cells to
+  watch them again. Cameras with per-type AI zones (person, vehicle, animal,
+  …) get a chip per type; the grid's dimensions are whatever the camera
+  reports, and the write is refused rather than scrambled if they changed
+  under a stale editor (firmware update mid-edit). Painting is entirely
+  browser-side — the server sees one table string on save, and the
+  surrounding config (schedules, sensitivities, target sizes) goes back to
+  the camera untouched, same read-modify-write discipline as the
+  sensitivity sliders. Exposed as GET/POST
+  `/api/cameras/{name}/detectionzone` for scripting. Needs the camera's
+  HTTP API, like the sensitivity sliders it sits beside; a camera that is
+  asleep or offline still opens the editor, just without the snapshot
+  behind the grid. In all six languages. Beta note: the grid is written the
+  way the API documents it ('1' = watched, '0' = ignored) — before trusting
+  an edit, open the editor on a camera that has a zone painted in the
+  Reolink app and confirm the shading matches the app's; a firmware that
+  inverted the convention would mean a saved zone ignores the wrong cells.
+
 - **Sign-in protection (opt-in).** Switched on from the server settings
   Users tab, it locks an account after a configurable number of failed
   sign-ins (default 10) and blocks an address that keeps failing across

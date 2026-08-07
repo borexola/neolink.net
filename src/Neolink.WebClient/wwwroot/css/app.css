@@ -5448,6 +5448,66 @@ select.input-pending {
     color: #e8b054;
 }
 
+/* ---------- detection-zone editor ---------- */
+.zone-editor {
+    position: fixed;
+    inset: 0;
+    z-index: 70; /* above the camera panel (61) it opens from */
+    background: rgba(0, 0, 0, 0.55);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 12px;
+}
+
+.zone-dialog {
+    position: relative; /* anchors the toast */
+    width: min(860px, 96vw);
+    max-height: 94vh;
+    overflow-y: auto;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+}
+
+.zone-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 700;
+    letter-spacing: 1px;
+}
+
+.zone-types {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+/* touch-action: none — a touch drag must paint cells, not scroll the dialog */
+.zone-canvas {
+    display: block;
+    width: 100%;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    touch-action: none;
+    cursor: crosshair;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.zone-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+}
+
 /* Zoom/focus + floodlight-brightness sliders in the camera panel */
 .zf-slider {
     flex: 1;
