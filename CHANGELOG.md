@@ -8,16 +8,21 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Fixed
 
-- **Motion-config writes learn the second firmware dialect.** Field report
-  from 1.0.0: on some models the motion-sensitivity slider and the detection
-  zone save came back refused by the camera — "param error" on the Video
-  Doorbell line, "err get data from json" on others — because those
-  firmwares answer GetMdAlarm but reject the very object written back
-  through SetMdAlarm. A rejected write now falls back to the legacy Alarm
-  dialect (the one the same firmwares do accept), revalidated against that
-  object's own grid dimensions, and the camera's answer is remembered so the
-  next write takes the accepted path first. A camera that rejects both
-  dialects reports it plainly instead of leaving only a warning in the log.
+- **Motion-config writes step down a ladder the camera chooses.** Field
+  report from 1.0.0: on some models the motion-sensitivity slider and the
+  detection zone save came back refused by the camera — "param error" on the
+  Video Doorbell line, "err get data from json" on the Elite WiFi — while an
+  RLC-810WA accepted the identical write. The cause is the round trip
+  itself: Neolink writes the config back whole to preserve every sibling
+  field (schedules, sens tables), and some firmwares answer GetMdAlarm but
+  refuse their own object re-ingested — the app avoids this by writing a
+  PARTIAL object. A rejected write now steps down: the full object first,
+  then the app-style minimal object (channel plus only the changed section),
+  then the legacy Alarm dialect revalidated against that object's own grid
+  dimensions. Whichever rung the firmware accepts is remembered per camera,
+  so later writes take it directly, and every step down is a log line — a
+  camera that exhausts the ladder names what each dialect answered instead
+  of leaving a bare rejection.
 
 ## 1.0.0
 

@@ -1814,33 +1814,69 @@ public sealed class CameraControl : ICameraControl
         int v = Math.Clamp(sensitivity, 1, 50);
         // Read-modify-write in whichever dialect the camera speaks; every time-slot
         // entry follows the new value, matching what the Reolink app does.
-        if (_mdWriteIsLegacy != true)
+        if (_mdWriteMode != MdWriteMode.Legacy)
         {
             var (cfg, isMdAlarm) = await _httpApi.GetMdConfigAsync(ct).ConfigureAwait(false);
             if (!ApplyMdSensitivity(cfg, isMdAlarm, v))
                 throw new NotSupportedException($"{CameraName} reports no motion-sensitivity table");
-            try
+            if (!isMdAlarm)
             {
-                await _httpApi.SetMdConfigAsync(cfg, isMdAlarm, ct).ConfigureAwait(false);
+                // The read already fell back to the legacy object; there is no
+                // second dialect below it, so a rejection here is the answer.
+                await _httpApi.SetMdConfigAsync(cfg, isMdAlarm: false, ct).ConfigureAwait(false);
                 Log.Info($"{CameraName}: motion sensitivity set to {v}/50");
                 return;
             }
-            catch (ReolinkApiException ex) when (isMdAlarm)
+            if (_mdWriteMode != MdWriteMode.Minimal)
             {
-                // Some firmwares answer GetMdAlarm but refuse the object written
-                // back through SetMdAlarm (the Video Doorbell line answers "param
-                // error", others cannot re-parse their own config). The legacy
-                // Alarm object is the write path those firmwares do accept.
-                Log.Info($"{CameraName}: SetMdAlarm rejected ({ex.Message}) — trying the legacy Alarm dialect");
+                try
+                {
+                    await _httpApi.SetMdConfigAsync(cfg, isMdAlarm: true, ct).ConfigureAwait(false);
+                    _mdWriteMode = MdWriteMode.Full;
+                    Log.Info($"{CameraName}: motion sensitivity set to {v}/50");
+                    return;
+                }
+                catch (ReolinkApiException ex)
+                {
+                    // Some firmwares answer GetMdAlarm but refuse their own config
+                    // written back whole (the Video Doorbell line answers "param
+                    // error"; others cannot re-parse it, likely over the zone
+                    // table's size). The Reolink app writes a PARTIAL object.
+                    Log.Info($"{CameraName}: SetMdAlarm rejected ({ex.Message}) — trying the app-style minimal object");
+                }
+            }
+            try
+            {
+                await _httpApi.SetMdConfigAsync(
+                    MinimalMdWrite(cfg, "useNewSens", "newSens", "sens"), isMdAlarm: true, ct).ConfigureAwait(false);
+                _mdWriteMode = MdWriteMode.Minimal;
+                Log.Info($"{CameraName}: motion sensitivity set to {v}/50 (minimal write)");
+                return;
+            }
+            catch (ReolinkApiException ex)
+            {
+                Log.Info($"{CameraName}: minimal SetMdAlarm rejected too ({ex.Message}) — trying the legacy Alarm dialect");
             }
         }
         var legacy = await _httpApi.TryGetLegacyMdConfigAsync(ct).ConfigureAwait(false)
-            ?? throw new NotSupportedException($"{CameraName} rejects the motion-config write in both firmware dialects");
+            ?? throw new NotSupportedException($"{CameraName} rejects the motion-config write in every firmware dialect");
         if (!ApplyMdSensitivity(legacy, isMdAlarm: false, v))
             throw new NotSupportedException($"{CameraName} reports no motion-sensitivity table");
         await _httpApi.SetMdConfigAsync(legacy, isMdAlarm: false, ct).ConfigureAwait(false);
-        _mdWriteIsLegacy = true;
+        _mdWriteMode = MdWriteMode.Legacy;
         Log.Info($"{CameraName}: motion sensitivity set to {v}/50 (legacy dialect)");
+    }
+
+    /// <summary>The app-style partial write: channel plus only the named sections,
+    /// deep-cloned from the (modified) full config. Firmwares that reject their own
+    /// config round-tripped whole accept this shape — it is what the app sends.</summary>
+    internal static JsonObject MinimalMdWrite(JsonObject cfg, params string[] sections)
+    {
+        var o = new JsonObject();
+        if (cfg["channel"] is { } ch) o["channel"] = ch.DeepClone();
+        foreach (var key in sections)
+            if (cfg[key] is { } n) o[key] = n.DeepClone();
+        return o;
     }
 
     internal static bool ApplyMdSensitivity(JsonObject cfg, bool isMdAlarm, int value)
@@ -1926,10 +1962,14 @@ public sealed class CameraControl : ICameraControl
     /// later reads and the write go straight there instead of paying for the probe.</summary>
     private bool? _mdZoneIsLegacy;
 
-    /// <summary>Motion-config WRITES must use the legacy SetAlarm dialect: learned
-    /// when this camera rejected a SetMdAlarm it had happily answered the Get for.
-    /// Separate from the zone flag — reads and writes can split differently.</summary>
-    private bool? _mdWriteIsLegacy;
+    /// <summary>How this camera's firmware accepts motion-config writes, learned
+    /// from its rejections: the full object as read (preserves every sibling
+    /// field), the app-style minimal object (channel + changed section only), or
+    /// the legacy SetAlarm dialect. Separate from the zone-read flag — reads and
+    /// writes can split differently.</summary>
+    private enum MdWriteMode { Unknown, Full, Minimal, Legacy }
+
+    private MdWriteMode _mdWriteMode;
 
     /// <summary>AI types this camera reports a zone of their OWN for. Most cameras
     /// keep a single zone that governs every detection type, and answer per-type
@@ -2068,22 +2108,41 @@ public sealed class CameraControl : ICameraControl
                 ApplyZoneChecked(type, cfg, table);
                 try
                 {
-                    await _httpApi.SetMdConfigAsync(cfg, isMdAlarm, ct).ConfigureAwait(false);
+                    if (_mdWriteMode is MdWriteMode.Minimal or MdWriteMode.Legacy)
+                        await _httpApi.SetMdConfigAsync(MinimalMdWrite(cfg, "scope"), isMdAlarm: true, ct).ConfigureAwait(false);
+                    else
+                        await _httpApi.SetMdConfigAsync(cfg, isMdAlarm, ct).ConfigureAwait(false);
                 }
                 catch (ReolinkApiException ex) when (isMdAlarm)
                 {
                     // Same firmware split as the sensitivity write: a grid READ from
-                    // MdAlarm can still be refused on write. When the legacy Alarm
-                    // object carries the same grid, write through it instead — and
-                    // remember, so future reads and writes take the accepted path.
-                    if (await _httpApi.TryGetLegacyMdConfigAsync(ct).ConfigureAwait(false) is not { } lg
-                        || ParseZone(type, lg) == null)
-                        throw;
-                    Log.Info($"{CameraName}: SetMdAlarm rejected ({ex.Message}) — writing the zone through the legacy Alarm dialect");
-                    ApplyZoneChecked(type, lg, table);
-                    await _httpApi.SetMdConfigAsync(lg, isMdAlarm: false, ct).ConfigureAwait(false);
-                    _mdZoneIsLegacy = true;
-                    _mdWriteIsLegacy = true;
+                    // MdAlarm can still be refused on write. Step down the same
+                    // ladder — the app-style minimal object first, the legacy Alarm
+                    // object (when it carries the grid) after that.
+                    try
+                    {
+                        Log.Info($"{CameraName}: SetMdAlarm rejected ({ex.Message}) — trying the app-style minimal object");
+                        await _httpApi.SetMdConfigAsync(MinimalMdWrite(cfg, "scope"), isMdAlarm: true, ct).ConfigureAwait(false);
+                        if (_mdWriteMode != MdWriteMode.Legacy) _mdWriteMode = MdWriteMode.Minimal;
+                    }
+                    catch (ReolinkApiException ex2)
+                    {
+                        var lg = await _httpApi.TryGetLegacyMdConfigAsync(ct).ConfigureAwait(false);
+                        if (lg == null || ParseZone(type, lg) == null)
+                        {
+                            // Without this line a dead-end fallback is indistinguishable
+                            // in the log from code that never tried one.
+                            Log.Info($"{CameraName}: minimal SetMdAlarm rejected too ({ex2.Message}) and the legacy Alarm object " +
+                                (lg == null ? "was refused" : $"has no grid (carries [{string.Join(",", lg.Select(kv => kv.Key))}])") +
+                                " — every dialect exhausted");
+                            throw;
+                        }
+                        Log.Info($"{CameraName}: minimal SetMdAlarm rejected too ({ex2.Message}) — writing the zone through the legacy Alarm dialect");
+                        ApplyZoneChecked(type, lg, table);
+                        await _httpApi.SetMdConfigAsync(lg, isMdAlarm: false, ct).ConfigureAwait(false);
+                        _mdZoneIsLegacy = true;
+                        _mdWriteMode = MdWriteMode.Legacy;
+                    }
                 }
             }
             else if (isMdAlarm

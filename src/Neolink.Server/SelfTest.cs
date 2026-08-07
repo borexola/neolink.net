@@ -2864,6 +2864,18 @@ public static class SelfTest
             Assert(!Streaming.CameraControl.ApplyMdSensitivity(Obj("""{"channel":0}"""), false, 25),
                 "no table -> write refused");
 
+            // The app-style minimal write: channel + named sections only, absent
+            // sections skipped — the shape for firmwares that reject their own
+            // config round-tripped whole.
+            var minimal = Streaming.CameraControl.MinimalMdWrite(Obj(
+                """{"channel":2,"useNewSens":1,"newSens":{"sensDef":30},"scope":{"cols":4,"rows":2,"table":"11111111"},"extra":9}"""),
+                "useNewSens", "newSens", "absent");
+            AssertEq((int?)minimal["channel"], 2);
+            AssertEq((int?)minimal["useNewSens"], 1);
+            Assert(minimal["newSens"] is System.Text.Json.Nodes.JsonObject, "named section cloned");
+            Assert(minimal["scope"] == null && minimal["extra"] == null && minimal["absent"] == null,
+                "unnamed and absent sections dropped");
+
             // AI sensitivity: plain field; missing sensitivity = type unsupported.
             var ai = Streaming.CameraControl.ParseAiSensitivity("people", Obj(
                 """{"channel":0,"ai_type":"people","sensitivity":85,"stay_time":2}"""));
