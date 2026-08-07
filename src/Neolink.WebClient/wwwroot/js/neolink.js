@@ -2209,7 +2209,7 @@
         // A canvas painting the camera's watched/ignored cell grid over its
         // latest snapshot. All paint interaction stays in the browser — the
         // circuit only sees the final table string when the user saves.
-        zoneInit(canvas, cols, rows, table, imgUrl, noSnapLabel) {
+        zoneInit(canvas, cols, rows, table, imgUrl, noSnapLabel, mode) {
             if (!canvas) return;
             const st = {
                 cols, rows,
@@ -2218,6 +2218,10 @@
                 failed: false, // snapshot fetch failed: say so on the canvas
                 label: noSnapLabel || '',
                 painting: false,
+                // Block or watch is the TOGGLE's call, not the grid's: inferring
+                // it from the first cell under the pointer made every drag on a
+                // fine grid a coin toss, since which cell that was is invisible.
+                mode: mode === 'watch' ? 'watch' : 'block',
                 paint: false, // the value the pending box will apply
                 // The box being dragged, in cell coordinates. Shading cell by cell
                 // is unusable on a dense grid — a 4K camera reports ~23000 cells, so
@@ -2357,9 +2361,7 @@
                 const p = cellAt(e);
                 if (!p) return;
                 st.painting = true;
-                // The first cell decides the direction for the whole box: start on a
-                // watched cell to ignore an area, on an ignored one to take it back.
-                st.paint = !st.cells[p.r * st.cols + p.c];
+                st.paint = st.mode === 'watch';
                 st.box = { r0: p.r, c0: p.c, r1: p.r, c1: p.c };
                 try { canvas.setPointerCapture(e.pointerId); } catch { }
                 scheduleDraw();
@@ -2416,6 +2418,10 @@
         zoneRead(canvas) {
             const st = canvas?._zone;
             return st ? st.cells.map(b => (b ? '1' : '0')).join('') : null;
+        },
+        zoneMode(canvas, mode) {
+            const st = canvas?._zone;
+            if (st) st.mode = mode === 'watch' ? 'watch' : 'block';
         },
         zoneFill(canvas, watch) {
             const st = canvas?._zone;

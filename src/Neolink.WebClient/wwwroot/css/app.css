@@ -5510,6 +5510,12 @@ select.input-pending {
     flex: 0 0 auto;
 }
 
+.zone-mode {
+    display: flex;
+    gap: 6px;
+    flex: 0 0 auto;
+}
+
 /* touch-action: none — a touch drag must paint cells, not scroll the dialog */
 /* Width and height are set by the script, which fits the whole frame into the
    space available; this is only the pre-init state and the centring. */

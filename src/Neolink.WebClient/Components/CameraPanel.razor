@@ -1251,9 +1251,15 @@
                         }
                         else
                         {
+                            <div class="zone-mode">
+                                <button class="chip @(_zoneMode == "block" ? "chip-active" : "")"
+                                        @onclick='() => SetZoneModeAsync("block")'>@UiIcon.Render("eye-off", 12) @T["Block"]</button>
+                                <button class="chip @(_zoneMode == "watch" ? "chip-active" : "")"
+                                        @onclick='() => SetZoneModeAsync("watch")'>@UiIcon.Render("eye", 12) @T["Watch"]</button>
+                            </div>
                             <canvas class="zone-canvas" @key="_zoneType" @ref="_zoneCanvas"></canvas>
                             <div class="notice small">
-                                @T["Drag a box over an area the camera should ignore — no motion or AI alarms fire there. Start the drag on an already-ignored area to watch it again. Build any shape from a few boxes; the grid overlays the camera's latest snapshot."]
+                                @T["Drag a box to mark an area — in Block mode the camera ignores it (no motion or AI alarms fire there), in Watch mode it watches it again. Build any shape from a few boxes; the grid overlays the camera's latest snapshot."]
                                 @if (_zone.IsGlobal)
                                 {
                                     <text> </text>@T["This camera keeps one zone for every detection type, so it governs motion, person, vehicle and the rest alike."]
@@ -1779,6 +1785,7 @@
     private bool _zoneLoading;
     private bool _zoneSaving;
     private bool _zoneNeedsInit;
+    private string _zoneMode = "block";
     private ElementReference _zoneCanvas;
 
     /// <summary>The tabs to offer. Driven by what the CAMERA reports a separate grid
@@ -1799,7 +1806,15 @@
     private Task OpenZoneAsync()
     {
         _zoneOpen = true;
+        _zoneMode = "block";
         return SwitchZoneAsync(_zoneType);
+    }
+
+    private async Task SetZoneModeAsync(string mode)
+    {
+        _zoneMode = mode;
+        try { await JS.InvokeVoidAsync("neolink.zoneMode", _zoneCanvas, mode); }
+        catch { }
     }
 
     private async Task SwitchZoneAsync(string type)
@@ -1854,7 +1869,7 @@
             try
             {
                 await JS.InvokeVoidAsync("neolink.zoneInit", _zoneCanvas, z.Cols, z.Rows, z.Table,
-                    SnapshotUrl(), T["no snapshot available"]);
+                    SnapshotUrl(), T["no snapshot available"], _zoneMode);
             }
             catch (Exception ex) when (ex is JSDisconnectedException or TaskCanceledException)
             {

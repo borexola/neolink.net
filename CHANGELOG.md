@@ -23,8 +23,11 @@ in the README). Paste the matching section below into the GitHub release.
   section gains an Edit zone button: the camera's own watched/ignored cell
   grid, painted over its latest snapshot. Drag to paint the cells the camera
   should ignore — no motion or AI alarms fire there, in the Reolink app and
-  in this server's event recording alike — and start a drag on an
-  already-ignored area to watch it again. A drag marks a RECTANGLE, the way
+  in this server's event recording alike. Whether a drag blocks or watches
+  is an explicit Block/Watch toggle above the grid, not a guess from the
+  first cell under the pointer: on a fine grid you cannot see which cell a
+  drag starts on, so inferring the direction from it (a beta round did) made
+  every drag a coin toss. A drag marks a RECTANGLE, the way
   the camera's own app does, because shading cell by cell does not scale:
   a 4K camera reports a grid of some 23000 cells, so clearing a driveway
   would mean dragging across hundreds of them one at a time. Any shape is
