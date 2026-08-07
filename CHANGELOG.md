@@ -4,6 +4,21 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
+## 1.0.1 — unreleased
+
+### Fixed
+
+- **Motion-config writes learn the second firmware dialect.** Field report
+  from 1.0.0: on some models the motion-sensitivity slider and the detection
+  zone save came back refused by the camera — "param error" on the Video
+  Doorbell line, "err get data from json" on others — because those
+  firmwares answer GetMdAlarm but reject the very object written back
+  through SetMdAlarm. A rejected write now falls back to the legacy Alarm
+  dialect (the one the same firmwares do accept), revalidated against that
+  object's own grid dimensions, and the camera's answer is remembered so the
+  next write takes the accepted path first. A camera that rejects both
+  dialects reports it plainly instead of leaving only a warning in the log.
+
 ## 1.0.0
 
 ### Added

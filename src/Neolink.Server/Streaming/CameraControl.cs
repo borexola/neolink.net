@@ -1814,11 +1814,33 @@ public sealed class CameraControl : ICameraControl
         int v = Math.Clamp(sensitivity, 1, 50);
         // Read-modify-write in whichever dialect the camera speaks; every time-slot
         // entry follows the new value, matching what the Reolink app does.
-        var (cfg, isMdAlarm) = await _httpApi.GetMdConfigAsync(ct).ConfigureAwait(false);
-        if (!ApplyMdSensitivity(cfg, isMdAlarm, v))
+        if (_mdWriteIsLegacy != true)
+        {
+            var (cfg, isMdAlarm) = await _httpApi.GetMdConfigAsync(ct).ConfigureAwait(false);
+            if (!ApplyMdSensitivity(cfg, isMdAlarm, v))
+                throw new NotSupportedException($"{CameraName} reports no motion-sensitivity table");
+            try
+            {
+                await _httpApi.SetMdConfigAsync(cfg, isMdAlarm, ct).ConfigureAwait(false);
+                Log.Info($"{CameraName}: motion sensitivity set to {v}/50");
+                return;
+            }
+            catch (ReolinkApiException ex) when (isMdAlarm)
+            {
+                // Some firmwares answer GetMdAlarm but refuse the object written
+                // back through SetMdAlarm (the Video Doorbell line answers "param
+                // error", others cannot re-parse their own config). The legacy
+                // Alarm object is the write path those firmwares do accept.
+                Log.Info($"{CameraName}: SetMdAlarm rejected ({ex.Message}) — trying the legacy Alarm dialect");
+            }
+        }
+        var legacy = await _httpApi.TryGetLegacyMdConfigAsync(ct).ConfigureAwait(false)
+            ?? throw new NotSupportedException($"{CameraName} rejects the motion-config write in both firmware dialects");
+        if (!ApplyMdSensitivity(legacy, isMdAlarm: false, v))
             throw new NotSupportedException($"{CameraName} reports no motion-sensitivity table");
-        await _httpApi.SetMdConfigAsync(cfg, isMdAlarm, ct).ConfigureAwait(false);
-        Log.Info($"{CameraName}: motion sensitivity set to {v}/50");
+        await _httpApi.SetMdConfigAsync(legacy, isMdAlarm: false, ct).ConfigureAwait(false);
+        _mdWriteIsLegacy = true;
+        Log.Info($"{CameraName}: motion sensitivity set to {v}/50 (legacy dialect)");
     }
 
     internal static bool ApplyMdSensitivity(JsonObject cfg, bool isMdAlarm, int value)
@@ -1903,6 +1925,11 @@ public sealed class CameraControl : ICameraControl
     /// <summary>Whether the md grid lives in the LEGACY Alarm object (doorbells), so
     /// later reads and the write go straight there instead of paying for the probe.</summary>
     private bool? _mdZoneIsLegacy;
+
+    /// <summary>Motion-config WRITES must use the legacy SetAlarm dialect: learned
+    /// when this camera rejected a SetMdAlarm it had happily answered the Get for.
+    /// Separate from the zone flag — reads and writes can split differently.</summary>
+    private bool? _mdWriteIsLegacy;
 
     /// <summary>AI types this camera reports a zone of their OWN for. Most cameras
     /// keep a single zone that governs every detection type, and answer per-type
@@ -2039,7 +2066,25 @@ public sealed class CameraControl : ICameraControl
             if (cfg != null && ParseZone(type, cfg) != null)
             {
                 ApplyZoneChecked(type, cfg, table);
-                await _httpApi.SetMdConfigAsync(cfg, isMdAlarm, ct).ConfigureAwait(false);
+                try
+                {
+                    await _httpApi.SetMdConfigAsync(cfg, isMdAlarm, ct).ConfigureAwait(false);
+                }
+                catch (ReolinkApiException ex) when (isMdAlarm)
+                {
+                    // Same firmware split as the sensitivity write: a grid READ from
+                    // MdAlarm can still be refused on write. When the legacy Alarm
+                    // object carries the same grid, write through it instead — and
+                    // remember, so future reads and writes take the accepted path.
+                    if (await _httpApi.TryGetLegacyMdConfigAsync(ct).ConfigureAwait(false) is not { } lg
+                        || ParseZone(type, lg) == null)
+                        throw;
+                    Log.Info($"{CameraName}: SetMdAlarm rejected ({ex.Message}) — writing the zone through the legacy Alarm dialect");
+                    ApplyZoneChecked(type, lg, table);
+                    await _httpApi.SetMdConfigAsync(lg, isMdAlarm: false, ct).ConfigureAwait(false);
+                    _mdZoneIsLegacy = true;
+                    _mdWriteIsLegacy = true;
+                }
             }
             else if (isMdAlarm
                 && await _httpApi.TryGetLegacyMdConfigAsync(ct).ConfigureAwait(false) is { } legacy
