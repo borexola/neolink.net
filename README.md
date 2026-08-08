@@ -27,14 +27,15 @@ The cameras are unmodified and no Reolink NVR is required.
                                └─────────────────┘                └──────────────────┘
 ```
 
-![The Neolink.NET web UI: camera wall with resizable tiles and the event review strip](docs/screenshot.png)
+![The Neolink.NET web UI: camera wall with resizable tiles and the live event review strip](docs/screenshot-1.png)
 
 <table>
   <tr>
-    <td width="25%"><a href="docs/events.png"><img src="docs/events.png" alt="Events page: deep-linkable event review with playback speed and HD/SD quality controls"></a><br><sub><b>Events page</b> — deep-linkable review, 1–16× playback, HD/SD</sub></td>
-    <td width="25%"><a href="docs/timeline.png"><img src="docs/timeline.png" alt="Timeline: synced multi-camera scrubbing with coverage bars, event marks and a footage calendar"></a><br><sub><b>Timeline</b> — synced scrubbing, event marks, footage calendar</sub></td>
-    <td width="25%"><a href="docs/camera-settings-1.png"><img src="docs/camera-settings-1.png" alt="Per-camera recording: event types and retention, AI descriptions, 24/7 recording, archive tiers and the footage lifecycle strip"></a><br><sub><b>Recording setup</b> — events, 24/7, archive lifecycle, per camera</sub></td>
-    <td width="25%"><a href="docs/camera-settings-2.png"><img src="docs/camera-settings-2.png" alt="Camera settings: stream encode tables, lights, picture, detection sensitivity and zone, siren — staged changes, applied only when you say so"></a><br><sub><b>Camera settings</b> — staged changes, applied only when you say so</sub></td>
+    <td width="20%"><a href="docs/screenshot-2.png"><img src="docs/screenshot-2.png" alt="Events page: deep-linkable event review with per-camera and threat filters"></a><br><sub><b>Events page</b> — deep-linkable review, filters, 1–16× playback</sub></td>
+    <td width="20%"><a href="docs/screenshot-3.png"><img src="docs/screenshot-3.png" alt="Timeline: synced multi-camera scrubbing with coverage bars, event marks, events-only playback and export"></a><br><sub><b>Timeline</b> — synced scrubbing, event marks, export</sub></td>
+    <td width="20%"><a href="docs/screenshot-4.png"><img src="docs/screenshot-4.png" alt="Monitor: server CPU/memory/storage graphs, per-camera availability grades and frontend vitals"></a><br><sub><b>Monitor</b> — server health, camera uptime, fill forecasts</sub></td>
+    <td width="20%"><a href="docs/screenshot-5.png"><img src="docs/screenshot-5.png" alt="Per-camera recording: event types and retention, scheduled capture, 24/7 recording and the footage lifecycle strip"></a><br><sub><b>Recording setup</b> — events, 24/7, lifecycle, per camera</sub></td>
+    <td width="20%"><a href="docs/camera-settings-2.png"><img src="docs/camera-settings-2.png" alt="Camera settings: stream encode tables, lights, picture, detection sensitivity and zone, siren — staged changes, applied only when you say so"></a><br><sub><b>Camera settings</b> — staged changes, applied only when you say so</sub></td>
   </tr>
 </table>
 
