@@ -48,14 +48,15 @@ public sealed class DemoRig
     public required string Root { get; init; }
 
     // Name, scene filtergraph, detection labels the pulses draw from. The scenes
-    // are chosen for visible MOTION (mandelbrot zooms, life crawls) — a still
-    // demo reads as a broken one.
+    // need visible MOTION (a still demo reads as a broken one) but not NOISE —
+    // life's static crawl and fast gradients read as a bad signal, so half the
+    // wall is slow, calm colour drifts instead.
     private static readonly (string Name, string Scene, string[] Labels)[] Cameras =
     {
         ("Driveway", "testsrc2=size=1280x720:rate=15", new[] { "vehicle", "person", "motion" }),
-        ("FrontDoor", "gradients=size=1280x720:speed=0.05,fps=15", new[] { "person", "motion" }),
+        ("FrontDoor", "gradients=size=1280x720:speed=0.015:n=3:c0=#16324f:c1=#3b2d5e:c2=#0f4c5c,fps=15", new[] { "person", "motion" }),
         ("Backyard", "mandelbrot=size=1280x720:end_scale=0.2,fps=15", new[] { "animal", "person", "motion" }),
-        ("Garage", "life=size=1280x720:mold=10:rate=15:ratio=0.1:death_color=#301040:life_color=#80a060", new[] { "motion", "person" }),
+        ("Garage", "gradients=size=1280x720:speed=0.01:n=3:c0=#0a2a2a:c1=#14403a:c2=#1d4a52,fps=15", new[] { "motion", "person" }),
     };
 
     private const int Fps = 15;

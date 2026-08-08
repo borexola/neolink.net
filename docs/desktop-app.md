@@ -110,6 +110,12 @@ on the tray menu, which also has:
   shell watches for events on its own, outside the page. Turn it off to keep
   streams warm for an instant picture on open.
 - **Server connection** — change server or account
+- **Servers — switch or remove** — every server this PC has connected to,
+  sign-ins included. Switch between them with a double-click (a home and a
+  remote instance, say), add a new one, or remove one — removal asks first
+  and erases its saved sign-in from this PC only; the server itself is
+  untouched. Removing the connected server restarts into the connect dialog,
+  like a fresh install.
 - **Reload** (F5), **Full reload** (Ctrl+F5), **Quit**
 
 Inside the window, F5 / Ctrl+R reload the page the browser way. Ctrl+F5 (also

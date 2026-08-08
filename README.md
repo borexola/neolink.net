@@ -251,6 +251,9 @@ Then:
 
 ## Quick start (Windows — no Docker)
 
+> ### 📖 Step-by-step with screenshots: **[docs/windows-install.md](docs/windows-install.md)**
+> — every click from download to your cameras on screen.
+
 One MSI, two shapes. Download `Neolink.NET.Desktop-X.Y.Z-win-x64.msi` from the
 [releases page](https://github.com/borexola/neolink.net/releases) and run it:
 

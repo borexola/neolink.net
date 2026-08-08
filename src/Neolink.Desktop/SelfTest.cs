@@ -485,6 +485,11 @@ internal static class SelfTest
             using var connect = new ConnectForm(settings, reconfiguring: false);
             Assert(connect.Text.Length > 0, "the connect dialog builds");
 
+            using var servers = new ServersForm(settings);
+            Assert(servers.Text.Length > 0, "the servers dialog builds");
+            Assert(settings.Servers.Count == 1 && settings.Servers[0].Url == settings.ServerUrl,
+                "opening the manager seeds the saved list with the active server");
+
             using var link = new ServerLink(settings, persistLogin: false);
             using var tray = new NotifyIcon();
             using var toaster = new Toaster(tray, Application.ExecutablePath, ensureShortcut: false);

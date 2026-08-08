@@ -42,7 +42,38 @@ in the README). Paste the matching section below into the GitHub release.
   six hours — run it under a restart policy and every reset is a fresh
   world.
 
+- **The desktop app keeps a server list.** Every server the app connects to
+  is remembered (sign-in included, DPAPI-encrypted like the active one), and
+  the tray's new "Servers — switch or remove" dialog moves between them with
+  a double-click — a home and a remote instance stop being a retyping
+  exercise. Removing one asks first and erases its saved sign-in from the PC
+  only; removing the server you are connected to restarts into the connect
+  dialog, like a fresh install. Until now there was no way to drop a server
+  at all — only to overtype its address with another.
+
 ### Fixed
+
+- **UDP cameras stop silently losing to Hyper-V on Windows hosts.** The
+  client side of UDP discovery — wake probes and battery-camera connects —
+  bound its local port by picking randomly inside the official client's
+  53500–53999 band and giving up after a few misses. On Windows, Hyper-V and
+  Docker reserve "excluded port ranges" in ~100-port blocks that can swallow
+  nearly that whole band (438 of the 500 ports on the dev machine), and
+  every miss was silent: wake probes reporting an awake camera as asleep,
+  UDP connects dying before a single packet — intermittently, at whatever
+  rate the exclusions dictated, shifting whenever Hyper-V restarted. The
+  band was convention, not contract (the camera learns our port from the
+  hello itself), so binding now falls back to the OS's ephemeral allocator,
+  which dodges exclusions by design. Found because the UDP selftests flaked
+  in the same waves; they now bind ephemeral mock ports, survive Windows'
+  ICMP-reset quirk, and run their mocks on dedicated threads — twelve
+  consecutive green runs on the machine that flaked.
+
+- **The empty wall's hint caught up with the product.** With no cameras
+  configured, the sidebar (and the server log) still said to edit
+  config.json — from the era before the UI could do it. Both now point at
+  Server settings (the gear icon): add the first camera there and restart
+  when prompted. All seven languages updated.
 
 - **The desktop app's dialogs no longer clip on scaled displays.** The
   connect and notification windows declared DPI scaling but, being built in

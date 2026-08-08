@@ -228,12 +228,16 @@ internal sealed class ConnectForm : Form
             if (!commit) return true;
 
             // Only a verified connection is worth keeping — and only Connect keeps it.
+            // The outgoing server is registered in the saved list first, so
+            // pointing at a new one is a switch, never a loss.
+            _settings.RememberCurrent();
             _settings.ServerUrl = candidate.ServerUrl;
             _settings.Username = string.IsNullOrEmpty(candidate.Username) ? null : candidate.Username;
             _settings.RememberPassword = candidate.RememberPassword;
             _settings.AllowUntrustedCertificate = candidate.AllowUntrustedCertificate;
             _settings.Token = candidate.Token;
             _settings.Password = candidate.RememberPassword && _pass.Text.Length > 0 ? _pass.Text : null;
+            _settings.RememberCurrent();
             _settings.Save();
             return true;
         }

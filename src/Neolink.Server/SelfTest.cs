@@ -5759,7 +5759,8 @@ public static class SelfTest
     {
         const string uid = "TESTUID0000000LO";
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-        using var cam = BindLoopbackUdp(2015);
+        using var cam = BindLoopbackUdp();
+        int camPort = PortOf(cam);
         int clientDataPackets = 0;
         int clientAckPackets = 0;
         int clientC2dA = 0;
@@ -5782,7 +5783,12 @@ public static class SelfTest
             }),
             new Neolink.Bc.EncryptionState());
 
-        var mock = Task.Run(async () =>
+        // LongRunning = a dedicated thread NOW. Task.Run queues to the thread
+        // pool, and under load (a busy dev box, a saturated CI runner) the mock
+        // started SECONDS late — after the client's handshake window had already
+        // expired. The dedicated thread posts the first receive immediately; the
+        // async body migrates to the pool only after that, which is harmless.
+        var mock = Task.Factory.StartNew(async () =>
         {
             System.Net.IPEndPoint? client = null;
             int cid = 0;
@@ -5791,7 +5797,17 @@ public static class SelfTest
             //    session to it).
             while (!cts.IsCancellationRequested && client == null)
             {
-                var r = await cam.ReceiveAsync(cts.Token);
+                System.Net.Sockets.UdpReceiveResult r;
+                try { r = await cam.ReceiveAsync(cts.Token); }
+                catch (System.Net.Sockets.SocketException ex)
+                {
+                    // Windows surfaces a bounced SEND (ICMP port-unreachable) as a
+                    // SocketException on the next RECEIVE. For UDP that is noise,
+                    // not death — a mock that dies of it fails the handshake with
+                    // a message blaming the network.
+                    Log.Debug($"udptest: mock receive reset ({ex.SocketErrorCode}); continuing");
+                    continue;
+                }
                 if (!UdpDiscovery.TryParseDiscovery(r.Buffer, out var htid, out var xml, out _)) continue;
                 if (!xml.Contains("<C2D_C>", StringComparison.Ordinal)) continue;
                 cid = int.Parse(xml.Split("<cid>")[1].Split("</cid>")[0]);
@@ -5858,7 +5874,13 @@ public static class SelfTest
             //    the tid the client's heartbeats run under.
             while (!cts.IsCancellationRequested)
             {
-                var r = await cam.ReceiveAsync(cts.Token);
+                System.Net.Sockets.UdpReceiveResult r;
+                try { r = await cam.ReceiveAsync(cts.Token); }
+                catch (System.Net.Sockets.SocketException ex)
+                {
+                    Log.Debug($"udptest: mock receive reset ({ex.SocketErrorCode}); continuing");
+                    continue;
+                }
                 if (UdpDiscovery.TryParseDiscovery(r.Buffer, out var dtid, out var dx, out _))
                 {
                     if (dx.Contains("<C2D_A>", StringComparison.Ordinal)
@@ -5886,10 +5908,10 @@ public static class SelfTest
                     clientAckPackets++; // the continuous ack timer — the keepalive the camera needs
                 }
             }
-        }, cts.Token);
+        }, cts.Token, TaskCreationOptions.LongRunning, TaskScheduler.Default).Unwrap();
 
         await using var conn = await Neolink.Protocol.BcUdpConnection.ConnectAsync(
-            "127.0.0.1", uid, TimeSpan.FromSeconds(10), cts.Token, "udptest");
+            "127.0.0.1", uid, TimeSpan.FromSeconds(10), cts.Token, "udptest", camPort);
 
         using (var sub = conn.Subscribe(Neolink.Bc.BcConstants.MsgIdPing))
         {
@@ -5964,20 +5986,39 @@ public static class SelfTest
     private static async Task RunWakeProbe()
     {
         const string uid = "TESTUID0000000LO";
-        // Nothing listening → probe returns false quickly.
-        Assert(!await UdpDiscovery.IsReachableAsync("127.0.0.1", uid, TimeSpan.FromMilliseconds(600), CancellationToken.None),
-            "liveness probe is false while the camera is asleep");
+        // A bound socket that never answers is exactly what an asleep camera looks
+        // like on the wire → probe returns false quickly.
+        using (var asleep = BindLoopbackUdp())
+            Assert(!await UdpDiscovery.IsReachableAsync("127.0.0.1", uid,
+                    TimeSpan.FromMilliseconds(600), CancellationToken.None, camPort: PortOf(asleep)),
+                "liveness probe is false while the camera is asleep");
 
-        // Bring up a responder on 2015 → probe returns true.
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        using var cam = BindLoopbackUdp(2015);
+        // Bring up a responder → probe returns true.
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        using var cam = BindLoopbackUdp();
+        int camPort = PortOf(cam);
         int gotDisc = 0;
-        var responder = Task.Run(async () =>
+        // Dedicated thread for the same reason as the transport mock above: the
+        // probe's window is seconds, and a pool-queued responder can start later
+        // than that on a busy machine.
+        var responder = Task.Factory.StartNew(async () =>
         {
             while (!cts.IsCancellationRequested)
             {
                 System.Net.Sockets.UdpReceiveResult r;
-                try { r = await cam.ReceiveAsync(cts.Token); } catch { return; }
+                try { r = await cam.ReceiveAsync(cts.Token); }
+                catch (OperationCanceledException) { return; }
+                catch (Exception ex)
+                {
+                    // A dead mock is indistinguishable from a dead network; say why.
+                    // (Windows delivers ICMP port-unreachable as a receive-side
+                    // SocketException on UDP — a straggler sent to a closed peer
+                    // must not end the mock.)
+                    Log.Debug($"udptest: mock camera receive error: {ex.Message}");
+                    if (ex is System.Net.Sockets.SocketException) continue;
+                    return;
+                }
+                Log.Debug($"udptest: mock camera got {r.Buffer.Length}B from {r.RemoteEndPoint}");
                 if (!UdpDiscovery.TryParseDiscovery(r.Buffer, out _, out var xml, out _)) continue;
                 if (xml.Contains("<C2D_C>", StringComparison.Ordinal))
                 {
@@ -5987,9 +6028,15 @@ public static class SelfTest
                 }
                 else if (xml.Contains("<C2D_DISC>", StringComparison.Ordinal)) gotDisc++;
             }
-        }, cts.Token);
+        }, cts.Token, TaskCreationOptions.LongRunning, TaskScheduler.Default).Unwrap();
 
-        Assert(await UdpDiscovery.IsReachableAsync("127.0.0.1", uid, TimeSpan.FromSeconds(3), cts.Token),
+        // logTag: every discovery reply logs at Debug — run the selftest with
+        // NEOLINK_LOG=debug when this assertion ever flakes to see the wire.
+        // 8 s, not 3: the reply itself is instant, but the responder's async
+        // continuations still ride the thread pool, and this assertion exists to
+        // test the probe, not the pool's injection rate under load.
+        Assert(await UdpDiscovery.IsReachableAsync("127.0.0.1", uid, TimeSpan.FromSeconds(8), cts.Token,
+                logTag: "udptest", camPort: camPort),
             "liveness probe is true the moment the camera answers");
         // The probe must release the session it just created — a C2D_DISC — or the
         // camera would keep retrying D2C_C_R for ~9 s after every 5 s poll.
@@ -5999,27 +6046,18 @@ public static class SelfTest
         try { await responder; } catch { }
     }
 
-    /// <summary>Bind a loopback UDP socket, retrying briefly — the two UDP tests both
-    /// use port 2015 back to back, and the OS can hold it a moment after the prior
-    /// test releases it, so a bare bind occasionally flakes.</summary>
-    private static System.Net.Sockets.UdpClient BindLoopbackUdp(int port)
-    {
-        for (int i = 0; ; i++)
-        {
-            try
-            {
-                var c = new System.Net.Sockets.UdpClient();
-                c.Client.SetSocketOption(System.Net.Sockets.SocketOptionLevel.Socket,
-                    System.Net.Sockets.SocketOptionName.ReuseAddress, true);
-                c.Client.Bind(new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, port));
-                return c;
-            }
-            catch (System.Net.Sockets.SocketException) when (i < 30)
-            {
-                System.Threading.Thread.Sleep(50);
-            }
-        }
-    }
+    /// <summary>Bind a loopback UDP socket on an EPHEMERAL port (read it back from
+    /// LocalEndPoint). The mock cameras used to take the real Baichuan port 2015
+    /// with ReuseAddress — and on a dev box where a live Neolink server's own UDP
+    /// machinery touches 2015, both binds "succeeded" and the OS delivered the
+    /// test's packets to the other socket: intermittent handshake failures in
+    /// waves matching the live server's wake scans. An ephemeral port cannot
+    /// collide with anything, so the retry and the reuse flag are gone with it.</summary>
+    private static System.Net.Sockets.UdpClient BindLoopbackUdp() =>
+        new(new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 0));
+
+    private static int PortOf(System.Net.Sockets.UdpClient c) =>
+        ((System.Net.IPEndPoint)c.Client.LocalEndPoint!).Port;
 
     private static void Assert(bool cond, string what)
     {

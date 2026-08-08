@@ -43,6 +43,28 @@ public static class UdpDiscovery
     // battery model's low-power wake chip listens on both or just one of them.
     private static readonly int[] CameraPorts = ParsePortsEnv() ?? new[] { 2015, 2018 };
 
+    /// <summary>
+    /// Binds the client-side socket for discovery and the UDP transport: two
+    /// tries in the official client's 53500-53999 band, then the OS's ephemeral
+    /// allocator. The band is convention, not contract — the camera learns our
+    /// port from the hello itself (the datagram's source, plus the port field in
+    /// the C2D_C XML) — but on Windows, Hyper-V/Docker "excluded port ranges"
+    /// can swallow nearly the whole band (438 of the 500 ports on one dev box),
+    /// and random in-band picks then fail SILENTLY: wake probes reporting a
+    /// camera asleep that was awake, UDP connects dying before a single packet.
+    /// The ephemeral allocator dodges exclusions and collisions by design.
+    /// </summary>
+    private static UdpClient? BindClientSocket()
+    {
+        for (int i = 0; i < 2; i++)
+        {
+            try { return new UdpClient(new IPEndPoint(IPAddress.Any, Random.Shared.Next(53500, 54000))); }
+            catch (SocketException) { }
+        }
+        try { return new UdpClient(new IPEndPoint(IPAddress.Any, 0)); }
+        catch (SocketException) { return null; }
+    }
+
     private static int[]? ParsePortsEnv()
     {
         var raw = Environment.GetEnvironmentVariable("NEOLINK_UDP_PORTS");
@@ -176,8 +198,12 @@ public static class UdpDiscovery
     /// genuinely awake camera.
     /// </summary>
     internal static async Task<bool> IsReachableAsync(string host, string uid, TimeSpan timeout, CancellationToken ct,
-        string? logTag = null)
+        string? logTag = null, int? camPort = null)
     {
+        // camPort: selftests only. Their mock camera must live on an EPHEMERAL
+        // loopback port — on a dev box a real Neolink instance's own UDP machinery
+        // can hold 2015, and two sockets sharing it means one silently starves.
+        var camPorts = camPort is { } cp ? new[] { cp } : CameraPorts;
         // UID-only camera (no address): the wake probe broadcasts like the connect
         // path does — the UID keys the reply, so a hit still means OUR camera is up.
         IPAddress? ip = null;
@@ -195,12 +221,7 @@ public static class UdpDiscovery
         var targets = ip != null ? new[] { ip } : BroadcastTargets();
         if (targets.Length == 0) return false;
 
-        UdpClient? udp = null;
-        for (int i = 0; i < 4 && udp == null; i++)
-        {
-            try { udp = new UdpClient(new IPEndPoint(IPAddress.Any, Random.Shared.Next(53500, 54000))); }
-            catch (SocketException) { }
-        }
+        var udp = BindClientSocket();
         if (udp == null) return false;
         if (ip == null) udp.EnableBroadcast = true;
 
@@ -218,7 +239,7 @@ public static class UdpDiscovery
                 while (!cts.IsCancellationRequested)
                 {
                     foreach (var target in targets)
-                    foreach (var port in CameraPorts)
+                    foreach (var port in camPorts)
                     {
                         try { await udp.SendAsync(hello,
                             new IPEndPoint(target, port), cts.Token).ConfigureAwait(false); }
@@ -294,8 +315,10 @@ public static class UdpDiscovery
     /// <see cref="ProbeAsync"/> (which is the throwaway diagnostic).
     /// </summary>
     internal static async Task<Session?> EstablishAsync(IPAddress? ip, string uid, TimeSpan timeout,
-        CancellationToken ct, string tag)
+        CancellationToken ct, string tag, int? camPort = null)
     {
+        // camPort: selftests only — see IsReachableAsync. Real cameras are 2015/2018.
+        var camPorts = camPort is { } cp ? new[] { cp } : CameraPorts;
         string P(string m) => $"{tag}: [udp] {MaskUid(m, uid)}";
         if (ip != null && ip.AddressFamily != AddressFamily.InterNetwork)
         {
@@ -312,13 +335,7 @@ public static class UdpDiscovery
             Log.Info(P($"no address configured — broadcasting discovery for the UID on " +
                        $"{string.Join(", ", targets.AsEnumerable())}"));
 
-        UdpClient? udp = null;
-        for (int attempt = 0; attempt < 8 && udp == null; attempt++)
-        {
-            int lp = Random.Shared.Next(53500, 54000);
-            try { udp = new UdpClient(new IPEndPoint(IPAddress.Any, lp)); }
-            catch (SocketException) { }
-        }
+        var udp = BindClientSocket();
         if (udp == null) { Log.Warn(P("could not bind a local UDP port")); return null; }
         if (ip == null) udp.EnableBroadcast = true;
 
@@ -344,7 +361,7 @@ public static class UdpDiscovery
                 while (!handshakeCts.IsCancellationRequested)
                 {
                     foreach (var target in targets)
-                    foreach (var port in CameraPorts)
+                    foreach (var port in camPorts)
                     {
                         try { await udp.SendAsync(hello, new IPEndPoint(target, port), handshakeCts.Token).ConfigureAwait(false); }
                         catch (OperationCanceledException) { return; }
@@ -509,20 +526,13 @@ public static class UdpDiscovery
             return UdpOutcome.Aborted;
         }
 
-        // The official client binds an ephemeral port in this range.
-        UdpClient? udp = null;
-        int localPort = 0;
-        for (int attempt = 0; attempt < 8 && udp == null; attempt++)
-        {
-            localPort = Random.Shared.Next(53500, 54000);
-            try { udp = new UdpClient(new IPEndPoint(IPAddress.Any, localPort)); }
-            catch (SocketException) { /* port taken — roll again */ }
-        }
+        var udp = BindClientSocket();
         if (udp == null)
         {
-            Log.Warn(P("could not bind a local UDP port in 53500-53999 — skipped"));
+            Log.Warn(P("could not bind a local UDP port — skipped"));
             return UdpOutcome.Aborted;
         }
+        int localPort = ((IPEndPoint)udp.Client.LocalEndPoint!).Port;
 
         using (udp)
         {

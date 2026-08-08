@@ -551,7 +551,8 @@ public sealed class NeolinkConfig
         // rather than the process crash-looping on a first-run config.
         if (Cameras.Count == 0)
             Log.Warn("No cameras configured yet — the web UI will run but show no cameras. " +
-                     "Add at least one camera to the config file and restart.");
+                     "Add your first under Server settings (the gear icon) in the web UI " +
+                     "and restart when it prompts you — or edit the config file directly.");
 
         foreach (var cam in Cameras)
         {

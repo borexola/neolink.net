@@ -120,6 +120,7 @@ internal sealed class MainForm : Form
         menu.Items.Add(_pauseVideoItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem("Server connection...", null, (_, _) => OpenConnectDialog()));
+        menu.Items.Add(new ToolStripMenuItem("Servers — switch or remove...", null, (_, _) => OpenServersDialog()));
         menu.Items.Add(new ToolStripMenuItem("Reload", null, (_, _) => Reload())
         {
             ShortcutKeyDisplayString = "F5",
@@ -910,6 +911,18 @@ internal sealed class MainForm : Form
         // The connection changed underneath everything: the simplest correct
         // answer is a clean restart of the process.
         Program.RestartSelf();
+    }
+
+    /// <summary>The saved-server manager: switch to another saved server, remove
+    /// one (confirmed, credentials erased from this PC), or add a new one. Any
+    /// change to the ACTIVE connection ends in a restart — session, token and
+    /// alert baseline are all keyed on the old server.</summary>
+    private void OpenServersDialog()
+    {
+        using var dlg = new ServersForm(_settings);
+        ShowDialogCentered(dlg);
+        if (dlg.RestartNeeded)
+            Program.RestartSelf();
     }
 
     private DialogResult ShowDialogCentered(Form dlg)

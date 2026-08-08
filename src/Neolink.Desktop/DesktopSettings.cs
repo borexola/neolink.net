@@ -101,6 +101,70 @@ internal sealed class DesktopSettings
     /// account to store them against).</summary>
     public AlertPrefs? CachedAlertPrefs { get; set; }
 
+    // ---- saved servers ----------------------------------------------------
+
+    /// <summary>Every server this PC has connected to, credentials included (the
+    /// same DPAPI blobs the active connection uses), so switching between a home
+    /// and a remote instance is a pick, not a retype. The ACTIVE connection stays
+    /// in the top-level fields — everything else reads those — and re-registers
+    /// itself here on every successful connect.</summary>
+    public List<SavedServer> Servers { get; set; } = new();
+
+    public sealed class SavedServer
+    {
+        public string Url { get; set; } = "";
+        public string? Username { get; set; }
+        public string? ProtectedPassword { get; set; }
+        public string? ProtectedToken { get; set; }
+        public bool AllowUntrustedCertificate { get; set; }
+    }
+
+    /// <summary>Upserts the active connection into the saved list (keyed by URL,
+    /// case-insensitive). No-op when nothing is configured.</summary>
+    public void RememberCurrent()
+    {
+        if (!Configured) return;
+        var entry = Servers.FirstOrDefault(s =>
+            string.Equals(s.Url, ServerUrl, StringComparison.OrdinalIgnoreCase));
+        if (entry == null)
+        {
+            entry = new SavedServer();
+            Servers.Add(entry);
+        }
+        entry.Url = ServerUrl;
+        entry.Username = Username;
+        entry.ProtectedPassword = ProtectedPassword;
+        entry.ProtectedToken = ProtectedToken;
+        entry.AllowUntrustedCertificate = AllowUntrustedCertificate;
+    }
+
+    /// <summary>Makes a saved server the active connection (the caller restarts
+    /// the app — the WebView session, token and alert baseline all keyed on the
+    /// old server).</summary>
+    public void ActivateServer(SavedServer s)
+    {
+        ServerUrl = s.Url;
+        Username = s.Username;
+        ProtectedPassword = s.ProtectedPassword;
+        ProtectedToken = s.ProtectedToken;
+        AllowUntrustedCertificate = s.AllowUntrustedCertificate;
+    }
+
+    /// <summary>Drops a server from the list; removing the ACTIVE one also clears
+    /// the active connection (back to the first-run connect dialog).</summary>
+    public void RemoveServer(SavedServer s)
+    {
+        Servers.Remove(s);
+        if (string.Equals(s.Url, ServerUrl, StringComparison.OrdinalIgnoreCase))
+        {
+            ServerUrl = "";
+            Username = null;
+            ProtectedPassword = null;
+            ProtectedToken = null;
+            AllowUntrustedCertificate = false;
+        }
+    }
+
     // ---- persistence ------------------------------------------------------
 
     private static readonly JsonSerializerOptions Opts = new()

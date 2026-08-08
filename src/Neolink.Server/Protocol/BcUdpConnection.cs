@@ -152,7 +152,7 @@ public sealed class BcUdpConnection : IBcConnection
     }
 
     public static async Task<BcUdpConnection> ConnectAsync(string host, string uid, TimeSpan timeout,
-        CancellationToken ct, string tag)
+        CancellationToken ct, string tag, int? camPort = null)
     {
         // No host = UID-only config: discovery broadcasts on the local subnets and
         // the camera whose UID matches answers with its own address.
@@ -160,7 +160,7 @@ public sealed class BcUdpConnection : IBcConnection
         if (!string.IsNullOrWhiteSpace(host))
             ip = await ResolveV4Async(host, ct).ConfigureAwait(false)
                 ?? throw new IOException($"UDP: '{host}' has no IPv4 address");
-        var session = await UdpDiscovery.EstablishAsync(ip, uid, timeout, ct, tag).ConfigureAwait(false)
+        var session = await UdpDiscovery.EstablishAsync(ip, uid, timeout, ct, tag, camPort).ConfigureAwait(false)
             ?? throw new IOException(ip != null
                 ? $"UDP handshake to {host} failed (camera asleep or unreachable)"
                 : "UDP broadcast discovery found no camera with this UID (asleep, off-subnet, or broadcast blocked)");
