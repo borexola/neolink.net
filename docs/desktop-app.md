@@ -47,6 +47,38 @@ Everything else is identical, and stays identical: the window renders the live
 UI from your server, so a feature that ships on the server appears here the same
 day, with no separate app update.
 
+## Standalone: the local server feature
+
+The installer's feature page has an optional second entry, **Local server
+(Windows service)**. Left unticked (the default), the app is a client and the
+rest of this guide applies unchanged. Ticked, the full Neolink.NET server
+installs into a `Server` folder beside the app and registers as a Windows
+service named `Neolink.NET` — the same server the Docker image runs, no Docker
+required:
+
+- **It runs as a service**, started automatically at boot, recording and
+  serving RTSP whether or not anyone is signed in. Manage it like any service
+  (`services.msc`), though there is rarely a reason to touch it.
+- **Everything it owns lives in `C:\ProgramData\Neolink.NET\`** — on first
+  start it writes a starter `config.json` there, records into `recordings\`,
+  and logs into `logs\neolink.log` (rolls to `.old` at 10 MB). Cameras,
+  accounts, recording paths and retention are all managed from the web UI at
+  `http://localhost:8655`; the config file is there if you prefer a text
+  editor (edit, then restart the service).
+- **The connect dialog prefills `http://localhost:8655`** on a fresh install,
+  so the first run is: install → Connect. Create the admin account from the
+  web UI when you want sign-in required.
+- **The firewall is opened for the server to your local subnet only**, so
+  phones, tablets and NVRs on your LAN can reach the web UI and RTSP —
+  nothing beyond it.
+- **Uninstalling removes the service but keeps `ProgramData`** — your config,
+  accounts and footage survive an uninstall/reinstall cycle. Delete the
+  folder yourself if you want it gone.
+
+Upgrades remember the choice: installing a newer MSI over an older one keeps
+whichever features were selected, stops the service, replaces it, and starts
+it again.
+
 ## Setting it up
 
 On first run it asks for:
@@ -200,7 +232,7 @@ dotnet tool install --global wix --version 5.0.2
 ```
 
 then `wix extension add -g WixToolset.Util.wixext/5.0.2`, the same for
-`WixToolset.UI.wixext/5.0.2`, and:
+`WixToolset.UI.wixext/5.0.2` and `WixToolset.Firewall.wixext/5.0.2`, and:
 
 ```bash
 pwsh installer/build-msi.ps1

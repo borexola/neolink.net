@@ -234,6 +234,26 @@ Then:
 > RTSP (the default for ffmpeg/Frigate, and `--rtsp-tcp` in VLC), works fine with
 > plain port mapping.
 
+## Quick start (Windows — no Docker)
+
+One MSI, two shapes. Download `Neolink.NET.Desktop-X.Y.Z-win-x64.msi` from the
+[releases page](https://github.com/borexola/neolink.net/releases) and run it:
+
+- **Desktop monitoring** — the default install is the [desktop
+  app](#windows-desktop-app--beta): your camera wall in its own window, real
+  Windows notifications from the tray, pointed at a server you already run
+  (Docker, the add-on, another machine).
+- **A complete standalone system** — tick **Local server (Windows service)**
+  on the feature page and the same MSI installs the full server as a Windows
+  service: recording and serving your cameras 24/7, signed in or not, with
+  nothing else to install. The desktop app connects to it at
+  `http://localhost:8655`, and cameras, accounts and recording all get set up
+  from the web UI there.
+
+The MSI is not code-signed yet, so SmartScreen shows *"Windows protected your
+PC"* on first run — click **More info** → **Run anyway**. Details in the
+[desktop guide](docs/desktop-app.md).
+
 ## Quick start (from source)
 
 Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download).
@@ -901,8 +921,22 @@ proxy, and every account keeps its own layouts server-side.
 > building it yourself.
 
 An MSI-installed Windows app that puts the same web UI in its own window, sits
-in the system tray, and starts with Windows. It is a **client** — your server
-keeps running wherever it already does, and nothing about that setup changes.
+in the system tray, and starts with Windows. By default it is a **client** —
+your server keeps running wherever it already does (Docker, the Home Assistant
+add-on, another machine), and nothing about that setup changes.
+
+The installer can also make the PC the whole system: tick **Local server
+(Windows service)** on the feature page and the full Neolink.NET server
+installs alongside the app and runs as a Windows service — recording and
+serving your cameras around the clock, whether anyone is signed in or not, no
+Docker or Home Assistant required. Its config and recordings live under
+`C:\ProgramData\Neolink.NET\` (a starter config is written on first launch;
+cameras, recording paths and everything else are then managed from the web
+UI at `http://localhost:8655`, which the desktop app's connect dialog
+prefills). The service log rolls in `ProgramData\Neolink.NET\logs\`, and the
+firewall is opened to your local subnet so phones and NVRs on the LAN can
+reach the web UI and RTSP. Uninstalling removes the service but leaves your
+config and footage in `ProgramData` for a later reinstall.
 
 What it adds over the PWA is being there when you are not looking: it runs its
 own alert connection, so detections, camera outages and server problems reach

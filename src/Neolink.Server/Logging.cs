@@ -30,6 +30,73 @@ public static class Log
     /// </summary>
     public static Action<LogLevel, string>? Tap;
 
+    private static StreamWriter? _file;
+    private static string? _filePath;
+    private static long _fileLength;
+
+    /// <summary>Bytes at which the log file rolls to "<c>.old</c>". Two files
+    /// bound the disk cost; a Windows service has no console, so without this
+    /// sink a refused start or a camera fault leaves no trace at all.</summary>
+    private const long FileRollBytes = 10 * 1024 * 1024;
+
+    /// <summary>A file sink is attached. Callers that print to stderr (which a
+    /// service discards) use this to decide whether to say it here too.</summary>
+    public static bool HasFile => _file != null;
+
+    /// <summary>Mirrors every line at or above <see cref="Level"/> to a file
+    /// (--log). Returns false, with the reason on the console, when the path is
+    /// unusable — the caller decides whether that is fatal.</summary>
+    public static bool AttachFile(string path, out string? error)
+    {
+        lock (Gate)
+        {
+            try
+            {
+                var full = Path.GetFullPath(path);
+                Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+                _file = new StreamWriter(new FileStream(full, FileMode.Append, FileAccess.Write,
+                    FileShare.ReadWrite | FileShare.Delete)) { AutoFlush = true };
+                _filePath = full;
+                _fileLength = _file.BaseStream.Length;
+                error = null;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _file = null;
+                _filePath = null;
+                error = ex.Message;
+                return false;
+            }
+        }
+    }
+
+    /// <summary>Called under <see cref="Gate"/>. A failure disables the sink for
+    /// the rest of the run rather than taking the process down: the console (and
+    /// the web UI's log stream) still carry every line.</summary>
+    private static void WriteFile(string line)
+    {
+        if (_file == null) return;
+        try
+        {
+            if (_fileLength > FileRollBytes)
+            {
+                _file.Dispose();
+                File.Move(_filePath!, _filePath! + ".old", overwrite: true);
+                _file = new StreamWriter(new FileStream(_filePath!, FileMode.Create, FileAccess.Write,
+                    FileShare.ReadWrite | FileShare.Delete)) { AutoFlush = true };
+                _fileLength = 0;
+            }
+            _file.WriteLine(line);
+            _fileLength += line.Length + Environment.NewLine.Length;
+        }
+        catch
+        {
+            try { _file?.Dispose(); } catch { }
+            _file = null;
+        }
+    }
+
     /// <summary>
     /// Capture mode (NEOLINK_DEBUG_ALARMS=1): logs every camera alarm/smart-event
     /// push with its FULL raw XML at Info, without the media-packet flood a full
@@ -74,6 +141,7 @@ public static class Log
         var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] [{LevelTag(level)}] {msg}";
         lock (Gate)
         {
+            WriteFile(line);
             // Redirected output (Docker, systemd, a pipe) renders no colour, and
             // each get/set of the console colour is a syscall on Windows.
             if (Colorize)

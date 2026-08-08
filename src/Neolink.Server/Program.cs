@@ -22,6 +22,8 @@ string Version = Assembly.GetExecutingAssembly()
 var argList = args.ToList();
 string? command = null;
 string? configPath = null;
+string? logPath = null;
+bool serviceMode = false;
 
 for (int i = 0; i < argList.Count; i++)
 {
@@ -44,6 +46,16 @@ for (int i = 0; i < argList.Count; i++)
         case var s when s.StartsWith("--config="):
             configPath = s["--config=".Length..];
             break;
+        case "--log":
+            if (i + 1 >= argList.Count) return Fail("--log requires a path");
+            logPath = argList[++i];
+            break;
+        case var s when s.StartsWith("--log="):
+            logPath = s["--log=".Length..];
+            break;
+        case "--service":
+            serviceMode = true;
+            break;
         case "rtsp" or "selftest" or "probe":
             command = a;
             break;
@@ -53,6 +65,24 @@ for (int i = 0; i < argList.Count; i++)
 }
 
 command ??= "rtsp";
+
+// The file sink attaches before anything can go wrong, because its whole reason
+// to exist is runs where nothing else records what went wrong: a Windows service
+// has no console, and stdout in general only lives as long as its terminal.
+if (logPath != null && !Log.AttachFile(logPath, out var logError))
+    return Fail($"--log '{logPath}' is unusable: {logError}");
+
+// A Windows service must check in with the Service Control Manager promptly
+// after launch, so this runs before the config is even read. From a console the
+// dispatcher reports "no SCM here" and the flag downgrades to a no-op — the same
+// installed command line works at a prompt for testing.
+bool runningAsService = false;
+if (serviceMode && command == "rtsp")
+{
+    if (!OperatingSystem.IsWindows())
+        return Fail("--service is the Windows service entry point and does nothing on this OS");
+    runningAsService = WindowsService.TryStart();
+}
 
 if (command == "selftest")
     return SelfTest.Run(configPath) ? 0 : 1;
@@ -83,7 +113,14 @@ if (!File.Exists(configPath))
     {
         var full = Path.GetFullPath(configPath);
         Directory.CreateDirectory(Path.GetDirectoryName(full)!);
-        File.WriteAllText(full, StarterConfig());
+        // A service install has no volume to map later: give it a working
+        // recording setup out of the box, next to the config, changeable in the
+        // web UI's admin settings. Container starters keep the commented hint —
+        // there the path only means something once a volume backs it.
+        var recDefault = runningAsService
+            ? Path.Combine(Path.GetDirectoryName(full)!, "recordings")
+            : null;
+        File.WriteAllText(full, StarterConfig(recDefault));
         Log.Info($"No config file found — wrote a starter config to {full}. " +
                  "Edit it to add your cameras (see the comments inside), then restart.");
     }
@@ -152,6 +189,14 @@ if (stateDir != configDir)
     Log.Info($"UI state directory: {stateDir}");
 
 using var shutdown = new CancellationTokenSource();
+// The SCM's stop button and Ctrl+C are the same request; route them to the
+// same place. (A stop that raced the startup is latched and lands here too.)
+if (runningAsService)
+    WindowsService.OnStop = () =>
+    {
+        Log.Info("Service stop requested — shutting down...");
+        try { shutdown.Cancel(); } catch (ObjectDisposedException) { }
+    };
 Console.CancelKeyPress += (_, e) =>
 {
     e.Cancel = true;
@@ -871,6 +916,7 @@ try
 catch (OperationCanceledException) { }
 
 Log.Info("Goodbye");
+if (runningAsService) WindowsService.NotifyStopped(exitCode);
 return exitCode;
 
 // Safety net around one camera stream: a crash in CameraService must never take
@@ -937,6 +983,13 @@ static int Fail(string message)
 {
     Console.Error.WriteLine($"error: {message}");
     Console.Error.WriteLine("Run with --help for usage.");
+    // Everything above went to stderr, which a service discards — the file log
+    // exists precisely for the run where nobody saw this.
+    if (Log.HasFile) Log.Error(message);
+    // Also into Environment: as a service, the SCM learns of an early exit from
+    // a ProcessExit hook that reads this — Main's return value alone would
+    // report a refused start as a CLEAN stop.
+    Environment.ExitCode = 2;
     return 2;
 }
 
@@ -944,7 +997,11 @@ static int Fail(string message)
 // a fresh container boots to the web UI instead of crash-looping. Cameras start
 // empty (the app runs, the wall is empty); the user fills in a block and restarts.
 // The loader accepts // comments and trailing commas, so this stays valid as-is.
-static string StarterConfig() =>
+// recordingPath (the Windows-service install) turns the commented recording hint
+// into a live block — retention defaults keep it bounded (7 days).
+static string StarterConfig(string? recordingPath = null)
+{
+    var starter =
     """
     {
       // Neolink.NET wrote this starter config because none existed here.
@@ -972,6 +1029,12 @@ static string StarterConfig() =>
       // ,"recording": { "path": "/recordings" }
     }
     """;
+    if (recordingPath != null)
+        starter = starter.Replace(
+            "// ,\"recording\": { \"path\": \"/recordings\" }",
+            $",\"recording\": {{ \"path\": {System.Text.Json.JsonSerializer.Serialize(recordingPath)} }}");
+    return starter;
+}
 
 static void PrintHelp()
 {
@@ -990,6 +1053,9 @@ static void PrintHelp()
             -c, --config <PATH>   Path to the configuration file (JSON; legacy TOML also accepted)
                                   (defaults to ./config.json if present)
             -v, --verbose         Debug logging (or set NEOLINK_LOG=debug|trace)
+            --log <PATH>          Also write the log to a file (rolls to .old at 10 MB)
+            --service             Run as a Windows service (what the installed
+                                  service uses; harmless from a console)
 
         Streams are served at rtsp://<bind>:<port>/<camera-name>[/mainStream|/subStream]
         """);

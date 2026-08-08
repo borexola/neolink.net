@@ -3,10 +3,11 @@
 #   pwsh installer/build-msi.ps1                 # version from the csproj
 #   pwsh installer/build-msi.ps1 -Version 0.9.9  # or forced (CI passes the tag)
 #
-# Needs the WiX v5 CLI and its two extensions:
+# Needs the WiX v5 CLI and its three extensions:
 #   dotnet tool install --global wix --version 5.0.2
 #   wix extension add -g WixToolset.Util.wixext/5.0.2
 #   wix extension add -g WixToolset.UI.wixext/5.0.2
+#   wix extension add -g WixToolset.Firewall.wixext/5.0.2
 #
 # WiX v5 rather than v6/v7 on purpose: from v6 the toolset requires accepting the
 # Open Source Maintenance Fee EULA, which is a licensing decision for the project
@@ -53,6 +54,25 @@ if (-not (Test-Path $exe)) { throw "publish produced no Neolink.Desktop.exe" }
 $sizeMb = [math]::Round(((Get-ChildItem $publish -Recurse | Measure-Object Length -Sum).Sum / 1MB), 1)
 Write-Host "  $publish  ($sizeMb MB)" -ForegroundColor DarkGray
 
+# The optional "Local server" feature carries the real server, published the way
+# the README documents for bare-metal Windows: self-contained single file. It
+# rides in every MSI (features decide what is laid down, not what is packed).
+$serverProject = Join-Path $repo "src/Neolink.Server/Neolink.Server.csproj"
+$serverPublish = Join-Path ([System.IO.Path]::GetTempPath()) "neolink-server-publish-$Runtime"
+if (Test-Path $serverPublish) { Remove-Item -Recurse -Force $serverPublish }
+
+Write-Host "publishing server..." -ForegroundColor DarkGray
+& dotnet publish $serverProject -c $Configuration -r $Runtime -o $serverPublish --nologo `
+    -p:Version=$Version | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "dotnet publish (server) failed" }
+if (-not (Test-Path (Join-Path $serverPublish "neolink.net.exe"))) { throw "server publish produced no neolink.net.exe" }
+# A wandering config.json next to the built server must not ship: the installed
+# service keeps its config in ProgramData, and a developer's own camera passwords
+# in an MSI would be a disaster.
+Remove-Item -Force (Join-Path $serverPublish "config.json") -ErrorAction SilentlyContinue
+$serverMb = [math]::Round(((Get-ChildItem $serverPublish -Recurse | Measure-Object Length -Sum).Sum / 1MB), 1)
+Write-Host "  $serverPublish  ($serverMb MB)" -ForegroundColor DarkGray
+
 # ---- licence, as RTF for the installer's licence page ----------------------
 # The MSI UI only renders RTF, and the repository keeps the AGPL as plain text;
 # wrap it rather than committing a second copy that could drift.
@@ -79,9 +99,11 @@ Write-Host "packaging..." -ForegroundColor DarkGray
     -arch $arch `
     -d "Version=$msiVersion" `
     -d "PublishDir=$publish" `
+    -d "ServerPublishDir=$serverPublish" `
     -d "LicenseRtf=$licenseRtf" `
     -ext WixToolset.Util.wixext `
     -ext WixToolset.UI.wixext `
+    -ext WixToolset.Firewall.wixext `
     -o $msi
 if ($LASTEXITCODE -ne 0) { throw "wix build failed" }
 

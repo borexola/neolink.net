@@ -4,6 +4,32 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
+## 1.1.0 — unreleased
+
+### Added
+
+- **The Windows installer can now set up a complete standalone system — no
+  Docker, no Home Assistant.** The MSI gained a second, optional feature:
+  "Local server (Windows service)". Tick it and the full Neolink.NET server
+  installs beside the desktop app and runs as a Windows service — recording
+  and serving your cameras around the clock, signed in or not, surviving
+  reboots. Its config lives in `C:\ProgramData\Neolink.NET\` (written as a
+  starter on first launch, recordings defaulting to a `recordings` folder
+  there — both changeable in the web UI), its log rolls in `logs\` beside
+  it, and the installer opens the Windows Firewall to the local subnet for
+  the exe so phones and NVRs on the LAN can reach the web UI and RTSP.
+  Leave the feature unticked and the installer behaves exactly as before: a
+  desktop client for a server you already run. The desktop app notices a
+  local server install and prefills `http://localhost:8655` in its connect
+  dialog, so the standalone first run is install → Connect. Uninstalling
+  leaves `ProgramData` untouched — configs and footage are yours; a
+  reinstall picks them straight back up.
+- **`--service` and `--log <path>` server flags.** `--service` is the
+  Windows service entry point (run from a console it says so and carries on
+  as a normal console app); `--log` mirrors the log to a file that rolls to
+  `.old` at 10 MB — how a service, which has no console, stays debuggable.
+  Both work on any deployment, not just the installer's.
+
 ## 1.0.1
 
 ### Fixed

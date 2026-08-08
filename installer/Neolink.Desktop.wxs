@@ -18,6 +18,7 @@
   passes the version and publish directory in.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:fw="http://wixtoolset.org/schemas/v4/wxs/firewall"
      xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui"
      xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
 
@@ -79,29 +80,109 @@
     <Property Id="REBOOT" Value="ReallySuppress" />
 
     <Property Id="ARPPRODUCTICON" Value="NeolinkIcon" />
-    <Property Id="ARPURLINFOABOUT" Value="https://github.com/QuantumEntangledAndy/neolink" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/borexola/neolink.net" />
     <!-- Add/Remove Programs shows a blank install location without this, because
          INSTALLFOLDER is only known once the user has been through the dialog. -->
     <SetProperty Id="ARPINSTALLLOCATION" Value="[INSTALLFOLDER]" After="CostFinalize" Sequence="both" />
     <!-- ARPNOMODIFY comes from WixUI_InstallDir; there is nothing to modify here. -->
     <Icon Id="NeolinkIcon" SourceFile="$(PublishDir)\neolink.ico" />
 
-    <!-- One feature: this is a viewer, there is nothing meaningful to opt out of. -->
-    <Feature Id="Main" Title="$(AppName)" Level="1" AllowAdvertise="no" AllowAbsent="no">
+    <!-- Two features, and the choice is the install's whole story:
+           - the desktop app alone, pointed at a server that already exists
+             (Docker, the Home Assistant add-on, another PC), or
+           - that PLUS the server itself as a Windows service - a standalone
+             install with nothing else to run.
+         The server feature defaults OFF (Level 2 > INSTALLLEVEL 1): today's
+         typical download pairs the app with an existing add-on, and a surprise
+         service that starts recording to ProgramData must be chosen, not
+         defaulted into. The feature tree is where it gets chosen; upgrades keep
+         whatever was chosen last time (MajorUpgrade migrates feature states). -->
+    <Feature Id="Main" Title="Desktop app" Level="1" AllowAdvertise="no" AllowAbsent="no"
+             Description="The Neolink.NET viewer: your camera wall in its own window, alerts in the Action Center, starts with Windows.">
       <ComponentGroupRef Id="AppFiles" />
       <ComponentGroupRef Id="AppShortcuts" />
     </Feature>
+    <Feature Id="LocalServer" Title="Local server (Windows service)" Level="2" AllowAdvertise="no"
+             Description="Run the full Neolink.NET server on this PC as a Windows service - no Docker or Home Assistant needed. It records and serves your cameras even when nobody is signed in; the desktop app connects to it at http://localhost:8655.">
+      <ComponentGroupRef Id="ServerFiles" />
+      <ComponentRef Id="ServerService" />
+      <ComponentRef Id="NeolinkDataDir" />
+      <ComponentRef Id="NeolinkLogsDir" />
+    </Feature>
 
     <StandardDirectory Id="ProgramFiles6432Folder">
-      <Directory Id="INSTALLFOLDER" Name="$(AppName)" />
+      <Directory Id="INSTALLFOLDER" Name="$(AppName)">
+        <Directory Id="ServerFolder" Name="Server" />
+      </Directory>
     </StandardDirectory>
     <StandardDirectory Id="ProgramMenuFolder" />
+    <!-- The service's world lives in ProgramData, never Program Files: the
+         config it writes on first start, the accounts and UI state beside it,
+         recordings under .\recordings, logs under .\logs. Uninstall leaves the
+         directory behind on purpose - configs and footage are the user's, and a
+         reinstall picks them straight back up. -->
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="NeolinkDataFolder" Name="Neolink.NET">
+        <Directory Id="NeolinkLogsFolder" Name="logs" />
+      </Directory>
+    </StandardDirectory>
 
     <!-- Every file the publish produced, laid down as-is. A self-contained build
          means the .NET runtime rides along and no prerequisite has to be chased. -->
     <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
       <Files Include="$(PublishDir)\**" />
     </ComponentGroup>
+
+    <!-- The server: a single self-contained exe plus its web assets, in a Server
+         subfolder so the two programs never shadow each other's files. The exe is
+         excluded from the harvest because the service registration must live in
+         the component that owns it. -->
+    <ComponentGroup Id="ServerFiles" Directory="ServerFolder">
+      <Files Include="$(ServerPublishDir)\**">
+        <Exclude Files="$(ServerPublishDir)\neolink.net.exe" />
+      </Files>
+    </ComponentGroup>
+
+    <Component Id="ServerService" Directory="ServerFolder" Guid="7A2B04E3-9C61-4D5B-8E0F-2D64C1A7B9D2">
+      <File Id="NeolinkServerExe" Source="$(ServerPublishDir)\neolink.net.exe" KeyPath="yes">
+        <!-- One program-scoped rule instead of per-port ones: it covers the web
+             UI (8655), RTSP (8654) AND the UDP dialects battery cameras answer
+             on, and it keeps meaning that after someone changes a port in the
+             config. localSubnet: the LAN is the audience; the internet is not. -->
+        <fw:FirewallException Id="NeolinkServerFirewall" Name="Neolink.NET Server"
+                              Scope="localSubnet" Profile="all" />
+      </File>
+      <!-- LocalSystem rather than a low-privilege account, deliberately: the UI
+           lets people point recordings at any disk they own (D:\, a NAS letter),
+           and a service account that needs hand-ACLing for every such folder
+           turns a settings change into a support case. -->
+      <ServiceInstall Id="NeolinkService"
+                      Name="Neolink.NET"
+                      DisplayName="Neolink.NET Server"
+                      Description="Reolink camera bridge - RTSP restreaming, recording, and the web UI at http://localhost:8655."
+                      Type="ownProcess"
+                      Start="auto"
+                      ErrorControl="normal"
+                      Account="LocalSystem"
+                      Arguments="--service --config &quot;[NeolinkDataFolder]config.json&quot; --log &quot;[NeolinkLogsFolder]neolink.log&quot;"
+                      Vital="yes" />
+      <!-- Start on install so the finish dialog's "start now" opens a UI that is
+           already there; Stop on both so an upgrade can replace the exe. -->
+      <ServiceControl Id="NeolinkServiceControl" Name="Neolink.NET"
+                      Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+    </Component>
+
+    <Component Id="NeolinkDataDir" Directory="NeolinkDataFolder" Guid="5E91D7C4-63BA-4F2E-9A07-B81D3C5F6A18">
+      <CreateFolder />
+      <!-- The desktop app's tell that localhost:8655 is a Neolink server: its
+           connect dialog prefills the address when this is present. Removed with
+           the feature, so an uninstalled server stops being suggested. -->
+      <RegistryValue Root="HKLM" Key="SOFTWARE\Neolink.NET"
+                     Name="LocalServer" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+    <Component Id="NeolinkLogsDir" Directory="NeolinkLogsFolder" Guid="0C4F8A61-2E7D-4B93-B5C2-9F1E6D0A3487">
+      <CreateFolder />
+    </Component>
 
     <ComponentGroup Id="AppShortcuts">
       <Component Id="StartMenuShortcut" Directory="ProgramMenuFolder" Guid="424CC58D-1869-4051-A945-D10CEB00083D">
@@ -140,7 +221,10 @@
     <CustomAction Id="LaunchApp" DllEntry="WixShellExec" Impersonate="yes"
                   BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)" Return="ignore" />
 
-    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
+    <!-- FeatureTree instead of InstallDir: the meaningful choice is no longer
+         the folder, it is whether the local server rides along. The customize
+         page carries both (features to pick, Browse for the location). -->
+    <ui:WixUI Id="WixUI_FeatureTree" />
     <UI>
       <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchApp"
                Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 and NOT Installed" />

@@ -37,7 +37,11 @@ internal sealed class ConnectForm : Form
         ClientSize = new Size(520, 330);
         AutoScaleMode = AutoScaleMode.Dpi;
 
-        _url.Text = settings.ServerUrl;
+        // A first run beside the installer's local server should not open with an
+        // empty box asking for an address the user never chose: the service on
+        // this PC is the server. Prefilled, not forced — still editable.
+        bool localServer = string.IsNullOrEmpty(settings.ServerUrl) && LocalServerInstalled();
+        _url.Text = localServer ? "http://localhost:8655" : settings.ServerUrl;
         _url.PlaceholderText = "10.1.0.60:8000";
         _user.Text = settings.Username ?? "";
         _pass.Text = settings.Password ?? "";
@@ -111,7 +115,27 @@ internal sealed class ConnectForm : Form
         // A no-auth server needs no credentials at all; say so instead of leaving
         // two boxes looking mandatory.
         if (!reconfiguring)
-            _status.Text = "Leave the username and password blank if your server has no accounts.";
+            _status.Text = localServer
+                ? "The server installed on this PC is filled in — just press Connect. " +
+                  "Leave the username and password blank until you create an account."
+                : "Leave the username and password blank if your server has no accounts.";
+    }
+
+    /// <summary>The installer's local-server feature leaves this marker; its
+    /// presence means "http://localhost:8655 is (about to be) a Neolink server".
+    /// The service may still be starting when the dialog opens, so this reads the
+    /// registry rather than probing the port — Test connection does the probing.</summary>
+    private static bool LocalServerInstalled()
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Neolink.NET");
+            return key?.GetValue("LocalServer") is int and not 0;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private DesktopSettings Candidate()

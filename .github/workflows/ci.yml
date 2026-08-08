@@ -61,5 +61,6 @@ jobs:
           dotnet tool install --global wix --version 5.0.2
           wix extension add -g WixToolset.Util.wixext/5.0.2
           wix extension add -g WixToolset.UI.wixext/5.0.2
+          wix extension add -g WixToolset.Firewall.wixext/5.0.2
           ./installer/build-msi.ps1
         shell: pwsh
