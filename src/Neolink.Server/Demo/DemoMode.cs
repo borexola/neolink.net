@@ -131,7 +131,7 @@ public sealed class DemoRig
             // joiners depend on in-band parameter sets); aud=1 delimits AUs.
             lastError = Run(ffmpeg, ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", graph,
                 "-t", "24", "-an", "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
-                "-profile:v", "baseline", "-pix_fmt", "yuv420p", "-b:v", "1200k",
+                "-profile:v", "baseline", "-pix_fmt", "yuv420p", "-b:v", "600k",
                 "-x264-params", "keyint=30:min-keyint=30:scenecut=0:repeat-headers=1:aud=1",
                 "-f", "h264", "-y", h264Path]);
             if (lastError != null) continue;
@@ -140,7 +140,7 @@ public sealed class DemoRig
             if (lastError != null) continue;
             lastError = Run(ffmpeg, ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", graph,
                 "-t", "6", "-an", "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "baseline",
-                "-pix_fmt", "yuv420p", "-b:v", "1200k", "-movflags", "+faststart", "-y", clipPath]);
+                "-pix_fmt", "yuv420p", "-b:v", "600k", "-movflags", "+faststart", "-y", clipPath]);
             if (lastError == null) break;
         }
         if (lastError != null)

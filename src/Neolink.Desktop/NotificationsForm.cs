@@ -188,9 +188,14 @@ internal sealed class NotificationsForm : Form
             Height = 52,
             Padding = new Padding(14, 10, 14, 10),
         };
-        var save = new Button { Text = "Save", DialogResult = DialogResult.OK, Width = 90 };
-        var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Width = 90 };
-        var test = new Button { Text = "Show a test notification", Width = 180 };
+        // AutoSize with a floor, not fixed widths: fixed widths are where the
+        // connect dialog's "Test connection" clipping came from.
+        var save = new Button
+            { Text = "Save", DialogResult = DialogResult.OK, AutoSize = true, MinimumSize = new Size(90, 0), Padding = new Padding(6, 2, 6, 2) };
+        var cancel = new Button
+            { Text = "Cancel", DialogResult = DialogResult.Cancel, AutoSize = true, MinimumSize = new Size(90, 0), Padding = new Padding(6, 2, 6, 2) };
+        var test = new Button
+            { Text = "Show a test notification", AutoSize = true, Padding = new Padding(6, 2, 6, 2) };
         test.Click += (_, _) => ShowTest();
         bar.Controls.Add(save);
         bar.Controls.Add(cancel);

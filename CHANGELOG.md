@@ -29,15 +29,18 @@ in the README). Paste the matching section below into the GitHub release.
   as a normal console app); `--log` mirrors the log to a file that rolls to
   `.old` at 10 MB — how a service, which has no console, stays debuggable.
   Both work on any deployment, not just the installer's.
-- **A one-click demo.** `neolink.net --demo` runs the whole product against
-  four synthetic cameras: ffmpeg-drawn looping footage pumped through the
-  real pipeline, detections pulsing on a timer, a seeded two-day event
-  history, 24/7 recording to the timeline — no hardware, no config, and
-  nothing saved (everything lives in a temp folder wiped at the next start).
-  The repo gained a devcontainer that boots straight into it, and the README
-  an "Open in GitHub Codespaces" badge — a private, throwaway instance in
-  the browser for anyone curious what Neolink.NET looks like before they
-  point it at a camera.
+- **A one-command demo.** `docker run --rm -p 8655:8655
+  ghcr.io/borexola/neolink.net:latest --demo` (or `neolink.net --demo` with
+  ffmpeg on PATH) runs the whole product against four synthetic cameras:
+  ffmpeg-drawn looping footage pumped through the real pipeline, detections
+  pulsing on a timer, a seeded two-day event history, 24/7 recording to the
+  timeline — no hardware, no config, and nothing saved (everything lives in
+  a temp folder wiped at the next start). Built to be hosted as a public
+  "try it" instance too: account creation is disabled in demo mode, which
+  keeps the whole admin surface behind its existing "create the admin
+  account first" gate, and the world resets itself with a clean exit every
+  six hours — run it under a restart policy and every reset is a fresh
+  world.
 
 ### Fixed
 

@@ -22,8 +22,13 @@ internal sealed class ConnectForm : Form
     // Tall enough for the three-line prefill hint; error messages run long too.
     private readonly Label _status = new() { AutoSize = false, Height = 64 };
     private Font? _statusBold;
-    private readonly Button _test = new() { Text = "Test connection" };
-    private readonly Button _ok = new() { Text = "Connect", DialogResult = DialogResult.OK };
+    // AutoSize: the default 75px button clips "Test connection" at any DPI, and
+    // fixed widths just move the clipping point. MinimumSize keeps "Connect" and
+    // "Cancel" from shrinking into tabs; the flow panel lays them out either way.
+    private readonly Button _test = new()
+        { Text = "Test connection", AutoSize = true, Padding = new Padding(6, 2, 6, 2) };
+    private readonly Button _ok = new()
+        { Text = "Connect", DialogResult = DialogResult.OK, AutoSize = true, MinimumSize = new Size(88, 0), Padding = new Padding(6, 2, 6, 2) };
 
     public ConnectForm(DesktopSettings settings, bool reconfiguring)
     {
@@ -105,7 +110,11 @@ internal sealed class ConnectForm : Form
             Height = 52,
             Padding = new Padding(16, 10, 16, 10),
         };
-        var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel };
+        var cancel = new Button
+        {
+            Text = "Cancel", DialogResult = DialogResult.Cancel,
+            AutoSize = true, MinimumSize = new Size(88, 0), Padding = new Padding(6, 2, 6, 2),
+        };
         buttons.Controls.Add(_ok);
         buttons.Controls.Add(cancel);
         buttons.Controls.Add(_test);

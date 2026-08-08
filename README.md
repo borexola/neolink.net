@@ -57,20 +57,19 @@ The cameras are unmodified and no Reolink NVR is required.
 > requests are very welcome**: a fix validated on hardware I don't have is the
 > one contribution I cannot make myself.
 
-## Try it first — no cameras, no install
+## Try it first — no cameras, no config
 
-[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/borexola/neolink.net?quickstart=1)
+```bash
+docker run --rm -p 8655:8655 ghcr.io/borexola/neolink.net:latest --demo
+```
 
-One click gives you a private, throwaway Neolink.NET running against **four
-synthetic cameras** — live moving video, detections firing every minute or two,
-a seeded event history, 24/7 recordings scrubbing on the timeline. It is the
-real product with a fake world behind it: no real footage anywhere, nothing
-saved, and the whole thing vanishes when the codespace closes. (First start
-takes a couple of minutes to build; any GitHub account's free Codespaces hours
-cover it easily.)
-
-The same showroom runs anywhere the server does: `neolink.net --demo` (needs
-ffmpeg on PATH).
+Open <http://localhost:8655> and you're looking at the real product with a fake
+world behind it: **four synthetic cameras** with live moving video, detections
+firing every minute or two, a seeded event history, 24/7 recordings scrubbing
+on the timeline. No real footage anywhere, nothing saved — the demo world
+lives in a temp folder, resets itself every six hours, and vanishes with the
+container. The same showroom runs on bare metal too: `neolink.net --demo`
+(needs ffmpeg on PATH).
 
 ## Quick start (Home Assistant add-on)
 

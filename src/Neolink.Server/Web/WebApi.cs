@@ -428,6 +428,12 @@ public static class WebApi
         // First account = the admin; creating it is what turns authentication on.
         app.MapPost("/api/auth/setup", (CredentialsRequest req) =>
         {
+            // On a shared demo, whoever creates the admin account owns the server
+            // for everyone — and unlocks the whole AdminOnly surface (config,
+            // camera test's outbound connects, SMTP). Keeping accounts impossible
+            // keeps that entire surface locked by its existing gate.
+            if (o.Demo)
+                return Results.Json(new { error = "this is a shared demo — accounts are disabled" }, statusCode: 403);
             if (userStore.Enabled)
                 return Results.Json(new { error = "already set up" }, statusCode: 409);
             if (string.IsNullOrWhiteSpace(req.Username) || string.IsNullOrEmpty(req.Password))

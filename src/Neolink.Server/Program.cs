@@ -246,6 +246,28 @@ AppDomain.CurrentDomain.ProcessExit += (_, _) =>
     try { shutdown.Cancel(); } catch (ObjectDisposedException) { }
 };
 
+// The demo world has a lifespan: continuous recording accrues gigabytes per
+// hour, and a hosted demo accumulates visitors' fiddling. A clean exit every
+// six hours bounds both — the supervisor (docker --restart, systemd) starts a
+// fresh world; the wipe-on-start does the cleaning. A console run just ends.
+if (demoRig != null)
+{
+    Log.Info("Demo mode: the world resets every 6 hours (clean exit — run under " +
+             "a restart policy such as docker --restart when hosting this)");
+    var demoShutdown = shutdown;
+    _ = Task.Run(async () =>
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromHours(6), demoShutdown.Token);
+            Log.Info("Demo reset: six hours are up — exiting so the supervisor can start a fresh world");
+            demoShutdown.Cancel();
+        }
+        catch (OperationCanceledException) { }
+        catch (ObjectDisposedException) { }
+    });
+}
+
 var users = config.Users.ToDictionary(u => u.Name, u => u.Pass);
 if (users.Count > 0)
     Log.Warn("RTSP is unencrypted: usernames and passwords are exchanged in plaintext.");
