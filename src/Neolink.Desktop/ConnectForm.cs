@@ -19,7 +19,8 @@ internal sealed class ConnectForm : Form
     private readonly TextBox _pass = new() { UseSystemPasswordChar = true };
     private readonly CheckBox _remember = new() { Text = "Remember the password (encrypted for this Windows account)" };
     private readonly CheckBox _insecure = new() { Text = "Accept an untrusted TLS certificate (self-signed LAN server)" };
-    private readonly Label _status = new() { AutoSize = false, Height = 44 };
+    // Tall enough for the three-line prefill hint; error messages run long too.
+    private readonly Label _status = new() { AutoSize = false, Height = 64 };
     private Font? _statusBold;
     private readonly Button _test = new() { Text = "Test connection" };
     private readonly Button _ok = new() { Text = "Connect", DialogResult = DialogResult.OK };
@@ -34,8 +35,14 @@ internal sealed class ConnectForm : Form
         MaximizeBox = false;
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(520, 330);
-        AutoScaleMode = AutoScaleMode.Dpi;
+        ClientSize = new Size(560, 400);
+        // Font scaling with an explicit 96-dpi baseline (Segoe UI 9pt = 7x15).
+        // AutoScaleMode alone does nothing for a code-built form: without
+        // designer-recorded AutoScaleDimensions the runtime DPI becomes the
+        // baseline, no scaling ever runs, and on a 125%/150% display the text
+        // grows into fixed pixel sizes — clipped labels and buttons.
+        AutoScaleDimensions = new SizeF(7F, 15F);
+        AutoScaleMode = AutoScaleMode.Font;
 
         // A first run beside the installer's local server should not open with an
         // empty box asking for an address the user never chose: the service on
@@ -116,8 +123,8 @@ internal sealed class ConnectForm : Form
         // two boxes looking mandatory.
         if (!reconfiguring)
             _status.Text = localServer
-                ? "The server installed on this PC is filled in — just press Connect. " +
-                  "Leave the username and password blank until you create an account."
+                ? "The server installed on this PC is filled in — leave the boxes blank and press " +
+                  "Connect. It will ask you to create your admin account right after."
                 : "Leave the username and password blank if your server has no accounts.";
     }
 
@@ -199,6 +206,10 @@ internal sealed class ConnectForm : Form
                     return false;
                 }
                 Say($"Success — signed in as {candidate.Username}.", success: true);
+            }
+            else if (status.SetupRequired)
+            {
+                Say("Success — connected. The next screen is the server's own: it will ask you to create the admin account.", success: true);
             }
             else
             {

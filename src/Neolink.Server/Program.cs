@@ -24,6 +24,7 @@ string? command = null;
 string? configPath = null;
 string? logPath = null;
 bool serviceMode = false;
+bool demoMode = false;
 
 for (int i = 0; i < argList.Count; i++)
 {
@@ -56,6 +57,9 @@ for (int i = 0; i < argList.Count; i++)
         case "--service":
             serviceMode = true;
             break;
+        case "--demo":
+            demoMode = true;
+            break;
         case "rtsp" or "selftest" or "probe":
             command = a;
             break;
@@ -86,6 +90,27 @@ if (serviceMode && command == "rtsp")
 
 if (command == "selftest")
     return SelfTest.Run(configPath) ? 0 : 1;
+
+// Demo mode builds its whole world — synthetic footage, seeded history, a
+// throwaway config — under one temp root, wiped at the next demo start. The
+// scratch config file exists only so the admin editor has something to edit.
+Neolink.Demo.DemoRig? demoRig = null;
+if (demoMode && command == "rtsp")
+{
+    if (Neolink.Media.Ffmpeg.ExePath == null)
+        return Fail("--demo draws its synthetic cameras with ffmpeg — install ffmpeg on PATH (or set NEOLINK_FFMPEG)");
+    Log.Info("Demo mode: generating synthetic cameras (a few seconds of ffmpeg)...");
+    try
+    {
+        demoRig = Neolink.Demo.DemoRig.Prepare();
+    }
+    catch (Exception ex)
+    {
+        return Fail($"demo setup failed: {ex.Message}");
+    }
+    configPath = demoRig.ConfigPath;
+    Log.Info($"Demo mode: nothing is saved — everything lives under {demoRig.Root} and is wiped at the next start");
+}
 
 if (configPath == null)
 {
@@ -131,13 +156,20 @@ if (!File.Exists(configPath))
 }
 
 NeolinkConfig config;
-try
+if (demoRig != null)
 {
-    config = NeolinkConfig.Load(configPath);
+    config = demoRig.Config;   // built in code; the file on disk is a scratch pad
 }
-catch (Exception ex)
+else
 {
-    return Fail($"Failed to load config '{configPath}': {ex.Message}");
+    try
+    {
+        config = NeolinkConfig.Load(configPath);
+    }
+    catch (Exception ex)
+    {
+        return Fail($"Failed to load config '{configPath}': {ex.Message}");
+    }
 }
 
 // On-demand camera-discovery diagnostic: run the sweep once, now, for every
@@ -394,8 +426,26 @@ foreach (var cam in config.Cameras)
     CameraService? primaryService = null;
     var camServices = new List<CameraService>();
     var pullServices = new List<RtspCameraService>();
+    var demoServices = new List<Neolink.Demo.DemoCameraService>();
 
-    if (cam.IsGenericRtsp)
+    if (cam.Demo)
+    {
+        // Demo camera: the same hub, mounts and recorders as a real one — only
+        // the source differs (a pump looping generated footage instead of a
+        // camera connection). No Baichuan control surface; snapshots come from
+        // the synthetic frames so events still get thumbnails.
+        var source = demoRig!.Sources[cam.Name];
+        var hub = new StreamHub($"{cam.Name} mainStream");
+        Mount($"/{cam.Name}/mainStream", hub);
+        Mount($"/{cam.Name}", hub);
+        webStreams.Add(new WebStreamInfo("mainStream", $"/{cam.Name}/mainStream", hub));
+        var demoService = new Neolink.Demo.DemoCameraService(cam.Name, source, hub);
+        demoService.SetSuspended(cameraState.Suspended(cam.Name));
+        demoServices.Add(demoService);
+        tasks.Add(Task.Run(() => demoService.RunAsync(shutdown.Token)));
+        control = new Neolink.Demo.DemoCameraControl(cam.Name, demoService, source.Thumb);
+    }
+    else if (cam.IsGenericRtsp)
     {
         // Generic (non-Reolink) camera: pull its RTSP URL(s) into hubs. It streams
         // and records, but has no Baichuan control surface and no motion pushes.
@@ -597,16 +647,18 @@ foreach (var cam in config.Cameras)
     // reading it back is "all streams held" (they toggle together). Persist here so
     // the API/bridge just flip one switch. Both service lists exist; only one is
     // populated per camera, so concatenating covers both kinds.
-    var suspendables = camServices.Cast<object>().Concat(pullServices).ToList();
+    var suspendables = camServices.Cast<object>().Concat(pullServices).Concat(demoServices).ToList();
     void SetCamSuspended(bool v)
     {
         foreach (var s in camServices) s.SetSuspended(v);
         foreach (var s in pullServices) s.SetSuspended(v);
+        foreach (var s in demoServices) s.SetSuspended(v);
         cameraState.SetSuspended(cam.Name, v);
     }
     bool IsCamSuspended() =>
         (camServices.Count > 0 && camServices.All(s => s.Suspended))
-        || (pullServices.Count > 0 && pullServices.All(s => s.Suspended));
+        || (pullServices.Count > 0 && pullServices.All(s => s.Suspended))
+        || (demoServices.Count > 0 && demoServices.All(s => s.Suspended));
     // Configured address for the settings identity strip: host, plus :port when
     // the camera is on a non-default Baichuan port. Generic RTSP cameras keep
     // their address in the stream URL, so leave theirs unset.
@@ -664,6 +716,20 @@ foreach (var cam in config.Cameras)
         });
     if (primaryService != null)
         motionTargets.Add((camServices, cam.Name, recorderSink));
+
+    // Demo cameras have no camera to push detections, so a pulse task plays the
+    // camera's part: a labelled push every minute or three, straight into the
+    // same recorder sink a Baichuan push lands in. 24/7 recording defaults ON —
+    // the timeline page is half the show.
+    if (cam.Demo)
+    {
+        recordingSettings?.Update(cam.Name, events: null, continuous: true, eventTypes: null, setEventTypes: false);
+        if (recorderSink is { } demoSink)
+        {
+            var source = demoRig!.Sources[cam.Name];
+            tasks.Add(Task.Run(() => Neolink.Demo.DemoRig.RunPulsesAsync(cam.Name, source, demoSink, shutdown.Token)));
+        }
+    }
 }
 
 // Router wake hints: instant, event-grade wake signals for battery cameras from
@@ -858,6 +924,7 @@ if (config.WebPort > 0)
         ConfigLanguage = config.Ui.Language,
         Version = Version,
         ConfigPath = Path.GetFullPath(configPath),
+        Demo = demoMode,
         Updates = updates,
         Monitor = monitor,
         RecordingHealth = recordingHealth,
@@ -1056,6 +1123,9 @@ static void PrintHelp()
             --log <PATH>          Also write the log to a file (rolls to .old at 10 MB)
             --service             Run as a Windows service (what the installed
                                   service uses; harmless from a console)
+            --demo                Showroom mode: four synthetic cameras with live
+                                  motion, events and recordings — no hardware, no
+                                  config, nothing saved (needs ffmpeg on PATH)
 
         Streams are served at rtsp://<bind>:<port>/<camera-name>[/mainStream|/subStream]
         """);

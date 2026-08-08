@@ -31,9 +31,10 @@ The cameras are unmodified and no Reolink NVR is required.
 
 <table>
   <tr>
-    <td width="33%"><a href="docs/events.png"><img src="docs/events.png" alt="Events page: deep-linkable event review with playback speed and HD/SD quality controls"></a><br><sub><b>Events page</b> — deep-linkable review, 1–16× playback, HD/SD</sub></td>
-    <td width="33%"><a href="docs/timeline.png"><img src="docs/timeline.png" alt="Timeline: synced multi-camera scrubbing with coverage bars, event marks and a footage calendar"></a><br><sub><b>Timeline</b> — synced scrubbing, event marks, footage calendar</sub></td>
-    <td width="33%"><a href="docs/camera-settings.png"><img src="docs/camera-settings.png" alt="Camera settings: stream encode tables, zoom/focus, lights — staged changes with a reboot warning before anything is sent"></a><br><sub><b>Camera settings</b> — staged changes, applied only when you say so</sub></td>
+    <td width="25%"><a href="docs/events.png"><img src="docs/events.png" alt="Events page: deep-linkable event review with playback speed and HD/SD quality controls"></a><br><sub><b>Events page</b> — deep-linkable review, 1–16× playback, HD/SD</sub></td>
+    <td width="25%"><a href="docs/timeline.png"><img src="docs/timeline.png" alt="Timeline: synced multi-camera scrubbing with coverage bars, event marks and a footage calendar"></a><br><sub><b>Timeline</b> — synced scrubbing, event marks, footage calendar</sub></td>
+    <td width="25%"><a href="docs/camera-settings-1.png"><img src="docs/camera-settings-1.png" alt="Per-camera recording: event types and retention, AI descriptions, 24/7 recording, archive tiers and the footage lifecycle strip"></a><br><sub><b>Recording setup</b> — events, 24/7, archive lifecycle, per camera</sub></td>
+    <td width="25%"><a href="docs/camera-settings-2.png"><img src="docs/camera-settings-2.png" alt="Camera settings: stream encode tables, lights, picture, detection sensitivity and zone, siren — staged changes, applied only when you say so"></a><br><sub><b>Camera settings</b> — staged changes, applied only when you say so</sub></td>
   </tr>
 </table>
 
@@ -55,6 +56,21 @@ The cameras are unmodified and no Reolink NVR is required.
 > and fixed exactly that way. And if you can go one step further, **pull
 > requests are very welcome**: a fix validated on hardware I don't have is the
 > one contribution I cannot make myself.
+
+## Try it first — no cameras, no install
+
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/borexola/neolink.net?quickstart=1)
+
+One click gives you a private, throwaway Neolink.NET running against **four
+synthetic cameras** — live moving video, detections firing every minute or two,
+a seeded event history, 24/7 recordings scrubbing on the timeline. It is the
+real product with a fake world behind it: no real footage anywhere, nothing
+saved, and the whole thing vanishes when the codespace closes. (First start
+takes a couple of minutes to build; any GitHub account's free Codespaces hours
+cover it easily.)
+
+The same showroom runs anywhere the server does: `neolink.net --demo` (needs
+ffmpeg on PATH).
 
 ## Quick start (Home Assistant add-on)
 

@@ -56,7 +56,12 @@ internal sealed class NotificationsForm : Form
         StartPosition = FormStartPosition.CenterParent;
         ClientSize = new Size(720, 600);
         MinimumSize = new Size(700, 560);
-        AutoScaleMode = AutoScaleMode.Dpi;
+        // Same baseline as ConnectForm: Dpi mode on a code-built form never
+        // actually scales (no designer AutoScaleDimensions), leaving high-DPI
+        // text to outgrow the fixed sizes. Resizable helps here, but the
+        // opening size should fit without the user dragging.
+        AutoScaleDimensions = new SizeF(7F, 15F);
+        AutoScaleMode = AutoScaleMode.Font;
 
         Controls.Add(BuildBody());
         Controls.Add(BuildButtons());

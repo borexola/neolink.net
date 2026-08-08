@@ -103,6 +103,10 @@ public sealed class WebApiOptions
     public string? ConfigLanguage { get; init; }
     public required string Version { get; init; }
     public required string ConfigPath { get; init; }
+    /// <summary>--demo: a public throwaway showroom. Suppresses the "secure this
+    /// server" first-run prompt — inviting every visitor to set an admin password
+    /// on a shared demo would be a trap, not security.</summary>
+    public bool Demo { get; init; }
     public UpdateChecker? Updates { get; init; }
     /// <summary>Process/disk resource sampler feeding the UI's monitor page.</summary>
     public SystemMonitor? Monitor { get; init; }
@@ -410,7 +414,7 @@ public static class WebApi
             return Results.Json(new
             {
                 enabled = userStore.Enabled,
-                setupRequired = !userStore.Enabled,
+                setupRequired = !userStore.Enabled && !o.Demo,
                 resetAvailable = resetAdminPassword && userStore.Enabled,
                 user = user?.Name,
                 admin = user?.Admin ?? false,

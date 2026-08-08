@@ -221,10 +221,62 @@
     <CustomAction Id="LaunchApp" DllEntry="WixShellExec" Impersonate="yes"
                   BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)" Return="ignore" />
 
-    <!-- FeatureTree instead of InstallDir: the meaningful choice is no longer
-         the folder, it is whether the local server rides along. The customize
-         page carries both (features to pick, Browse for the location). -->
-    <ui:WixUI Id="WixUI_FeatureTree" />
+    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
+
+    <!-- The local-server choice is one question, so it gets one page with one
+         checkbox — not the feature tree, whose "Will be installed on local hard
+         drive" dropdowns read like a filesystem exam to the very people the
+         standalone option is for. The page slots between the licence and the
+         folder; Next translates the box into MSI feature states. -->
+    <!-- Preselect on upgrade: the marker the server feature writes is also how
+         this installer remembers the last answer, so upgrading a standalone
+         install arrives with the box already ticked. -->
+    <Property Id="INSTALL_LOCAL_SERVER">
+      <RegistrySearch Id="ExistingLocalServer" Root="HKLM" Key="SOFTWARE\Neolink.NET"
+                      Name="LocalServer" Type="raw" Bitness="always64" />
+    </Property>
+    <UI>
+      <Dialog Id="LocalServerDlg" Width="370" Height="270" Title="[ProductName] Setup">
+        <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44"
+                 TabSkip="no" Text="WixUI_Bmp_Banner" />
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="330" Height="15"
+                 Transparent="yes" NoPrefix="yes"
+                 Text="{\WixUI_Font_Title}Choose what this PC does" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="330" Height="15"
+                 Transparent="yes" NoPrefix="yes"
+                 Text="Just the viewer — or the whole system." />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+        <Control Id="ViewerText" Type="Text" X="20" Y="58" Width="330" Height="28" NoPrefix="yes"
+                 Text="Out of the box, this installs the viewer: your cameras in a window, connected to a Neolink.NET server you already have (the Home Assistant add-on, Docker, or another PC)." />
+        <Control Id="ServerCheck" Type="CheckBox" X="20" Y="96" Width="330" Height="17"
+                 Property="INSTALL_LOCAL_SERVER" CheckBoxValue="1"
+                 Text="&amp;Run everything on this PC — install the server too" />
+        <Control Id="ServerText" Type="Text" X="33" Y="116" Width="317" Height="44" NoPrefix="yes"
+                 Text="No server yet? Tick this and this PC becomes the whole system: the server runs in the background, starts with Windows, and records and serves your cameras around the clock — no Docker, no Home Assistant. Phones and other PCs on your network can connect to it too." />
+        <Control Id="ChangeText" Type="Text" X="33" Y="164" Width="317" Height="17" NoPrefix="yes"
+                 Text="Not sure? Leave it unticked — running this installer again can add it later." />
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="&amp;Back">
+          <Publish Event="NewDialog" Value="LicenseAgreementDlg" />
+        </Control>
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17"
+                 Default="yes" Text="&amp;Next">
+          <Publish Event="AddLocal" Value="LocalServer" Condition="INSTALL_LOCAL_SERVER" />
+          <Publish Event="Remove" Value="LocalServer" Condition="NOT INSTALL_LOCAL_SERVER" />
+          <Publish Event="NewDialog" Value="InstallDirDlg" />
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17"
+                 Cancel="yes" Text="Cancel">
+          <Publish Event="SpawnDialog" Value="CancelDlg" />
+        </Control>
+      </Dialog>
+      <!-- Re-route the stock InstallDir flow through the new page. Order beats
+           the built-in publishes; for NewDialog the last one that fires wins. -->
+      <Publish Dialog="LicenseAgreementDlg" Control="Next" Event="NewDialog" Value="LocalServerDlg"
+               Condition="LicenseAccepted = &quot;1&quot;" Order="99" />
+      <Publish Dialog="InstallDirDlg" Control="Back" Event="NewDialog" Value="LocalServerDlg"
+               Order="99" />
+    </UI>
     <UI>
       <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchApp"
                Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 and NOT Installed" />

@@ -5,6 +5,7 @@ using System.Text;
 using System.Threading.Channels;
 using Neolink.Bc;
 using Neolink.Config;
+using Neolink.Demo;
 using Neolink.Media;
 using Neolink.Protocol;
 
@@ -982,6 +983,60 @@ public static class SelfTest
             AssertEq(H26x.H264NalType(pnals[1].Span), H26x.H264Pps);
             AssertEq(pnals[1].Length, 2); // 68 BB
             AssertEq(H26x.SplitNals(new byte[] { 0, 0 }).Count, 0); // too short to hold a start code
+        });
+
+        Test("demo access-unit grouping (AUD split, SPS/PPS repeated onto bare keyframes)", () =>
+        {
+            static byte[] Nal(params byte[] body)
+            {
+                var b = new byte[4 + body.Length];
+                b[3] = 1;
+                body.CopyTo(b, 4);
+                return b;
+            }
+            static byte[] Cat(params byte[][] parts)
+            {
+                var all = new byte[parts.Sum(p => p.Length)];
+                int at = 0;
+                foreach (var p in parts) { p.CopyTo(all, at); at += p.Length; }
+                return all;
+            }
+            var aud = Nal(0x09, 0x10);
+            var sps = Nal(0x67, 1, 2, 3);
+            var pps = Nal(0x68, 9);
+            var idr = Nal(0x65, 5, 5);
+            var p = Nal(0x41, 7);
+
+            // The encoder's own shape (aud=1, repeat-headers=1): AUD-delimited, the
+            // keyframe already carries its parameter sets — and zerolatency x264
+            // slices every frame across its threads, so AUs hold SEVERAL slice
+            // NALs. Only the AUD may split them (splitting on slices shipped
+            // frames in eleven pieces: 34 corrupt frames per 450 decoded).
+            var withAud = DemoRig.ParseAccessUnits(Cat(aud, sps, pps, idr, idr, aud, p, p, aud, p));
+            AssertEq(withAud.Count, 3);
+            Assert(withAud[0].Keyframe && !withAud[1].Keyframe && !withAud[2].Keyframe,
+                "only the IDR access unit is a keyframe");
+            Assert(H26x.SplitNals(withAud[0].Data).Any(n => H26x.H264NalType(n.Span) == H26x.H264Sps),
+                "keyframe AU keeps its in-band SPS");
+            AssertEq(H26x.SplitNals(withAud[1].Data).Count, 2); // both slices of frame 2 stay together
+            AssertEq(H26x.SplitNals(withAud[0].Data).Count(n => H26x.H264NalType(n.Span) == H26x.H264Idr), 2);
+
+            // No AUDs (fallback encode): a second slice starts the next frame.
+            var noAud = DemoRig.ParseAccessUnits(Cat(sps, pps, idr, p, p));
+            AssertEq(noAud.Count, 3);
+            Assert(noAud[0].Keyframe, "first AU (SPS+PPS+IDR) is the keyframe");
+
+            // A later bare keyframe (encoder that wrote headers once): the parser
+            // must prepend the stashed SPS/PPS — the hub's GOP cache and every
+            // late-joining viewer depend on parameter sets riding each keyframe.
+            var bare = DemoRig.ParseAccessUnits(Cat(sps, pps, idr, aud, p, aud, idr));
+            var lastNals = H26x.SplitNals(bare[^1].Data);
+            Assert(bare[^1].Keyframe, "bare IDR still flagged as keyframe");
+            AssertEq(H26x.H264NalType(lastNals[0].Span), H26x.H264Sps);
+            AssertEq(H26x.H264NalType(lastNals[1].Span), H26x.H264Pps);
+
+            // Parameter-set-only tail (nothing decodable) emits no unit.
+            AssertEq(DemoRig.ParseAccessUnits(Cat(sps, pps)).Count, 0);
         });
 
         Test("rtp h264 fragmentation", () =>

@@ -834,6 +834,9 @@ public sealed class CameraConfig
     public string? RtspSub { get; init; }
     /// <summary>True when this entry is a plain RTSP camera instead of a Baichuan (Reolink) one.</summary>
     public bool IsGenericRtsp => RtspMain != null || RtspSub != null;
+    /// <summary>Code-built --demo camera: synthetic looped footage, no network.
+    /// Never parsed from a config file — the demo rig is the only author.</summary>
+    public bool Demo { get; init; }
     public byte ChannelId { get; init; }
     public List<string>? PermittedUsers { get; init; }
     /// <summary>

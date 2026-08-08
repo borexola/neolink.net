@@ -1,0 +1,23 @@
+// The one-click demo: "Open in Codespaces" from the README lands here. The
+// container gets .NET and ffmpeg (which draws the synthetic cameras), builds the
+// server once, and every attach starts it in --demo mode — four fake cameras,
+// live motion, events and recordings, nothing real and nothing saved. Each
+// visitor gets their own private instance; closing the codespace ends the world.
+{
+  "name": "Neolink.NET demo",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+  "features": {
+    "ghcr.io/devcontainers/features/dotnet:2": { "version": "10.0" }
+  },
+  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg && dotnet build src/Neolink.Server/Neolink.Server.csproj -c Release",
+  // Guarded so a second terminal attach doesn't fight the running server for
+  // the port. The [N] bracket keeps pgrep -f from matching this guard's OWN
+  // command line (which contains the pattern) — without it the check is always
+  // true and the server never starts. --no-build: postCreate already compiled.
+  "postAttachCommand": "bash -c \"pgrep -f '[N]eolink.Server' >/dev/null || dotnet run --project src/Neolink.Server -c Release --no-build -- --demo\"",
+  "forwardPorts": [8655],
+  "portsAttributes": {
+    "8655": { "label": "Neolink.NET demo — open me", "onAutoForward": "openBrowserOnce" },
+    "8654": { "label": "RTSP (only reachable via a forwarded tunnel)", "onAutoForward": "silent" }
+  }
+}

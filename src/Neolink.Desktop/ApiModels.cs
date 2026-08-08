@@ -71,8 +71,10 @@ internal sealed record ApiCamera(
     string Name, bool Online = false, bool Asleep = false, bool Suspended = false);
 
 /// <summary>GET /api/auth/status — whether accounts exist decides if the connect
-/// dialog demands credentials.</summary>
-internal sealed record ApiAuthStatus(bool Enabled = false);
+/// dialog demands credentials. SetupRequired = a fresh server with no accounts
+/// at all: the web UI will open on its "create the admin account" panel, and
+/// the dialog says so instead of leaving the person to wonder about blanks.</summary>
+internal sealed record ApiAuthStatus(bool Enabled = false, bool SetupRequired = false);
 
 /// <summary>POST /api/auth/login.</summary>
 internal sealed record ApiLogin(string? Token = null, string? Error = null);
