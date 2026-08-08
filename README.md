@@ -103,58 +103,11 @@ route below — everything works the same, including the MQTT integration.
 
 ## Quick start (Docker — recommended)
 
-Prebuilt multi-arch images (`linux/amd64` + `linux/arm64`) are published to GitHub
-Container Registry on every push to `main` and every `v*` release tag.
-
-### 1. Pull the image
-
-```bash
-docker pull ghcr.io/borexola/neolink.net:latest
-```
-
-Available tags:
-
-| Tag | Meaning |
-|---|---|
-| `latest` | most recent build of `main` |
-| `0.6.0`, `0.6` | a specific release (created from `v0.6.0` git tags) — pin these in production |
-| `main` | same as `latest`, explicit branch tag |
-| `beta` | rolling pre-release test channel (built from the `beta` branch) — try new features early; not for production |
-
-Docker selects the right architecture (x86-64 server, Raspberry Pi 4/5, ARM NAS)
-automatically. Verify the pull:
-
-```bash
-docker image inspect ghcr.io/borexola/neolink.net:latest --format '{{.Os}}/{{.Architecture}} {{.Created}}'
-```
-
-> **`denied` or `unauthorized` when pulling?** The package is public, so no login is
-> needed. If you see this on a fresh setup you are likely logged into ghcr.io with an
-> expired token — run `docker logout ghcr.io` and pull again.
-> **`manifest unknown`?** The tag doesn't exist (typo, or a release tag that hasn't
-> been built yet) — check the available tags on the
-> [package page](https://github.com/borexola/neolink.net/pkgs/container/neolink.net).
-
-### 2. Create a config
+> ### 📖 Full guide: **[docs/docker-install.md](docs/docker-install.md)** — image
+> tags, docker compose, Unraid template, upgrading, building the image yourself.
 
 ```bash
 mkdir -p config
-curl -o config/config.json https://raw.githubusercontent.com/borexola/neolink.net/main/src/Neolink.Server/config.example.json
-```
-
-Edit it: camera names, IP addresses, and credentials (same login as the Reolink app).
-
-> **New to it?** You can skip this step. If `config.json` doesn't exist on
-> first start, Neolink.NET writes a commented starter config and boots straight to
-> the web UI (empty, no crash-loop) — then edit `config.json` to add your
-> cameras and restart. Handy for one-click installs (Unraid, Portainer).
-
-### 3. Run
-
-```bash
-# /config is a directory mount: config.json lives in it, and runtime settings
-# from the web UI (settings.json) are persisted next to it.
-# TZ sets the time zone for timestamps and the UI clock (defaults to UTC).
 docker run -d --name neolink --restart unless-stopped \
     -p 8654:8654 -p 8655:8655 \
     -e TZ=Europe/London \
@@ -162,92 +115,16 @@ docker run -d --name neolink --restart unless-stopped \
     ghcr.io/borexola/neolink.net:latest
 ```
 
-Then check it came up:
+First start writes a commented starter config into `config/` and opens the
+**web UI at <http://localhost:8655>** — add your cameras under Server settings
+(the gear icon) with the same login you use in the Reolink app, restart, and
+streams serve at `rtsp://localhost:8654/<camera-name>`. Images are multi-arch
+(`amd64` + `arm64`: x86 servers, Raspberry Pi 4/5, ARM NAS); pin a version tag
+like `:1.0.1` in production.
 
-```bash
-docker logs -f neolink     # prints the ready-to-use RTSP and web UI URLs
-```
-
-- **Web UI**: http://localhost:8655
-- **RTSP**: `rtsp://localhost:8654/<camera-name>`
-
-### Or with compose
-
-Save this as `docker-compose.yml` next to your `config/` directory
-(or `curl -O https://raw.githubusercontent.com/borexola/neolink.net/main/docker-compose.yml`):
-
-```yaml
-services:
-  neolink:
-    image: ghcr.io/borexola/neolink.net:latest
-    container_name: neolink
-    restart: unless-stopped
-    environment:
-      - TZ=Europe/London   # time zone for timestamps + the UI clock (defaults to UTC)
-    ports:
-      - "8654:8654"   # RTSP (TCP-interleaved works for ffmpeg/Frigate/VLC)
-      - "8655:8655"   # web UI + API; remove if webui:false and API unused
-    volumes:
-      - ./config:/config   # holds config.json + web-UI settings.json
-      # Recording storage — uncomment and set "recording": { "path": "/recordings" } in config.json:
-      # - ./recordings:/recordings
-      # Optional tiered storage (see "Tiered storage" below). Map a volume for EVERY tier
-      # path you set, or that footage lands inside the container and is lost on recreate:
-      # - /mnt/fast-ssd/neolink:/clips     # fast SSD tier  → "clips_path": "/clips"
-      # - /mnt/bigdisk/neolink:/archive    # cold archive   → "archive_path": "/archive"
-    # Host networking instead of port maps — REQUIRED for UDP-only battery
-    # cameras ("udp": true), and needed for RTSP over UDP transport. Delete the
-    # `ports:` block above when you enable it. See "UDP-only battery models".
-    # network_mode: host
-```
-
-Then:
-
-```bash
-docker compose up -d
-docker compose logs -f    # shows the rtsp:// and web UI URLs
-```
-
-### Unraid
-
-An Unraid [Community Applications](https://forums.unraid.net/topic/38582-plug-in-community-applications/)
-template ships in [`unraid/`](unraid/). Add
-`https://github.com/borexola/neolink.net` under **Apps → Settings → Template
-Repositories**, then search **Neolink.NET** in *Apps* — or paste the raw
-[template URL](https://raw.githubusercontent.com/borexola/neolink.net/main/unraid/neolink.net.xml)
-into **Docker → Add Container**. First start writes a starter config and opens
-the web UI; edit `config.json` in the Config share to add cameras. See
-[unraid/README.md](unraid/README.md).
-
-### Upgrading
-
-```bash
-docker pull ghcr.io/borexola/neolink.net:latest
-docker rm -f neolink
-docker run -d --name neolink ...   # same run command as above
-# or, with compose:
-docker compose pull && docker compose up -d
-```
-
-### Building the image from source
-
-```bash
-git clone https://github.com/borexola/neolink.net.git && cd neolink.net
-docker build -t neolink.net .
-docker run -d --name neolink -p 8654:8654 -p 8655:8655 \
-    -v "$PWD/config:/config" neolink.net
-```
-
-Then:
-- **Web UI**: http://localhost:8655
-- **RTSP**: `rtsp://localhost:8654/<camera-name>`
-
-> **When you need host networking** (`network_mode: host`, or `--network host`,
-> instead of port mapping): for [UDP-only battery
-> cameras](#udp-only-battery-models-beta) — where it is required, not optional —
-> and for RTSP over **UDP** transport. Everything else, including TCP-interleaved
-> RTSP (the default for ffmpeg/Frigate, and `--rtsp-tcp` in VLC), works fine with
-> plain port mapping.
+> Host networking (`--network host`) is required for
+> [UDP-only battery cameras](#udp-only-battery-models-beta) and RTSP over UDP
+> transport — everything else works with plain port mapping.
 
 ## Quick start (Windows — no Docker)
 
@@ -346,7 +223,7 @@ in exchange you get an integration light enough to leave running forever.
 - **Battery cameras** (BETA) auto-detected and sleep-friendly — see
   [Battery cameras](#battery-cameras-argus-etc--beta)
 - **Tiered storage** (SSD clips tier + cold archive, capacity watching and
-  fill forecasts — see [Tiered storage](#tiered-storage-optional)),
+  fill forecasts — see [Tiered storage](docs/recording.md#tiered-storage-optional)),
   **footage encryption at rest**, **email alerts** for critical
   conditions ([Email notifications](#email-notifications)) and per-user
   **browser alerts**
@@ -522,146 +399,25 @@ exists on GitHub, a dismissable banner links to it.
 
 ### Recording (`"recording": { ... }`)
 
-> 💾 **Slow disks are handled**: all recording I/O runs on dedicated
-> low-priority writer threads behind a bounded memory budget, so an HDD that
-> stalls (cache flushes, spin-ups, network shares) can never lag the service or
-> the live streams — if the disk falls behind, *recorded* frames are dropped
-> (with a log warning) and recording resumes at the next keyframe.
+> ### 📖 Full guide: **[docs/recording.md](docs/recording.md)** — every option,
+> tiered storage (SSD clips tier, cold archive), capacity forecasts, and
+> footage encryption at rest.
 
-Two recording modes, both switchable **per camera at runtime** from the web UI
-(camera ⚙ → RECORDING) — the switches persist in `settings.json` next to your
-config file (in Docker: the `/config` mount), so they survive restarts:
+One line turns it on:
 
-- **Detection events**: the camera's own motion/AI detections (person, vehicle,
-  animal — pushed over the Baichuan connection, no polling and no server-side ML)
-  become labeled events with video clips and thumbnails. New events appear in a
-  review strip at the top of the web UI; click to play, ✕ to dismiss. The 🕘
-  Events button opens the full history grouped by day. Per camera you can also
-  pick **which detection types to record** (🧍 person, 🚗 vehicle, 🐾 animal,
-  📦 package, 😢 crying, 👁 motion) — detections of disabled types are discarded
-  entirely. Crying is the audio detection indoor cams offer (E1 series and
-  friends): the camera hears crying through its mic and pushes it like any
-  other smart detection.
-  ⚠ The camera does the detecting: person/vehicle/animal labels only arrive when
-  the matching Smart Detection is enabled **in the Reolink app** (camera →
-  Settings → Detection). The chips are a Neolink.NET-side filter on what arrives;
-  the camera's own settings are never changed.
-- **Continuous (24/7)**: classic NVR-style recording into rolling
-  `segment_minutes`-long MP4 files, browsable under 🕘 → Recordings (grouped by
-  day, click to play). Off by default; enable per camera in the UI.
+```json
+"recording": { "path": "/recordings" }
+```
 
-| Option | Default | Description |
-|---|---|---|
-| `path` | *required* | Storage directory. In Docker, mount a volume here (e.g. `./recordings:/recordings`) |
-| `clips_path` | = `path` | Optional fast tier: new event clips are written here (point it at an SSD for snappy event playback); continuous footage stays on `path` |
-| `archive_path` | *unset* | Optional cold tier: enables per-camera archiving — aged footage is **moved** here instead of deleted. Use a different (bigger/slower) drive; in Docker, map a second volume (e.g. `-v /mnt/bigdisk:/archive`) |
-| `retention_days` | `7` | Events older than this are deleted (`0` = keep forever) |
-| `pre_seconds` | `5` | Video included from before the detection (pre-roll) |
-| `post_seconds` | `8` | Quiet time after the last detection before the event closes |
-| `max_clip_seconds` | `120` | Hard cap per event; continued activity starts a new event |
-| `stream` | `auto` | Stream to record: `auto` (main if served), `mainStream`, `subStream` |
-| `segment_minutes` | `10` | Continuous recording: time limit for one segment file |
-| `max_segment_size_mb` | `256` | Continuous recording: size limit for one segment file — a new file starts at the next keyframe once the segment reaches this size *or* `segment_minutes`, whichever comes first (keeps high-bitrate streams from producing huge files) |
-| `continuous_retention_days` | = `retention_days` | Days to keep continuous footage (`0` = forever) |
-| `encrypt` | `false` | Encrypt new footage at rest (AES-256-GCM) — see [Encrypting footage](#encrypting-footage) |
-
-Everything is fragmented MP4 (H.264/H.265 passthrough, video-only) playable in
-the browser and by ffmpeg/VLC. Storage layout is plain files, with everything
-for one camera-day under a single date folder —
-`recordings/<camera>/<date>/detections/<time>-<id>/{event.json, clip.mp4, thumb.jpg, preview.mp4}`
-for events and `recordings/<camera>/<date>/continuous/<HH-mm-ss>.mp4` for 24/7
-footage — so backups and external tooling are trivial. Recordings from older
-versions (events directly under the date folder, continuous under
-`<camera>/continuous/<date>`) are migrated to this layout automatically on
-startup — directory renames, instant regardless of footage size. Set
-`"record": false` on a camera to start with events off (the UI switch can
-re-enable it).
-
-#### Tiered storage (optional)
-
-Everything works with the single `path` folder — the tiers below are strictly
-opt-in and existing setups keep behaving exactly as before:
-
-- **Fast clips tier** (`clips_path`): point it at an SSD and new event clips
-  land there for instant review scrubbing, while bulky 24/7 footage stays on
-  the big disk.
-- **Archive tier** (`archive_path`): once set, each camera's ⚙ → RECORDING
-  section gains **Archive event clips** and **Archive continuous footage**
-  switches. Retention stays the single clock: when footage reaches the end of
-  its retention window, an enabled type is **moved** to the archive instead of
-  deleted (e.g. "Keep event clips: 30" moves clips to the archive on day 30).
-  One extra knob sets how long the archive keeps footage (blank = forever).
-  The events list and the timeline read archived footage transparently. Use a
-  different drive for the archive — in Docker, map a second volume
-  (e.g. `-v /mnt/bigdisk:/archive` with `"archive_path": "/archive"`;
-  `docker-compose.yml` ships commented examples for both tiers). On the Home
-  Assistant add-on no extra mapping is needed: point `archive_path` at a
-  folder under `/share` or `/media` — NAS shares added in HA under
-  Settings → System → Storage appear there automatically.
-  While an archive pass moves footage, admins see it live: a
-  **background-process strip** in the live view's sidebar (under the storage
-  banners) shows what is being archived — camera, day, bytes moved — with a
-  progress bar and percentage, and disappears when the pass finishes. The same
-  strip is the home for any future long-running server work admins should know
-  about (`GET /api/background` serves it; admin-only once accounts exist).
-
-Capacity is watched for you: when any configured location climbs past **90%
-used**, the web UI shows an amber warning banner; if one actually runs out of
-space, recording to it halts cleanly (no partial files) with a **red** banner
-until space is freed — recording resumes automatically. When split storage is
-configured, the 📈 Monitor page grows a STORAGE section showing every
-location's free space live.
-
-The Monitor also **forecasts when each disk fills**: free space is sampled
-every 15 minutes (persisted across restarts, up to a week of trend), and the
-DISK FREE card and each storage card show *"fills in ~23 days at the current
-rate"*. The projection is the **net** trend, not the raw write rate — so once
-retention starts deleting as fast as the cameras record, it honestly says
-*"not filling at the current rate"* instead of inventing a fill date. A fresh
-install says nothing for the first ~6 hours while it gathers data
-(`GET /api/storage` carries the same numbers: `forecastState`/`forecastDays`).
-
-#### Encrypting footage
-
-Opt-in encryption at rest for everything the server records: turn on
-**Server settings → Recording → Encrypt footage** (or set
-`"recording": { "encrypt": true }`) and restart. From then on new event clips,
-ambient previews, thumbnails and 24/7 segments are written as chunked
-**AES-256-GCM** — a stolen disk, a NAS share mounted elsewhere, or a copied
-backup exposes nothing, and any in-place tampering is detected on read.
-
-- **Playback is unaffected.** Files decrypt transparently when served: live
-  timeline scrubbing, seeking (HTTP range requests decrypt only the chunks a
-  seek touches), event previews and downloads/exports all behave exactly as
-  before. AES-GCM is hardware-accelerated, so the cost is a fraction of a
-  percent of one core even at main-stream bitrates.
-- **Old footage keeps playing.** The format is sniffed per file: plaintext
-  recordings from before the switch (or after turning it back off) are served
-  raw forever, side by side with encrypted ones. Nothing is re-encrypted or
-  migrated. Footage recorded while encryption was ON also keeps playing after
-  turning it OFF — the key stays available either way.
-- **The key** is derived from the server secret: the `NEOLINK_SECRET_KEY`
-  environment variable (32 bytes, base64/hex — the recommended way: the key
-  then never touches the footage disk) or the auto-generated `secret.key` in
-  the state dir. **Back it up** — without it, encrypted footage is
-  unrecoverable, by design. If `secret.key` lives on the same disk as the
-  recordings, a thief gets both: prefer the env var, or keep the state dir on
-  the OS disk.
-- **What it does not do:** event metadata (`event.json` — labels and
-  timestamps, no imagery) stays plaintext so the index stays cheap; exports
-  are decrypted downloads by definition; and like any at-rest encryption it
-  cannot protect against an attacker with full access to the *running* host.
-  If you control the machine, full-disk encryption (LUKS, BitLocker, ZFS)
-  gives the same guarantee for the whole system — this feature is for setups
-  where you can't control the volume (e.g. the HA add-on on an existing disk).
-
-> ⚠ **Docker: map a volume for every configured tier.** Missing directories
-> are created at startup so recording never blocks — but if a configured
-> container path has no volume behind it, that directory lands in the
-> container's writable layer: footage records fine yet lives inside the
-> container (gone on `docker rm`) and fills the Docker host's disk. If the
-> Monitor's STORAGE section shows a tier with the same capacity as the root
-> disk, that's the sign.
+Two modes, each switchable per camera at runtime from the web UI (camera ⚙ →
+RECORDING): **detection events** — the camera's own motion/AI detections
+become labeled clips with thumbnails, reviewable from the events strip — and
+**continuous (24/7)** NVR-style segments browsable by day. Defaults: 7-day
+retention, 5 s of pre-roll, rolling 10-minute segments; everything is plain
+fragmented MP4 in per-camera date folders, so backups and external tooling
+are trivial. The full guide covers the rest: an SSD fast tier for clips, a
+cold archive tier that moves aged footage instead of deleting it, 90%-full
+warnings with fill-date forecasts, and AES-256-GCM footage encryption.
 
 ### Per camera
 
@@ -1000,51 +756,13 @@ image (`docker run --rm ghcr.io/borexola/neolink.net:latest selftest`).
 
 ## Troubleshooting
 
-- Run with `--verbose` (or `NEOLINK_LOG=debug`) for protocol-level logging.
-- **`503 Service Unavailable` on DESCRIBE / web tiles stuck on "connecting…"**: the
-  camera is not connected yet (wrong address/credentials, camera booting) — check the
-  service logs.
-- **"authentication failed … retrying in 30s"**: the camera rejected the configured
-  username/password. Cameras also reject transiently while rebooting or when their user
-  table is full, so the bridge keeps retrying at a slow pace. Five wrong attempts can
-  lock the account for a few minutes.
-- **"Connection closed while waiting for message ID 1"**: usually an encryption
-  negotiation problem — make sure you're on the latest build (FullAes support).
-- **Video works but picture settings / volume / scaled snapshots are missing,
-  and the log says the HTTP API "REJECTED the login"**: the camera's HTTP API
-  is refusing a password the video protocol accepts. Almost always a special
-  character (or a password over 31 chars) — set the camera's password to
-  letters and digits only in the Reolink app. See *Per camera* above.
-- **"the camera's HTTP API is not answering … responds too slowly"**: the HTTP
-  port is open but the camera stalled — common for a Wi-Fi camera busy pushing
-  video. Reads resume automatically when it recovers; nothing to do unless it
-  never recovers (then check the camera's Wi-Fi signal, or set a wired
-  `http_address`).
-- **A UDP camera (`"udp": true`) times out while every other camera works, and
-  the discovery sweep ends in `UDP: SILENCE`**: in Docker, the container is on a
-  bridge network — UDP-only cameras need `network_mode: host` / `--network host`
-  (see [UDP-only battery models](#udp-only-battery-models-beta)). Read the
-  sweep's `targets:` line to confirm: if the only broadcast address is
-  container-internal (`172.x.255.255`) and none is on the camera's subnet, that
-  is the cause.
-- Cameras limit concurrent Baichuan clients; if the Reolink app is streaming
-  `mainStream`, use `stream: "subStream"` or close the app.
-- **Choppy browser video on Firefox for main streams**: that's H.265 — use the sub
-  stream or a Chromium/Safari browser with hardware HEVC.
-- **Configured `clips_path`/`archive_path` but the folders look empty on the
-  host (Docker)**: recording never blocks on a missing directory — Neolink.NET
-  creates it at startup. If no volume is mapped at that container path, the
-  directory is created **inside the container's writable layer**: footage
-  records fine but lives in the container (surviving restarts, destroyed by
-  `docker rm`) and eats the Docker host's disk. Map a volume for every
-  configured tier. The Monitor page's STORAGE section is the tell: tiers on
-  the container layer report the same total/free bytes as the root disk.
-- **Perimeter events (line crossing / intrusion / loitering) don't appear**:
-  they are opt-in — tick them under the camera's ⚙ → *Event types* first
-  (they need perimeter protection configured in the Reolink app). If the
-  camera still produces none, set `NEOLINK_DEBUG_ALARMS=1`, trip the line
-  once, and open an issue with the logged `alarm push <AlarmEventList …>`
-  XML lines so the mapping can be extended.
+> ### 📖 Full list: **[docs/troubleshooting.md](docs/troubleshooting.md)** — the
+> common failure signatures and what each one means.
+
+First move: run with `--verbose` (or `NEOLINK_LOG=debug`) and read the service
+log — almost every symptom has a matching line the guide explains, from a
+camera rejecting its login and web tiles stuck on "connecting…" to a UDP
+battery camera that needs host networking in Docker.
 
 ## Compared to the original Rust neolink
 

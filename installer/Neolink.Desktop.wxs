@@ -170,6 +170,16 @@
            already there; Stop on both so an upgrade can replace the exe. -->
       <ServiceControl Id="NeolinkServiceControl" Name="Neolink.NET"
                       Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+      <!-- Recovery: restart after any failure. This is BOTH crash resilience and
+           the web UI's Restart button — a service cannot restart itself, so a
+           UI-requested restart exits without reporting SERVICE_STOPPED and these
+           actions bring it back up. -->
+      <util:ServiceConfig ServiceName="Neolink.NET"
+                          FirstFailureActionType="restart"
+                          SecondFailureActionType="restart"
+                          ThirdFailureActionType="restart"
+                          RestartServiceDelayInSeconds="2"
+                          ResetPeriodInDays="1" />
     </Component>
 
     <Component Id="NeolinkDataDir" Directory="NeolinkDataFolder" Guid="5E91D7C4-63BA-4F2E-9A07-B81D3C5F6A18">

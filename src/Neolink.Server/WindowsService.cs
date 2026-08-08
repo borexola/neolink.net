@@ -132,14 +132,29 @@ internal static class WindowsService
         return false;
     }
 
+    private static volatile bool _exitForRestart;
+
+    /// <summary>A UI-requested restart while running as a service. The SCM has no
+    /// "restart me" call and never revives a CLEAN stop — its recovery actions
+    /// (which the installer configures to restart the service) fire when the
+    /// process dies WITHOUT reporting SERVICE_STOPPED. So a restart-intent exit
+    /// deliberately skips that report and lets the process death be the signal:
+    /// the SCM logs an unexpected termination and brings the service back up.
+    /// (Reporting STOPPED with an error code only counts as a failure behind
+    /// SERVICE_CONFIG_FAILURE_ACTIONS_FLAG, which the installer cannot set.)</summary>
+    public static void ExitForRestart() => _exitForRestart = true;
+
     /// <summary>The server has wound down: tell the SCM, with the process's exit
     /// code so a failed start shows as failed. Safe to call more than once.</summary>
     public static void NotifyStopped(int exitCode)
     {
         if (!_connected || Exited.IsSet) return;
+        // Restart path: no SERVICE_STOPPED and ServiceMain stays parked — the
+        // process death itself must be what the SCM sees. See ExitForRestart.
+        if (_exitForRestart) return;
+        Exited.Set();
         Report(Stopped, accepted: 0, win32ExitCode: exitCode == 0 ? 0 : 1066 /* ERROR_SERVICE_SPECIFIC_ERROR */,
             serviceExitCode: exitCode);
-        Exited.Set();
     }
 
     private static void ServiceMain(int argc, IntPtr argv)

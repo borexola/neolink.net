@@ -19,7 +19,11 @@ in the README). Paste the matching section below into the GitHub release.
   it, and the installer opens the Windows Firewall to the local subnet for
   the exe so phones and NVRs on the LAN can reach the web UI and RTSP.
   Leave the feature unticked and the installer behaves exactly as before: a
-  desktop client for a server you already run. The desktop app notices a
+  desktop client for a server you already run. The web UI's Restart button
+  works on the service too: a service cannot restart itself, so the
+  installer configures Windows' own recovery actions and a UI-requested
+  restart exits in the one way those actions answer — the same recovery
+  also brings the service back from a real crash. The desktop app notices a
   local server install and prefills `http://localhost:8655` in its connect
   dialog, so the standalone first run is install → Connect. Uninstalling
   leaves `ProgramData` untouched — configs and footage are yours; a

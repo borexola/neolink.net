@@ -48,14 +48,15 @@ public sealed class DemoRig
     public required string Root { get; init; }
 
     // Name, scene filtergraph, detection labels the pulses draw from. The scenes
-    // need visible MOTION (a still demo reads as a broken one) but not NOISE —
-    // life's static crawl and fast gradients read as a bad signal, so half the
-    // wall is slow, calm colour drifts instead.
+    // need visible MOTION (a still demo reads as a broken one) but nothing busy —
+    // test bars, fractals and cellular noise all read as a bad signal, so the
+    // whole wall is slow, calm colour drifts in four distinct palettes (dawn
+    // ambers, dusk blues, forest greens, night teals).
     private static readonly (string Name, string Scene, string[] Labels)[] Cameras =
     {
-        ("Driveway", "testsrc2=size=1280x720:rate=15", new[] { "vehicle", "person", "motion" }),
+        ("Driveway", "gradients=size=1280x720:speed=0.012:n=3:c0=#2c2416:c1=#4a3520:c2=#1d2a44,fps=15", new[] { "vehicle", "person", "motion" }),
         ("FrontDoor", "gradients=size=1280x720:speed=0.015:n=3:c0=#16324f:c1=#3b2d5e:c2=#0f4c5c,fps=15", new[] { "person", "motion" }),
-        ("Backyard", "mandelbrot=size=1280x720:end_scale=0.2,fps=15", new[] { "animal", "person", "motion" }),
+        ("Backyard", "gradients=size=1280x720:speed=0.012:n=3:c0=#12301e:c1=#1d4a30:c2=#0e2a24,fps=15", new[] { "animal", "person", "motion" }),
         ("Garage", "gradients=size=1280x720:speed=0.01:n=3:c0=#0a2a2a:c1=#14403a:c2=#1d4a52,fps=15", new[] { "motion", "person" }),
     };
 

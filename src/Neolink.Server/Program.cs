@@ -955,10 +955,14 @@ if (config.WebPort > 0)
         AiPending = aiDescriber != null ? aiDescriber.IsPending : null,
         Logs = logBuffer,
         // Graceful shutdown; docker's restart policy (systemd, or the HA
-        // add-on's Watchdog toggle) starts us again.
+        // add-on's Watchdog toggle) starts us again. As a Windows service the
+        // exit must LOOK like a failure — the SCM's recovery actions (set up by
+        // the installer) are the only thing that restarts a service, and they
+        // never fire on a clean stop.
         RestartRequested = () =>
         {
             Log.Warn("Shutting down for a UI-requested restart");
+            if (runningAsService) WindowsService.ExitForRestart();
             shutdown.Cancel();
         },
         // Let a web-UI setting change reflect in Home Assistant right away, rather
