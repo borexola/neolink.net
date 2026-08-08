@@ -18,8 +18,12 @@ public sealed class UpdateChecker
     private const string ApiTags = "https://api.github.com/repos/borexola/neolink.net/tags";
     private static readonly TimeSpan Interval = TimeSpan.FromHours(24);
 
+    private static readonly TimeSpan NudgeFloor = TimeSpan.FromHours(6);
+
     private readonly System.Version _current;
     private volatile string? _latest;
+    private long _lastAttemptMs;   // Environment.TickCount64 when a check last STARTED
+    private int _checking;         // one check in flight, ever
 
     public UpdateChecker(string currentVersion)
     {
@@ -34,6 +38,34 @@ public sealed class UpdateChecker
 
     /// <summary>The newest available version, only when strictly newer than the running one.</summary>
     public string? Latest => _latest;
+
+    /// <summary>A page load can pull the next daily check forward: /api/features
+    /// calls this, so a full refresh means "check now" instead of "wait for the
+    /// 24-hour timer" — a release landing hours after the daily poll used to be
+    /// invisible until the next one. Throttled hard: at most one check per six
+    /// hours and one in flight, whoever asks — GitHub's unauthenticated rate
+    /// limit is per-IP and not ours to spend on every request.</summary>
+    public void Nudge()
+    {
+        if (Environment.TickCount64 - Interlocked.Read(ref _lastAttemptMs) < NudgeFloor.TotalMilliseconds)
+            return;
+        if (Interlocked.CompareExchange(ref _checking, 1, 0) != 0) return;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await CheckAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Log.Debug($"Update check (page-load nudge) failed: {Log.Flatten(ex)}");
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _checking, 0);
+            }
+        });
+    }
 
     public async Task RunAsync(CancellationToken ct)
     {
@@ -54,6 +86,9 @@ public sealed class UpdateChecker
 
     private async Task CheckAsync(CancellationToken ct)
     {
+        // Stamped at the attempt, success or not: an offline box must not retry
+        // GitHub on every page load just because its checks keep failing.
+        Interlocked.Exchange(ref _lastAttemptMs, Environment.TickCount64);
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
         http.DefaultRequestHeaders.UserAgent.ParseAdd($"neolink.net/{_current}"); // GitHub requires a UA
 

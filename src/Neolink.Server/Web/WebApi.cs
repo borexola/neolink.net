@@ -1453,8 +1453,13 @@ public static class WebApi
         });
 
         // Feature discovery, so clients can hide UI for what this server won't do.
-        app.MapGet("/api/features", () => Results.Json(new
+        app.MapGet("/api/features", () =>
         {
+            // Every page load reads this endpoint, so it doubles as the "check
+            // for updates now" moment (throttled inside — see UpdateChecker.Nudge).
+            o.Updates?.Nudge();
+            return Results.Json(new
+            {
             events = events != null,
             continuous = events != null && RecordingConfig.ContinuousEnabled,
             trickleSpeed,
@@ -1478,7 +1483,8 @@ public static class WebApi
             // false->true edge. Same sources the email AlertMonitor uses.
             overload = o.Monitor?.Overloaded() ?? false,
             writeFailure = o.RecordingHealth?.CamerasWithRecentErrors(TimeSpan.FromMinutes(2)).Count > 0,
-        }));
+            });
+        });
 
         // Background jobs the admin should know about (footage archiving, ...),
         // with progress — feeds the web UI's background-process strip. Admin only

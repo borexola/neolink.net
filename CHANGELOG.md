@@ -73,6 +73,13 @@ in the README). Paste the matching section below into the GitHub release.
   ICMP-reset quirk, and run their mocks on dedicated threads — twelve
   consecutive green runs on the machine that flaked.
 
+- **Refreshing the page now counts as checking for updates.** The update
+  banner's data came from a server-side check that ran at startup and then
+  every 24 hours — a release landing just after the daily poll stayed
+  invisible for a day, no matter how often the page was reloaded. A page
+  load now pulls the next check forward, throttled to at most one GitHub
+  call per six hours so an office full of tabs still spends one request.
+
 - **The empty wall's hint caught up with the product.** With no cameras
   configured, the sidebar (and the server log) still said to edit
   config.json — from the era before the UI could do it. Both now point at
