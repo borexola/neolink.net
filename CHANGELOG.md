@@ -4,6 +4,66 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
+## 1.0.3 — unreleased
+
+### Fixed
+
+- **Browser alerts over plain HTTP stop giving impossible advice.** Field
+  report (Firefox, HTTP on a LAN address): the alerts panel said
+  notifications were blocked and to re-allow them in the browser's site
+  settings — but no permission popup ever appeared, and allowing them
+  manually changed nothing. Notifications need a secure context, and the
+  browsers disagree on how to say no: Chrome removes the API entirely on
+  HTTP (which the panel detected), while Firefox keeps the API and silently
+  auto-denies every request (which read as "blocked"). The panel now checks
+  the secure context first, so Firefox-over-HTTP gets the honest answer —
+  use HTTPS (a reverse proxy) or localhost — instead of a settings goose
+  chase.
+
+### Added
+
+- **A "Send a test alert" button in the alerts panel.** Once permission is
+  granted, one click pops a real notification through the exact path a
+  detection uses — so "granted but nothing arrives" (OS focus modes, the
+  browser muted in system notification settings) is diagnosable on the
+  spot. In all seven languages.
+
+## 1.0.3 — unreleased
+
+### Added
+
+- **Cameras can email their events, snapshots attached.** A per-camera
+  switch (camera ⚙ → Recording → Email events) mails every finished
+  detection event to the notification recipient, with 1–50 snapshots
+  (default 3) sampled evenly across the clip — encrypted footage samples
+  the same as plain, and without ffmpeg the event's thumbnail goes instead,
+  so the mail is never empty-handed. The camera's event-type chips already
+  decide what gets recorded, so they decide what gets emailed — one filter,
+  not two. The global knobs (snapshot count, a per-camera cooldown
+  defaulting to 2 minutes so a busy driveway can't flood an inbox) sit with
+  the rest of the mail setup under Server settings → Notifications, and the
+  whole path rides the existing notifier: composition on its own task, the
+  send on the bounded queue, a dead mail server never touching recording.
+- **Deleting more than 1000 events at once stopped failing — and stopped
+  blaming your account.** The delete endpoint caps one request at 1000 ids,
+  so selecting 1063 events came back 400; the events page turned every
+  failed request into "are you signed in as an admin?", which sent people
+  looking in the wrong place entirely. The page now sends large selections
+  in batches of 500 and merges the summaries, and when a request really
+  does fail it shows the server's own reason.
+- **Retention now logs the window it is actually applying** (Debug, one
+  line per camera per hourly pass): which day is the cutoff, and whether
+  footage is being deleted or archived. "I shortened retention and nothing
+  was deleted" was otherwise unanswerable — the number the running server
+  uses never appeared anywhere.
+- **Shrinking a retention window now asks first.** Retention judges existing
+  footage on the next hourly cleanup pass, so typing 5 into a field that
+  said 30 quietly erased ~25 days of history within the hour. The camera
+  panel's three windows (event clips, continuous, archive) now confirm any
+  reduction, spelling out what happens and when — and saying "moved to the
+  archive" instead of "deleted" when archiving makes that the truth.
+  Cancelling snaps the field back.
+
 ## 1.0.2
 
 ### Added

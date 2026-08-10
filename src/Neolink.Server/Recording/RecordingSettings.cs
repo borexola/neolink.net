@@ -44,7 +44,13 @@ public sealed record CameraRecordingSettings(bool Events, bool Continuous, List<
     // Owner's scene notes for the LLM ("faces the street — passing cars are
     // routine; the white SUV belongs here"). Threat calls are mostly context,
     // and this is the only place the model can get any. Null/blank = none.
-    string? AiContext = null)
+    string? AiContext = null,
+    // Email this camera's finished events (snapshots attached) to the server's
+    // notification recipient. Per-camera opt-in; inert until email is set up
+    // under Server settings → Notifications, which owns recipient and SMTP.
+    // The camera's event-type filter already decided what got recorded, so
+    // emails follow it for free — no second type matrix.
+    bool EmailEvents = false)
 {
     /// <summary>Known detection labels (what the UI offers as event-type filters).</summary>
     public static readonly string[] KnownLabels =
@@ -202,7 +208,8 @@ public sealed class RecordingSettings
         bool? archiveEvents = null, bool? archiveContinuous = null,
         int? archiveRetentionDays = null, bool setArchiveRetention = false,
         bool? wakeTimeline = null, bool? aiDescribe = null,
-        string? aiContext = null, bool setAiContext = false)
+        string? aiContext = null, bool setAiContext = false,
+        bool? emailEvents = null)
     {
         lock (_gate)
         {
@@ -225,7 +232,8 @@ public sealed class RecordingSettings
                 setArchiveRetention ? archiveRetentionDays : cur.ArchiveRetentionDays,
                 wakeTimeline ?? cur.WakeTimeline,
                 aiDescribe ?? cur.AiDescribe,
-                setAiContext ? aiContext : cur.AiContext);
+                setAiContext ? aiContext : cur.AiContext,
+                emailEvents ?? cur.EmailEvents);
             _cameras[camera] = next;
             SaveLocked();
             return next;

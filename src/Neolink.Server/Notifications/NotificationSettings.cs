@@ -48,6 +48,18 @@ public sealed class NotificationSettings
     /// <summary>Default minutes a camera must stay unreachable before it alerts.</summary>
     public int OfflineThresholdMinutes { get; set; } = 10;
 
+    // Detection-event emails (per-camera opt-in lives in RecordingSettings; the
+    // knobs that shape every event email live here with the rest of the mail
+    // config).
+    /// <summary>Snapshots attached to each event email, sampled evenly across
+    /// the clip. 1–50; 50 is deliberately the ceiling — beyond that the mail
+    /// stops being a notification and starts being the recording.</summary>
+    public int EventSnapshots { get; set; } = 3;
+
+    /// <summary>Per-camera quiet time between event emails (minutes, 0 = every
+    /// event). A busy driveway must not become a full inbox.</summary>
+    public int EventCooldownMinutes { get; set; } = 2;
+
     /// <summary>Per-camera overrides of <see cref="OfflineThresholdMinutes"/>
     /// (0 = never alert for that camera). Absent = use the default.</summary>
     public Dictionary<string, int> CameraOfflineOverrides { get; set; } =
@@ -77,6 +89,8 @@ public sealed class NotificationSettings
         AlertWriteFailure = AlertWriteFailure,
         OfflineThresholdMinutes = OfflineThresholdMinutes,
         CameraOfflineOverrides = new(CameraOfflineOverrides, StringComparer.OrdinalIgnoreCase),
+        EventSnapshots = EventSnapshots,
+        EventCooldownMinutes = EventCooldownMinutes,
     };
 }
 

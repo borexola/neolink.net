@@ -461,6 +461,15 @@ public sealed class EventStore
                 var contCutoff = DateTime.Now.Date.AddDays(-continuousRetentionDays);
                 bool eventActs = retentionDays > 0;
                 bool contActs = continuousRetentionDays > 0;
+                // The policy this pass ACTUALLY applied, per camera. Field reports
+                // of "I shortened retention and nothing was deleted" are otherwise
+                // unanswerable: the number the server is using (which is not the
+                // number in a config file it has not reloaded) never appeared
+                // anywhere. Debug-level — hourly, one line per camera.
+                Log.Debug($"Retention [{camName}]: events {(eventActs ? $"{retentionDays}d, cutoff {eventCutoff:yyyy-MM-dd}" : "forever")}" +
+                          $"{(archiveEvents ? " (archive)" : "")}; " +
+                          $"continuous {(contActs ? $"{continuousRetentionDays}d, cutoff {contCutoff:yyyy-MM-dd}" : "forever")}" +
+                          $"{(archiveCont ? " (archive)" : "")}");
 
                 foreach (var dayDir in Directory.EnumerateDirectories(cameraDir))
                 {

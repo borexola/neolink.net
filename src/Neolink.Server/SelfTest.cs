@@ -1791,6 +1791,34 @@ public static class SelfTest
                 Assert(File.Exists(Path.Combine(mixedDay, "continuous", "01-00-00.mp4")),
                     "continuous with a longer window survives in the same day folder");
 
+                // The field scenario (reported on 0.9.9): a camera runs for 60 days
+                // at 30-day retention, then the owner shrinks the window to 5. The
+                // whole 25-day backlog must go on the very NEXT pass — retention
+                // judges what is on disk now, it does not grandfather footage
+                // recorded under the old number. Driven through the per-camera
+                // policy overload, which is the path the UI's per-camera field uses.
+                var shrink = "camShrink";
+                var backlog = new List<string>();
+                for (int ago = 1; ago <= 60; ago++)
+                {
+                    var d = DayDir(dir, shrink, DateTime.Now.Date.AddDays(-ago), "detections");
+                    Directory.CreateDirectory(Path.Combine(d, $"1200{ago:00}-aaaa"));
+                    File.WriteAllText(Path.Combine(d, $"1200{ago:00}-aaaa", "event.json"), "{}");
+                    backlog.Add(d);
+                }
+                // Old policy: nothing older than 30 days existed to collect anyway.
+                store2.Cleanup(cam => cam == shrink ? (30, 30) : (3650, 3650));
+                Assert(Directory.Exists(backlog[0]) && Directory.Exists(backlog[28]),
+                    "30-day window keeps the first 29 days");
+                Assert(!Directory.Exists(backlog[59]), "30-day window already collected day 60");
+                // The shrink: 30 -> 5, one pass, no restart.
+                store2.Cleanup(cam => cam == shrink ? (5, 5) : (3650, 3650));
+                Assert(Directory.Exists(backlog[0]) && Directory.Exists(backlog[3]),
+                    "days inside the new 5-day window survive");
+                for (int ago = 6; ago <= 30; ago++)
+                    Assert(!Directory.Exists(backlog[ago - 1]),
+                        $"day {ago} (recorded under the old 30-day window) is collected by the new 5-day one");
+
                 // 0 = keep forever, and per-camera windows apply independently.
                 var keeper = DayDir(dir, "cam1", DateTime.Now.Date.AddDays(-3650), "detections");
                 var goner = DayDir(dir, "cam3", DateTime.Now.Date.AddDays(-3650), "detections");
@@ -3593,11 +3621,48 @@ public static class SelfTest
                 cfg.CameraOfflineOverrides["Driveway"] = 3;
                 AssertEq(cfg.OfflineMinutesFor("Driveway"), 3);
                 AssertEq(cfg.OfflineMinutesFor("Backyard"), 10);
+
+                // Event-email knobs survive the clone (the write path clones).
+                var ev = new Notifications.NotificationSettings { EventSnapshots = 7, EventCooldownMinutes = 0 };
+                Assert(ev.Clone() is { EventSnapshots: 7, EventCooldownMinutes: 0 },
+                    "event-email knobs ride Clone");
             }
             finally
             {
                 try { Directory.Delete(dir, recursive: true); } catch { }
             }
+        });
+
+        Test("smtp message: attachments nest the text/html pair inside multipart/mixed", () =>
+        {
+            var s = new Notifications.NotificationSettings
+            {
+                Recipient = "to@x.com", From = "from@x.com", FromName = "Neolink",
+            };
+            // No attachments: the classic alternative pair, no mixed wrapper.
+            var plain = Notifications.SmtpSender.BuildMessage(s, "subject", "<b>h</b>", "t");
+            Assert(plain.Contains("Content-Type: multipart/alternative"), "plain mail is alternative");
+            Assert(!plain.Contains("multipart/mixed"), "no mixed wrapper without attachments");
+
+            // With attachments: mixed at the top, the alternative pair nested,
+            // and every image present as base64 with name + disposition.
+            var jpeg = new byte[] { 0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3, 0xFF, 0xD9 };
+            var mail = Notifications.SmtpSender.BuildMessage(s, "Driveway: person", "<b>h</b>", "t",
+                new[]
+                {
+                    new Notifications.EmailAttachment("Driveway-1.jpg", "image/jpeg", jpeg),
+                    new Notifications.EmailAttachment("Driveway-2.jpg", "image/jpeg", jpeg),
+                });
+            Assert(mail.Contains("Content-Type: multipart/mixed"), "attachments force multipart/mixed");
+            Assert(mail.Contains("Content-Type: multipart/alternative"), "text/html pair still nested");
+            AssertEq(System.Text.RegularExpressions.Regex.Matches(mail,
+                "Content-Disposition: attachment").Count, 2);
+            Assert(mail.Contains("filename=\"Driveway-2.jpg\""), "attachment names carried");
+            Assert(mail.Contains(Convert.ToBase64String(jpeg)), "attachment bytes as base64");
+            // The mixed boundary must close AFTER the last attachment.
+            var boundary = System.Text.RegularExpressions.Regex.Match(mail,
+                "multipart/mixed; boundary=\"([^\"]+)\"").Groups[1].Value;
+            Assert(mail.TrimEnd().EndsWith($"--{boundary}--"), "mixed part closed last");
         });
 
         Test("config editor: read-modify-write with validation", () =>

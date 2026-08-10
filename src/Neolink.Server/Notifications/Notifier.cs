@@ -9,7 +9,10 @@ namespace Neolink.Notifications;
 /// (e.g. "storage", "camera:Driveway"); <paramref name="Recovery"/> marks the
 /// paired "resolved" message.</summary>
 public sealed record Alert(string Key, bool Recovery, string Subject, string Headline,
-    string Body, string? Context = null);
+    string Body, string? Context = null, IReadOnlyList<EmailAttachment>? Attachments = null);
+
+/// <summary>A file riding along with an email (event snapshots).</summary>
+public sealed record EmailAttachment(string Name, string ContentType, byte[] Data);
 
 /// <summary>
 /// Sends the app's critical alerts as email, in complete isolation from the rest
@@ -85,6 +88,15 @@ public sealed class Notifier
         if (toSend != null) _queue.Writer.TryWrite(toSend);       // non-blocking; dropped if flooded
     }
 
+    /// <summary>One-shot send, no edge detection — detection-event emails: each
+    /// event either mails or it doesn't (the cooldown decides at the source).
+    /// Same bounded queue and the same "never throws into the caller" contract.</summary>
+    public void Send(Alert alert)
+    {
+        if (!_store.Snapshot().Enabled) return;
+        _queue.Writer.TryWrite(alert);
+    }
+
     /// <summary>Sends a test email with the given (possibly unsaved) settings and
     /// an optional new password. Returns null on success, else a short error to
     /// show the user. Never throws.</summary>
@@ -114,7 +126,9 @@ public sealed class Notifier
         if (!s.Enabled || string.IsNullOrWhiteSpace(s.Recipient) || string.IsNullOrWhiteSpace(s.SmtpHost))
             return; // config went away between enqueue and send — drop quietly
         var (html, text) = NotificationTemplate.Render(alert, _serverName);
-        await SmtpSender.SendAsync(s, _store.SmtpPassword(), alert.Subject, html, text, ct).ConfigureAwait(false);
-        Log.Info($"Notification emailed to {s.Recipient}: {alert.Subject}");
+        await SmtpSender.SendAsync(s, _store.SmtpPassword(), alert.Subject, html, text, ct, alert.Attachments)
+            .ConfigureAwait(false);
+        Log.Info($"Notification emailed to {s.Recipient}: {alert.Subject}" +
+                 (alert.Attachments is { Count: > 0 } att ? $" ({att.Count} snapshot(s))" : ""));
     }
 }

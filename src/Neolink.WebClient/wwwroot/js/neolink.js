@@ -2453,9 +2453,15 @@
         },
 
         // ---- Browser alerts (per-detection notifications) -------------------
-        // Notification is only defined in secure contexts (HTTPS or localhost),
-        // so "unsupported" doubles as the http-on-LAN signal.
+        // Notifications only work in secure contexts (HTTPS or localhost), but
+        // the browsers disagree on how to say no: Chrome removes the API
+        // entirely, while Firefox KEEPS it and auto-denies requestPermission
+        // without ever showing a prompt. Checking isSecureContext first is what
+        // turns the Firefox case into the honest "needs HTTPS" message instead
+        // of "blocked — re-allow in site settings", advice that cannot work
+        // there (field report: user allowed it manually, still "blocked").
         notifState() {
+            if (!window.isSecureContext) return 'unsupported';
             return ('Notification' in window) ? Notification.permission : 'unsupported';
         },
         // The desktop shell marks its WebView before any page script runs; the
@@ -2465,7 +2471,7 @@
         // browser there is no chrome.webview and this is a silent no-op.
         shellPing(msg) { try { window.chrome?.webview?.postMessage(msg); } catch (e) { } },
         async notifRequest() {
-            if (!('Notification' in window)) return 'unsupported';
+            if (!window.isSecureContext || !('Notification' in window)) return 'unsupported';
             try { return await Notification.requestPermission(); }
             catch { return Notification.permission; }
         },

@@ -22,7 +22,8 @@ internal static class SmtpSender
     private static readonly TimeSpan Overall = TimeSpan.FromSeconds(25);
 
     public static async Task SendAsync(NotificationSettings s, string password,
-        string subject, string htmlBody, string textBody, CancellationToken outerCt)
+        string subject, string htmlBody, string textBody, CancellationToken outerCt,
+        IReadOnlyList<EmailAttachment>? attachments = null)
     {
         RequireAddress(s.EffectiveFrom, "sender address");
         RequireAddress(s.Recipient, "recipient address");
@@ -65,7 +66,7 @@ internal static class SmtpSender
         Check(await CommandAsync(stream, buf, $"RCPT TO:<{s.Recipient}>", ct).ConfigureAwait(false), 250, "RCPT TO");
         Check(await CommandAsync(stream, buf, "DATA", ct).ConfigureAwait(false), 354, "DATA");
 
-        var message = BuildMessage(s, subject, htmlBody, textBody);
+        var message = BuildMessage(s, subject, htmlBody, textBody, attachments);
         await WriteAsync(stream, message, ct).ConfigureAwait(false);
         await WriteAsync(stream, "\r\n.\r\n", ct).ConfigureAwait(false);          // end of DATA
         Check(await ReadReplyAsync(stream, buf, ct).ConfigureAwait(false), 250, "message body");
@@ -95,8 +96,12 @@ internal static class SmtpSender
 
     /// <summary>MIME multipart/alternative: plain text first, HTML second (clients
     /// pick the richest they render). Headers are ASCII; bodies are UTF-8 base64
-    /// so any character survives, avoiding line-length and encoding pitfalls.</summary>
-    private static string BuildMessage(NotificationSettings s, string subject, string html, string text)
+    /// so any character survives, avoiding line-length and encoding pitfalls.
+    /// With attachments the alternative pair nests inside multipart/mixed —
+    /// the one shape every client renders as "message with attached images".
+    /// Internal so the selftest can pin the structure without a mail server.</summary>
+    internal static string BuildMessage(NotificationSettings s, string subject, string html, string text,
+        IReadOnlyList<EmailAttachment>? attachments = null)
     {
         var boundary = "nlk_" + Guid.NewGuid().ToString("N");
         var fromName = string.IsNullOrWhiteSpace(s.FromName) ? "Neolink.NET" : s.FromName;
@@ -108,11 +113,36 @@ internal static class SmtpSender
         sb.Append("Message-ID: <").Append(Guid.NewGuid().ToString("N")).Append('@').Append(
             s.EffectiveFrom.Split('@').LastOrDefault() ?? "neolink.local").Append(">\r\n");
         sb.Append("MIME-Version: 1.0\r\n");
-        sb.Append("Content-Type: multipart/alternative; boundary=\"").Append(boundary).Append("\"\r\n\r\n");
+
+        if (attachments is not { Count: > 0 })
+        {
+            sb.Append("Content-Type: multipart/alternative; boundary=\"").Append(boundary).Append("\"\r\n\r\n");
+            AppendAlternative(sb, boundary, text, html);
+            return sb.ToString();
+        }
+
+        var inner = "alt_" + Guid.NewGuid().ToString("N");
+        sb.Append("Content-Type: multipart/mixed; boundary=\"").Append(boundary).Append("\"\r\n\r\n");
+        sb.Append("--").Append(boundary).Append("\r\n");
+        sb.Append("Content-Type: multipart/alternative; boundary=\"").Append(inner).Append("\"\r\n\r\n");
+        AppendAlternative(sb, inner, text, html);
+        foreach (var a in attachments)
+        {
+            sb.Append("--").Append(boundary).Append("\r\n");
+            sb.Append("Content-Type: ").Append(a.ContentType).Append("; name=\"").Append(a.Name).Append("\"\r\n");
+            sb.Append("Content-Disposition: attachment; filename=\"").Append(a.Name).Append("\"\r\n");
+            sb.Append("Content-Transfer-Encoding: base64\r\n\r\n");
+            AppendBase64(sb, a.Data);
+        }
+        sb.Append("--").Append(boundary).Append("--\r\n");
+        return sb.ToString();
+    }
+
+    private static void AppendAlternative(StringBuilder sb, string boundary, string text, string html)
+    {
         AppendPart(sb, boundary, "text/plain; charset=utf-8", text);
         AppendPart(sb, boundary, "text/html; charset=utf-8", html);
         sb.Append("--").Append(boundary).Append("--\r\n");
-        return sb.ToString();
     }
 
     private static void AppendPart(StringBuilder sb, string boundary, string contentType, string body)
@@ -120,7 +150,12 @@ internal static class SmtpSender
         sb.Append("--").Append(boundary).Append("\r\n");
         sb.Append("Content-Type: ").Append(contentType).Append("\r\n");
         sb.Append("Content-Transfer-Encoding: base64\r\n\r\n");
-        var b64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(body));
+        AppendBase64(sb, Encoding.UTF8.GetBytes(body));
+    }
+
+    private static void AppendBase64(StringBuilder sb, byte[] data)
+    {
+        var b64 = Convert.ToBase64String(data);
         for (int i = 0; i < b64.Length; i += 76)                                  // RFC 2045 line length
             sb.Append(b64, i, Math.Min(76, b64.Length - i)).Append("\r\n");
         sb.Append("\r\n");

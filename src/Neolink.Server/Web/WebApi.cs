@@ -220,7 +220,8 @@ public static class WebApi
         string? SmtpHost, int? SmtpPort, string? Security, string? Username, string? Password,
         string? From, string? FromName,
         bool? AlertStorage, bool? AlertOverload, bool? AlertCameraOffline, bool? AlertWriteFailure,
-        int? OfflineThresholdMinutes, Dictionary<string, int>? CameraOfflineOverrides);
+        int? OfflineThresholdMinutes, Dictionary<string, int>? CameraOfflineOverrides,
+        int? EventSnapshots = null, int? EventCooldownMinutes = null);
     /// <summary>Retention fields: null = unchanged, negative = back to the server default, 0 = keep forever.
     /// RecordStream: null = unchanged, "" = back to the server default, else a served stream kind.
     /// Capture schedule: applied only while ScheduleEnabled; ScheduleDays null = unchanged,
@@ -231,7 +232,8 @@ public static class WebApi
         List<string>? ScheduleDays = null, string? ScheduleStart = null, string? ScheduleEnd = null,
         bool? ScheduleEnabled = null,
         bool? ArchiveEvents = null, bool? ArchiveContinuous = null, int? ArchiveRetentionDays = null,
-        bool? WakeTimeline = null, bool? AiDescribe = null, string? AiContext = null);
+        bool? WakeTimeline = null, bool? AiDescribe = null, string? AiContext = null,
+        bool? EmailEvents = null);
     /// <summary>AI-description settings update. ApiKey is WRITE-ONLY: null keeps the
     /// stored one, "" clears it, a value sets it. It is never returned by GET.</summary>
     private sealed record AiSettingsRequest(bool? Enabled, string? Provider,
@@ -1236,6 +1238,8 @@ public static class WebApi
                     alertWriteFailure = s.AlertWriteFailure,
                     offlineThresholdMinutes = s.OfflineThresholdMinutes,
                     cameraOfflineOverrides = s.CameraOfflineOverrides,
+                    eventSnapshots = s.EventSnapshots,
+                    eventCooldownMinutes = s.EventCooldownMinutes,
                     cameras = cameras.Select(c => c.Name).ToList(),
                 };
             }
@@ -1270,6 +1274,10 @@ public static class WebApi
                     CameraOfflineOverrides = req.CameraOfflineOverrides != null
                         ? new(req.CameraOfflineOverrides, StringComparer.OrdinalIgnoreCase)
                         : cur.CameraOfflineOverrides,
+                    // 50 is the hard ceiling by design (the mail must stay a
+                    // notification, not become the recording); 0 cooldown = every event.
+                    EventSnapshots = Math.Clamp(req.EventSnapshots ?? cur.EventSnapshots, 1, 50),
+                    EventCooldownMinutes = Math.Clamp(req.EventCooldownMinutes ?? cur.EventCooldownMinutes, 0, 1440),
                 };
             }
 
@@ -2966,6 +2974,12 @@ public static class WebApi
                 aiAvailable = o.Ai?.Enabled == true,
                 aiDescribe = s.AiDescribe,
                 aiContext = s.AiContext ?? "",
+                // Event emails: per-camera opt-in; "available" = the server's
+                // email notifications are enabled with a recipient, so the panel
+                // can say what to set up instead of offering a dead switch.
+                emailEvents = s.EmailEvents,
+                emailAvailable = o.Notifier?.Store.Snapshot() is { Enabled: true } ns
+                                 && !string.IsNullOrWhiteSpace(ns.Recipient),
             };
 
             app.MapGet("/api/cameras/{name}/recording", (string name, HttpContext ctx) =>
@@ -3054,6 +3068,16 @@ public static class WebApi
                         error = "enable AI event descriptions globally first " +
                                 "(Settings → AI) — that's where the LLM endpoint lives",
                     }, statusCode: 409);
+                // Same shape for event emails: turning the camera ON needs a
+                // configured, enabled mail setup to send through; OFF always works.
+                if (req.EmailEvents == true
+                    && (o.Notifier?.Store.Snapshot() is not { Enabled: true } mail
+                        || string.IsNullOrWhiteSpace(mail.Recipient)))
+                    return Results.Json(new
+                    {
+                        error = "set up email notifications first (Server settings → " +
+                                "Notifications) — recipient and mail server live there",
+                    }, statusCode: 409);
                 var updated = recordingSettings.Update(cam.Name, req.Events, continuous,
                     types, setEventTypes: req.EventTypes != null,
                     eventRetentionDays: Retention(req.EventRetentionDays),
@@ -3077,7 +3101,8 @@ public static class WebApi
                     aiContext: req.AiContext is { } noteRaw
                                && noteRaw.Trim() is { Length: > 0 } note
                         ? (note.Length > 500 ? note[..500] : note) : null,
-                    setAiContext: req.AiContext != null);
+                    setAiContext: req.AiContext != null,
+                    emailEvents: req.EmailEvents);
                 NudgeHa(cam.Name);
                 return Results.Json(ShapeSettings(cam, updated));
             });

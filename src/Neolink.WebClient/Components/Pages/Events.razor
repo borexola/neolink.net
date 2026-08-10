@@ -934,7 +934,8 @@
             }
             else
             {
-                _delError = T["Could not prepare the deletion — are you signed in as an admin?"];
+                _delError = _delServerError
+                            ?? T["Could not prepare the deletion — are you signed in as an admin?"];
             }
         }
         catch
@@ -984,13 +985,90 @@
         StateHasChanged();
     }
 
+    /// <summary>The server caps one delete request at <see cref="DeleteBatch"/> ids
+    /// (a bounded request body, and a bounded amount of disk work per call), so a
+    /// big selection goes in batches and the results are summed. Before this, a
+    /// selection over the cap failed outright with a 400 the UI mis-reported as a
+    /// permissions problem.</summary>
+    private const int DeleteBatch = 500;
+
+    /// <summary>Set when the last delete call failed, to the server's own reason —
+    /// guessing "not an admin?" for every failure sent people to the wrong place.</summary>
+    private string? _delServerError;
+
     private async Task<JsonElement?> PostDeleteAsync(bool estimate)
     {
-        var req = Req(HttpMethod.Post, "/api/events/delete");
-        req.Content = JsonContent.Create(new { ids = _selectedIds.ToList(), estimate });
-        using var res = await Http.SendAsync(req);
-        if (!res.IsSuccessStatusCode) return null;
-        return await res.Content.ReadFromJsonAsync<JsonElement>();
+        _delServerError = null;
+        var ids = _selectedIds.ToList();
+        int count = 0, ongoing = 0, unknown = 0, deleted = 0;
+        long bytes = 0;
+        DateTime? earliest = null, latest = null;
+        var cameras = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        bool any = false;
+
+        for (int at = 0; at < ids.Count; at += DeleteBatch)
+        {
+            var batch = ids.GetRange(at, Math.Min(DeleteBatch, ids.Count - at));
+            var req = Req(HttpMethod.Post, "/api/events/delete");
+            req.Content = JsonContent.Create(new { ids = batch, estimate });
+            using var res = await Http.SendAsync(req);
+            if (!res.IsSuccessStatusCode)
+            {
+                // Carry the server's message (it says "admin only" when that IS
+                // the problem) so the dialog stops inventing a cause.
+                try
+                {
+                    var err = await res.Content.ReadFromJsonAsync<JsonElement>();
+                    if (err.ValueKind == JsonValueKind.Object
+                        && err.TryGetProperty("error", out var msg)
+                        && msg.GetString() is { Length: > 0 } text)
+                        _delServerError = text;
+                }
+                catch { /* not JSON — the status line is all we have */ }
+                _delServerError ??= $"{(int)res.StatusCode} {res.ReasonPhrase}";
+                return null;
+            }
+            var part = await res.Content.ReadFromJsonAsync<JsonElement>();
+            if (part.ValueKind != JsonValueKind.Object) return null;
+            any = true;
+            if (part.TryGetProperty("count", out var c)) count += c.GetInt32();
+            if (part.TryGetProperty("bytes", out var b)) bytes += b.GetInt64();
+            if (part.TryGetProperty("ongoing", out var og)) ongoing += og.GetInt32();
+            if (part.TryGetProperty("unknown", out var un)) unknown += un.GetInt32();
+            if (part.TryGetProperty("deleted", out var dl)) deleted += dl.GetInt32();
+            if (part.TryGetProperty("earliest", out var ea) && ea.ValueKind != JsonValueKind.Null)
+            {
+                var v = ea.GetDateTime();
+                if (earliest == null || v < earliest) earliest = v;
+            }
+            if (part.TryGetProperty("latest", out var la) && la.ValueKind != JsonValueKind.Null)
+            {
+                var v = la.GetDateTime();
+                if (latest == null || v > latest) latest = v;
+            }
+            if (part.TryGetProperty("cameras", out var cams) && cams.ValueKind == JsonValueKind.Array)
+                foreach (var cam in cams.EnumerateArray())
+                {
+                    var name = cam.GetProperty("camera").GetString() ?? "?";
+                    cameras[name] = cameras.GetValueOrDefault(name) + cam.GetProperty("count").GetInt32();
+                }
+        }
+        if (!any) return null;
+
+        // Re-shape the summed batches into the single-response shape the caller reads.
+        var merged = new
+        {
+            count,
+            bytes,
+            ongoing,
+            unknown,
+            deleted,
+            earliest,
+            latest,
+            cameras = cameras.OrderByDescending(kv => kv.Value).ThenBy(kv => kv.Key)
+                .Select(kv => new { camera = kv.Key, count = kv.Value }).ToList(),
+        };
+        return JsonSerializer.SerializeToElement(merged);
     }
 
     private static string SizeText(long bytes) => bytes switch

@@ -356,6 +356,9 @@ if (storage != null)
 var secretProtector = new Neolink.Notifications.SecretProtector(stateDir);
 var notificationStore = new Neolink.Notifications.NotificationStore(stateDir, secretProtector);
 var notifier = new Neolink.Notifications.Notifier(notificationStore, Environment.MachineName);
+// Detection-event emails: one emailer for all cameras (its per-camera opt-in
+// and cooldown live in settings); wired to each recorder as it is built below.
+Neolink.Notifications.EventEmailer? eventEmailer = null;
 var recordingHealth = new Neolink.Recording.RecordingHealth();
 tasks.Add(Task.Run(() => notifier.RunAsync(shutdown.Token)));
 
@@ -591,6 +594,9 @@ foreach (var cam in config.Cameras)
                     hasRoom: storage == null ? null : () => storage.HasRoom(StorageRole.Clips),
                     onWriteError: recordingHealth.MarkWriteError,
                     ai: aiDescriber);
+                eventEmailer ??= new Neolink.Notifications.EventEmailer(
+                    notificationStore, notifier, recordingSettings, eventStore);
+                recorder.OnEventClosed = eventEmailer.OnEventClosed;
                 recorderSink = recorder.OnMotion;
                 eventRecorder = recorder;
                 tasks.Add(Task.Run(() => recorder.RunAsync(shutdown.Token)));

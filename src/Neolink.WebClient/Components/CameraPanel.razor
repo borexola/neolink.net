@@ -64,6 +64,20 @@
         </div>
     }
 
+    @if (_retentionConfirm is { } rc)
+    {
+        @* Same pinned placement as the suspend card: a typed-in retention cut is
+           armed but inert until confirmed here — Cancel snaps the field back. *@
+        <div class="suspend-confirm" role="alertdialog" aria-label="@T["Shrink the retention window?"]">
+            <div class="campanel-section-title">@UiIcon.Render("clock", 13) @T["SHRINK THE RETENTION WINDOW?"]</div>
+            <div class="notice warn small">⚠ @rc.Message</div>
+            <div class="row-actions suspend-confirm-actions">
+                <button class="chip chip-danger" @onclick="ConfirmRetentionAsync">@T["Confirm — apply the shorter window"]</button>
+                <button class="chip" @onclick="CancelRetentionAsync">@T["Cancel"]</button>
+            </div>
+        </div>
+    }
+
     @if (_error != null)
     {
         <div class="notice error">@_error</div>
@@ -1041,6 +1055,33 @@
                                 }
                             </div>
                             <div class="event-sub">@ScheduleSummary</div>
+                        </div>
+                    }
+                    @* Event emails: on = every finished event mails the server's
+                       notification recipient, snapshots attached. The camera's
+                       event-type chips above already decide what records, so they
+                       decide what mails too — one filter, not two. *@
+                    <div class="control-row">
+                        <span>@T["Email events"] <span class="new-tag">@T["NEW"]</span></span>
+                        @if (_recording.EmailAvailable || _recording.EmailEvents)
+                        {
+                            <button class="chip @(_recording.EmailEvents ? "" : "chip-off")"
+                                    title="@(_recording.EmailEvents
+                                        ? T["This camera's events are emailed to the notification recipient — click to stop"]
+                                        : T["Click to email this camera's events (snapshots attached) to the notification recipient"])"
+                                    @onclick="() => SetRecordingAsync(emailEvents: !_recording.EmailEvents)">
+                                @(_recording.EmailEvents ? T["on"] : T["off"])
+                            </button>
+                        }
+                        else
+                        {
+                            <span class="event-sub">@T["set up email under Server settings → Notifications first"]</span>
+                        }
+                    </div>
+                    @if (_recording.EmailEvents)
+                    {
+                        <div class="event-sub">
+                            @T["Each email carries snapshots sampled across the clip; how many, the per-camera cooldown, and the recipient live under Server settings → Notifications. Only event types ticked above are recorded — and therefore emailed."]
                         </div>
                     }
                     @* Per-camera AI opt-in — only offered while the feature is ON
@@ -2585,22 +2626,36 @@
         List<string>? scheduleDays = null, string? scheduleStart = null, string? scheduleEnd = null,
         bool? scheduleEnabled = null,
         bool? archiveEvents = null, bool? archiveContinuous = null, int? archiveRetentionDays = null,
-        bool? wakeTimeline = null, bool? aiDescribe = null, string? aiContext = null)
+        bool? wakeTimeline = null, bool? aiDescribe = null, string? aiContext = null,
+        bool? emailEvents = null)
     {
         object body = new
         {
             events, continuous, eventTypes, eventRetentionDays, continuousRetentionDays, recordStream,
             scheduleDays, scheduleStart, scheduleEnd, scheduleEnabled,
             archiveEvents, archiveContinuous, archiveRetentionDays, wakeTimeline, aiDescribe, aiContext,
+            emailEvents,
         };
         if (await PostAsync("recording", body))
             _recording = await GetAsync<ApiRecordingSettings>("recording");
     }
 
-    /// <summary>Blank/invalid input clears the override (the API takes negative = clear).</summary>
+    /// <summary>Blank/invalid input clears the override (the API takes negative = clear).
+    /// Shrinking opens the same confirm card as the main retention fields: the
+    /// archive is footage's last stop, so an expiry here is a permanent delete.</summary>
     private Task SetArchiveDaysAsync(string? raw)
     {
+        if (_recording == null) return Task.CompletedTask;
         int days = int.TryParse(raw?.Trim(), out var d) && d >= 0 ? d : -1;
+        int oldEff = _recording.ArchiveRetentionDays ?? 0;   // 0/blank = keep forever
+        int newEff = days > 0 ? days : 0;
+        if (newEff != 0 && (oldEff == 0 || newEff < oldEff))
+        {
+            _retentionConfirm = ("archive", days, T.F(
+                "Keep archived footage for {0} days instead of {1}?\n\nArchived footage older than {0} days will be deleted permanently on the next cleanup pass — within the hour. The archive is the last stop; this cannot be undone.",
+                newEff, oldEff == 0 ? T["forever"] : oldEff.ToString()));
+            return Task.CompletedTask;
+        }
         return SetRecordingAsync(archiveRetentionDays: days);
     }
 
@@ -2649,13 +2704,56 @@
         </div>
     };
 
-    /// <summary>Blank/invalid input resets to the server default (the API takes negative = clear).</summary>
-    private Task SetRetentionAsync(bool forEvents, string? raw)
+    /// <summary>A retention reduction typed but not yet confirmed. Kind is
+    /// "events" | "continuous" | "archive"; Days is what the API will receive.</summary>
+    private (string Kind, int Days, string Message)? _retentionConfirm;
+
+    /// <summary>Blank/invalid input resets to the server default (the API takes negative = clear).
+    /// Shrinking the window opens a confirm card first: retention judges EXISTING
+    /// footage on the next hourly cleanup pass, so 30 → 5 deletes (or archives)
+    /// ~25 days of history within the hour — a decision, never a typo.</summary>
+    private async Task SetRetentionAsync(bool forEvents, string? raw)
     {
+        if (_recording == null) return;
         int days = int.TryParse(raw?.Trim(), out var d) && d >= 0 ? d : -1;
-        return forEvents
-            ? SetRecordingAsync(eventRetentionDays: days)
-            : SetRecordingAsync(continuousRetentionDays: days);
+        int oldEff = (forEvents ? _recording.EventRetentionDays : _recording.ContinuousRetentionDays)
+                     ?? (forEvents ? _recording.DefaultEventRetentionDays : _recording.DefaultContinuousRetentionDays);
+        int newEff = days >= 0 ? days
+            : forEvents ? _recording.DefaultEventRetentionDays : _recording.DefaultContinuousRetentionDays;
+        // A reduction = the new window is finite and tighter (0 = forever).
+        if (newEff != 0 && (oldEff == 0 || newEff < oldEff))
+        {
+            bool archived = forEvents ? _recording.ArchiveEvents : _recording.ArchiveContinuous;
+            var fate = archived
+                ? T["moved to the archive"]
+                : T["deleted permanently — this cannot be undone"];
+            var what = forEvents ? T["event clips"] : T["continuous footage"];
+            _retentionConfirm = (forEvents ? "events" : "continuous", days, T.F(
+                "Keep {0} for {1} days instead of {2}?\n\nExisting {0} older than {1} days will be {3} on the next cleanup pass — within the hour.",
+                what, newEff, oldEff == 0 ? T["forever"] : oldEff.ToString(), fate));
+            return;
+        }
+        if (forEvents) await SetRecordingAsync(eventRetentionDays: days);
+        else await SetRecordingAsync(continuousRetentionDays: days);
+    }
+
+    private async Task ConfirmRetentionAsync()
+    {
+        if (_retentionConfirm is not { } rc) return;
+        _retentionConfirm = null;
+        await (rc.Kind switch
+        {
+            "events" => SetRecordingAsync(eventRetentionDays: rc.Days),
+            "continuous" => SetRecordingAsync(continuousRetentionDays: rc.Days),
+            _ => SetRecordingAsync(archiveRetentionDays: rc.Days),
+        });
+    }
+
+    private async Task CancelRetentionAsync()
+    {
+        _retentionConfirm = null;
+        // Snap the input back to what is actually stored.
+        _recording = await GetAsync<ApiRecordingSettings>("recording");
     }
 
     private Task ToggleEventTypeAsync(string label)

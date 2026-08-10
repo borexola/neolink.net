@@ -225,6 +225,8 @@ public sealed class ApiNotifications
     public bool AlertWriteFailure { get; set; }
     public int OfflineThresholdMinutes { get; set; } = 10;
     public Dictionary<string, int> CameraOfflineOverrides { get; set; } = new();
+    public int EventSnapshots { get; set; } = 3;
+    public int EventCooldownMinutes { get; set; } = 2;
     public List<string> Cameras { get; set; } = new();
 }
 
@@ -263,7 +265,10 @@ public sealed record ApiRecordingSettings(bool Events, bool Continuous,
     // AI descriptions: AiAvailable mirrors the GLOBAL switch (Settings → AI) —
     // the per-camera opt-in only renders while it is on. AiContext is the
     // owner's scene notes for the model ("" = none).
-    bool AiAvailable = false, bool AiDescribe = false, string? AiContext = null)
+    bool AiAvailable = false, bool AiDescribe = false, string? AiContext = null,
+    // Event emails: per-camera opt-in; EmailAvailable = the server has email
+    // notifications enabled with a recipient (the panel hints at setup otherwise).
+    bool EmailEvents = false, bool EmailAvailable = false)
 {
     /// <summary>null EventTypes = every detection type is recorded.</summary>
     public bool TypeEnabled(string label) => EventTypes == null || EventTypes.Contains(label);

@@ -26,7 +26,7 @@
     <AssemblyName>Neolink.Desktop</AssemblyName>
     <!-- Kept in step with the server by hand: the shell shows both its own and
          the connected server's version, and a mismatch is a supported state. -->
-    <Version>1.0.2</Version>
+    <Version>1.0.3</Version>
     <Product>Neolink.NET Desktop</Product>
     <Company>Oluwabori Olaleye</Company>
     <ApplicationIcon>neolink.ico</ApplicationIcon>

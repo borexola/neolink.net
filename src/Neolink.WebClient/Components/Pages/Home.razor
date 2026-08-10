@@ -1435,6 +1435,8 @@
                                     else if (_notifPerm == "granted")
                                     {
                                         <span title="@T["This browser will show notifications from this site"]">@T["granted"] ✓</span>
+                                        <button class="chip" title="@T["Prove the path end to end: pops a real notification on this device, exactly like a detection would"]"
+                                                @onclick="TestBrowserAlertAsync">@T["Send a test alert"]</button>
                                     }
                                     else if (_notifPerm == "denied")
                                     {
@@ -2002,6 +2004,15 @@
                                     }
                                 }
 
+                                <div class="campanel-divider"></div>
+                                <div class="campanel-subtitle">@T["EVENT EMAILS"] <span class="new-tag">@T["NEW"]</span></div>
+                                <div class="notice small">
+                                    @((MarkupString)T["Each camera opts in on its own recording panel (camera ⚙ → Recording → <b>Email events</b>). The knobs that shape every event email live here."])
+                                </div>
+                                <div class="control-row"><span>@T["Snapshots per email (1–50)"]</span>
+                                    <input class="ret-input" type="number" min="1" max="50" @bind="_notif.EventSnapshots" /></div>
+                                <div class="control-row"><span>@T["Per-camera cooldown (minutes, 0 = every event)"]</span>
+                                    <input class="ret-input" type="number" min="0" max="1440" @bind="_notif.EventCooldownMinutes" /></div>
                             }
                         </div>
                     }
@@ -2622,6 +2633,8 @@
         alertWriteFailure = _notif.AlertWriteFailure,
         offlineThresholdMinutes = _notif.OfflineThresholdMinutes,
         cameraOfflineOverrides = _notif.CameraOfflineOverrides,
+        eventSnapshots = _notif.EventSnapshots,
+        eventCooldownMinutes = _notif.EventCooldownMinutes,
     };
 
     private void SetCameraOverride(string cam, string? raw)
@@ -4956,6 +4969,13 @@
     {
         try { _notifPerm = await JS.InvokeAsync<string>("neolink.notifRequest"); } catch { }
     }
+
+    /// <summary>The alerts panel's proof button: pops a real notification through
+    /// the exact path a detection uses, so "granted but nothing arrives" (OS focus
+    /// modes, the browser muted in system settings) is diagnosable in one click.</summary>
+    private Task TestBrowserAlertAsync() =>
+        FireSystemNotifAsync("neolink-test", "Neolink.NET",
+            T["If you can see this, alerts from this server reach this device."]);
 
     private async Task SetAlertCooldownAsync(ChangeEventArgs e)
     {

@@ -124,6 +124,11 @@ public sealed class EventRecorder
     // ------------------------------------------------------------------ on-demand recording
 
     /// <summary>A running user-commanded recording (web UI record button / HA Record switch).</summary>
+    /// <summary>Fires once per finished (non-provisional) event, after the record,
+    /// clip and thumbnail have all settled on disk — the seam event emails ride.
+    /// Must not block: heavy work belongs on the handler's own task.</summary>
+    public Action<EventRecord>? OnEventClosed { get; set; }
+
     public sealed record OnDemandSession(DateTime StartedUtc, DateTime EndsUtc)
     {
         public double RemainingSeconds => Math.Max(0, (EndsUtc - DateTime.UtcNow).TotalSeconds);
@@ -746,6 +751,10 @@ public sealed class EventRecorder
         try { await thumbTask.ConfigureAwait(false); } catch { }
         Log.Info($"{_camera}: event ended ({string.Join("+", rec.Labels)}, " +
                  $"{(rec.EndUtc - rec.StartUtc).TotalSeconds:0}s{(rec.HasClip ? ", clip saved" : "")})");
+        // After the thumb settles, so an email fallback has something to attach.
+        // The handler (event emails) detaches its own work; a throw here must
+        // not end the event pump.
+        try { OnEventClosed?.Invoke(rec); } catch (Exception ex) { Log.Warn($"{_camera}: event-closed hook failed: {Log.Flatten(ex)}"); }
     }
 
     private void StartClip(EventRecord rec)
