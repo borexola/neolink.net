@@ -44,6 +44,16 @@ in the README). Paste the matching section below into the GitHub release.
   the rest of the mail setup under Server settings → Notifications, and the
   whole path rides the existing notifier: composition on its own task, the
   send on the bounded queue, a dead mail server never touching recording.
+- **"3 snapshots" now means three.** Event emails computed their sampling
+  rate from the request divided by an estimated duration, which quietly
+  under-delivered whenever the estimate ran long or the event was short.
+  The decode now deliberately over-produces and exactly the requested
+  number is picked, evenly spaced across the clip. And when fewer can be
+  attached, both the log and the email say why instead of leaving a count
+  that looks like a bug: no ffmpeg on this server (the single attachment is
+  then the event's thumbnail), no clip for that event, or a clip with no
+  more decodable frames. Installs without ffmpeg now say so at startup
+  whether or not AI descriptions are configured.
 - **Server settings uses the screen it is given.** The dialog was pinned to
   700px tall, so a 1440p monitor scrolled through settings it had the room
   to show. It now grows to 90% of the viewport (capped at 1200px, where a

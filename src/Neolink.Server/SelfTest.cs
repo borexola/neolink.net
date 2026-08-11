@@ -3633,6 +3633,30 @@ public static class SelfTest
             }
         });
 
+        Test("event email: N snapshots means N, spread across the clip", () =>
+        {
+            static List<byte[]> Frames(int n) =>
+                Enumerable.Range(0, n).Select(i => new[] { (byte)i }).ToList();
+            static string Ids(List<byte[]> f) => string.Join(",", f.Select(x => x[0]));
+
+            // The decode over-produces; the pick must return exactly the request,
+            // first and last included, evenly spaced. (A 68 s event asking for 3
+            // returned 1 before this: the rate was computed from a duration that
+            // included pre-roll the event's own length did not know about.)
+            AssertEq(Notifications.EventEmailer.PickEvenly(Frames(30), 3).Count, 3);
+            // 14 not 15 at the midpoint: Math.Round is banker's rounding (14.5 -> 14).
+            AssertEq(Ids(Notifications.EventEmailer.PickEvenly(Frames(30), 3)), "0,14,29");
+            AssertEq(Ids(Notifications.EventEmailer.PickEvenly(Frames(9), 5)), "0,2,4,6,8");
+            AssertEq(Notifications.EventEmailer.PickEvenly(Frames(120), 50).Count, 50);
+            // Fewer frames than asked: attach them all rather than nothing.
+            AssertEq(Ids(Notifications.EventEmailer.PickEvenly(Frames(2), 3)), "0,1");
+            // One snapshot is the MIDDLE of the event, not its first frame —
+            // the first frame is pre-roll, i.e. the scene before anything happened.
+            AssertEq(Ids(Notifications.EventEmailer.PickEvenly(Frames(11), 1)), "5");
+            AssertEq(Notifications.EventEmailer.PickEvenly(Frames(0), 3).Count, 0);
+            AssertEq(Notifications.EventEmailer.PickEvenly(Frames(5), 0).Count, 0);
+        });
+
         Test("email failures report, never throw (unreachable/misconfigured SMTP)", () =>
         {
             var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");

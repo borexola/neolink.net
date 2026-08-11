@@ -384,6 +384,15 @@ if (eventStore != null && recordingSettings != null)
         : "AI describe: no ffmpeg found — frames come from camera snapshots only " +
           "(install ffmpeg or set NEOLINK_FFMPEG to add stream sampling, pre-trigger frames and downscaling)");
 }
+else if (Neolink.Media.Ffmpeg.ExePath == null)
+{
+    // Same banner for installs without AI: event emails sample their snapshots
+    // with ffmpeg too, and "I asked for 3 snapshots and got 1" must not require
+    // reading the source to explain.
+    Log.Info("No ffmpeg found — features that sample video frames fall back to single " +
+             "snapshots (event emails attach the thumbnail only). Install ffmpeg or set " +
+             "NEOLINK_FFMPEG; the Docker image ships one.");
+}
 
 // Footage encryption (opt-in via recording.encrypt): new clips, segments
 // and thumbnails are written as chunked AES-256-GCM. The vault gets the key

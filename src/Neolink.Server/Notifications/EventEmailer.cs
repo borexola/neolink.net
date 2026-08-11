@@ -97,12 +97,21 @@ public sealed class EventEmailer
         var local = rec.StartUtc.ToLocalTime();
         var seconds = Math.Max(0, (rec.EndUtc - rec.StartUtc).TotalSeconds);
         var subject = $"{rec.Camera}: {labels} at {local:HH:mm:ss}";
+        // When fewer snapshots arrive than were asked for, the mail says why —
+        // otherwise "1 snapshot" against a setting of 3 looks like a bug.
+        string attachNote = attachments.Count switch
+        {
+            0 => " No snapshot could be captured for this event.",
+            var n when n < want && Media.Ffmpeg.ExePath == null =>
+                $" {n} snapshot attached — sampling {want} frames from the clip needs ffmpeg, " +
+                "which is not installed on this server, so this is the event's thumbnail.",
+            var n when n < want =>
+                $" {n} of the {want} snapshots asked for are attached (the clip held no more).",
+            var n => $" {n} snapshot(s) attached.",
+        };
         var body =
             $"{Cap(labels)} on {rec.Camera}, {local:yyyy-MM-dd HH:mm:ss} (local server time), " +
-            $"about {seconds:0} seconds long." +
-            (attachments.Count > 0
-                ? $" {attachments.Count} snapshot(s) attached."
-                : " No snapshot could be captured for this event.") +
+            $"about {seconds:0} seconds long." + attachNote +
             " The full clip is in the web UI's events page.";
 
         _notifier.Send(new Alert($"event:{rec.Id}", Recovery: false, subject,
@@ -122,6 +131,16 @@ public sealed class EventEmailer
         var safe = EventStore.SafeName(rec.Camera);
 
         var clip = Path.Combine(dir, "clip.mp4");
+        // Why only one snapshot arrived is otherwise invisible to the person
+        // reading the mail — every fallback below says so, at Info.
+        if (want > 1 && Media.Ffmpeg.ExePath == null)
+            Log.Info($"{rec.Camera}: event email attaches the thumbnail only — sampling {want} " +
+                     "frames from the clip needs ffmpeg, and none was found on PATH " +
+                     "(set NEOLINK_FFMPEG, or install ffmpeg; the Docker image ships one)");
+        else if (want > 1 && !(rec.HasClip && File.Exists(clip)))
+            Log.Info($"{rec.Camera}: event email attaches the thumbnail only — this event has no clip " +
+                     "(recording was off, the disk was full, or the stream never carried a keyframe)");
+
         if (rec.HasClip && File.Exists(clip) && Media.Ffmpeg.ExePath is { } ffmpeg)
         {
             try
@@ -129,11 +148,14 @@ public sealed class EventEmailer
                 var frames = await SampleClipAsync(ffmpeg, clip, rec, want).ConfigureAwait(false);
                 for (int i = 0; i < frames.Count; i++)
                     result.Add(new EmailAttachment($"{safe}-{i + 1}.jpg", "image/jpeg", frames[i]));
+                if (frames.Count < want)
+                    Log.Info($"{rec.Camera}: event email carries {frames.Count} of the {want} " +
+                             "snapshots asked for — the clip held no more decodable frames");
             }
             catch (Exception ex)
             {
-                Log.Debug($"{rec.Camera}: clip snapshot sampling failed ({Log.Flatten(ex)}); " +
-                          "falling back to the thumbnail");
+                Log.Warn($"{rec.Camera}: could not sample the clip for the event email " +
+                         $"({Log.Flatten(ex)}) — attaching the thumbnail instead");
             }
         }
         if (result.Count > 0) return result;
@@ -159,12 +181,17 @@ public sealed class EventEmailer
     private static async Task<List<byte[]>> SampleClipAsync(string ffmpeg, string clipPath,
         EventRecord rec, int want)
     {
-        // fps = frames wanted over the clip's length spreads them evenly; the
-        // duration estimate includes the recorder's pre-roll (default 5 s), and
-        // -frames:v caps the output so an estimate that runs short just spaces
-        // the frames tighter instead of overshooting the attachment count.
-        double duration = Math.Max(2, (rec.EndUtc - rec.StartUtc).TotalSeconds + 5);
-        double fps = want / duration;
+        // Decode at a rate that comfortably OVER-produces, then pick exactly the
+        // frames wanted, evenly spaced, from what actually came out. Computing a
+        // rate of want/duration instead — the obvious approach — quietly returns
+        // fewer than asked whenever the duration estimate runs long (the clip
+        // carries pre-roll the event's own length doesn't know about) or the
+        // event is short: a 68 s event asked for 3 and got 1.
+        double eventSeconds = Math.Max(1, (rec.EndUtc - rec.StartUtc).TotalSeconds);
+        double fps = Math.Clamp(want / eventSeconds * 2.5, 0.5, 10);
+        // Bounded work and memory whatever the clip: at most 4x the request, and
+        // never more than 300 frames (~30 MB of 720p JPEG at the extreme).
+        int maxFrames = Math.Min(300, Math.Max(want * 4, want + 8));
         var psi = new ProcessStartInfo(ffmpeg)
         {
             RedirectStandardInput = true,
@@ -177,7 +204,7 @@ public sealed class EventEmailer
             "-hide_banner", "-loglevel", "error",
             "-i", "pipe:0",
             "-vf", FormattableString.Invariant($"fps={fps:0.######},scale=-2:720"),
-            "-frames:v", want.ToString(),
+            "-frames:v", maxFrames.ToString(),
             "-q:v", "4", "-f", "image2pipe", "-c:v", "mjpeg", "pipe:1",
         }) psi.ArgumentList.Add(a);
 
@@ -208,6 +235,21 @@ public sealed class EventEmailer
                 .Select(l => l.Trim()).LastOrDefault(l => l.Length > 0);
             throw new IOException(err ?? $"ffmpeg exit code {p.ExitCode}");
         }
-        return Ai.AiPreroll.SplitJpegs(stdout.ToArray()).Take(want).ToList();
+        return PickEvenly(Ai.AiPreroll.SplitJpegs(stdout.ToArray()), want);
+    }
+
+    /// <summary>Exactly <paramref name="want"/> items spread across the list
+    /// (first and last always included when there is room), or the whole list
+    /// when it is shorter. The decode over-produces on purpose; this is what
+    /// makes "3 snapshots" mean three, spaced across the event.</summary>
+    internal static List<byte[]> PickEvenly(List<byte[]> frames, int want)
+    {
+        if (want <= 0 || frames.Count == 0) return new List<byte[]>();
+        if (frames.Count <= want) return frames;
+        if (want == 1) return new List<byte[]> { frames[frames.Count / 2] };
+        var picked = new List<byte[]>(want);
+        for (int i = 0; i < want; i++)
+            picked.Add(frames[(int)Math.Round(i * (frames.Count - 1.0) / (want - 1))]);
+        return picked;
     }
 }
