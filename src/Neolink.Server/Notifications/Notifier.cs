@@ -99,11 +99,15 @@ public sealed class Notifier
 
     /// <summary>One-shot send, no edge detection — detection-event emails: each
     /// event either mails or it doesn't (the cooldown decides at the source).
-    /// Same bounded queue and the same "never throws into the caller" contract.</summary>
-    public void Send(Alert alert)
+    /// Same bounded queue and the same "never throws into the caller" contract.
+    /// Returns whether the alert was queued: a full queue drops it, but named
+    /// in the log and reported to the caller, never silently.</summary>
+    public bool Send(Alert alert)
     {
-        if (!_store.Snapshot().Enabled) return;
-        _queue.Writer.TryWrite(alert);
+        if (!_store.Snapshot().Enabled) return false;
+        if (_queue.Writer.TryWrite(alert)) return true;
+        Log.Warn($"Notification queue is full — dropped: {alert.Subject}");
+        return false;
     }
 
     /// <summary>Sends a test email with the given (possibly unsaved) settings and

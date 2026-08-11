@@ -2013,6 +2013,8 @@
                                     <input class="ret-input" type="number" min="1" max="50" @bind="_notif.EventSnapshots" /></div>
                                 <div class="control-row"><span>@T["Per-camera cooldown (minutes, 0 = every event)"]</span>
                                     <input class="ret-input" type="number" min="0" max="1440" @bind="_notif.EventCooldownMinutes" /></div>
+                                <div class="control-row"><span>@T["Send after (seconds into the event, 0 = when it ends)"]</span>
+                                    <input class="ret-input" type="number" min="0" max="300" @bind="_notif.EventEmailDelaySeconds" /></div>
                             }
                         </div>
                     }
@@ -2635,6 +2637,7 @@
         cameraOfflineOverrides = _notif.CameraOfflineOverrides,
         eventSnapshots = _notif.EventSnapshots,
         eventCooldownMinutes = _notif.EventCooldownMinutes,
+        eventEmailDelaySeconds = _notif.EventEmailDelaySeconds,
     };
 
     private void SetCameraOverride(string cam, string? raw)

@@ -221,7 +221,8 @@ public static class WebApi
         string? From, string? FromName,
         bool? AlertStorage, bool? AlertOverload, bool? AlertCameraOffline, bool? AlertWriteFailure,
         int? OfflineThresholdMinutes, Dictionary<string, int>? CameraOfflineOverrides,
-        int? EventSnapshots = null, int? EventCooldownMinutes = null);
+        int? EventSnapshots = null, int? EventCooldownMinutes = null,
+        int? EventEmailDelaySeconds = null);
     /// <summary>Retention fields: null = unchanged, negative = back to the server default, 0 = keep forever.
     /// RecordStream: null = unchanged, "" = back to the server default, else a served stream kind.
     /// Capture schedule: applied only while ScheduleEnabled; ScheduleDays null = unchanged,
@@ -1240,6 +1241,7 @@ public static class WebApi
                     cameraOfflineOverrides = s.CameraOfflineOverrides,
                     eventSnapshots = s.EventSnapshots,
                     eventCooldownMinutes = s.EventCooldownMinutes,
+                    eventEmailDelaySeconds = s.EventEmailDelaySeconds,
                     cameras = cameras.Select(c => c.Name).ToList(),
                 };
             }
@@ -1278,6 +1280,9 @@ public static class WebApi
                     // notification, not become the recording); 0 cooldown = every event.
                     EventSnapshots = Math.Clamp(req.EventSnapshots ?? cur.EventSnapshots, 1, 50),
                     EventCooldownMinutes = Math.Clamp(req.EventCooldownMinutes ?? cur.EventCooldownMinutes, 0, 1440),
+                    // 0 = wait for the event to end; 300 s because past five
+                    // minutes "delayed alert" and "event summary" are the same thing.
+                    EventEmailDelaySeconds = Math.Clamp(req.EventEmailDelaySeconds ?? cur.EventEmailDelaySeconds, 0, 300),
                 };
             }
 

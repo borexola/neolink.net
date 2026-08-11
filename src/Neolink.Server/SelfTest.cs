@@ -3623,9 +3623,12 @@ public static class SelfTest
                 AssertEq(cfg.OfflineMinutesFor("Backyard"), 10);
 
                 // Event-email knobs survive the clone (the write path clones).
-                var ev = new Notifications.NotificationSettings { EventSnapshots = 7, EventCooldownMinutes = 0 };
-                Assert(ev.Clone() is { EventSnapshots: 7, EventCooldownMinutes: 0 },
+                var ev = new Notifications.NotificationSettings
+                    { EventSnapshots = 7, EventCooldownMinutes = 0, EventEmailDelaySeconds = 9 };
+                Assert(ev.Clone() is { EventSnapshots: 7, EventCooldownMinutes: 0, EventEmailDelaySeconds: 9 },
                     "event-email knobs ride Clone");
+                Assert(new Notifications.NotificationSettings().EventEmailDelaySeconds == 5,
+                    "event emails default to 5 seconds into the event");
             }
             finally
             {
@@ -3655,6 +3658,33 @@ public static class SelfTest
             AssertEq(Ids(Notifications.EventEmailer.PickEvenly(Frames(11), 1)), "5");
             AssertEq(Notifications.EventEmailer.PickEvenly(Frames(0), 3).Count, 0);
             AssertEq(Notifications.EventEmailer.PickEvenly(Frames(5), 0).Count, 0);
+        });
+
+        Test("event email: the decode plan reaches the end of every clip", () =>
+        {
+            // The two invariants that make "spread across the event" true. A rate
+            // floor that outruns the frame cap broke both once: a 68 s event's
+            // three snapshots all landed in the clip's first 24 seconds.
+            foreach (var (want, sec) in new[]
+                { (3, 15.0), (3, 68.0), (3, 600.0), (3, 1800.0), (10, 45.0), (50, 600.0), (1, 30.0) })
+            {
+                double fps = Notifications.EventEmailer.InitialRate(want, sec);
+                // The cap must never bind before the clip ends — allow a clip up
+                // to twice the event (pre-roll + post-roll padding included).
+                Assert(Notifications.EventEmailer.MaxDecodedFrames / fps >= sec * 2,
+                    $"cap outlasts a 2x clip (want {want}, {sec}s event)");
+                // An event-length clip must over-produce the request.
+                Assert(fps * sec >= want, $"event-length clip fills the request (want {want}, {sec}s)");
+            }
+
+            // A clip far shorter than its event: the retry rate must escalate to
+            // the ceiling in a handful of passes (each ~2.5x), never crawl.
+            double f = Notifications.EventEmailer.InitialRate(3, 1800);
+            int passes = 0;
+            while (f < 10 && passes < 10) { f = Notifications.EventEmailer.RetryRate(3, f, 1); passes++; }
+            Assert(f >= 10 && passes <= 8, "retry escalation reaches the rate ceiling within 8 passes");
+            // And a pass that DID fill the request never triggers a hotter one.
+            Assert(Notifications.EventEmailer.RetryRate(3, 0.5, 8) <= 10, "retry rate stays capped");
         });
 
         Test("email failures report, never throw (unreachable/misconfigured SMTP)", () =>
@@ -3738,6 +3768,12 @@ public static class SelfTest
             var boundary = System.Text.RegularExpressions.Regex.Match(mail,
                 "multipart/mixed; boundary=\"([^\"]+)\"").Groups[1].Value;
             Assert(mail.TrimEnd().EndsWith($"--{boundary}--"), "mixed part closed last");
+
+            // Attachment names land in MIME headers unencoded: quotes and
+            // control characters must be stripped at this seam (Linux's
+            // invalid-filename set strips almost nothing).
+            AssertEq(Notifications.SmtpSender.HeaderSafeName("Drive\"way\r\nBcc: x.jpg"), "DrivewayBcc: x.jpg");
+            AssertEq(Notifications.SmtpSender.HeaderSafeName("\r\n"), "attachment");
         });
 
         Test("config editor: read-modify-write with validation", () =>

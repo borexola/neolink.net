@@ -7,14 +7,21 @@ using Neolink.Recording;
 namespace Neolink.Notifications;
 
 /// <summary>
-/// Emails a camera's finished detection events, snapshots attached. Sits on the
-/// recorder's event-closed callback: the recorder decided what was worth keeping
-/// (the per-camera event-type filter), so anything that closed with footage is
-/// by definition worth telling the recipient about — no second filter to keep
-/// in sync.
+/// Emails a camera's detection events, snapshots attached. Rides the recorder's
+/// hooks: the recorder decided what was worth keeping (the per-camera event-type
+/// filter), so anything it announces is by definition worth telling the
+/// recipient about — no second filter to keep in sync.
 ///
-/// Snapshots are sampled evenly across the finished clip with ffmpeg (read
-/// through <see cref="FootageVault"/>, so encrypted footage samples the same as
+/// Timing is the point of an alert: the email goes out
+/// <see cref="NotificationSettings.EventEmailDelaySeconds"/> seconds into the
+/// event (an alert that waits for a four-minute visit to end arrives four
+/// minutes late), sampling the clip as it stands — the clip is a live
+/// fragmented MP4, decodable mid-write. 0 waits for the event to end and
+/// samples the whole clip. A tentative self-wake never mails: the recorder
+/// announces only promoted events.
+///
+/// Snapshots are sampled evenly across the clip with ffmpeg (read through
+/// <see cref="FootageVault"/>, so encrypted footage samples the same as
 /// plain); without ffmpeg — or a clip — the event's thumbnail goes instead, so
 /// the email is never empty-handed. Composition runs on its own task and the
 /// send rides the Notifier's bounded queue: a slow disk or mail server can
@@ -31,6 +38,10 @@ public sealed class EventEmailer
     private readonly RecordingSettings _settings;
     private readonly EventStore _events;
     private readonly Dictionary<string, DateTime> _lastSent = new(StringComparer.OrdinalIgnoreCase);
+    // Events the start-triggered path has claimed, so the close hook never
+    // mails the same event twice (an event shorter than the delay closes
+    // before its scheduled email has gone out).
+    private readonly HashSet<string> _claimed = new();
     private readonly object _gate = new();
 
     public EventEmailer(NotificationStore store, Notifier notifier,
@@ -42,44 +53,25 @@ public sealed class EventEmailer
         _events = events;
     }
 
-    /// <summary>The recorder's event-closed hook. Cheap checks inline (the
-    /// recorder calls this on its own pump); everything heavier is detached.</summary>
-    public void OnEventClosed(EventRecord rec)
+    /// <summary>The recorder's event-started hook (real events only — a
+    /// tentative self-wake is announced, and so mailed, only on promotion).
+    /// Schedules the email for <see cref="NotificationSettings.EventEmailDelaySeconds"/>
+    /// seconds in; with a delay of 0 the close hook owns the event instead.
+    /// Cheap checks inline (the recorder calls this on its own pump);
+    /// everything heavier is detached.</summary>
+    public void OnEventStarted(EventRecord rec)
     {
-        // Nothing in here may escape into the recorder's pump — a mail problem
-        // is a mail problem, never a recording one. The inner work is detached
-        // and guarded too; this outer net covers even the settings reads.
         try
         {
             var s = _store.Snapshot();
-            if (!s.Enabled || string.IsNullOrWhiteSpace(s.Recipient) || string.IsNullOrWhiteSpace(s.SmtpHost))
-                return;
-            if (!_settings.Get(rec.Camera).EmailEvents) return;
-
-            lock (_gate)
-            {
-                if (_lastSent.TryGetValue(rec.Camera, out var last)
-                    && s.EventCooldownMinutes > 0
-                    && DateTime.UtcNow - last < TimeSpan.FromMinutes(s.EventCooldownMinutes))
-                {
-                    Log.Debug($"{rec.Camera}: event email skipped (cooldown, " +
-                              $"{s.EventCooldownMinutes} min per camera) — the event is still recorded");
-                    return;
-                }
-                _lastSent[rec.Camera] = DateTime.UtcNow;
-            }
+            int delay = Math.Clamp(s.EventEmailDelaySeconds, 0, 300);
+            if (delay <= 0) return;
+            if (!Claim(rec, s, out var stamp, out var prev)) return;
 
             _ = Task.Run(async () =>
             {
-                try
-                {
-                    await ComposeAndSendAsync(rec, s).ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    Log.Warn($"{rec.Camera}: event email could not be prepared: {Log.Flatten(ex)} " +
-                             "— the event itself is recorded and unaffected");
-                }
+                await Task.Delay(TimeSpan.FromSeconds(delay)).ConfigureAwait(false);
+                await GuardedComposeAsync(rec, s, stamp, prev).ConfigureAwait(false);
             });
         }
         catch (Exception ex)
@@ -88,33 +80,130 @@ public sealed class EventEmailer
         }
     }
 
-    private async Task ComposeAndSendAsync(EventRecord rec, NotificationSettings s)
+    /// <summary>The recorder's event-closed hook — the sender when the delay is
+    /// 0 (whole-clip snapshots), otherwise only the claim set's janitor.</summary>
+    public void OnEventClosed(EventRecord rec)
+    {
+        // Nothing in here may escape into the recorder's pump — a mail problem
+        // is a mail problem, never a recording one. The inner work is detached
+        // and guarded too; this outer net covers even the settings reads.
+        try
+        {
+            lock (_gate)
+            {
+                if (_claimed.Remove(rec.Id)) return;   // the start path mailed (or is about to)
+            }
+            var s = _store.Snapshot();
+            if (Math.Clamp(s.EventEmailDelaySeconds, 0, 300) > 0)
+                return;   // the start path was configured; it declined this event
+            if (!Claim(rec, s, out var stamp, out var prev)) return;
+
+            _ = Task.Run(() => GuardedComposeAsync(rec, s, stamp, prev));
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"{rec.Camera}: event email skipped after an unexpected error: {Log.Flatten(ex)}");
+        }
+    }
+
+    /// <summary>The shared gate: config on, camera opted in, cooldown clear.
+    /// The cooldown window is claimed up front (a burst of events must not
+    /// double-send) but only KEPT by a successful hand-off to the mail queue —
+    /// <see cref="GuardedComposeAsync"/> gives it back on failure, because the
+    /// next event in the window is then the recipient's only shot.</summary>
+    private bool Claim(EventRecord rec, NotificationSettings s,
+        out DateTime stamp, out DateTime? prev)
+    {
+        stamp = default;
+        prev = null;
+        if (!s.Enabled || string.IsNullOrWhiteSpace(s.Recipient) || string.IsNullOrWhiteSpace(s.SmtpHost))
+            return false;
+        if (!_settings.Get(rec.Camera).EmailEvents) return false;
+
+        lock (_gate)
+        {
+            if (_lastSent.TryGetValue(rec.Camera, out var last))
+            {
+                if (s.EventCooldownMinutes > 0
+                    && DateTime.UtcNow - last < TimeSpan.FromMinutes(s.EventCooldownMinutes))
+                {
+                    Log.Debug($"{rec.Camera}: event email skipped (cooldown, " +
+                              $"{s.EventCooldownMinutes} min per camera) — the event is still recorded");
+                    return false;
+                }
+                prev = last;
+            }
+            stamp = DateTime.UtcNow;
+            _lastSent[rec.Camera] = stamp;
+            _claimed.Add(rec.Id);
+            return true;
+        }
+    }
+
+    private async Task GuardedComposeAsync(EventRecord rec, NotificationSettings s,
+        DateTime stamped, DateTime? prev)
+    {
+        bool queued = false;
+        try
+        {
+            queued = await ComposeAndSendAsync(rec, s).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"{rec.Camera}: event email could not be prepared: {Log.Flatten(ex)} " +
+                     "— the event itself is recorded and unaffected");
+        }
+        if (!queued)
+            lock (_gate)
+            {
+                if (_lastSent.TryGetValue(rec.Camera, out var cur) && cur == stamped)
+                {
+                    if (prev is { } p) _lastSent[rec.Camera] = p;
+                    else _lastSent.Remove(rec.Camera);
+                }
+            }
+    }
+
+    /// <summary>Why fewer snapshots than asked for are attached — the email
+    /// states the reason, because a silent shortfall reads as a bug.</summary>
+    private enum Shortfall { None, NoFfmpeg, NoClip, Sampling }
+
+    private async Task<bool> ComposeAndSendAsync(EventRecord rec, NotificationSettings s)
     {
         int want = Math.Clamp(s.EventSnapshots, 1, 50);
-        var attachments = await SnapshotsAsync(rec, want).ConfigureAwait(false);
+        var (attachments, why) = await SnapshotsAsync(rec, want).ConfigureAwait(false);
 
         var labels = rec.Labels.Count > 0 ? string.Join(" + ", rec.Labels) : "detection";
         var local = rec.StartUtc.ToLocalTime();
-        var seconds = Math.Max(0, (rec.EndUtc - rec.StartUtc).TotalSeconds);
+        // Sampled once: the recorder flips Ongoing on its own pump, and the
+        // duration line, the attachments and the closing note must agree on
+        // which event they describe.
+        bool ongoing = rec.Ongoing;
+        var seconds = Math.Max(0, ((ongoing ? DateTime.UtcNow : rec.EndUtc) - rec.StartUtc).TotalSeconds);
         var subject = $"{rec.Camera}: {labels} at {local:HH:mm:ss}";
         // When fewer snapshots arrive than were asked for, the mail says why —
         // otherwise "1 snapshot" against a setting of 3 looks like a bug.
         string attachNote = attachments.Count switch
         {
             0 => " No snapshot could be captured for this event.",
-            var n when n < want && Media.Ffmpeg.ExePath == null =>
+            var n when n < want && why == Shortfall.NoFfmpeg =>
                 $" {n} snapshot attached — sampling {want} frames from the clip needs ffmpeg, " +
                 "which is not installed on this server, so this is the event's thumbnail.",
+            var n when n < want && why == Shortfall.NoClip =>
+                $" {n} snapshot attached — this event has no saved clip, so this is its thumbnail.",
             var n when n < want =>
                 $" {n} of the {want} snapshots asked for are attached (the clip held no more).",
             var n => $" {n} snapshot(s) attached.",
         };
-        var body =
-            $"{Cap(labels)} on {rec.Camera}, {local:yyyy-MM-dd HH:mm:ss} (local server time), " +
-            $"about {seconds:0} seconds long." + attachNote +
-            " The full clip is in the web UI's events page.";
+        var body = ongoing
+            ? $"{Cap(labels)} on {rec.Camera}, {local:yyyy-MM-dd HH:mm:ss} (local server time), " +
+              $"still ongoing when this email was sent ({seconds:0} seconds in)." + attachNote +
+              " The full clip will be in the web UI's events page once the event ends."
+            : $"{Cap(labels)} on {rec.Camera}, {local:yyyy-MM-dd HH:mm:ss} (local server time), " +
+              $"about {seconds:0} seconds long." + attachNote +
+              " The full clip is in the web UI's events page.";
 
-        _notifier.Send(new Alert($"event:{rec.Id}", Recovery: false, subject,
+        return _notifier.Send(new Alert($"event:{rec.Id}", Recovery: false, subject,
             Headline: $"{Cap(labels)} — {rec.Camera}", body, Context: null,
             Attachments: attachments.Count > 0 ? attachments : null));
     }
@@ -124,41 +213,57 @@ public sealed class EventEmailer
 
     /// <summary>Evenly spaced JPEG frames from the event's clip; the thumbnail
     /// when the clip or ffmpeg is unavailable; empty only when both are.</summary>
-    private async Task<List<EmailAttachment>> SnapshotsAsync(EventRecord rec, int want)
+    private async Task<(List<EmailAttachment> Attachments, Shortfall Why)> SnapshotsAsync(
+        EventRecord rec, int want)
     {
         var dir = _events.EventDir(rec);
         var result = new List<EmailAttachment>();
         var safe = EventStore.SafeName(rec.Camera);
+        var why = Shortfall.None;
 
         var clip = Path.Combine(dir, "clip.mp4");
         // Why only one snapshot arrived is otherwise invisible to the person
         // reading the mail — every fallback below says so, at Info.
         if (want > 1 && Media.Ffmpeg.ExePath == null)
+        {
+            why = Shortfall.NoFfmpeg;
             Log.Info($"{rec.Camera}: event email attaches the thumbnail only — sampling {want} " +
                      "frames from the clip needs ffmpeg, and none was found on PATH " +
                      "(set NEOLINK_FFMPEG, or install ffmpeg; the Docker image ships one)");
+        }
         else if (want > 1 && !(rec.HasClip && File.Exists(clip)))
+        {
+            why = Shortfall.NoClip;
             Log.Info($"{rec.Camera}: event email attaches the thumbnail only — this event has no clip " +
                      "(recording was off, the disk was full, or the stream never carried a keyframe)");
+        }
 
         if (rec.HasClip && File.Exists(clip) && Media.Ffmpeg.ExePath is { } ffmpeg)
         {
             try
             {
-                var frames = await SampleClipAsync(ffmpeg, clip, rec, want).ConfigureAwait(false);
+                // An ongoing event's clip only reaches "now" — EndUtc is stale
+                // mid-event (touched on label changes, final only at close).
+                double eventSeconds = Math.Max(1,
+                    ((rec.Ongoing ? DateTime.UtcNow : rec.EndUtc) - rec.StartUtc).TotalSeconds);
+                var frames = await SampleClipAsync(ffmpeg, clip, eventSeconds, want).ConfigureAwait(false);
                 for (int i = 0; i < frames.Count; i++)
                     result.Add(new EmailAttachment($"{safe}-{i + 1}.jpg", "image/jpeg", frames[i]));
                 if (frames.Count < want)
+                {
+                    why = Shortfall.Sampling;
                     Log.Info($"{rec.Camera}: event email carries {frames.Count} of the {want} " +
                              "snapshots asked for — the clip held no more decodable frames");
+                }
             }
             catch (Exception ex)
             {
+                why = Shortfall.Sampling;
                 Log.Warn($"{rec.Camera}: could not sample the clip for the event email " +
                          $"({Log.Flatten(ex)}) — attaching the thumbnail instead");
             }
         }
-        if (result.Count > 0) return result;
+        if (result.Count > 0) return (result, why);
 
         var thumb = Path.Combine(dir, "thumb.jpg");
         if (rec.HasThumb && File.Exists(thumb))
@@ -175,23 +280,56 @@ public sealed class EventEmailer
                 Log.Debug($"{rec.Camera}: event thumbnail unreadable for email: {Log.Flatten(ex)}");
             }
         }
-        return result;
+        return (result, why);
     }
 
+    /// <summary>Frames decoded per pass, whatever the clip (~30 MB of 720p JPEG
+    /// at the extreme). Wide on purpose: a cap the sampling rate can outrun
+    /// stops the decode early, and every snapshot then comes from the clip's
+    /// opening seconds — the cap must never bind before the clip ends.</summary>
+    internal const int MaxDecodedFrames = 300;
+
+    /// <summary>The decode rate for a clip believed to run the event's length,
+    /// over-producing 2.5x so <see cref="PickEvenly"/> always has the request
+    /// covered even with pre- and post-roll padding the estimate. The floor
+    /// only guards ffmpeg against a degenerate rate: at 0.02 fps the frame cap
+    /// still spans over four hours of clip, so it cannot cause early cutoff.</summary>
+    internal static double InitialRate(int want, double eventSeconds) =>
+        Math.Clamp(want * 2.5 / eventSeconds, 0.02, 10);
+
+    /// <summary>The next rate after a pass returned fewer frames than wanted:
+    /// what came out bounds the decodable length (at most got/fps seconds), so
+    /// this aims the same 2.5x over-production at THAT. Grows at least 2.5x per
+    /// pass, so escalation to the 10 fps ceiling takes only a handful of passes.</summary>
+    internal static double RetryRate(int want, double fps, int got) =>
+        Math.Min(10, want * 2.5 * fps / Math.Max(1, got));
+
     private static async Task<List<byte[]>> SampleClipAsync(string ffmpeg, string clipPath,
-        EventRecord rec, int want)
+        double eventSeconds, int want)
     {
-        // Decode at a rate that comfortably OVER-produces, then pick exactly the
-        // frames wanted, evenly spaced, from what actually came out. Computing a
-        // rate of want/duration instead — the obvious approach — quietly returns
-        // fewer than asked whenever the duration estimate runs long (the clip
-        // carries pre-roll the event's own length doesn't know about) or the
-        // event is short: a 68 s event asked for 3 and got 1.
-        double eventSeconds = Math.Max(1, (rec.EndUtc - rec.StartUtc).TotalSeconds);
-        double fps = Math.Clamp(want / eventSeconds * 2.5, 0.5, 10);
-        // Bounded work and memory whatever the clip: at most 4x the request, and
-        // never more than 300 frames (~30 MB of 720p JPEG at the extreme).
-        int maxFrames = Math.Min(300, Math.Max(want * 4, want + 8));
+        double fps = InitialRate(want, eventSeconds);
+        var frames = await DecodeAsync(ffmpeg, clipPath, fps).ConfigureAwait(false);
+        // The clip can be far shorter than the event that owns it (recording
+        // started late, the disk hiccupped): the first pass then under-fills —
+        // "asked for 3, got 1" — and each retry re-aims at the length the
+        // previous pass proved. Cheap by construction: a pass only under-fills
+        // when the clip is short, and that is exactly what a re-decode costs.
+        while (frames.Count > 0 && frames.Count < want && fps < 10)
+        {
+            double next = RetryRate(want, fps, frames.Count);
+            if (next <= fps) break;
+            fps = next;
+            List<byte[]> again;
+            try { again = await DecodeAsync(ffmpeg, clipPath, fps).ConfigureAwait(false); }
+            catch { break; }                          // keep what the first pass proved
+            if (again.Count <= frames.Count) break;   // the clip truly holds no more
+            frames = again;
+        }
+        return PickEvenly(frames, want);
+    }
+
+    private static async Task<List<byte[]>> DecodeAsync(string ffmpeg, string clipPath, double fps)
+    {
         var psi = new ProcessStartInfo(ffmpeg)
         {
             RedirectStandardInput = true,
@@ -204,7 +342,7 @@ public sealed class EventEmailer
             "-hide_banner", "-loglevel", "error",
             "-i", "pipe:0",
             "-vf", FormattableString.Invariant($"fps={fps:0.######},scale=-2:720"),
-            "-frames:v", maxFrames.ToString(),
+            "-frames:v", MaxDecodedFrames.ToString(),
             "-q:v", "4", "-f", "image2pipe", "-c:v", "mjpeg", "pipe:1",
         }) psi.ArgumentList.Add(a);
 
@@ -235,7 +373,7 @@ public sealed class EventEmailer
                 .Select(l => l.Trim()).LastOrDefault(l => l.Length > 0);
             throw new IOException(err ?? $"ffmpeg exit code {p.ExitCode}");
         }
-        return PickEvenly(Ai.AiPreroll.SplitJpegs(stdout.ToArray()), want);
+        return Ai.AiPreroll.SplitJpegs(stdout.ToArray());
     }
 
     /// <summary>Exactly <paramref name="want"/> items spread across the list

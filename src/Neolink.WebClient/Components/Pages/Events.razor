@@ -1026,6 +1026,12 @@
                 }
                 catch { /* not JSON — the status line is all we have */ }
                 _delServerError ??= $"{(int)res.StatusCode} {res.ReasonPhrase}";
+                // Earlier batches already ran: a real delete interrupted midway
+                // must say what it did do, not pretend nothing happened.
+                if (!estimate && deleted > 0)
+                    _delServerError = T.F(
+                        "{0} — {1} of the selected events were already deleted before this failure; the rest are untouched.",
+                        _delServerError, deleted);
                 return null;
             }
             var part = await res.Content.ReadFromJsonAsync<JsonElement>();

@@ -227,6 +227,7 @@ public sealed class ApiNotifications
     public Dictionary<string, int> CameraOfflineOverrides { get; set; } = new();
     public int EventSnapshots { get; set; } = 3;
     public int EventCooldownMinutes { get; set; } = 2;
+    public int EventEmailDelaySeconds { get; set; } = 5;
     public List<string> Cameras { get; set; } = new();
 }
 

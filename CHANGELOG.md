@@ -6,6 +6,45 @@ in the README). Paste the matching section below into the GitHub release.
 
 ## 1.0.3 — unreleased
 
+### Added
+
+- **Cameras can email their events, snapshots attached.** A per-camera
+  switch (camera ⚙ → Recording → Email events) mails every detection event
+  to the notification recipient — five seconds into the event by default,
+  because an alert that waits out a four-minute visit arrives four minutes
+  late. The delay is configurable (0 = send when the event ends and sample
+  the whole clip); the recording keeps rolling either way, and the email
+  says "still ongoing" when it is. Each mail carries 1–50 snapshots
+  (default 3) sampled evenly across the clip so far — encrypted footage
+  samples the same as plain, and without ffmpeg the event's thumbnail goes
+  instead, so the mail is never empty-handed. The camera's event-type chips
+  already decide what gets recorded, so they decide what gets emailed — one
+  filter, not two. The global knobs (snapshot count, send delay, a
+  per-camera cooldown defaulting to 2 minutes so a busy driveway can't
+  flood an inbox) sit with the rest of the mail setup under Server settings
+  → Notifications, and the whole path rides the existing notifier:
+  composition on its own task, the send on the bounded queue, a dead mail
+  server never touching recording. An email that fails to compose or queue
+  gives its cooldown window back — the next event in the window is then the
+  recipient's only shot.
+- **A "Send a test alert" button in the alerts panel.** Once permission is
+  granted, one click pops a real notification through the exact path a
+  detection uses — so "granted but nothing arrives" (OS focus modes, the
+  browser muted in system notification settings) is diagnosable on the
+  spot. In all seven languages.
+- **Shrinking a retention window now asks first.** Retention judges existing
+  footage on the next hourly cleanup pass, so typing 5 into a field that
+  said 30 quietly erased ~25 days of history within the hour. The camera
+  panel's three windows (event clips, continuous, archive) now confirm any
+  reduction, spelling out what happens and when — and saying "moved to the
+  archive" instead of "deleted" when archiving makes that the truth.
+  Cancelling snaps the field back.
+- **Retention now logs the window it is actually applying** (Debug, one
+  line per camera per hourly pass): which day is the cutoff, and whether
+  footage is being deleted or archived. "I shortened retention and nothing
+  was deleted" was otherwise unanswerable — the number the running server
+  uses never appeared anywhere.
+
 ### Fixed
 
 - **Browser alerts over plain HTTP stop giving impossible advice.** Field
@@ -19,41 +58,21 @@ in the README). Paste the matching section below into the GitHub release.
   the secure context first, so Firefox-over-HTTP gets the honest answer —
   use HTTPS (a reverse proxy) or localhost — instead of a settings goose
   chase.
-
-### Added
-
-- **A "Send a test alert" button in the alerts panel.** Once permission is
-  granted, one click pops a real notification through the exact path a
-  detection uses — so "granted but nothing arrives" (OS focus modes, the
-  browser muted in system notification settings) is diagnosable on the
-  spot. In all seven languages.
-
-## 1.0.3 — unreleased
-
-### Added
-
-- **Cameras can email their events, snapshots attached.** A per-camera
-  switch (camera ⚙ → Recording → Email events) mails every finished
-  detection event to the notification recipient, with 1–50 snapshots
-  (default 3) sampled evenly across the clip — encrypted footage samples
-  the same as plain, and without ffmpeg the event's thumbnail goes instead,
-  so the mail is never empty-handed. The camera's event-type chips already
-  decide what gets recorded, so they decide what gets emailed — one filter,
-  not two. The global knobs (snapshot count, a per-camera cooldown
-  defaulting to 2 minutes so a busy driveway can't flood an inbox) sit with
-  the rest of the mail setup under Server settings → Notifications, and the
-  whole path rides the existing notifier: composition on its own task, the
-  send on the bounded queue, a dead mail server never touching recording.
-- **"3 snapshots" now means three.** Event emails computed their sampling
-  rate from the request divided by an estimated duration, which quietly
-  under-delivered whenever the estimate ran long or the event was short.
-  The decode now deliberately over-produces and exactly the requested
-  number is picked, evenly spaced across the clip. And when fewer can be
-  attached, both the log and the email say why instead of leaving a count
-  that looks like a bug: no ffmpeg on this server (the single attachment is
-  then the event's thumbnail), no clip for that event, or a clip with no
-  more decodable frames. Installs without ffmpeg now say so at startup
-  whether or not AI descriptions are configured.
+- **"3 snapshots" now means three, spread across the whole event.** Two ways
+  the sampler under-delivered: the decode rate came from a duration estimate
+  the clip on disk didn't have to match (a 68 s event asked for 3 and got 1),
+  and a rate floor combined with a tight frame cap could stop the decode a
+  few seconds in, so a long event's snapshots all came from its opening
+  moments. The decode now over-produces at a rate honest to the event's
+  length, with a cap wide enough to reach the end of any clip — and a clip
+  that turns out far shorter than its event (recording started late, the
+  disk hiccupped) is re-sampled at the length the first pass proved.
+  Exactly the requested number is picked, evenly, first and last included.
+  When fewer can be attached, both the log and the email say why instead of
+  leaving a count that looks like a bug: no ffmpeg on this server (the
+  single attachment is then the event's thumbnail), no saved clip for that
+  event, or a clip with no more decodable frames. Installs without ffmpeg
+  now say so at startup whether or not AI descriptions are configured.
 - **Server settings uses the screen it is given.** The dialog was pinned to
   700px tall, so a 1440p monitor scrolled through settings it had the room
   to show. It now grows to 90% of the viewport (capped at 1200px, where a
@@ -66,19 +85,8 @@ in the README). Paste the matching section below into the GitHub release.
   failed request into "are you signed in as an admin?", which sent people
   looking in the wrong place entirely. The page now sends large selections
   in batches of 500 and merges the summaries, and when a request really
-  does fail it shows the server's own reason.
-- **Retention now logs the window it is actually applying** (Debug, one
-  line per camera per hourly pass): which day is the cutoff, and whether
-  footage is being deleted or archived. "I shortened retention and nothing
-  was deleted" was otherwise unanswerable — the number the running server
-  uses never appeared anywhere.
-- **Shrinking a retention window now asks first.** Retention judges existing
-  footage on the next hourly cleanup pass, so typing 5 into a field that
-  said 30 quietly erased ~25 days of history within the hour. The camera
-  panel's three windows (event clips, continuous, archive) now confirm any
-  reduction, spelling out what happens and when — and saying "moved to the
-  archive" instead of "deleted" when archiving makes that the truth.
-  Cancelling snaps the field back.
+  does fail it shows the server's own reason — including, if a batched
+  delete is interrupted midway, how many events were already deleted.
 
 ## 1.0.2
 

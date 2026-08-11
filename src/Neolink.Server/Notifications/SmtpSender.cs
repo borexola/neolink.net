@@ -128,9 +128,13 @@ internal static class SmtpSender
         AppendAlternative(sb, inner, text, html);
         foreach (var a in attachments)
         {
+            // Names land in headers unencoded, so the same characters the
+            // address guard refuses (CR/LF, quotes) must not pass here either —
+            // on Linux Path.GetInvalidFileNameChars() strips almost nothing.
+            var name = HeaderSafeName(a.Name);
             sb.Append("--").Append(boundary).Append("\r\n");
-            sb.Append("Content-Type: ").Append(a.ContentType).Append("; name=\"").Append(a.Name).Append("\"\r\n");
-            sb.Append("Content-Disposition: attachment; filename=\"").Append(a.Name).Append("\"\r\n");
+            sb.Append("Content-Type: ").Append(a.ContentType).Append("; name=\"").Append(name).Append("\"\r\n");
+            sb.Append("Content-Disposition: attachment; filename=\"").Append(name).Append("\"\r\n");
             sb.Append("Content-Transfer-Encoding: base64\r\n\r\n");
             AppendBase64(sb, a.Data);
         }
@@ -151,6 +155,14 @@ internal static class SmtpSender
         sb.Append("Content-Type: ").Append(contentType).Append("\r\n");
         sb.Append("Content-Transfer-Encoding: base64\r\n\r\n");
         AppendBase64(sb, Encoding.UTF8.GetBytes(body));
+    }
+
+    internal static string HeaderSafeName(string name)
+    {
+        var sb = new StringBuilder(name.Length);
+        foreach (var c in name)
+            if (c >= ' ' && c != '"') sb.Append(c);
+        return sb.Length > 0 ? sb.ToString() : "attachment";
     }
 
     private static void AppendBase64(StringBuilder sb, byte[] data)
