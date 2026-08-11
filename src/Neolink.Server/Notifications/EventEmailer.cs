@@ -46,35 +46,46 @@ public sealed class EventEmailer
     /// recorder calls this on its own pump); everything heavier is detached.</summary>
     public void OnEventClosed(EventRecord rec)
     {
-        var s = _store.Snapshot();
-        if (!s.Enabled || string.IsNullOrWhiteSpace(s.Recipient) || string.IsNullOrWhiteSpace(s.SmtpHost))
-            return;
-        if (!_settings.Get(rec.Camera).EmailEvents) return;
-
-        lock (_gate)
+        // Nothing in here may escape into the recorder's pump — a mail problem
+        // is a mail problem, never a recording one. The inner work is detached
+        // and guarded too; this outer net covers even the settings reads.
+        try
         {
-            if (_lastSent.TryGetValue(rec.Camera, out var last)
-                && s.EventCooldownMinutes > 0
-                && DateTime.UtcNow - last < TimeSpan.FromMinutes(s.EventCooldownMinutes))
-            {
-                Log.Debug($"{rec.Camera}: event email skipped (cooldown, " +
-                          $"{s.EventCooldownMinutes} min per camera) — the event is still recorded");
+            var s = _store.Snapshot();
+            if (!s.Enabled || string.IsNullOrWhiteSpace(s.Recipient) || string.IsNullOrWhiteSpace(s.SmtpHost))
                 return;
-            }
-            _lastSent[rec.Camera] = DateTime.UtcNow;
-        }
+            if (!_settings.Get(rec.Camera).EmailEvents) return;
 
-        _ = Task.Run(async () =>
+            lock (_gate)
+            {
+                if (_lastSent.TryGetValue(rec.Camera, out var last)
+                    && s.EventCooldownMinutes > 0
+                    && DateTime.UtcNow - last < TimeSpan.FromMinutes(s.EventCooldownMinutes))
+                {
+                    Log.Debug($"{rec.Camera}: event email skipped (cooldown, " +
+                              $"{s.EventCooldownMinutes} min per camera) — the event is still recorded");
+                    return;
+                }
+                _lastSent[rec.Camera] = DateTime.UtcNow;
+            }
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await ComposeAndSendAsync(rec, s).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn($"{rec.Camera}: event email could not be prepared: {Log.Flatten(ex)} " +
+                             "— the event itself is recorded and unaffected");
+                }
+            });
+        }
+        catch (Exception ex)
         {
-            try
-            {
-                await ComposeAndSendAsync(rec, s).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                Log.Warn($"{rec.Camera}: event email failed: {Log.Flatten(ex)}");
-            }
-        });
+            Log.Warn($"{rec.Camera}: event email skipped after an unexpected error: {Log.Flatten(ex)}");
+        }
     }
 
     private async Task ComposeAndSendAsync(EventRecord rec, NotificationSettings s)

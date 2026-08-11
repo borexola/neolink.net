@@ -51,7 +51,16 @@ public sealed class Notifier
             {
                 try { await DeliverAsync(alert, ct).ConfigureAwait(false); }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
-                catch (Exception ex) { Log.Warn($"Notification email failed ({alert.Subject}): {ex.Message}"); }
+                catch (Exception ex)
+                {
+                    // The whole point of this queue: a wrong password, an
+                    // unreachable host, a TLS mismatch — all of it stops here,
+                    // named, with the server it tried, and nothing else notices.
+                    var s = _store.Snapshot();
+                    Log.Warn($"Notification email failed ({alert.Subject}) via " +
+                             $"{s.SmtpHost}:{s.SmtpPort} [{s.Security}]: {Log.Flatten(ex)} " +
+                             "— check Server settings → Notifications; nothing else is affected");
+                }
             }
         }
         catch (OperationCanceledException) { }

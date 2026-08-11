@@ -1061,26 +1061,32 @@
                        notification recipient, snapshots attached. The camera's
                        event-type chips above already decide what records, so they
                        decide what mails too — one filter, not two. *@
+                    @* The switch is always VISIBLE — a feature that vanishes when
+                       unconfigured reads as a feature that doesn't exist. Without
+                       a mail setup it sits off and disabled, and the line below
+                       says exactly what to do about it. *@
                     <div class="control-row">
                         <span>@T["Email events"] <span class="new-tag">@T["NEW"]</span></span>
-                        @if (_recording.EmailAvailable || _recording.EmailEvents)
-                        {
-                            <button class="chip @(_recording.EmailEvents ? "" : "chip-off")"
-                                    title="@(_recording.EmailEvents
+                        <button class="chip @(_recording.EmailEvents ? "" : "chip-off")"
+                                disabled="@(!_recording.EmailAvailable && !_recording.EmailEvents)"
+                                title="@(!_recording.EmailAvailable && !_recording.EmailEvents
+                                    ? T["Unavailable — this server has no email set up yet"]
+                                    : _recording.EmailEvents
                                         ? T["This camera's events are emailed to the notification recipient — click to stop"]
                                         : T["Click to email this camera's events (snapshots attached) to the notification recipient"])"
-                                    @onclick="() => SetRecordingAsync(emailEvents: !_recording.EmailEvents)">
-                                @(_recording.EmailEvents ? T["on"] : T["off"])
-                            </button>
-                        }
-                        else
-                        {
-                            <span class="event-sub">@T["set up email under Server settings → Notifications first"]</span>
-                        }
+                                @onclick="() => SetRecordingAsync(emailEvents: !_recording.EmailEvents)">
+                            @(_recording.EmailEvents ? T["on"] : T["off"])
+                        </button>
                     </div>
-                    @if (_recording.EmailEvents)
+                    @if (!_recording.EmailAvailable && !_recording.EmailEvents)
                     {
-                        <div class="event-sub">
+                        <div class="notice small">
+                            @((MarkupString)T["No email is set up on this server yet. Add a recipient and mail server under <b>Server settings → Notifications</b> (and switch notifications on) — this toggle turns on once that is done."])
+                        </div>
+                    }
+                    else if (_recording.EmailEvents)
+                    {
+                        <div class="event-sub email-sub">
                             @T["Each email carries snapshots sampled across the clip; how many, the per-camera cooldown, and the recipient live under Server settings → Notifications. Only event types ticked above are recorded — and therefore emailed."]
                         </div>
                     }

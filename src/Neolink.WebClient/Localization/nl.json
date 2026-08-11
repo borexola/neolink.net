@@ -706,6 +706,8 @@
  "Send email alerts": "E-mailmeldingen sturen",
  "Send a test alert": "Een testmelding versturen",
  "Send test email": "Test-e-mail versturen",
+ "Unavailable — this server has no email set up yet": "Niet beschikbaar — op deze server is nog geen e-mail ingesteld",
+ "No email is set up on this server yet. Add a recipient and mail server under <b>Server settings → Notifications</b> (and switch notifications on) — this toggle turns on once that is done.": "Op deze server is nog geen e-mail ingesteld. Voeg een ontvanger en mailserver toe onder <b>Serverinstellingen → Meldingen</b> (en zet meldingen aan) — daarna kan deze schakelaar aan.",
  "Shrink the retention window?": "Bewaarvenster verkleinen?",
  "SHRINK THE RETENTION WINDOW?": "BEWAARVENSTER VERKLEINEN?",
  "Confirm — apply the shorter window": "Bevestigen — korter venster toepassen",

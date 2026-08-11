@@ -2276,7 +2276,15 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
        metrics would eat, so leave a real margin. Tabs still wrap gracefully
        below this width; they just shouldn't have to on a desktop. */
     width: min(1020px, 96vw);
-    height: min(700px, 90vh);
+    /* Fixed height on purpose (switching tabs must not resize the dialog), but
+       it now grows with the screen: the old 700px cap left a 1440p monitor
+       scrolling settings it had the room to show. 1200px is where a dialog
+       stops being easier to read and starts being a lot of eye travel, so the
+       viewport, not the cap, is what binds on ordinary screens. dvh second:
+       on mobile 90vh can exceed the VISIBLE viewport while the URL bar shows,
+       which would push the footer's Save button off-screen. */
+    height: min(1200px, 90vh);
+    height: min(1200px, 90dvh);
 }
 
 .settings-tabs {
@@ -5749,8 +5757,10 @@ textarea.ai-prompt {
     text-overflow: clip;
 }
 
-/* The AI-description note is explanatory prose too — wrap, don't ellipsize. */
-.event-sub.ai-sub {
+/* The AI-description and event-email notes are explanatory prose too — wrap,
+   don't ellipsize (.event-sub is nowrap for the single-line event rows). */
+.event-sub.ai-sub,
+.event-sub.email-sub {
     white-space: normal;
     overflow: visible;
     text-overflow: clip;

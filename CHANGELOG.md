@@ -44,6 +44,12 @@ in the README). Paste the matching section below into the GitHub release.
   the rest of the mail setup under Server settings → Notifications, and the
   whole path rides the existing notifier: composition on its own task, the
   send on the bounded queue, a dead mail server never touching recording.
+- **Server settings uses the screen it is given.** The dialog was pinned to
+  700px tall, so a 1440p monitor scrolled through settings it had the room
+  to show. It now grows to 90% of the viewport (capped at 1200px, where a
+  dialog stops being easier to read), still fixed-height so switching tabs
+  never resizes it, and measured in `dvh` so a phone's URL bar can't push
+  the Save button off-screen.
 - **Deleting more than 1000 events at once stopped failing — and stopped
   blaming your account.** The delete endpoint caps one request at 1000 ids,
   so selecting 1063 events came back 400; the events page turned every

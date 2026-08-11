@@ -3633,6 +3633,57 @@ public static class SelfTest
             }
         });
 
+        Test("email failures report, never throw (unreachable/misconfigured SMTP)", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var key = new byte[32];
+                Array.Fill(key, (byte)7);
+                var store = new Notifications.NotificationStore(dir, new Notifications.SecretProtector(key));
+                var notifier = new Notifications.Notifier(store, "selftest");
+
+                // A port nothing listens on: connection refused, immediately.
+                var broken = new Notifications.NotificationSettings
+                {
+                    Enabled = true, Recipient = "to@x.com", From = "from@x.com",
+                    SmtpHost = "127.0.0.1", SmtpPort = 9, Security = Notifications.SmtpSecurity.None,
+                };
+                var err = notifier.SendTestAsync(broken, "pw", CancellationToken.None)
+                    .GetAwaiter().GetResult();
+                Assert(err != null, "an unreachable mail server REPORTS instead of throwing");
+
+                // A malformed address is refused by the sender's own validation
+                // (header injection guard) — also as a message, not an exception.
+                var inject = new Notifications.NotificationSettings
+                {
+                    Enabled = true, Recipient = "a@b.com\r\nBcc: c@d.com",
+                    From = "from@x.com", SmtpHost = "127.0.0.1", SmtpPort = 9,
+                    Security = Notifications.SmtpSecurity.None,
+                };
+                Assert(notifier.SendTestAsync(inject, "pw", CancellationToken.None).GetAwaiter().GetResult() != null,
+                    "a control character in an address is refused as a message");
+
+                // The queue path swallows the same failures: Send() must return
+                // immediately and the delivery loop must survive them, so the
+                // recorder that raised the event never learns mail is broken.
+                store.Save(broken, "pw");
+                using var cts = new CancellationTokenSource();
+                var loop = notifier.RunAsync(cts.Token);
+                for (int i = 0; i < 5; i++)
+                    notifier.Send(new Notifications.Alert($"e{i}", false, "s", "h", "b"));
+                Assert(!loop.IsFaulted, "the delivery loop does not fault on a bad server");
+                cts.Cancel();
+                try { loop.GetAwaiter().GetResult(); } catch (OperationCanceledException) { }
+                Assert(!loop.IsFaulted, "the delivery loop ends cleanly after failed sends");
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+        });
+
         Test("smtp message: attachments nest the text/html pair inside multipart/mixed", () =>
         {
             var s = new Notifications.NotificationSettings

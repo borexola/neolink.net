@@ -706,6 +706,8 @@
  "Send email alerts": "Envoyer des alertes e-mail",
  "Send a test alert": "Envoyer une alerte de test",
  "Send test email": "Envoyer un e-mail de test",
+ "Unavailable — this server has no email set up yet": "Indisponible — aucun e-mail n'est configuré sur ce serveur",
+ "No email is set up on this server yet. Add a recipient and mail server under <b>Server settings → Notifications</b> (and switch notifications on) — this toggle turns on once that is done.": "Aucun e-mail n'est configuré sur ce serveur. Ajoutez un destinataire et un serveur de messagerie dans <b>Réglages du serveur → Notifications</b> (et activez les notifications) — ce bouton s'active ensuite.",
  "Shrink the retention window?": "Réduire la fenêtre de rétention ?",
  "SHRINK THE RETENTION WINDOW?": "RÉDUIRE LA FENÊTRE DE RÉTENTION ?",
  "Confirm — apply the shorter window": "Confirmer — appliquer la fenêtre plus courte",
