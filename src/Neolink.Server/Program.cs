@@ -605,8 +605,7 @@ foreach (var cam in config.Cameras)
                     ai: aiDescriber);
                 eventEmailer ??= new Neolink.Notifications.EventEmailer(
                     notificationStore, notifier, recordingSettings, eventStore);
-                // Both hooks, always: the delay setting decides at event time
-                // which one sends (started + delay, or closed when delay is 0).
+                // The delay setting decides at event time which hook sends.
                 recorder.EventStarted += eventEmailer.OnEventStarted;
                 recorder.OnEventClosed = eventEmailer.OnEventClosed;
                 recorderSink = recorder.OnMotion;

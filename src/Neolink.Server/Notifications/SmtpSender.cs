@@ -128,9 +128,7 @@ internal static class SmtpSender
         AppendAlternative(sb, inner, text, html);
         foreach (var a in attachments)
         {
-            // Names land in headers unencoded, so the same characters the
-            // address guard refuses (CR/LF, quotes) must not pass here either —
-            // on Linux Path.GetInvalidFileNameChars() strips almost nothing.
+            // Names land in headers unencoded; CR/LF and quotes must not pass.
             var name = HeaderSafeName(a.Name);
             sb.Append("--").Append(boundary).Append("\r\n");
             sb.Append("Content-Type: ").Append(a.ContentType).Append("; name=\"").Append(name).Append("\"\r\n");

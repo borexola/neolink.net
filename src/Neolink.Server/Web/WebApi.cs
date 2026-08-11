@@ -1280,8 +1280,6 @@ public static class WebApi
                     // notification, not become the recording); 0 cooldown = every event.
                     EventSnapshots = Math.Clamp(req.EventSnapshots ?? cur.EventSnapshots, 1, 50),
                     EventCooldownMinutes = Math.Clamp(req.EventCooldownMinutes ?? cur.EventCooldownMinutes, 0, 1440),
-                    // 0 = wait for the event to end; 300 s because past five
-                    // minutes "delayed alert" and "event summary" are the same thing.
                     EventEmailDelaySeconds = Math.Clamp(req.EventEmailDelaySeconds ?? cur.EventEmailDelaySeconds, 0, 300),
                 };
             }

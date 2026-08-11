@@ -15,9 +15,12 @@ in the README). Paste the matching section below into the GitHub release.
   late. The delay is configurable (0 = send when the event ends and sample
   the whole clip); the recording keeps rolling either way, and the email
   says "still ongoing" when it is. Each mail carries 1–50 snapshots
-  (default 3) sampled evenly across the clip so far — encrypted footage
-  samples the same as plain, and without ffmpeg the event's thumbnail goes
-  instead, so the mail is never empty-handed. The camera's event-type chips
+  (default 3) sampled evenly across the event's own footage — the pre-roll
+  that opens every clip is context for the recording, not the alert, so
+  sampling starts at the detection and the subject is in frame instead of
+  the empty scene before them. Encrypted footage samples the same as plain,
+  and without ffmpeg the event's thumbnail goes instead, so the mail is
+  never empty-handed. The camera's event-type chips
   already decide what gets recorded, so they decide what gets emailed — one
   filter, not two. The global knobs (snapshot count, send delay, a
   per-camera cooldown defaulting to 2 minutes so a busy driveway can't

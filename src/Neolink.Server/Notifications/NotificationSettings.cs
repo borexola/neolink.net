@@ -60,10 +60,8 @@ public sealed class NotificationSettings
     /// event). A busy driveway must not become a full inbox.</summary>
     public int EventCooldownMinutes { get; set; } = 2;
 
-    /// <summary>Seconds into an event before its email is sent — the alert must
-    /// not wait out a long event (a 4-minute visit would mail 4 minutes late).
-    /// The snapshots cover the event so far; 0 = wait for the event to end and
-    /// sample the whole clip.</summary>
+    /// <summary>Seconds into an event before its email is sent; snapshots cover
+    /// the event so far. 0 = wait for the end and sample the whole clip.</summary>
     public int EventEmailDelaySeconds { get; set; } = 5;
 
     /// <summary>Per-camera overrides of <see cref="OfflineThresholdMinutes"/>
