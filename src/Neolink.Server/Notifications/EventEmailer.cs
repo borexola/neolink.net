@@ -7,9 +7,10 @@ using Neolink.Recording;
 namespace Neolink.Notifications;
 
 /// <summary>
-/// Emails a camera's detection events, snapshots attached, from the recorder's
-/// hooks. The email leaves <see cref="NotificationSettings.EventEmailDelaySeconds"/>
-/// seconds into the event, sampling the clip mid-write (a live fragmented MP4);
+/// Sends a camera's detection events (email and/or webhook, per-camera opt-in
+/// each), snapshots attached, from the recorder's hooks. The notification
+/// leaves <see cref="NotificationSettings.EventEmailDelaySeconds"/> seconds
+/// into the event, sampling the clip mid-write (a live fragmented MP4);
 /// 0 waits for the event to end. Sampling starts at the detection, not the
 /// clip's pre-roll, and reads go through <see cref="FootageVault"/> so
 /// encrypted footage samples the same as plain; without ffmpeg or a clip the
@@ -55,12 +56,12 @@ public sealed class EventEmailer
             var s = _store.Snapshot();
             int delay = Math.Clamp(s.EventEmailDelaySeconds, 0, 300);
             if (delay <= 0) return;
-            if (!Claim(rec, s, out var stamp, out var prev)) return;
+            if (!Claim(rec, s, out var stamp, out var prev, out var channels)) return;
 
             _ = Task.Run(async () =>
             {
                 await Task.Delay(TimeSpan.FromSeconds(delay)).ConfigureAwait(false);
-                await GuardedComposeAsync(rec, s, trigger, stamp, prev).ConfigureAwait(false);
+                await GuardedComposeAsync(rec, s, trigger, stamp, prev, channels).ConfigureAwait(false);
             });
         }
         catch (Exception ex)
@@ -84,9 +85,9 @@ public sealed class EventEmailer
             }
             var s = _store.Snapshot();
             if (Math.Clamp(s.EventEmailDelaySeconds, 0, 300) > 0) return;
-            if (!Claim(rec, s, out var stamp, out var prev)) return;
+            if (!Claim(rec, s, out var stamp, out var prev, out var channels)) return;
 
-            _ = Task.Run(() => GuardedComposeAsync(rec, s, trigger, stamp, prev));
+            _ = Task.Run(() => GuardedComposeAsync(rec, s, trigger, stamp, prev, channels));
         }
         catch (Exception ex)
         {
@@ -98,13 +99,15 @@ public sealed class EventEmailer
     /// is claimed up front so a burst cannot double-send; a failed hand-off to
     /// the queue gives it back (see <see cref="GuardedComposeAsync"/>).</summary>
     private bool Claim(EventRecord rec, NotificationSettings s,
-        out DateTime stamp, out DateTime? prev)
+        out DateTime stamp, out DateTime? prev, out AlertChannels channels)
     {
         stamp = default;
         prev = null;
-        if (!s.Enabled || string.IsNullOrWhiteSpace(s.Recipient) || string.IsNullOrWhiteSpace(s.SmtpHost))
-            return false;
-        if (!_settings.Get(rec.Camera).EmailEvents) return false;
+        var cam = _settings.Get(rec.Camera);
+        channels = AlertChannels.None;
+        if (Notifier.EmailReady(s) && cam.EmailEvents) channels |= AlertChannels.Email;
+        if (Notifier.WebhookReady(s) && cam.WebhookEvents) channels |= AlertChannels.Webhook;
+        if (channels == AlertChannels.None) return false;
 
         lock (_gate)
         {
@@ -127,12 +130,12 @@ public sealed class EventEmailer
     }
 
     private async Task GuardedComposeAsync(EventRecord rec, NotificationSettings s,
-        DateTime? trigger, DateTime stamped, DateTime? prev)
+        DateTime? trigger, DateTime stamped, DateTime? prev, AlertChannels channels)
     {
         bool queued = false;
         try
         {
-            queued = await ComposeAndSendAsync(rec, s, trigger).ConfigureAwait(false);
+            queued = await ComposeAndSendAsync(rec, s, trigger, channels).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -154,7 +157,7 @@ public sealed class EventEmailer
     private enum Shortfall { None, NoFfmpeg, NoClip, Sampling }
 
     private async Task<bool> ComposeAndSendAsync(EventRecord rec, NotificationSettings s,
-        DateTime? trigger)
+        DateTime? trigger, AlertChannels channels)
     {
         int want = Math.Clamp(s.EventSnapshots, 1, 50);
         // Sampled once so the duration line, attachments and closing note agree.
@@ -190,7 +193,9 @@ public sealed class EventEmailer
 
         return _notifier.Send(new Alert($"event:{rec.Id}", Recovery: false, subject,
             Headline: $"{Cap(labels)} — {rec.Camera}", body, Context: null,
-            Attachments: attachments.Count > 0 ? attachments : null));
+            Attachments: attachments.Count > 0 ? attachments : null,
+            Channels: channels,
+            Event: new EventInfo(rec.Camera, rec.Labels.ToArray(), rec.StartUtc, seconds, ongoing)));
     }
 
     private static string Cap(string s) =>

@@ -3629,6 +3629,14 @@ public static class SelfTest
                     "event-email knobs ride Clone");
                 Assert(new Notifications.NotificationSettings().EventEmailDelaySeconds == 5,
                     "event emails default to 5 seconds into the event");
+                var wh = new Notifications.NotificationSettings
+                {
+                    WebhookEnabled = true, WebhookUrl = "http://x/", WebhookBodyMode = "text",
+                    WebhookHeaders = new() { "A: b" }, WebhookServerAlerts = false,
+                };
+                Assert(wh.Clone() is { WebhookEnabled: true, WebhookUrl: "http://x/", WebhookBodyMode: "text",
+                        WebhookServerAlerts: false } wc && wc.WebhookHeaders.Count == 1,
+                    "webhook knobs ride Clone");
             }
             finally
             {
@@ -3715,6 +3723,12 @@ public static class SelfTest
                 Assert(notifier.SendTestAsync(inject, "pw", CancellationToken.None).GetAwaiter().GetResult() != null,
                     "a control character in an address is refused as a message");
 
+                var hookErr = notifier.SendTestWebhookAsync(new Notifications.NotificationSettings
+                {
+                    WebhookEnabled = true, WebhookUrl = "http://127.0.0.1:9/hook",
+                }, CancellationToken.None).GetAwaiter().GetResult();
+                Assert(hookErr != null, "an unreachable webhook REPORTS instead of throwing");
+
                 // The queue path swallows the same failures: Send() must return
                 // immediately and the delivery loop must survive them, so the
                 // recorder that raised the event never learns mail is broken.
@@ -3768,6 +3782,79 @@ public static class SelfTest
             // Names land in MIME headers unencoded; quotes and control characters must not.
             AssertEq(Notifications.SmtpSender.HeaderSafeName("Drive\"way\r\nBcc: x.jpg"), "DrivewayBcc: x.jpg");
             AssertEq(Notifications.SmtpSender.HeaderSafeName("\r\n"), "attachment");
+        });
+
+        Test("webhook: placeholders, headers and body modes build the right request", () =>
+        {
+            var ev = new Notifications.EventInfo("Driveway", new[] { "person" },
+                DateTime.UtcNow.AddSeconds(-30), 30, Ongoing: true);
+            var jpeg = new byte[] { 0xFF, 0xD8, 0xFF, 0xE0, 9, 9, 0xFF, 0xD9 };
+            var alert = new Notifications.Alert("event:1", false, "subj", "Person — Driveway", "body text",
+                Attachments: new[] { new Notifications.EmailAttachment("Driveway-1.jpg", "image/jpeg", jpeg) },
+                Channels: Notifications.AlertChannels.Webhook, Event: ev);
+
+            static string Body(HttpRequestMessage r) =>
+                r.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+
+            var s = new Notifications.NotificationSettings
+            {
+                WebhookUrl = "http://127.0.0.1:1/hook",
+                WebhookMethod = "POST",
+                WebhookBodyMode = "text",
+                WebhookBodyTemplate = "{\"text\":\"{title}: {message} [{camera}|{labels}|{status}|{duration}]\"}",
+                WebhookHeaders = new() { "Content-Type: application/json", "X-Title: {title}", "no-colon-line" },
+            };
+            using (var r = Notifications.WebhookSender.BuildRequest(s, alert, "selftest"))
+            {
+                // JSON braces survive rendering; only the documented placeholders substitute.
+                AssertEq(Body(r), "{\"text\":\"Person — Driveway: body text [Driveway|person|ongoing|30]\"}");
+                AssertEq(r.Content!.Headers.ContentType!.MediaType, "application/json");
+                Assert(r.Headers.TryGetValues("X-Title", out var xt) && xt.First() == "Person - Driveway",
+                    "header values render placeholders and fold to header-safe ASCII");
+            }
+
+            s.WebhookBodyMode = "json";
+            using (var r = Notifications.WebhookSender.BuildRequest(s, alert, "selftest"))
+            {
+                var body = Body(r);
+                Assert(body.Contains("\"type\":\"event\"") && body.Contains("\"camera\":\"Driveway\"")
+                    && body.Contains("\"ongoing\":true"), "json mode carries the event schema");
+                Assert(body.Contains(Convert.ToBase64String(jpeg)), "json mode carries snapshots as base64");
+            }
+
+            s.WebhookBodyMode = "snapshot";
+            s.WebhookHeaders = new() { "X-Title: {title}", "X-Message: {message}", "X-Filename: snapshot.jpg" };
+            using (var r = Notifications.WebhookSender.BuildRequest(s, alert, "selftest"))
+            {
+                AssertEq(r.Content!.Headers.ContentType!.MediaType, "image/jpeg");
+                AssertEq(r.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult().Length, jpeg.Length);
+                Assert(r.Headers.Contains("X-Message"), "snapshot mode carries the text in headers");
+            }
+            // No image to attach: the body becomes the text, so the ntfy headers
+            // that would re-route it must not survive.
+            using (var r = Notifications.WebhookSender.BuildRequest(s, alert with { Attachments = null }, "selftest"))
+            {
+                AssertEq(r.Content!.Headers.ContentType!.MediaType, "text/plain");
+                Assert(!r.Headers.Contains("X-Message") && !r.Headers.Contains("X-Filename"),
+                    "snapshot fallback drops the attachment headers");
+                Assert(r.Headers.Contains("X-Title"), "snapshot fallback keeps the rest");
+            }
+
+            s.WebhookBodyMode = "multipart";
+            s.WebhookBodyTemplate = "";
+            s.WebhookMethod = "PUT";
+            using (var r = Notifications.WebhookSender.BuildRequest(s, alert, "selftest"))
+            {
+                AssertEq(r.Method.Method, "PUT");
+                var body = Body(r);
+                Assert(body.Contains("name=payload_json") || body.Contains("name=\"payload_json\""),
+                    "multipart carries the payload_json part");
+                Assert(body.Contains("filename=Driveway-1.jpg") || body.Contains("filename=\"Driveway-1.jpg\""),
+                    "multipart carries the image file");
+            }
+
+            AssertEq(Notifications.WebhookSender.ParseHeaderLines(
+                new[] { "A: b", "bad", " : x", "C:d" }).Count, 2);
         });
 
         Test("config editor: read-modify-write with validation", () =>

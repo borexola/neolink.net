@@ -50,7 +50,10 @@ public sealed record CameraRecordingSettings(bool Events, bool Continuous, List<
     // under Server settings → Notifications, which owns recipient and SMTP.
     // The camera's event-type filter already decided what got recorded, so
     // emails follow it for free — no second type matrix.
-    bool EmailEvents = false)
+    bool EmailEvents = false,
+    // Same opt-in for the webhook channel (Server settings → Notifications owns
+    // the endpoint and format).
+    bool WebhookEvents = false)
 {
     /// <summary>Known detection labels (what the UI offers as event-type filters).</summary>
     public static readonly string[] KnownLabels =
@@ -209,7 +212,7 @@ public sealed class RecordingSettings
         int? archiveRetentionDays = null, bool setArchiveRetention = false,
         bool? wakeTimeline = null, bool? aiDescribe = null,
         string? aiContext = null, bool setAiContext = false,
-        bool? emailEvents = null)
+        bool? emailEvents = null, bool? webhookEvents = null)
     {
         lock (_gate)
         {
@@ -233,7 +236,8 @@ public sealed class RecordingSettings
                 wakeTimeline ?? cur.WakeTimeline,
                 aiDescribe ?? cur.AiDescribe,
                 setAiContext ? aiContext : cur.AiContext,
-                emailEvents ?? cur.EmailEvents);
+                emailEvents ?? cur.EmailEvents,
+                webhookEvents ?? cur.WebhookEvents);
             _cameras[camera] = next;
             SaveLocked();
             return next;

@@ -228,6 +228,14 @@ public sealed class ApiNotifications
     public int EventSnapshots { get; set; } = 3;
     public int EventCooldownMinutes { get; set; } = 2;
     public int EventEmailDelaySeconds { get; set; } = 5;
+    public bool WebhookEnabled { get; set; }
+    public string WebhookUrl { get; set; } = "";
+    public string WebhookMethod { get; set; } = "POST";
+    public string WebhookBodyMode { get; set; } = "json";
+    public string WebhookBodyTemplate { get; set; } = "";
+    public List<string> WebhookHeaders { get; set; } = new();
+    public string WebhookPreset { get; set; } = "json";
+    public bool WebhookServerAlerts { get; set; } = true;
     public List<string> Cameras { get; set; } = new();
 }
 
@@ -267,9 +275,10 @@ public sealed record ApiRecordingSettings(bool Events, bool Continuous,
     // the per-camera opt-in only renders while it is on. AiContext is the
     // owner's scene notes for the model ("" = none).
     bool AiAvailable = false, bool AiDescribe = false, string? AiContext = null,
-    // Event emails: per-camera opt-in; EmailAvailable = the server has email
-    // notifications enabled with a recipient (the panel hints at setup otherwise).
-    bool EmailEvents = false, bool EmailAvailable = false)
+    // Event notifications: per-camera opt-in per channel; *Available = that
+    // channel is configured (the panel hints at setup otherwise).
+    bool EmailEvents = false, bool EmailAvailable = false,
+    bool WebhookEvents = false, bool WebhookAvailable = false)
 {
     /// <summary>null EventTypes = every detection type is recorded.</summary>
     public bool TypeEnabled(string label) => EventTypes == null || EventTypes.Contains(label);

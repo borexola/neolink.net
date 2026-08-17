@@ -286,6 +286,17 @@ html, body {
     padding: 7px 10px;
 }
 
+/* Setup pointers ("no email configured yet — here's where"): guidance that
+   must catch the eye without amber's alarm, so accent, not warning. */
+.notice.setup {
+    color: color-mix(in srgb, var(--accent) 75%, #dfe9f5);
+    border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+    background: color-mix(in srgb, var(--accent) 9%, transparent);
+    border-radius: var(--radius-sm);
+    padding: 7px 10px;
+    font-size: 12px;
+}
+
 .cam {
     background: var(--panel-2);
     border: 1px solid transparent;

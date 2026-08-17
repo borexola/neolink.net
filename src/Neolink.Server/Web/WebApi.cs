@@ -222,7 +222,11 @@ public static class WebApi
         bool? AlertStorage, bool? AlertOverload, bool? AlertCameraOffline, bool? AlertWriteFailure,
         int? OfflineThresholdMinutes, Dictionary<string, int>? CameraOfflineOverrides,
         int? EventSnapshots = null, int? EventCooldownMinutes = null,
-        int? EventEmailDelaySeconds = null);
+        int? EventEmailDelaySeconds = null,
+        bool? WebhookEnabled = null, string? WebhookUrl = null, string? WebhookMethod = null,
+        string? WebhookBodyMode = null, string? WebhookBodyTemplate = null,
+        List<string>? WebhookHeaders = null, string? WebhookPreset = null,
+        bool? WebhookServerAlerts = null);
     /// <summary>Retention fields: null = unchanged, negative = back to the server default, 0 = keep forever.
     /// RecordStream: null = unchanged, "" = back to the server default, else a served stream kind.
     /// Capture schedule: applied only while ScheduleEnabled; ScheduleDays null = unchanged,
@@ -234,7 +238,7 @@ public static class WebApi
         bool? ScheduleEnabled = null,
         bool? ArchiveEvents = null, bool? ArchiveContinuous = null, int? ArchiveRetentionDays = null,
         bool? WakeTimeline = null, bool? AiDescribe = null, string? AiContext = null,
-        bool? EmailEvents = null);
+        bool? EmailEvents = null, bool? WebhookEvents = null);
     /// <summary>AI-description settings update. ApiKey is WRITE-ONLY: null keeps the
     /// stored one, "" clears it, a value sets it. It is never returned by GET.</summary>
     private sealed record AiSettingsRequest(bool? Enabled, string? Provider,
@@ -1242,6 +1246,14 @@ public static class WebApi
                     eventSnapshots = s.EventSnapshots,
                     eventCooldownMinutes = s.EventCooldownMinutes,
                     eventEmailDelaySeconds = s.EventEmailDelaySeconds,
+                    webhookEnabled = s.WebhookEnabled,
+                    webhookUrl = s.WebhookUrl,
+                    webhookMethod = s.WebhookMethod,
+                    webhookBodyMode = s.WebhookBodyMode,
+                    webhookBodyTemplate = s.WebhookBodyTemplate,
+                    webhookHeaders = s.WebhookHeaders,
+                    webhookPreset = s.WebhookPreset,
+                    webhookServerAlerts = s.WebhookServerAlerts,
                     cameras = cameras.Select(c => c.Name).ToList(),
                 };
             }
@@ -1281,6 +1293,24 @@ public static class WebApi
                     EventSnapshots = Math.Clamp(req.EventSnapshots ?? cur.EventSnapshots, 1, 50),
                     EventCooldownMinutes = Math.Clamp(req.EventCooldownMinutes ?? cur.EventCooldownMinutes, 0, 1440),
                     EventEmailDelaySeconds = Math.Clamp(req.EventEmailDelaySeconds ?? cur.EventEmailDelaySeconds, 0, 300),
+                    WebhookEnabled = req.WebhookEnabled ?? cur.WebhookEnabled,
+                    WebhookUrl = (req.WebhookUrl ?? cur.WebhookUrl).Trim(),
+                    WebhookMethod = req.WebhookMethod == null ? cur.WebhookMethod
+                        : req.WebhookMethod.Equals("PUT", StringComparison.OrdinalIgnoreCase) ? "PUT" : "POST",
+                    WebhookBodyMode = req.WebhookBodyMode?.ToLowerInvariant() switch
+                    {
+                        null => cur.WebhookBodyMode,
+                        "text" => "text",
+                        "snapshot" => "snapshot",
+                        "multipart" => "multipart",
+                        _ => "json",
+                    },
+                    WebhookBodyTemplate = req.WebhookBodyTemplate == null ? cur.WebhookBodyTemplate
+                        : req.WebhookBodyTemplate.Length > 4000 ? req.WebhookBodyTemplate[..4000] : req.WebhookBodyTemplate,
+                    WebhookHeaders = req.WebhookHeaders == null ? new(cur.WebhookHeaders)
+                        : req.WebhookHeaders.Take(20).Select(h => h.Length > 500 ? h[..500] : h).ToList(),
+                    WebhookPreset = req.WebhookPreset ?? cur.WebhookPreset,
+                    WebhookServerAlerts = req.WebhookServerAlerts ?? cur.WebhookServerAlerts,
                 };
             }
 
@@ -1300,6 +1330,15 @@ public static class WebApi
                 // Test with the posted (possibly unsaved) settings so the user can
                 // verify before saving; password null = use the stored one.
                 var error = await notifier.SendTestAsync(MergedFrom(req), req.Password, ctx.RequestAborted);
+                return error == null
+                    ? Results.Json(new { ok = true })
+                    : Results.Json(new { error }, statusCode: 502);
+            });
+
+            app.MapPost("/api/admin/notifications/webhook-test", async (NotificationRequest req, HttpContext ctx) =>
+            {
+                if (AdminOnly(ctx) is { } denied) return denied;
+                var error = await notifier.SendTestWebhookAsync(MergedFrom(req), ctx.RequestAborted);
                 return error == null
                     ? Results.Json(new { ok = true })
                     : Results.Json(new { error }, statusCode: 502);
@@ -2977,12 +3016,15 @@ public static class WebApi
                 aiAvailable = o.Ai?.Enabled == true,
                 aiDescribe = s.AiDescribe,
                 aiContext = s.AiContext ?? "",
-                // Event emails: per-camera opt-in; "available" = the server's
-                // email notifications are enabled with a recipient, so the panel
-                // can say what to set up instead of offering a dead switch.
+                // Event notifications: per-camera opt-in per channel; "available"
+                // = that channel is configured, so the panel can say what to set
+                // up instead of offering a dead switch.
                 emailEvents = s.EmailEvents,
-                emailAvailable = o.Notifier?.Store.Snapshot() is { Enabled: true } ns
-                                 && !string.IsNullOrWhiteSpace(ns.Recipient),
+                emailAvailable = o.Notifier?.Store.Snapshot() is { } ns
+                                 && Neolink.Notifications.Notifier.EmailReady(ns),
+                webhookEvents = s.WebhookEvents,
+                webhookAvailable = o.Notifier?.Store.Snapshot() is { } ns2
+                                   && Neolink.Notifications.Notifier.WebhookReady(ns2),
             };
 
             app.MapGet("/api/cameras/{name}/recording", (string name, HttpContext ctx) =>
@@ -3074,12 +3116,20 @@ public static class WebApi
                 // Same shape for event emails: turning the camera ON needs a
                 // configured, enabled mail setup to send through; OFF always works.
                 if (req.EmailEvents == true
-                    && (o.Notifier?.Store.Snapshot() is not { Enabled: true } mail
-                        || string.IsNullOrWhiteSpace(mail.Recipient)))
+                    && (o.Notifier?.Store.Snapshot() is not { } mail
+                        || !Neolink.Notifications.Notifier.EmailReady(mail)))
                     return Results.Json(new
                     {
                         error = "set up email notifications first (Server settings → " +
                                 "Notifications) — recipient and mail server live there",
+                    }, statusCode: 409);
+                if (req.WebhookEvents == true
+                    && (o.Notifier?.Store.Snapshot() is not { } hook
+                        || !Neolink.Notifications.Notifier.WebhookReady(hook)))
+                    return Results.Json(new
+                    {
+                        error = "set up the webhook first (Server settings → " +
+                                "Notifications) — URL and format live there",
                     }, statusCode: 409);
                 var updated = recordingSettings.Update(cam.Name, req.Events, continuous,
                     types, setEventTypes: req.EventTypes != null,
@@ -3105,7 +3155,8 @@ public static class WebApi
                                && noteRaw.Trim() is { Length: > 0 } note
                         ? (note.Length > 500 ? note[..500] : note) : null,
                     setAiContext: req.AiContext != null,
-                    emailEvents: req.EmailEvents);
+                    emailEvents: req.EmailEvents,
+                    webhookEvents: req.WebhookEvents);
                 NudgeHa(cam.Name);
                 return Results.Json(ShapeSettings(cam, updated));
             });

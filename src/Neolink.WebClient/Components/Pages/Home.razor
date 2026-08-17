@@ -2004,12 +2004,81 @@
                                     }
                                 }
 
-                                <div class="campanel-divider"></div>
-                                <div class="campanel-subtitle">@T["EVENT EMAILS"] <span class="new-tag">@T["NEW"]</span></div>
-                                <div class="notice small">
-                                    @((MarkupString)T["Each camera opts in on its own recording panel (camera ⚙ → Recording → <b>Email events</b>). The knobs that shape every event email live here."])
+                            }
+
+                            <div class="campanel-divider"></div>
+                            <div class="campanel-subtitle">@T["WEBHOOK"] <span class="new-tag">@T["NEW"]</span></div>
+                            <div class="notice small">
+                                @((MarkupString)T["Push alerts over HTTP to <b>ntfy</b>, <b>Discord</b>, <b>Gotify</b>, <b>Slack</b> or anything with a URL: pick a preset, paste the URL, send a test. Event snapshots ride along where the target supports them."])
+                            </div>
+                            <div class="control-row">
+                                <span>@T["Send webhook notifications"]</span>
+                                <button class="chip @(_notif.WebhookEnabled ? "" : "chip-off")"
+                                        @onclick="() => _notif.WebhookEnabled = !_notif.WebhookEnabled">@(_notif.WebhookEnabled ? T["on"] : T["off"])</button>
+                            </div>
+                            @if (_notif.WebhookEnabled)
+                            {
+                                <div class="control-row"><span>@T["Preset"]</span>
+                                    <select class="event-filter" value="@_notif.WebhookPreset"
+                                            @onchange="e => ApplyWebhookPreset((string?)e.Value)">
+                                        <option value="ntfy">ntfy</option>
+                                        <option value="discord">Discord</option>
+                                        <option value="gotify">Gotify</option>
+                                        <option value="slack">Slack</option>
+                                        <option value="json">@T["JSON (full event data + snapshots)"]</option>
+                                        <option value="custom">@T["Custom"]</option>
+                                    </select></div>
+                                @if (WebhookPresetHint is { } hint)
+                                {
+                                    <div class="notice small">@hint</div>
+                                }
+                                <div class="control-row"><span>@T["Webhook URL"]</span>
+                                    <input class="notif-input" placeholder="@WebhookUrlPlaceholder" @bind="_notif.WebhookUrl" /></div>
+                                <div class="control-row">
+                                    <span>@T["Also send server alerts (storage, camera offline…) here"]</span>
+                                    <button class="chip @(_notif.WebhookServerAlerts ? "" : "chip-off")"
+                                            @onclick="() => _notif.WebhookServerAlerts = !_notif.WebhookServerAlerts">@(_notif.WebhookServerAlerts ? T["on"] : T["off"])</button>
                                 </div>
-                                <div class="control-row"><span>@T["Snapshots per email (1–50)"]</span>
+                                <div class="control-row">
+                                    <span></span>
+                                    <button class="chip" @onclick="() => _webhookAdvanced = !_webhookAdvanced">
+                                        @(_webhookAdvanced ? T["Hide advanced"] : T["Show advanced"])</button>
+                                </div>
+                                @if (_webhookAdvanced)
+                                {
+                                    <div class="control-row"><span>@T["Method"]</span>
+                                        <select class="event-filter" @bind="_notif.WebhookMethod">
+                                            <option value="POST">POST</option>
+                                            <option value="PUT">PUT</option>
+                                        </select></div>
+                                    <div class="control-row"><span>@T["Body"]</span>
+                                        <select class="event-filter" @bind="_notif.WebhookBodyMode">
+                                            <option value="json">@T["JSON (full event data + snapshots)"]</option>
+                                            <option value="text">@T["Text (template below)"]</option>
+                                            <option value="snapshot">@T["Snapshot image (text in headers — the ntfy shape)"]</option>
+                                            <option value="multipart">@T["Multipart (template + image files — the Discord shape)"]</option>
+                                        </select></div>
+                                    @if (_notif.WebhookBodyMode != "json")
+                                    {
+                                        <div class="control-row"><span>@T["Body template"]</span></div>
+                                        <textarea class="notif-input ai-prompt" rows="2" @bind="_notif.WebhookBodyTemplate"></textarea>
+                                    }
+                                    <div class="control-row"><span>@T["Extra headers, one per line (Name: value)"]</span></div>
+                                    <textarea class="notif-input ai-prompt" rows="3" @bind="WebhookHeadersText"></textarea>
+                                    <div class="event-sub email-sub">
+                                        @T["Placeholders for template and header values: {title} {message} {camera} {labels} {time} {duration} {status} {server}"]
+                                    </div>
+                                }
+                            }
+
+                            @if (_notif.Enabled || _notif.WebhookEnabled)
+                            {
+                                <div class="campanel-divider"></div>
+                                <div class="campanel-subtitle">@T["EVENT NOTIFICATIONS"] <span class="new-tag">@T["NEW"]</span></div>
+                                <div class="notice small">
+                                    @((MarkupString)T["Each camera opts in on its own recording panel (camera ⚙ → Recording). These knobs shape event emails and webhooks alike."])
+                                </div>
+                                <div class="control-row"><span>@T["Snapshots per notification (1–50)"]</span>
                                     <input class="ret-input" type="number" min="1" max="50" @bind="_notif.EventSnapshots" /></div>
                                 <div class="control-row"><span>@T["Per-camera cooldown (minutes, 0 = every event)"]</span>
                                     <input class="ret-input" type="number" min="0" max="1440" @bind="_notif.EventCooldownMinutes" /></div>
@@ -2184,6 +2253,11 @@
                             {
                                 <button class="chip" disabled="@(_notifBusy || NotifHasErrors)" @onclick="SendTestNotificationAsync">
                                     @(_notifTesting ? T["Sending…"] : T["Send test email"])</button>
+                            }
+                            @if (_notif.WebhookEnabled)
+                            {
+                                <button class="chip" disabled="@_notifBusy" @onclick="SendTestWebhookAsync">
+                                    @(_webhookTesting ? T["Sending…"] : T["Send test webhook"])</button>
                             }
                             <span class="tile-spacer"></span>
                             <button class="chip @(NotifDirty ? "chip-active" : "")" disabled="@(_notifBusy || NotifHasErrors)" @onclick="SaveNotificationsAsync">
@@ -2575,7 +2649,7 @@
     private string _notifPassword = "";
     private string? _notifStatus;
     private bool _notifError, _notifSaving, _notifTesting;
-    private bool _notifBusy => _notifSaving || _notifTesting;
+    private bool _notifBusy => _notifSaving || _notifTesting || _webhookTesting;
 
     // Email-shape check (local@domain.tld) so a typo in an address field is caught
     // before a save silently ships alerts nowhere.
@@ -2638,7 +2712,120 @@
         eventSnapshots = _notif.EventSnapshots,
         eventCooldownMinutes = _notif.EventCooldownMinutes,
         eventEmailDelaySeconds = _notif.EventEmailDelaySeconds,
+        webhookEnabled = _notif.WebhookEnabled,
+        webhookUrl = _notif.WebhookUrl,
+        webhookMethod = _notif.WebhookMethod,
+        webhookBodyMode = _notif.WebhookBodyMode,
+        webhookBodyTemplate = _notif.WebhookBodyTemplate,
+        webhookHeaders = _notif.WebhookHeaders,
+        webhookPreset = _notif.WebhookPreset,
+        webhookServerAlerts = _notif.WebhookServerAlerts,
     };
+
+    private bool _webhookAdvanced;
+    private bool _webhookTesting;
+
+    private string WebhookHeadersText
+    {
+        get => _notif == null ? "" : string.Join("\n", _notif.WebhookHeaders);
+        set
+        {
+            if (_notif == null) return;
+            _notif.WebhookHeaders = value.Split('\n')
+                .Select(l => l.TrimEnd('\r'))
+                .Where(l => l.Trim().Length > 0)
+                .ToList();
+        }
+    }
+
+    /// <summary>A preset fills the advanced knobs so the common targets are
+    /// paste-URL-and-go; Custom leaves everything as it stands.</summary>
+    private void ApplyWebhookPreset(string? preset)
+    {
+        if (_notif == null || string.IsNullOrEmpty(preset)) return;
+        _notif.WebhookPreset = preset;
+        switch (preset)
+        {
+            case "ntfy":
+                _notif.WebhookMethod = "POST";
+                _notif.WebhookBodyMode = "snapshot";
+                _notif.WebhookBodyTemplate = "{message}";
+                _notif.WebhookHeaders = new() { "X-Title: {title}", "X-Message: {message}", "X-Filename: snapshot.jpg" };
+                break;
+            case "discord":
+                _notif.WebhookMethod = "POST";
+                _notif.WebhookBodyMode = "multipart";
+                _notif.WebhookBodyTemplate = "{\"content\":\"**{title}**\\n{message}\"}";
+                _notif.WebhookHeaders = new();
+                break;
+            case "gotify":
+                _notif.WebhookMethod = "POST";
+                _notif.WebhookBodyMode = "text";
+                _notif.WebhookBodyTemplate = "{\"title\":\"{title}\",\"message\":\"{message}\",\"priority\":5}";
+                _notif.WebhookHeaders = new() { "Content-Type: application/json" };
+                break;
+            case "slack":
+                _notif.WebhookMethod = "POST";
+                _notif.WebhookBodyMode = "text";
+                _notif.WebhookBodyTemplate = "{\"text\":\"*{title}*\\n{message}\"}";
+                _notif.WebhookHeaders = new() { "Content-Type: application/json" };
+                break;
+            case "json":
+                _notif.WebhookMethod = "POST";
+                _notif.WebhookBodyMode = "json";
+                _notif.WebhookBodyTemplate = "";
+                _notif.WebhookHeaders = new();
+                break;
+            case "custom":
+                _webhookAdvanced = true;
+                break;
+        }
+    }
+
+    private string? WebhookPresetHint => _notif?.WebhookPreset switch
+    {
+        "ntfy" => T["Paste your topic URL (e.g. https://ntfy.sh/my-cameras). Protected topic? Add a header line under Advanced: Authorization: Bearer tk_yourtoken"],
+        "discord" => T["Channel settings → Integrations → Webhooks → copy the webhook URL. Snapshots arrive as image attachments."],
+        "gotify" => T["Use your server's /message URL with the app token, e.g. https://gotify.example.com/message?token=…"],
+        "slack" => T["Create an incoming webhook in Slack and paste its URL. Snapshots are not supported by Slack webhooks."],
+        "json" => T["Sends the full event as JSON (snapshots as base64) — for Node-RED, n8n, Home Assistant or your own script."],
+        _ => null,
+    };
+
+    private string WebhookUrlPlaceholder => _notif?.WebhookPreset switch
+    {
+        "ntfy" => "https://ntfy.sh/my-cameras",
+        "discord" => "https://discord.com/api/webhooks/…",
+        "gotify" => "https://gotify.example.com/message?token=…",
+        "slack" => "https://hooks.slack.com/services/…",
+        _ => "https://example.com/hook",
+    };
+
+    private async Task SendTestWebhookAsync()
+    {
+        if (_notif == null || _notifBusy) return;
+        _webhookTesting = true; _notifStatus = null;
+        try
+        {
+            var req = ApiRequest(HttpMethod.Post, "/api/admin/notifications/webhook-test");
+            req.Content = JsonContent.Create(NotifBody());
+            using var res = await Http.SendAsync(req);
+            if (res.IsSuccessStatusCode)
+            {
+                _notifError = false;
+                _notifStatus = T["Test webhook delivered — the endpoint accepted it."];
+            }
+            else
+            {
+                _notifError = true;
+                var err = await res.Content.ReadFromJsonAsync<JsonElement>();
+                _notifStatus = T.F("Test failed: {0}",
+                    err.TryGetProperty("error", out var e) ? e.GetString() : T["the endpoint rejected it."]);
+            }
+        }
+        catch (Exception ex) { _notifError = true; _notifStatus = T.F("Test failed: {0}", ex.Message); }
+        finally { _webhookTesting = false; }
+    }
 
     private void SetCameraOverride(string cam, string? raw)
     {

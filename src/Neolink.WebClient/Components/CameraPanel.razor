@@ -1065,8 +1065,10 @@
                        unconfigured reads as a feature that doesn't exist. Without
                        a mail setup it sits off and disabled, and the line below
                        says exactly what to do about it. *@
+                    <div class="campanel-divider"></div>
+                    <div class="campanel-section-title">@UiIcon.Render("bell", 13) @T["NOTIFICATIONS"] <span class="new-tag">@T["NEW"]</span></div>
                     <div class="control-row">
-                        <span>@T["Email events"] <span class="new-tag">@T["NEW"]</span></span>
+                        <span>@T["Email events"]</span>
                         <button class="chip @(_recording.EmailEvents ? "" : "chip-off")"
                                 disabled="@(!_recording.EmailAvailable && !_recording.EmailEvents)"
                                 title="@(!_recording.EmailAvailable && !_recording.EmailEvents
@@ -1080,7 +1082,7 @@
                     </div>
                     @if (!_recording.EmailAvailable && !_recording.EmailEvents)
                     {
-                        <div class="notice small">
+                        <div class="notice setup">
                             @((MarkupString)T["No email is set up on this server yet. Add a recipient and mail server under <b>Server settings → Notifications</b> (and switch notifications on) — this toggle turns on once that is done."])
                         </div>
                     }
@@ -1090,10 +1092,36 @@
                             @T["Each email carries snapshots sampled across the clip; how many, when it is sent, the per-camera cooldown, and the recipient live under Server settings → Notifications. Only event types ticked above are recorded — and therefore emailed."]
                         </div>
                     }
+                    <div class="control-row">
+                        <span>@T["Webhook events"]</span>
+                        <button class="chip @(_recording.WebhookEvents ? "" : "chip-off")"
+                                disabled="@(!_recording.WebhookAvailable && !_recording.WebhookEvents)"
+                                title="@(!_recording.WebhookAvailable && !_recording.WebhookEvents
+                                    ? T["Unavailable — no webhook is set up on this server yet"]
+                                    : _recording.WebhookEvents
+                                        ? T["This camera's events are sent to the webhook — click to stop"]
+                                        : T["Click to send this camera's events to the webhook (snapshots included where the target supports them)"])"
+                                @onclick="() => SetRecordingAsync(webhookEvents: !_recording.WebhookEvents)">
+                            @(_recording.WebhookEvents ? T["on"] : T["off"])
+                        </button>
+                    </div>
+                    @if (!_recording.WebhookAvailable && !_recording.WebhookEvents)
+                    {
+                        <div class="notice setup">
+                            @((MarkupString)T["No webhook is set up on this server yet. Configure one under <b>Server settings → Notifications</b> (preset, URL, test) — this toggle turns on once that is done."])
+                        </div>
+                    }
+                    else if (_recording.WebhookEvents)
+                    {
+                        <div class="event-sub email-sub">
+                            @T["Sent through the configured webhook. Timing, snapshot count and cooldown follow the event notification knobs under Server settings → Notifications."]
+                        </div>
+                    }
                     @* Per-camera AI opt-in — only offered while the feature is ON
                        globally (Settings → AI owns the endpoint and the budget). *@
                     @if (_recording.AiAvailable)
                     {
+                        <div class="campanel-divider"></div>
                         <div class="control-row">
                             <span>@T["AI descriptions"] <span class="beta-tag">@T["BETA"]</span></span>
                             <button class="chip @(_recording.AiDescribe ? "" : "chip-off")"
@@ -2633,14 +2661,14 @@
         bool? scheduleEnabled = null,
         bool? archiveEvents = null, bool? archiveContinuous = null, int? archiveRetentionDays = null,
         bool? wakeTimeline = null, bool? aiDescribe = null, string? aiContext = null,
-        bool? emailEvents = null)
+        bool? emailEvents = null, bool? webhookEvents = null)
     {
         object body = new
         {
             events, continuous, eventTypes, eventRetentionDays, continuousRetentionDays, recordStream,
             scheduleDays, scheduleStart, scheduleEnd, scheduleEnabled,
             archiveEvents, archiveContinuous, archiveRetentionDays, wakeTimeline, aiDescribe, aiContext,
-            emailEvents,
+            emailEvents, webhookEvents,
         };
         if (await PostAsync("recording", body))
             _recording = await GetAsync<ApiRecordingSettings>("recording");

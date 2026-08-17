@@ -5,11 +5,22 @@ using System.Threading.Channels;
 
 namespace Neolink.Notifications;
 
-/// <summary>One alert to email. <paramref name="Key"/> is the dedup identity
+/// <summary>Delivery channels an alert goes to; the source decides, delivery
+/// re-checks readiness.</summary>
+[Flags]
+public enum AlertChannels { None = 0, Email = 1, Webhook = 2, All = Email | Webhook }
+
+/// <summary>Structured facts of a detection event, for webhook payloads and
+/// template placeholders. Null on server alerts.</summary>
+public sealed record EventInfo(string Camera, IReadOnlyList<string> Labels,
+    DateTime StartUtc, double DurationSeconds, bool Ongoing);
+
+/// <summary>One alert to deliver. <paramref name="Key"/> is the dedup identity
 /// (e.g. "storage", "camera:Driveway"); <paramref name="Recovery"/> marks the
 /// paired "resolved" message.</summary>
 public sealed record Alert(string Key, bool Recovery, string Subject, string Headline,
-    string Body, string? Context = null, IReadOnlyList<EmailAttachment>? Attachments = null);
+    string Body, string? Context = null, IReadOnlyList<EmailAttachment>? Attachments = null,
+    AlertChannels Channels = AlertChannels.All, EventInfo? Event = null);
 
 /// <summary>A file riding along with an email (event snapshots).</summary>
 public sealed record EmailAttachment(string Name, string ContentType, byte[] Data);
@@ -42,6 +53,16 @@ public sealed class Notifier
 
     public NotificationStore Store => _store;
 
+    internal static bool EmailReady(NotificationSettings s) =>
+        s.Enabled && !string.IsNullOrWhiteSpace(s.Recipient) && !string.IsNullOrWhiteSpace(s.SmtpHost);
+
+    internal static bool WebhookReady(NotificationSettings s) =>
+        s.WebhookEnabled && !string.IsNullOrWhiteSpace(s.WebhookUrl);
+
+    private static AlertChannels ReadyChannels(NotificationSettings s) =>
+        (EmailReady(s) ? AlertChannels.Email : AlertChannels.None)
+        | (WebhookReady(s) ? AlertChannels.Webhook : AlertChannels.None);
+
     /// <summary>Runs the background send loop until cancelled.</summary>
     public async Task RunAsync(CancellationToken ct)
     {
@@ -53,12 +74,7 @@ public sealed class Notifier
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
                 catch (Exception ex)
                 {
-                    // The whole point of this queue: a wrong password, an
-                    // unreachable host, a TLS mismatch — all of it stops here,
-                    // named, with the server it tried, and nothing else notices.
-                    var s = _store.Snapshot();
-                    Log.Warn($"Notification email failed ({alert.Subject}) via " +
-                             $"{s.SmtpHost}:{s.SmtpPort} [{s.Security}]: {Log.Flatten(ex)} " +
+                    Log.Warn($"Notification delivery failed ({alert.Subject}): {Log.Flatten(ex)} " +
                              "— check Server settings → Notifications; nothing else is affected");
                 }
             }
@@ -74,7 +90,10 @@ public sealed class Notifier
     /// Enabled guard here.</summary>
     public void Report(string key, bool active, Func<Alert> problem, Func<Alert> recovery)
     {
-        if (!_store.Snapshot().Enabled) return;
+        var s = _store.Snapshot();
+        var ch = (EmailReady(s) ? AlertChannels.Email : AlertChannels.None)
+            | (WebhookReady(s) && s.WebhookServerAlerts ? AlertChannels.Webhook : AlertChannels.None);
+        if (ch == AlertChannels.None) return;
         Alert? toSend = null;
         lock (_gate)
         {
@@ -94,7 +113,7 @@ public sealed class Notifier
                 toSend = recovery();
             }
         }
-        if (toSend != null) _queue.Writer.TryWrite(toSend);       // non-blocking; dropped if flooded
+        if (toSend != null) _queue.Writer.TryWrite(toSend with { Channels = ch });  // non-blocking; dropped if flooded
     }
 
     /// <summary>One-shot send, no edge detection — detection-event emails: each
@@ -103,7 +122,7 @@ public sealed class Notifier
     /// Returns whether the alert was queued (a full queue drops it, logged).</summary>
     public bool Send(Alert alert)
     {
-        if (!_store.Snapshot().Enabled) return false;
+        if ((alert.Channels & ReadyChannels(_store.Snapshot())) == AlertChannels.None) return false;
         if (_queue.Writer.TryWrite(alert)) return true;
         Log.Warn($"Notification queue is full — dropped: {alert.Subject}");
         return false;
@@ -132,15 +151,61 @@ public sealed class Notifier
         }
     }
 
+    /// <summary>Sends a test webhook with the given (possibly unsaved) settings.
+    /// Returns null on success, else a short error to show the user. Never throws.</summary>
+    public async Task<string?> SendTestWebhookAsync(NotificationSettings settings, CancellationToken ct)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(settings.WebhookUrl)) return "Set the webhook URL first.";
+            var alert = new Alert("test", false, $"{_serverName}: test notification",
+                "Test notification",
+                "This is a test from Neolink.NET. If it reached you, the webhook is configured correctly.",
+                Channels: AlertChannels.Webhook);
+            await WebhookSender.SendAsync(settings, alert, _serverName, ct).ConfigureAwait(false);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return ex.Message;
+        }
+    }
+
+    // One channel failing must not cost the other its delivery.
     private async Task DeliverAsync(Alert alert, CancellationToken ct)
     {
         var s = _store.Snapshot();
-        if (!s.Enabled || string.IsNullOrWhiteSpace(s.Recipient) || string.IsNullOrWhiteSpace(s.SmtpHost))
-            return; // config went away between enqueue and send — drop quietly
-        var (html, text) = NotificationTemplate.Render(alert, _serverName);
-        await SmtpSender.SendAsync(s, _store.SmtpPassword(), alert.Subject, html, text, ct, alert.Attachments)
-            .ConfigureAwait(false);
-        Log.Info($"Notification emailed to {s.Recipient}: {alert.Subject}" +
-                 (alert.Attachments is { Count: > 0 } att ? $" ({att.Count} snapshot(s))" : ""));
+        if (alert.Channels.HasFlag(AlertChannels.Email) && EmailReady(s))
+        {
+            try
+            {
+                var (html, text) = NotificationTemplate.Render(alert, _serverName);
+                await SmtpSender.SendAsync(s, _store.SmtpPassword(), alert.Subject, html, text, ct, alert.Attachments)
+                    .ConfigureAwait(false);
+                Log.Info($"Notification emailed to {s.Recipient}: {alert.Subject}" +
+                         (alert.Attachments is { Count: > 0 } att ? $" ({att.Count} snapshot(s))" : ""));
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                Log.Warn($"Notification email failed ({alert.Subject}) via " +
+                         $"{s.SmtpHost}:{s.SmtpPort} [{s.Security}]: {Log.Flatten(ex)} " +
+                         "— check Server settings → Notifications; nothing else is affected");
+            }
+        }
+        if (alert.Channels.HasFlag(AlertChannels.Webhook) && WebhookReady(s))
+        {
+            try
+            {
+                await WebhookSender.SendAsync(s, alert, _serverName, ct).ConfigureAwait(false);
+                Log.Info($"Notification webhooked: {alert.Subject}");
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                Log.Warn($"Notification webhook failed ({alert.Subject}) via {s.WebhookUrl}: " +
+                         $"{Log.Flatten(ex)} — check Server settings → Notifications; nothing else is affected");
+            }
+        }
     }
 }

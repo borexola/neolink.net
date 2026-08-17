@@ -30,6 +30,22 @@ in the README). Paste the matching section below into the GitHub release.
   server never touching recording. An email that fails to compose or queue
   gives its cooldown window back — the next event in the window is then the
   recipient's only shot.
+- **Webhook notifications — ntfy, Discord, Gotify, Slack, or anything with a
+  URL.** A second notification channel next to email, built for broad
+  compatibility: pick a preset, paste the URL, send a test. ntfy gets the
+  snapshot as a real push attachment, Discord gets the images uploaded into
+  the channel, Gotify and Slack get clean formatted messages, and the JSON
+  preset sends the full event (camera, labels, time, duration, ongoing,
+  snapshots as base64) for Node-RED, n8n, Home Assistant or your own
+  script. Under Advanced the raw knobs are yours: method, body mode (JSON /
+  text template / snapshot image / multipart), a template with placeholders
+  ({title} {message} {camera} {labels} {time} {duration} {status}
+  {server}), and extra headers — so a target nobody wrote a preset for is a
+  template away. Works with or without email configured; per camera it is
+  its own opt-in switch next to Email events, server alerts (storage,
+  offline…) can ride along or not, and the send timing, snapshot count and
+  cooldown are shared with event emails. Same isolation contract: a dead
+  endpoint is a log line, never a recording problem.
 - **A "Send a test alert" button in the alerts panel.** Once permission is
   granted, one click pops a real notification through the exact path a
   detection uses — so "granted but nothing arrives" (OS focus modes, the

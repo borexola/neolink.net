@@ -64,6 +64,26 @@ public sealed class NotificationSettings
     /// the event so far. 0 = wait for the end and sample the whole clip.</summary>
     public int EventEmailDelaySeconds { get; set; } = 5;
 
+    // Webhook channel: one HTTP endpoint, shaped by a preset in the UI or the
+    // raw knobs below. Independent of the email master switch.
+    public bool WebhookEnabled { get; set; }
+    public string WebhookUrl { get; set; } = "";
+    /// <summary>"POST" or "PUT".</summary>
+    public string WebhookMethod { get; set; } = "POST";
+    /// <summary>"json" (full event + snapshots base64), "text" (rendered
+    /// template), "snapshot" (first image as body, text in headers — ntfy),
+    /// "multipart" (payload_json + image files — Discord).</summary>
+    public string WebhookBodyMode { get; set; } = "json";
+    /// <summary>Body template for text/multipart modes; blank = mode default.
+    /// Placeholders render here and in header values.</summary>
+    public string WebhookBodyTemplate { get; set; } = "";
+    /// <summary>Extra request headers, one "Name: value" line each.</summary>
+    public List<string> WebhookHeaders { get; set; } = new();
+    /// <summary>UI memory only — which preset filled the knobs.</summary>
+    public string WebhookPreset { get; set; } = "json";
+    /// <summary>Send server alerts (storage, offline…) to the webhook too.</summary>
+    public bool WebhookServerAlerts { get; set; } = true;
+
     /// <summary>Per-camera overrides of <see cref="OfflineThresholdMinutes"/>
     /// (0 = never alert for that camera). Absent = use the default.</summary>
     public Dictionary<string, int> CameraOfflineOverrides { get; set; } =
@@ -96,6 +116,14 @@ public sealed class NotificationSettings
         EventSnapshots = EventSnapshots,
         EventCooldownMinutes = EventCooldownMinutes,
         EventEmailDelaySeconds = EventEmailDelaySeconds,
+        WebhookEnabled = WebhookEnabled,
+        WebhookUrl = WebhookUrl,
+        WebhookMethod = WebhookMethod,
+        WebhookBodyMode = WebhookBodyMode,
+        WebhookBodyTemplate = WebhookBodyTemplate,
+        WebhookHeaders = new(WebhookHeaders),
+        WebhookPreset = WebhookPreset,
+        WebhookServerAlerts = WebhookServerAlerts,
     };
 }
 
