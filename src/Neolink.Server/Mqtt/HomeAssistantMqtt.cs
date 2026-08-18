@@ -41,6 +41,9 @@ namespace Neolink.Mqtt;
 ///                    for this camera (and on-demand). The camera keeps detecting,
 ///                    so the detection sensors above still report. Bridge-only
 ///                    availability, like Suspend; announced with the event recorder
+///   • switch:        email events / webhook events — the camera panel's per-camera
+///                    notification opt-ins, for presence/schedule automations;
+///                    bridge-only availability, announced with the event recorder
 ///   • switch:        Continuous recording — the web UI's 24/7 "record around the
 ///                    clock" toggle; ON tapes continuously (retention still applies).
 ///                    Bridge-only availability, like Suspend; announced whenever a
@@ -715,6 +718,15 @@ internal sealed class CameraBridge
             // automation (this pauses recording; it does not silence the sensors).
             await AnnounceEntityAsync("switch", "detect", DetectSwitchConfig(), ct).ConfigureAwait(false);
             await PublishDetectStateAsync(ct).ConfigureAwait(false);
+            // Per-camera notification opt-ins — the camera panel's Email/Webhook
+            // events toggles, exposed so automations can arm them by presence or
+            // schedule. Announced whether or not the channel is configured
+            // (entities are never pruned; an unconfigured channel is inert).
+            await AnnounceEntityAsync("switch", "email_events",
+                NotifySwitchConfig("Email events", "email_events", "mdi:email-fast"), ct).ConfigureAwait(false);
+            await AnnounceEntityAsync("switch", "webhook_events",
+                NotifySwitchConfig("Webhook events", "webhook_events", "mdi:webhook"), ct).ConfigureAwait(false);
+            await PublishNotifyStatesAsync(ct).ConfigureAwait(false);
             // Last event id + start time. The retained topics normally carry the
             // newest event across restarts, but a NEWLY-ADDED sensor has never been
             // published, so its topic holds nothing and HA shows "unknown" until the
@@ -1230,6 +1242,32 @@ internal sealed class CameraBridge
         _cam.EventRecorder is not { } rec
             ? Task.CompletedTask
             : _hub.PublishAsync(StateTopic("detect"), rec.EventsEnabled ? "ON" : "OFF", ct);
+
+    /// <summary>Per-camera notification opt-ins (email / webhook events): server
+    /// settings like Detect, so bridge-only availability — the away/schedule
+    /// automations these exist for must reach battery cameras while they sleep.</summary>
+    internal object NotifySwitchConfig(string name, string entity, string icon) => new
+    {
+        name,
+        unique_id = $"neolink_{Id}_{entity}",
+        state_topic = StateTopic(entity),
+        command_topic = CommandTopic(entity),
+        payload_on = "ON",
+        payload_off = "OFF",
+        icon,
+        device = Device(),
+        availability = new object[] { new { topic = _hub.AvailabilityTopic } },
+        availability_mode = "all",
+    };
+
+    private async Task PublishNotifyStatesAsync(CancellationToken ct)
+    {
+        if (_cam.EventRecorder is not { } rec) return;
+        await _hub.PublishAsync(StateTopic("email_events"), rec.EmailEventsEnabled ? "ON" : "OFF", ct)
+            .ConfigureAwait(false);
+        await _hub.PublishAsync(StateTopic("webhook_events"), rec.WebhookEventsEnabled ? "ON" : "OFF", ct)
+            .ConfigureAwait(false);
+    }
 
     /// <summary>
     /// The HA "Record" switch drives the camera's shared on-demand session (the
@@ -2091,6 +2129,20 @@ internal sealed class CameraBridge
                     {
                         eventsRecorder.SetEventsEnabled(payload == "ON");
                         await _hub.PublishAsync(StateTopic("detect"), payload == "ON" ? "ON" : "OFF", ct).ConfigureAwait(false);
+                    }
+                    break;
+                case "email_events":
+                    if (_cam.EventRecorder is { } emailRec)
+                    {
+                        emailRec.SetEmailEvents(payload == "ON");
+                        await _hub.PublishAsync(StateTopic("email_events"), payload == "ON" ? "ON" : "OFF", ct).ConfigureAwait(false);
+                    }
+                    break;
+                case "webhook_events":
+                    if (_cam.EventRecorder is { } hookRec)
+                    {
+                        hookRec.SetWebhookEvents(payload == "ON");
+                        await _hub.PublishAsync(StateTopic("webhook_events"), payload == "ON" ? "ON" : "OFF", ct).ConfigureAwait(false);
                     }
                     break;
                 case "suspend":

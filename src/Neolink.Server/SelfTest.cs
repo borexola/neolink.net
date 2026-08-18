@@ -3371,6 +3371,24 @@ public static class SelfTest
                     $"detect switch availability must be bridge-only, got: {json}");
                 Assert(!json.Contains("detectcam/state"),
                     "per-camera availability topic must NOT gate the detect switch");
+
+                Assert(!recorder.EmailEventsEnabled && !recorder.WebhookEventsEnabled,
+                    "notification opt-ins default to off");
+                bridge.HandleCommandAsync("email_events", "ON").GetAwaiter().GetResult();
+                bridge.HandleCommandAsync("webhook_events", "ON").GetAwaiter().GetResult();
+                Assert(recorder.EmailEventsEnabled && recorder.WebhookEventsEnabled,
+                    "HA ON flips both notification opt-ins");
+                var stored = new Recording.RecordingSettings(dir).Get("detectcam");
+                Assert(stored.EmailEvents && stored.WebhookEvents,
+                    "the notification opt-ins persist to settings.json (what the web UI reads)");
+                bridge.HandleCommandAsync("email_events", "OFF").GetAwaiter().GetResult();
+                Assert(!recorder.EmailEventsEnabled && recorder.WebhookEventsEnabled,
+                    "the opt-ins flip independently");
+                var hookJson = System.Text.Json.JsonSerializer.Serialize(
+                    bridge.NotifySwitchConfig("Email events", "email_events", "mdi:email-fast"),
+                    Mqtt.HomeAssistantMqtt.DiscoveryJson);
+                Assert(hookJson.Contains("\"availability\":[{\"topic\":\"neolink/bridge/state\"}]"),
+                    $"notification switch availability must be bridge-only, got: {hookJson}");
             }
             finally
             {

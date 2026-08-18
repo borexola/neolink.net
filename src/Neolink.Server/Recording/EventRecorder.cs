@@ -158,6 +158,20 @@ public sealed class EventRecorder
     public void SetEventsEnabled(bool on) =>
         _settings.Update(_camera, events: on, continuous: null, eventTypes: null, setEventTypes: false);
 
+    // Per-camera notification opt-ins, the same stored settings as the web UI
+    // toggles — the HA switches share this path. Setting them while the channel
+    // is unconfigured is allowed and inert (delivery re-checks readiness).
+    public bool EmailEventsEnabled => _settings.Get(_camera).EmailEvents;
+    public bool WebhookEventsEnabled => _settings.Get(_camera).WebhookEvents;
+
+    public void SetEmailEvents(bool on) =>
+        _settings.Update(_camera, events: null, continuous: null, eventTypes: null,
+            setEventTypes: false, emailEvents: on);
+
+    public void SetWebhookEvents(bool on) =>
+        _settings.Update(_camera, events: null, continuous: null, eventTypes: null,
+            setEventTypes: false, webhookEvents: on);
+
     /// <summary>The cap every on-demand session runs to (recording.max_clip_seconds).</summary>
     public int OnDemandMaxSeconds => _cfg.MaxClipSeconds;
 

@@ -61,6 +61,13 @@ in the README). Paste the matching section below into the GitHub release.
   notification settings and Server alerts, with the per-camera offline
   overrides folded behind an advanced button instead of stretching the
   page by one row per camera.
+- **The per-camera notification opt-ins are Home Assistant switches now.**
+  Every recording camera's device grows "Email events" and "Webhook events"
+  switches — the same stored settings as the camera panel toggles — so an
+  automation can arm notifications when you leave and silence them when you
+  are home, or run them on a schedule. Like the Detection events switch
+  they stay controllable while the camera itself is offline or asleep,
+  battery cameras included.
 - **A "Send a test alert" button in the alerts panel.** Once permission is
   granted, one click pops a real notification through the exact path a
   detection uses — so "granted but nothing arrives" (OS focus modes, the
