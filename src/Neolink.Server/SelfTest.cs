@@ -3633,9 +3633,10 @@ public static class SelfTest
                 {
                     WebhookEnabled = true, WebhookUrl = "http://x/", WebhookBodyMode = "text",
                     WebhookHeaders = new() { "A: b" }, WebhookServerAlerts = false,
+                    WebhookInsecureTls = true,
                 };
                 Assert(wh.Clone() is { WebhookEnabled: true, WebhookUrl: "http://x/", WebhookBodyMode: "text",
-                        WebhookServerAlerts: false } wc && wc.WebhookHeaders.Count == 1,
+                        WebhookServerAlerts: false, WebhookInsecureTls: true } wc && wc.WebhookHeaders.Count == 1,
                     "webhook knobs ride Clone");
             }
             finally

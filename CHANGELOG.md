@@ -44,8 +44,20 @@ in the README). Paste the matching section below into the GitHub release.
   template away. Works with or without email configured; per camera it is
   its own opt-in switch next to Email events, server alerts (storage,
   offline…) can ride along or not, and the send timing, snapshot count and
-  cooldown are shared with event emails. Same isolation contract: a dead
-  endpoint is a log line, never a recording problem.
+  cooldown are shared with event emails. Homelab TLS is a first-class
+  citizen: an "Accept self-signed certificates" switch covers reverse
+  proxies signed by an internal CA, and a failed test now reports the real
+  reason (certificate, DNS, refusal) instead of "see inner exception".
+  Same isolation contract: a dead endpoint is a log line, never a
+  recording problem.
+- **The two notification worlds stopped sharing a name.** The per-device
+  tab is now called Browser alerts (with its own icon), and each tab links
+  to the other — pop-ups on this device live one tab over from the email
+  and webhook channels the server sends on its own. The Notifications tab
+  itself is regrouped into Email settings, Webhook settings, Event
+  notification settings and Server alerts, with the per-camera offline
+  overrides folded behind an advanced button instead of stretching the
+  page by one row per camera.
 - **A "Send a test alert" button in the alerts panel.** Once permission is
   granted, one click pops a real notification through the exact path a
   detection uses — so "granted but nothing arrives" (OS focus modes, the

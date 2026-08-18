@@ -20,6 +20,13 @@ internal static class WebhookSender
 {
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(15) };
 
+    // Homelab endpoints commonly sit behind an internal CA the server has no
+    // root for; opt-in per settings, never the default.
+    private static readonly HttpClient HttpInsecure = new(new HttpClientHandler
+    {
+        ServerCertificateCustomValidationCallback = (_, _, _, _) => true,
+    }) { Timeout = TimeSpan.FromSeconds(15) };
+
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -33,7 +40,8 @@ internal static class WebhookSender
         CancellationToken ct)
     {
         using var req = BuildRequest(s, alert, serverName);
-        using var res = await Http.SendAsync(req, ct).ConfigureAwait(false);
+        using var res = await (s.WebhookInsecureTls ? HttpInsecure : Http)
+            .SendAsync(req, ct).ConfigureAwait(false);
         if (!res.IsSuccessStatusCode)
         {
             var body = "";

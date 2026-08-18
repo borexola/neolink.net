@@ -1160,7 +1160,7 @@
                     <button class="settings-tab @(_settingsTab == "connection" ? "active" : "")" role="tab"
                             @onclick="OpenConnectionTabAsync">@UiIcon.Render("activity", 13) @T["Connection"]</button>
                     <button class="settings-tab @(_settingsTab == "alerts" ? "active" : "")" role="tab"
-                            @onclick="OpenAlertsTabAsync">@UiIcon.Render("bell", 13) @T["Alerts"]</button>
+                            @onclick="OpenAlertsTabAsync">@UiIcon.Render("siren", 13) @(_isShell ? T["Alerts"] : T["Browser alerts"])</button>
                     @* Everyone gets this one: the language is the user's, not the
                        server's, and a non-admin must be able to change their own. *@
                     <button class="settings-tab @(_settingsTab == "language" ? "active" : "")" role="tab"
@@ -1415,6 +1415,9 @@
                                                                                               T["Preferences are stored in this browser."])
                                 }
                             </div>
+                            <div class="notice small">
+                                @((MarkupString)T["Email and webhook notifications — sent by the server whether or not this app is open — live under <b>Server settings → Notifications</b>."])
+                            </div>
                             @if (_notifPerm == "unsupported" && !_isShell)
                             {
                                 <div class="notice error">
@@ -1457,7 +1460,7 @@
                                     <div class="campanel-divider"></div>
                                     <div class="campanel-subtitle">@T["SYSTEM ALERTS"]</div>
                                     <div class="notice small">
-                                        @T["Server-wide conditions — the in-app twin of the email alerts. They fire on this device while the app is open."]
+                                        @T["Server-wide conditions — the in-app twin of the email and webhook alerts. They fire on this device while the app is open."]
                                     </div>
                                     <div class="control-row"><span>@T["Storage full / recovered"]</span>
                                         <button class="chip @(_alerts.SysStorage ? "" : "chip-off")"
@@ -1931,6 +1934,10 @@
                             <div class="notice small">
                                 @((MarkupString)T["Email alerts for critical events — saved here and applied immediately (no restart). The SMTP password is <b>encrypted at rest</b>, but anyone with full access to the server's files could still decrypt it (unavoidable for sending email), so prefer a provider <b>app password</b> over your main account password."])
                             </div>
+                            <div class="notice small">
+                                @((MarkupString)T["Pop-up alerts on this device live under the <b>Browser alerts</b> tab — they fire only while the app is open there."])
+                            </div>
+                            <div class="campanel-subtitle">@T["EMAIL SETTINGS"]</div>
                             <div class="control-row">
                                 <span>@T["Send email alerts"]</span>
                                 <button class="chip @(_notif.Enabled ? "" : "chip-off")"
@@ -1978,36 +1985,10 @@
                                 <div class="control-row"><span>@T["From name"]</span>
                                     <input class="notif-input" @bind="_notif.FromName" /></div>
 
-                                <div class="campanel-divider"></div>
-                                <div class="campanel-subtitle">@T["ALERTS"]</div>
-                                @NotifToggle(T["Storage full / recovered"], _notif.AlertStorage, v => _notif.AlertStorage = v)
-                                @NotifToggle(T["Server overload"], _notif.AlertOverload, v => _notif.AlertOverload = v)
-                                @NotifToggle(T["Recording write failures"], _notif.AlertWriteFailure, v => _notif.AlertWriteFailure = v)
-                                @NotifToggle(T["Camera offline / back online"], _notif.AlertCameraOffline, v => _notif.AlertCameraOffline = v)
-                                @if (_notif.AlertCameraOffline)
-                                {
-                                    <div class="control-row"><span>@T["Camera offline after (minutes)"]</span>
-                                        <input class="ret-input" type="number" min="1" max="1440" @bind="_notif.OfflineThresholdMinutes" /></div>
-                                    @if (_notif.Cameras.Count > 0)
-                                    {
-                                        <div class="notice small">@((MarkupString)T["Per-camera override — blank uses the default above, <b>0</b> never alerts for that camera:"])</div>
-                                        <div class="cam-override-list">
-                                            @foreach (var cam in _notif.Cameras)
-                                            {
-                                                <div class="control-row"><span>@cam</span>
-                                                    <input class="ret-input" type="number" min="0" max="1440"
-                                                           placeholder="@_notif.OfflineThresholdMinutes"
-                                                           value="@(_notif.CameraOfflineOverrides.TryGetValue(cam, out var ov) ? ov.ToString() : "")"
-                                                           @onchange="e => SetCameraOverride(cam, (string?)e.Value)" /></div>
-                                            }
-                                        </div>
-                                    }
-                                }
-
                             }
 
                             <div class="campanel-divider"></div>
-                            <div class="campanel-subtitle">@T["WEBHOOK"] <span class="new-tag">@T["NEW"]</span></div>
+                            <div class="campanel-subtitle">@T["WEBHOOK SETTINGS"] <span class="new-tag">@T["NEW"]</span></div>
                             <div class="notice small">
                                 @((MarkupString)T["Push alerts over HTTP to <b>ntfy</b>, <b>Discord</b>, <b>Gotify</b>, <b>Slack</b> or anything with a URL: pick a preset, paste the URL, send a test. Event snapshots ride along where the target supports them."])
                             </div>
@@ -2019,7 +2000,7 @@
                             @if (_notif.WebhookEnabled)
                             {
                                 <div class="control-row"><span>@T["Preset"]</span>
-                                    <select class="event-filter" value="@_notif.WebhookPreset"
+                                    <select class="event-filter webhook-select" value="@_notif.WebhookPreset"
                                             @onchange="e => ApplyWebhookPreset((string?)e.Value)">
                                         <option value="ntfy">ntfy</option>
                                         <option value="discord">Discord</option>
@@ -2035,6 +2016,12 @@
                                 <div class="control-row"><span>@T["Webhook URL"]</span>
                                     <input class="notif-input" placeholder="@WebhookUrlPlaceholder" @bind="_notif.WebhookUrl" /></div>
                                 <div class="control-row">
+                                    <span>@T["Accept self-signed certificates"]</span>
+                                    <button class="chip @(_notif.WebhookInsecureTls ? "" : "chip-off")"
+                                            title="@T["For internal CAs and homelab TLS (e.g. a reverse proxy with an OPNsense or step-ca certificate): the server will trust whatever certificate this URL presents"]"
+                                            @onclick="() => _notif.WebhookInsecureTls = !_notif.WebhookInsecureTls">@(_notif.WebhookInsecureTls ? T["on"] : T["off"])</button>
+                                </div>
+                                <div class="control-row">
                                     <span>@T["Also send server alerts (storage, camera offline…) here"]</span>
                                     <button class="chip @(_notif.WebhookServerAlerts ? "" : "chip-off")"
                                             @onclick="() => _notif.WebhookServerAlerts = !_notif.WebhookServerAlerts">@(_notif.WebhookServerAlerts ? T["on"] : T["off"])</button>
@@ -2047,12 +2034,12 @@
                                 @if (_webhookAdvanced)
                                 {
                                     <div class="control-row"><span>@T["Method"]</span>
-                                        <select class="event-filter" @bind="_notif.WebhookMethod">
+                                        <select class="event-filter webhook-select" @bind="_notif.WebhookMethod">
                                             <option value="POST">POST</option>
                                             <option value="PUT">PUT</option>
                                         </select></div>
                                     <div class="control-row"><span>@T["Body"]</span>
-                                        <select class="event-filter" @bind="_notif.WebhookBodyMode">
+                                        <select class="event-filter webhook-select" @bind="_notif.WebhookBodyMode">
                                             <option value="json">@T["JSON (full event data + snapshots)"]</option>
                                             <option value="text">@T["Text (template below)"]</option>
                                             <option value="snapshot">@T["Snapshot image (text in headers — the ntfy shape)"]</option>
@@ -2074,7 +2061,7 @@
                             @if (_notif.Enabled || _notif.WebhookEnabled)
                             {
                                 <div class="campanel-divider"></div>
-                                <div class="campanel-subtitle">@T["EVENT NOTIFICATIONS"] <span class="new-tag">@T["NEW"]</span></div>
+                                <div class="campanel-subtitle">@T["EVENT NOTIFICATION SETTINGS"] <span class="new-tag">@T["NEW"]</span></div>
                                 <div class="notice small">
                                     @((MarkupString)T["Each camera opts in on its own recording panel (camera ⚙ → Recording). These knobs shape event emails and webhooks alike."])
                                 </div>
@@ -2084,6 +2071,43 @@
                                     <input class="ret-input" type="number" min="0" max="1440" @bind="_notif.EventCooldownMinutes" /></div>
                                 <div class="control-row"><span>@T["Send after (seconds into the event, 0 = when it ends)"]</span>
                                     <input class="ret-input" type="number" min="0" max="300" @bind="_notif.EventEmailDelaySeconds" /></div>
+
+                                <div class="campanel-divider"></div>
+                                <div class="campanel-subtitle">@T["SERVER ALERTS"]</div>
+                                <div class="notice small">
+                                    @T["Which server conditions are sent — through email, the webhook, or both, as enabled above."]
+                                </div>
+                                @NotifToggle(T["Storage full / recovered"], _notif.AlertStorage, v => _notif.AlertStorage = v)
+                                @NotifToggle(T["Server overload"], _notif.AlertOverload, v => _notif.AlertOverload = v)
+                                @NotifToggle(T["Recording write failures"], _notif.AlertWriteFailure, v => _notif.AlertWriteFailure = v)
+                                @NotifToggle(T["Camera offline / back online"], _notif.AlertCameraOffline, v => _notif.AlertCameraOffline = v)
+                                @if (_notif.AlertCameraOffline)
+                                {
+                                    <div class="control-row"><span>@T["Camera offline after (minutes)"]</span>
+                                        <input class="ret-input" type="number" min="1" max="1440" @bind="_notif.OfflineThresholdMinutes" /></div>
+                                    @if (_notif.Cameras.Count > 0)
+                                    {
+                                        <div class="control-row">
+                                            <span></span>
+                                            <button class="chip" @onclick="() => _alertsAdvanced = !_alertsAdvanced">
+                                                @(_alertsAdvanced ? T["Hide advanced"] : T["Show advanced"])</button>
+                                        </div>
+                                        @if (_alertsAdvanced)
+                                        {
+                                            <div class="notice small">@((MarkupString)T["Per-camera override — blank uses the default above, <b>0</b> never alerts for that camera:"])</div>
+                                            <div class="cam-override-list">
+                                                @foreach (var cam in _notif.Cameras)
+                                                {
+                                                    <div class="control-row"><span>@cam</span>
+                                                        <input class="ret-input" type="number" min="0" max="1440"
+                                                               placeholder="@_notif.OfflineThresholdMinutes"
+                                                               value="@(_notif.CameraOfflineOverrides.TryGetValue(cam, out var ov) ? ov.ToString() : "")"
+                                                               @onchange="e => SetCameraOverride(cam, (string?)e.Value)" /></div>
+                                                }
+                                            </div>
+                                        }
+                                    }
+                                }
                             }
                         </div>
                     }
@@ -2714,6 +2738,7 @@
         eventEmailDelaySeconds = _notif.EventEmailDelaySeconds,
         webhookEnabled = _notif.WebhookEnabled,
         webhookUrl = _notif.WebhookUrl,
+        webhookInsecureTls = _notif.WebhookInsecureTls,
         webhookMethod = _notif.WebhookMethod,
         webhookBodyMode = _notif.WebhookBodyMode,
         webhookBodyTemplate = _notif.WebhookBodyTemplate,
@@ -2724,6 +2749,7 @@
 
     private bool _webhookAdvanced;
     private bool _webhookTesting;
+    private bool _alertsAdvanced;
 
     private string WebhookHeadersText
     {

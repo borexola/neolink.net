@@ -167,7 +167,9 @@ public sealed class Notifier
         }
         catch (Exception ex)
         {
-            return ex.Message;
+            // Flattened: "The SSL connection could not be established, see
+            // inner exception" without the inner exception diagnoses nothing.
+            return Log.Flatten(ex);
         }
     }
 

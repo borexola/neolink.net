@@ -68,6 +68,9 @@ public sealed class NotificationSettings
     // raw knobs below. Independent of the email master switch.
     public bool WebhookEnabled { get; set; }
     public string WebhookUrl { get; set; } = "";
+    /// <summary>Trust any TLS certificate the endpoint presents (internal CA /
+    /// self-signed reverse proxies).</summary>
+    public bool WebhookInsecureTls { get; set; }
     /// <summary>"POST" or "PUT".</summary>
     public string WebhookMethod { get; set; } = "POST";
     /// <summary>"json" (full event + snapshots base64), "text" (rendered
@@ -118,6 +121,7 @@ public sealed class NotificationSettings
         EventEmailDelaySeconds = EventEmailDelaySeconds,
         WebhookEnabled = WebhookEnabled,
         WebhookUrl = WebhookUrl,
+        WebhookInsecureTls = WebhookInsecureTls,
         WebhookMethod = WebhookMethod,
         WebhookBodyMode = WebhookBodyMode,
         WebhookBodyTemplate = WebhookBodyTemplate,

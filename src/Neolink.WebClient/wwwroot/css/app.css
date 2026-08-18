@@ -5629,6 +5629,10 @@ select.input-pending {
 .notif-input:focus { border-color: var(--accent); }
 .notif-input::placeholder { color: var(--muted); }
 
+/* Webhook selects hold sentence-length options ("JSON (full event data +
+   snapshots)"); the panel's default select width clips them. */
+.webhook-select { width: 260px; max-width: 58%; }
+
 /* The AI system-prompt editor: full-width block (the label sits on its own row
    above), user-resizable downward only — sideways would break the panel. */
 textarea.ai-prompt {

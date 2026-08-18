@@ -223,7 +223,8 @@ public static class WebApi
         int? OfflineThresholdMinutes, Dictionary<string, int>? CameraOfflineOverrides,
         int? EventSnapshots = null, int? EventCooldownMinutes = null,
         int? EventEmailDelaySeconds = null,
-        bool? WebhookEnabled = null, string? WebhookUrl = null, string? WebhookMethod = null,
+        bool? WebhookEnabled = null, string? WebhookUrl = null, bool? WebhookInsecureTls = null,
+        string? WebhookMethod = null,
         string? WebhookBodyMode = null, string? WebhookBodyTemplate = null,
         List<string>? WebhookHeaders = null, string? WebhookPreset = null,
         bool? WebhookServerAlerts = null);
@@ -1248,6 +1249,7 @@ public static class WebApi
                     eventEmailDelaySeconds = s.EventEmailDelaySeconds,
                     webhookEnabled = s.WebhookEnabled,
                     webhookUrl = s.WebhookUrl,
+                    webhookInsecureTls = s.WebhookInsecureTls,
                     webhookMethod = s.WebhookMethod,
                     webhookBodyMode = s.WebhookBodyMode,
                     webhookBodyTemplate = s.WebhookBodyTemplate,
@@ -1295,6 +1297,7 @@ public static class WebApi
                     EventEmailDelaySeconds = Math.Clamp(req.EventEmailDelaySeconds ?? cur.EventEmailDelaySeconds, 0, 300),
                     WebhookEnabled = req.WebhookEnabled ?? cur.WebhookEnabled,
                     WebhookUrl = (req.WebhookUrl ?? cur.WebhookUrl).Trim(),
+                    WebhookInsecureTls = req.WebhookInsecureTls ?? cur.WebhookInsecureTls,
                     WebhookMethod = req.WebhookMethod == null ? cur.WebhookMethod
                         : req.WebhookMethod.Equals("PUT", StringComparison.OrdinalIgnoreCase) ? "PUT" : "POST",
                     WebhookBodyMode = req.WebhookBodyMode?.ToLowerInvariant() switch
