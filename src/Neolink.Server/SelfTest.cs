@@ -3633,10 +3633,11 @@ public static class SelfTest
                 {
                     WebhookEnabled = true, WebhookUrl = "http://x/", WebhookBodyMode = "text",
                     WebhookHeaders = new() { "A: b" }, WebhookServerAlerts = false,
-                    WebhookInsecureTls = true,
+                    WebhookInsecureTls = true, WebhookTokenEnc = "enc",
                 };
                 Assert(wh.Clone() is { WebhookEnabled: true, WebhookUrl: "http://x/", WebhookBodyMode: "text",
-                        WebhookServerAlerts: false, WebhookInsecureTls: true } wc && wc.WebhookHeaders.Count == 1,
+                        WebhookServerAlerts: false, WebhookInsecureTls: true, WebhookTokenEnc: "enc" } wc
+                    && wc.WebhookHeaders.Count == 1,
                     "webhook knobs ride Clone");
             }
             finally
@@ -3727,8 +3728,13 @@ public static class SelfTest
                 var hookErr = notifier.SendTestWebhookAsync(new Notifications.NotificationSettings
                 {
                     WebhookEnabled = true, WebhookUrl = "http://127.0.0.1:9/hook",
-                }, CancellationToken.None).GetAwaiter().GetResult();
+                }, null, CancellationToken.None).GetAwaiter().GetResult();
                 Assert(hookErr != null, "an unreachable webhook REPORTS instead of throwing");
+
+                store.Save(new Notifications.NotificationSettings
+                    { WebhookEnabled = true, WebhookUrl = "http://x/" }, null, "Bearer tk_secret");
+                AssertEq(store.WebhookToken(), "tk_secret");
+                Assert(store.HasWebhookToken, "webhook token stored encrypted, scheme prefix stripped");
 
                 // The queue path swallows the same failures: Send() must return
                 // immediately and the delivery loop must survive them, so the
@@ -3805,17 +3811,29 @@ public static class SelfTest
                 WebhookBodyTemplate = "{\"text\":\"{title}: {message} [{camera}|{labels}|{status}|{duration}]\"}",
                 WebhookHeaders = new() { "Content-Type: application/json", "X-Title: {title}", "no-colon-line" },
             };
-            using (var r = Notifications.WebhookSender.BuildRequest(s, alert, "selftest"))
+            using (var r = Notifications.WebhookSender.BuildRequest(s, "", alert, "selftest"))
             {
                 // JSON braces survive rendering; only the documented placeholders substitute.
                 AssertEq(Body(r), "{\"text\":\"Person — Driveway: body text [Driveway|person|ongoing|30]\"}");
                 AssertEq(r.Content!.Headers.ContentType!.MediaType, "application/json");
                 Assert(r.Headers.TryGetValues("X-Title", out var xt) && xt.First() == "Person - Driveway",
                     "header values render placeholders and fold to header-safe ASCII");
+                Assert(!r.Headers.Contains("Authorization"), "no token, no Authorization header");
             }
 
+            // The token field becomes a Bearer header (pasted scheme prefix
+            // forgiven); an explicit Authorization line wins over it.
+            using (var r = Notifications.WebhookSender.BuildRequest(s, "Bearer tk_abc", alert, "selftest"))
+                Assert(r.Headers.TryGetValues("Authorization", out var a) && a.Single() == "Bearer tk_abc",
+                    "token becomes a single Bearer header");
+            s.WebhookHeaders.Add("Authorization: Basic dXNlcg==");
+            using (var r = Notifications.WebhookSender.BuildRequest(s, "tk_abc", alert, "selftest"))
+                Assert(r.Headers.TryGetValues("Authorization", out var a) && a.Single() == "Basic dXNlcg==",
+                    "an explicit Authorization line wins over the token");
+            s.WebhookHeaders.RemoveAt(s.WebhookHeaders.Count - 1);
+
             s.WebhookBodyMode = "json";
-            using (var r = Notifications.WebhookSender.BuildRequest(s, alert, "selftest"))
+            using (var r = Notifications.WebhookSender.BuildRequest(s, "", alert, "selftest"))
             {
                 var body = Body(r);
                 Assert(body.Contains("\"type\":\"event\"") && body.Contains("\"camera\":\"Driveway\"")
@@ -3825,7 +3843,7 @@ public static class SelfTest
 
             s.WebhookBodyMode = "snapshot";
             s.WebhookHeaders = new() { "X-Title: {title}", "X-Message: {message}", "X-Filename: snapshot.jpg" };
-            using (var r = Notifications.WebhookSender.BuildRequest(s, alert, "selftest"))
+            using (var r = Notifications.WebhookSender.BuildRequest(s, "", alert, "selftest"))
             {
                 AssertEq(r.Content!.Headers.ContentType!.MediaType, "image/jpeg");
                 AssertEq(r.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult().Length, jpeg.Length);
@@ -3833,7 +3851,7 @@ public static class SelfTest
             }
             // No image to attach: the body becomes the text, so the ntfy headers
             // that would re-route it must not survive.
-            using (var r = Notifications.WebhookSender.BuildRequest(s, alert with { Attachments = null }, "selftest"))
+            using (var r = Notifications.WebhookSender.BuildRequest(s, "", alert with { Attachments = null }, "selftest"))
             {
                 AssertEq(r.Content!.Headers.ContentType!.MediaType, "text/plain");
                 Assert(!r.Headers.Contains("X-Message") && !r.Headers.Contains("X-Filename"),
@@ -3844,7 +3862,7 @@ public static class SelfTest
             s.WebhookBodyMode = "multipart";
             s.WebhookBodyTemplate = "";
             s.WebhookMethod = "PUT";
-            using (var r = Notifications.WebhookSender.BuildRequest(s, alert, "selftest"))
+            using (var r = Notifications.WebhookSender.BuildRequest(s, "", alert, "selftest"))
             {
                 AssertEq(r.Method.Method, "PUT");
                 var body = Body(r);

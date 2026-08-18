@@ -1450,6 +1450,10 @@
                                         <button class="chip" @onclick="RequestNotifPermAsync">@T["Allow notifications…"]</button>
                                     }
                                 </div>
+                                @if (_alertTestStatus != null)
+                                {
+                                    <div class="notice small @(_alertTestFailed ? "fail" : "ok")">@_alertTestStatus</div>
+                                }
                                 @if (_alerts.Enabled)
                                 {
                                     <div class="control-row"><span>@T["Cooldown per camera & type (seconds)"]</span>
@@ -1984,7 +1988,18 @@
                                 }
                                 <div class="control-row"><span>@T["From name"]</span>
                                     <input class="notif-input" @bind="_notif.FromName" /></div>
-
+                                <div class="control-row">
+                                    <span></span>
+                                    <button class="chip" disabled="@(_notifBusy || NotifHasErrors
+                                                || string.IsNullOrWhiteSpace(_notif.Recipient)
+                                                || string.IsNullOrWhiteSpace(_notif.SmtpHost))"
+                                            @onclick="SendTestNotificationAsync">
+                                        @(_notifTesting ? T["Sending…"] : T["Send test email"])</button>
+                                </div>
+                                @if (_emailTestStatus != null)
+                                {
+                                    <div class="notice small @(_emailTestError ? "fail" : "ok")">@_emailTestStatus</div>
+                                }
                             }
 
                             <div class="campanel-divider"></div>
@@ -2015,6 +2030,11 @@
                                 }
                                 <div class="control-row"><span>@T["Webhook URL"]</span>
                                     <input class="notif-input" placeholder="@WebhookUrlPlaceholder" @bind="_notif.WebhookUrl" /></div>
+                                <div class="control-row"><span>@T["Access token (optional)"]</span>
+                                    <input class="notif-input" type="password" autocomplete="new-password"
+                                           placeholder="@(_notif.HasWebhookToken ? T["•••• stored — blank keeps it"] : "tk_…")"
+                                           title="@T["Sent as an Authorization: Bearer header — ntfy protected topics and most token APIs. Encrypted at rest; an Authorization line under Advanced → headers overrides it."]"
+                                           @bind="_webhookToken" /></div>
                                 <div class="control-row">
                                     <span>@T["Accept self-signed certificates"]</span>
                                     <button class="chip @(_notif.WebhookInsecureTls ? "" : "chip-off")"
@@ -2055,6 +2075,16 @@
                                     <div class="event-sub email-sub">
                                         @T["Placeholders for template and header values: {title} {message} {camera} {labels} {time} {duration} {status} {server}"]
                                     </div>
+                                }
+                                <div class="control-row">
+                                    <span></span>
+                                    <button class="chip" disabled="@(_notifBusy || string.IsNullOrWhiteSpace(_notif.WebhookUrl))"
+                                            @onclick="SendTestWebhookAsync">
+                                        @(_webhookTesting ? T["Sending…"] : T["Send test webhook"])</button>
+                                </div>
+                                @if (_webhookTestStatus != null)
+                                {
+                                    <div class="notice small @(_webhookTestError ? "fail" : "ok")">@_webhookTestStatus</div>
                                 }
                             }
 
@@ -2273,16 +2303,6 @@
                             <div class="notice pending">@((MarkupString)T.F("Unsaved changes — click <b>{0}</b> to apply them.", _notif.Enabled ? T["Save notifications"] : T["Save"]))</div>
                         }
                         <div class="settings-foot-btns">
-                            @if (_notif.Enabled)
-                            {
-                                <button class="chip" disabled="@(_notifBusy || NotifHasErrors)" @onclick="SendTestNotificationAsync">
-                                    @(_notifTesting ? T["Sending…"] : T["Send test email"])</button>
-                            }
-                            @if (_notif.WebhookEnabled)
-                            {
-                                <button class="chip" disabled="@_notifBusy" @onclick="SendTestWebhookAsync">
-                                    @(_webhookTesting ? T["Sending…"] : T["Send test webhook"])</button>
-                            }
                             <span class="tile-spacer"></span>
                             <button class="chip @(NotifDirty ? "chip-active" : "")" disabled="@(_notifBusy || NotifHasErrors)" @onclick="SaveNotificationsAsync">
                                 @(_notifSaving ? T["Saving…"] : (_notif.Enabled ? T["Save notifications"] : T["Save"]))</button>
@@ -2739,6 +2759,8 @@
         webhookEnabled = _notif.WebhookEnabled,
         webhookUrl = _notif.WebhookUrl,
         webhookInsecureTls = _notif.WebhookInsecureTls,
+        // Write-only, like the SMTP password: null keeps the stored token.
+        webhookToken = string.IsNullOrEmpty(_webhookToken) ? null : _webhookToken,
         webhookMethod = _notif.WebhookMethod,
         webhookBodyMode = _notif.WebhookBodyMode,
         webhookBodyTemplate = _notif.WebhookBodyTemplate,
@@ -2750,6 +2772,7 @@
     private bool _webhookAdvanced;
     private bool _webhookTesting;
     private bool _alertsAdvanced;
+    private string _webhookToken = "";
 
     private string WebhookHeadersText
     {
@@ -2764,6 +2787,21 @@
         }
     }
 
+    // Header names the presets manage; every other line is the user's (an
+    // Authorization token, custom routing) and survives preset switches.
+    private static readonly string[] PresetOwnedHeaders = { "content-type", "x-title", "x-message", "x-filename" };
+
+    private void SetPresetHeaders(params string[] presetLines)
+    {
+        var kept = _notif!.WebhookHeaders.Where(h =>
+        {
+            int i = h.IndexOf(':');
+            if (i <= 0) return false;
+            return !PresetOwnedHeaders.Contains(h[..i].Trim().ToLowerInvariant());
+        });
+        _notif.WebhookHeaders = presetLines.Concat(kept).ToList();
+    }
+
     /// <summary>A preset fills the advanced knobs so the common targets are
     /// paste-URL-and-go; Custom leaves everything as it stands.</summary>
     private void ApplyWebhookPreset(string? preset)
@@ -2776,31 +2814,31 @@
                 _notif.WebhookMethod = "POST";
                 _notif.WebhookBodyMode = "snapshot";
                 _notif.WebhookBodyTemplate = "{message}";
-                _notif.WebhookHeaders = new() { "X-Title: {title}", "X-Message: {message}", "X-Filename: snapshot.jpg" };
+                SetPresetHeaders("X-Title: {title}", "X-Message: {message}", "X-Filename: snapshot.jpg");
                 break;
             case "discord":
                 _notif.WebhookMethod = "POST";
                 _notif.WebhookBodyMode = "multipart";
                 _notif.WebhookBodyTemplate = "{\"content\":\"**{title}**\\n{message}\"}";
-                _notif.WebhookHeaders = new();
+                SetPresetHeaders();
                 break;
             case "gotify":
                 _notif.WebhookMethod = "POST";
                 _notif.WebhookBodyMode = "text";
                 _notif.WebhookBodyTemplate = "{\"title\":\"{title}\",\"message\":\"{message}\",\"priority\":5}";
-                _notif.WebhookHeaders = new() { "Content-Type: application/json" };
+                SetPresetHeaders("Content-Type: application/json");
                 break;
             case "slack":
                 _notif.WebhookMethod = "POST";
                 _notif.WebhookBodyMode = "text";
                 _notif.WebhookBodyTemplate = "{\"text\":\"*{title}*\\n{message}\"}";
-                _notif.WebhookHeaders = new() { "Content-Type: application/json" };
+                SetPresetHeaders("Content-Type: application/json");
                 break;
             case "json":
                 _notif.WebhookMethod = "POST";
                 _notif.WebhookBodyMode = "json";
                 _notif.WebhookBodyTemplate = "";
-                _notif.WebhookHeaders = new();
+                SetPresetHeaders();
                 break;
             case "custom":
                 _webhookAdvanced = true;
@@ -2810,7 +2848,7 @@
 
     private string? WebhookPresetHint => _notif?.WebhookPreset switch
     {
-        "ntfy" => T["Paste your topic URL (e.g. https://ntfy.sh/my-cameras). Protected topic? Add a header line under Advanced: Authorization: Bearer tk_yourtoken"],
+        "ntfy" => T["Paste your topic URL (e.g. https://ntfy.sh/my-cameras). Protected topic? Paste your token into the Access token field below."],
         "discord" => T["Channel settings → Integrations → Webhooks → copy the webhook URL. Snapshots arrive as image attachments."],
         "gotify" => T["Use your server's /message URL with the app token, e.g. https://gotify.example.com/message?token=…"],
         "slack" => T["Create an incoming webhook in Slack and paste its URL. Snapshots are not supported by Slack webhooks."],
@@ -2830,7 +2868,7 @@
     private async Task SendTestWebhookAsync()
     {
         if (_notif == null || _notifBusy) return;
-        _webhookTesting = true; _notifStatus = null;
+        _webhookTesting = true; _webhookTestStatus = null;
         try
         {
             var req = ApiRequest(HttpMethod.Post, "/api/admin/notifications/webhook-test");
@@ -2838,18 +2876,18 @@
             using var res = await Http.SendAsync(req);
             if (res.IsSuccessStatusCode)
             {
-                _notifError = false;
-                _notifStatus = T["Test webhook delivered — the endpoint accepted it."];
+                _webhookTestError = false;
+                _webhookTestStatus = T["Test webhook delivered — the endpoint accepted it."];
             }
             else
             {
-                _notifError = true;
+                _webhookTestError = true;
                 var err = await res.Content.ReadFromJsonAsync<JsonElement>();
-                _notifStatus = T.F("Test failed: {0}",
+                _webhookTestStatus = T.F("Test failed: {0}",
                     err.TryGetProperty("error", out var e) ? e.GetString() : T["the endpoint rejected it."]);
             }
         }
-        catch (Exception ex) { _notifError = true; _notifStatus = T.F("Test failed: {0}", ex.Message); }
+        catch (Exception ex) { _webhookTestError = true; _webhookTestStatus = T.F("Test failed: {0}", ex.Message); }
         finally { _webhookTesting = false; }
     }
 
@@ -2878,6 +2916,7 @@
             {
                 _notif = await res.Content.ReadFromJsonAsync<ApiNotifications>();
                 _notifPassword = "";
+                _webhookToken = "";
                 _notifSignature = NotifSig(); // saved state is the new baseline
                 _notifError = false;
                 _notifStatus = T["Notification settings saved."];
@@ -2892,15 +2931,21 @@
         finally { _notifSaving = false; }
     }
 
+    // Test verdicts render beside their button, not in the shared footer.
+    private string? _emailTestStatus;
+    private bool _emailTestError;
+    private string? _webhookTestStatus;
+    private bool _webhookTestError;
+
     private async Task SendTestNotificationAsync()
     {
         if (_notif == null || _notifBusy) return;
         if (_notif.Enabled && NotifHasErrors)
         {
-            _notifError = true; _notifStatus = T["Fix the highlighted email address first."];
+            _emailTestError = true; _emailTestStatus = T["Fix the highlighted email address first."];
             return;
         }
-        _notifTesting = true; _notifStatus = null;
+        _notifTesting = true; _emailTestStatus = null;
         try
         {
             var req = ApiRequest(HttpMethod.Post, "/api/admin/notifications/test");
@@ -2908,18 +2953,18 @@
             using var res = await Http.SendAsync(req);
             if (res.IsSuccessStatusCode)
             {
-                _notifError = false;
-                _notifStatus = T["Test email sent — check the recipient inbox."];
+                _emailTestError = false;
+                _emailTestStatus = T["Test email sent — check the recipient inbox."];
             }
             else
             {
-                _notifError = true;
+                _emailTestError = true;
                 var err = await res.Content.ReadFromJsonAsync<JsonElement>();
-                _notifStatus = T.F("Test failed: {0}",
+                _emailTestStatus = T.F("Test failed: {0}",
                     err.TryGetProperty("error", out var e) ? e.GetString() : T["the mail server rejected it."]);
             }
         }
-        catch (Exception ex) { _notifError = true; _notifStatus = T.F("Test failed: {0}", ex.Message); }
+        catch (Exception ex) { _emailTestError = true; _emailTestStatus = T.F("Test failed: {0}", ex.Message); }
         finally { _notifTesting = false; }
     }
 
@@ -5186,12 +5231,22 @@
         try { _notifPerm = await JS.InvokeAsync<string>("neolink.notifRequest"); } catch { }
     }
 
+    private string? _alertTestStatus;
+    private bool _alertTestFailed;
+
     /// <summary>The alerts panel's proof button: pops a real notification through
-    /// the exact path a detection uses, so "granted but nothing arrives" (OS focus
-    /// modes, the browser muted in system settings) is diagnosable in one click.</summary>
-    private Task TestBrowserAlertAsync() =>
-        FireSystemNotifAsync("neolink-test", "Neolink.NET",
-            T["If you can see this, alerts from this server reach this device."]);
+    /// the exact path a detection uses, and reports which side swallowed it —
+    /// the browser (permission) or, past that, the OS (focus modes, per-app
+    /// notification settings), which accepts silently.</summary>
+    private async Task TestBrowserAlertAsync()
+    {
+        bool ok = await FireSystemNotifAsync("neolink-test", "Neolink.NET",
+            T["If you can see this, alerts from this server reach this device."], renotify: true);
+        _alertTestFailed = !ok;
+        _alertTestStatus = ok
+            ? T["Sent, and the browser accepted it. Nothing popped up? Then the OS is muting this browser: check its notification permission in system settings, Focus Assist / Do Not Disturb, and whether it landed silently in the notification center."]
+            : T["The browser refused to show it — re-check this site's notification permission."];
+    }
 
     private async Task SetAlertCooldownAsync(ChangeEventArgs e)
     {
@@ -5264,20 +5319,22 @@
 
     private bool AlertsLive => _alerts.Enabled && _notifPerm == "granted";
 
-    private async Task FireSystemNotifAsync(string tag, string title, string body)
+    private async Task<bool> FireSystemNotifAsync(string tag, string title, string body,
+        bool renotify = false)
     {
         try
         {
-            await JS.InvokeVoidAsync("neolink.notifShow", new
+            return await JS.InvokeAsync<bool>("neolink.notifShow", new
             {
                 title,
                 body,
                 tag,
                 url = "/",
                 icon = "/_content/Neolink.WebClient/icons/icon-192.png",
+                renotify,
             });
         }
-        catch { /* notification failures must never disturb the poll */ }
+        catch { return false; /* notification failures must never disturb the poll */ }
     }
 
     private async Task MaybeNotifySystemAsync(bool storageFull, bool overload, bool writeFailure)

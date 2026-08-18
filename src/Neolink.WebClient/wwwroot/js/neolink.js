@@ -2484,6 +2484,9 @@
             const opts = {
                 body: o.body || '', tag: o.tag || undefined,
                 icon: o.icon || undefined, image: o.image || undefined,
+                // A repeated tag silently REPLACES the earlier notification;
+                // renotify makes it alert again (the test button's second click).
+                renotify: !!(o.renotify && o.tag),
                 data: { url },
             };
             try {

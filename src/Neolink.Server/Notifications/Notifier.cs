@@ -151,9 +151,11 @@ public sealed class Notifier
         }
     }
 
-    /// <summary>Sends a test webhook with the given (possibly unsaved) settings.
-    /// Returns null on success, else a short error to show the user. Never throws.</summary>
-    public async Task<string?> SendTestWebhookAsync(NotificationSettings settings, CancellationToken ct)
+    /// <summary>Sends a test webhook with the given (possibly unsaved) settings;
+    /// <paramref name="token"/> null = use the stored one. Returns null on
+    /// success, else a short error to show the user. Never throws.</summary>
+    public async Task<string?> SendTestWebhookAsync(NotificationSettings settings, string? token,
+        CancellationToken ct)
     {
         try
         {
@@ -162,7 +164,8 @@ public sealed class Notifier
                 "Test notification",
                 "This is a test from Neolink.NET. If it reached you, the webhook is configured correctly.",
                 Channels: AlertChannels.Webhook);
-            await WebhookSender.SendAsync(settings, alert, _serverName, ct).ConfigureAwait(false);
+            await WebhookSender.SendAsync(settings, token ?? _store.WebhookToken(), alert, _serverName, ct)
+                .ConfigureAwait(false);
             return null;
         }
         catch (Exception ex)
@@ -199,7 +202,8 @@ public sealed class Notifier
         {
             try
             {
-                await WebhookSender.SendAsync(s, alert, _serverName, ct).ConfigureAwait(false);
+                await WebhookSender.SendAsync(s, _store.WebhookToken(), alert, _serverName, ct)
+                    .ConfigureAwait(false);
                 Log.Info($"Notification webhooked: {alert.Subject}");
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }

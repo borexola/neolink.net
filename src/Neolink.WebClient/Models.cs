@@ -231,6 +231,7 @@ public sealed class ApiNotifications
     public bool WebhookEnabled { get; set; }
     public string WebhookUrl { get; set; } = "";
     public bool WebhookInsecureTls { get; set; }
+    public bool HasWebhookToken { get; set; }
     public string WebhookMethod { get; set; } = "POST";
     public string WebhookBodyMode { get; set; } = "json";
     public string WebhookBodyTemplate { get; set; } = "";

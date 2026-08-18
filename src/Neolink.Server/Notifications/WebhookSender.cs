@@ -36,10 +36,10 @@ internal static class WebhookSender
     internal const string DefaultTextTemplate = "{title}\n{message}";
     internal const string DefaultMultipartTemplate = "{\"content\":\"{title}\\n{message}\"}";
 
-    public static async Task SendAsync(NotificationSettings s, Alert alert, string serverName,
-        CancellationToken ct)
+    public static async Task SendAsync(NotificationSettings s, string token, Alert alert,
+        string serverName, CancellationToken ct)
     {
-        using var req = BuildRequest(s, alert, serverName);
+        using var req = BuildRequest(s, token, alert, serverName);
         using var res = await (s.WebhookInsecureTls ? HttpInsecure : Http)
             .SendAsync(req, ct).ConfigureAwait(false);
         if (!res.IsSuccessStatusCode)
@@ -53,8 +53,12 @@ internal static class WebhookSender
         }
     }
 
-    internal static HttpRequestMessage BuildRequest(NotificationSettings s, Alert alert, string serverName)
+    internal static HttpRequestMessage BuildRequest(NotificationSettings s, string token,
+        Alert alert, string serverName)
     {
+        token = token.Trim();
+        if (token.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            token = token["Bearer ".Length..].Trim();
         var method = string.Equals(s.WebhookMethod, "PUT", StringComparison.OrdinalIgnoreCase)
             ? HttpMethod.Put : HttpMethod.Post;
         var req = new HttpRequestMessage(method, s.WebhookUrl.Trim());
@@ -74,12 +78,14 @@ internal static class WebhookSender
             _ => JsonPayload(alert, serverName),
         };
 
+        bool hasAuthLine = false;
         foreach (var (name, value) in ParseHeaderLines(s.WebhookHeaders))
         {
             // ntfy reads the message from X-Message only when the body is the
             // image; on the text fallback the body already carries it.
             if (snapshotFallback && name.Equals("X-Message", StringComparison.OrdinalIgnoreCase)) continue;
             if (snapshotFallback && name.Equals("X-Filename", StringComparison.OrdinalIgnoreCase)) continue;
+            if (name.Equals("Authorization", StringComparison.OrdinalIgnoreCase)) hasAuthLine = true;
             var v = HeaderValue(Render(value, alert, serverName));
             if (!req.Headers.TryAddWithoutValidation(name, v))
             {
@@ -87,6 +93,10 @@ internal static class WebhookSender
                 req.Content.Headers.TryAddWithoutValidation(name, v);
             }
         }
+        // The stored token is the easy path; an explicit Authorization line is
+        // the escape hatch for other schemes and must win.
+        if (!hasAuthLine && token.Length > 0)
+            req.Headers.TryAddWithoutValidation("Authorization", "Bearer " + HeaderValue(token));
         return req;
     }
 

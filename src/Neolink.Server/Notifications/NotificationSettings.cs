@@ -71,6 +71,10 @@ public sealed class NotificationSettings
     /// <summary>Trust any TLS certificate the endpoint presents (internal CA /
     /// self-signed reverse proxies).</summary>
     public bool WebhookInsecureTls { get; set; }
+    /// <summary>AES-GCM token of the webhook access token, sent as
+    /// "Authorization: Bearer …" (an explicit Authorization header line wins).
+    /// Write-only like <see cref="PasswordEnc"/>; "" = none.</summary>
+    public string WebhookTokenEnc { get; set; } = "";
     /// <summary>"POST" or "PUT".</summary>
     public string WebhookMethod { get; set; } = "POST";
     /// <summary>"json" (full event + snapshots base64), "text" (rendered
@@ -122,6 +126,7 @@ public sealed class NotificationSettings
         WebhookEnabled = WebhookEnabled,
         WebhookUrl = WebhookUrl,
         WebhookInsecureTls = WebhookInsecureTls,
+        WebhookTokenEnc = WebhookTokenEnc,
         WebhookMethod = WebhookMethod,
         WebhookBodyMode = WebhookBodyMode,
         WebhookBodyTemplate = WebhookBodyTemplate,
@@ -185,9 +190,24 @@ public sealed class NotificationStore
         get { lock (_gate) return _settings.PasswordEnc.Length > 0; }
     }
 
-    /// <summary>Replaces the settings. <paramref name="newPassword"/> is write-only:
-    /// null keeps the stored password, non-null re-encrypts (""=clear it).</summary>
-    public void Save(NotificationSettings incoming, string? newPassword)
+    /// <summary>The decrypted webhook access token; "" when none/unreadable.</summary>
+    public string WebhookToken()
+    {
+        string enc;
+        lock (_gate) enc = _settings.WebhookTokenEnc;
+        return _protector.Unprotect(enc) ?? "";
+    }
+
+    public bool HasWebhookToken
+    {
+        get { lock (_gate) return _settings.WebhookTokenEnc.Length > 0; }
+    }
+
+    /// <summary>Replaces the settings. <paramref name="newPassword"/> and
+    /// <paramref name="newWebhookToken"/> are write-only: null keeps the stored
+    /// value, non-null re-encrypts (""=clear it). A pasted "Bearer " prefix is
+    /// forgiven — the sender adds the scheme itself.</summary>
+    public void Save(NotificationSettings incoming, string? newPassword, string? newWebhookToken = null)
     {
         lock (_gate)
         {
@@ -196,6 +216,15 @@ public sealed class NotificationStore
                 null => _settings.PasswordEnc,      // unchanged
                 "" => "",                            // cleared
                 _ => _protector.Protect(newPassword) // set
+            };
+            if (newWebhookToken != null && newWebhookToken.TrimStart()
+                    .StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+                newWebhookToken = newWebhookToken.TrimStart()["Bearer ".Length..].Trim();
+            incoming.WebhookTokenEnc = newWebhookToken switch
+            {
+                null => _settings.WebhookTokenEnc,
+                "" => "",
+                _ => _protector.Protect(newWebhookToken.Trim()),
             };
             _settings = incoming;
             SaveLocked();

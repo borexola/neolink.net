@@ -48,6 +48,9 @@ in the README). Paste the matching section below into the GitHub release.
   citizen: an "Accept self-signed certificates" switch covers reverse
   proxies signed by an internal CA, and a failed test now reports the real
   reason (certificate, DNS, refusal) instead of "see inner exception".
+  Protected endpoints get an Access token field — sent as Authorization:
+  Bearer, stored encrypted at rest like the SMTP password and write-only to
+  the API; a manual Authorization header line still wins for other schemes.
   Same isolation contract: a dead endpoint is a log line, never a
   recording problem.
 - **The two notification worlds stopped sharing a name.** The per-device

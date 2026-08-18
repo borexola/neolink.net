@@ -224,7 +224,7 @@ public static class WebApi
         int? EventSnapshots = null, int? EventCooldownMinutes = null,
         int? EventEmailDelaySeconds = null,
         bool? WebhookEnabled = null, string? WebhookUrl = null, bool? WebhookInsecureTls = null,
-        string? WebhookMethod = null,
+        string? WebhookToken = null, string? WebhookMethod = null,
         string? WebhookBodyMode = null, string? WebhookBodyTemplate = null,
         List<string>? WebhookHeaders = null, string? WebhookPreset = null,
         bool? WebhookServerAlerts = null);
@@ -1250,6 +1250,7 @@ public static class WebApi
                     webhookEnabled = s.WebhookEnabled,
                     webhookUrl = s.WebhookUrl,
                     webhookInsecureTls = s.WebhookInsecureTls,
+                    hasWebhookToken = notifier.Store.HasWebhookToken,
                     webhookMethod = s.WebhookMethod,
                     webhookBodyMode = s.WebhookBodyMode,
                     webhookBodyTemplate = s.WebhookBodyTemplate,
@@ -1323,7 +1324,7 @@ public static class WebApi
             app.MapPut("/api/admin/notifications", (NotificationRequest req, HttpContext ctx) =>
             {
                 if (AdminOnly(ctx) is { } denied) return denied;
-                notifier.Store.Save(MergedFrom(req), req.Password); // password write-only
+                notifier.Store.Save(MergedFrom(req), req.Password, req.WebhookToken); // secrets write-only
                 return Results.Json(ShapeNotifications());
             });
 
@@ -1341,7 +1342,7 @@ public static class WebApi
             app.MapPost("/api/admin/notifications/webhook-test", async (NotificationRequest req, HttpContext ctx) =>
             {
                 if (AdminOnly(ctx) is { } denied) return denied;
-                var error = await notifier.SendTestWebhookAsync(MergedFrom(req), ctx.RequestAborted);
+                var error = await notifier.SendTestWebhookAsync(MergedFrom(req), req.WebhookToken, ctx.RequestAborted);
                 return error == null
                     ? Results.Json(new { ok = true })
                     : Results.Json(new { error }, statusCode: 502);
