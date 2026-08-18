@@ -1269,5 +1269,7 @@
  "— every category hidden; the lanes show no marks": "— alle categorieën verborgen; de sporen tonen geen markeringen",
  "— match this against your backup to confirm it is the same key.": "— vergelijk dit met uw back-up om te bevestigen dat het dezelfde sleutel is.",
  "— pick the cameras to scrub; colored marks are events": "— kies de camera's om te doorzoeken; gekleurde markeringen zijn gebeurtenissen",
- "•••• stored — blank keeps it": "•••• opgeslagen — leeg behoudt het"
+ "•••• stored — blank keeps it": "•••• opgeslagen — leeg behoudt het",
+ "Email events are on for this camera, but this server no longer has email configured — nothing is being sent. Restore the recipient and mail server under <b>Server settings → Notifications</b>, or switch this off.": "E-mailgebeurtenissen staan aan voor deze camera, maar deze server heeft geen e-mail meer geconfigureerd — er wordt niets verzonden. Herstel de ontvanger en mailserver onder <b>Serverinstellingen → Meldingen</b>, of zet dit uit.",
+ "Webhook events are on for this camera, but this server no longer has a webhook configured — nothing is being sent. Restore the URL under <b>Server settings → Notifications</b>, or switch this off.": "Webhookgebeurtenissen staan aan voor deze camera, maar deze server heeft geen webhook meer geconfigureerd — er wordt niets verzonden. Herstel de URL onder <b>Serverinstellingen → Meldingen</b>, of zet dit uit."
 }

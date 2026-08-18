@@ -1269,5 +1269,7 @@
  "— every category hidden; the lanes show no marks": "— todas as categorias ocultas; as trilhas não mostram marcas",
  "— match this against your backup to confirm it is the same key.": "— compare com seu backup para confirmar que é a mesma chave.",
  "— pick the cameras to scrub; colored marks are events": "— escolha as câmeras para navegar; marcas coloridas são eventos",
- "•••• stored — blank keeps it": "•••• armazenada — vazio a mantém"
+ "•••• stored — blank keeps it": "•••• armazenada — vazio a mantém",
+ "Email events are on for this camera, but this server no longer has email configured — nothing is being sent. Restore the recipient and mail server under <b>Server settings → Notifications</b>, or switch this off.": "Os eventos por e-mail estão ativados para esta câmara, mas este servidor já não tem e-mail configurado — nada está a ser enviado. Restaure o destinatário e o servidor de e-mail em <b>Definições do servidor → Notificações</b>, ou desative isto.",
+ "Webhook events are on for this camera, but this server no longer has a webhook configured — nothing is being sent. Restore the URL under <b>Server settings → Notifications</b>, or switch this off.": "Os eventos por webhook estão ativados para esta câmara, mas este servidor já não tem um webhook configurado — nada está a ser enviado. Restaure o URL em <b>Definições do servidor → Notificações</b>, ou desative isto."
 }

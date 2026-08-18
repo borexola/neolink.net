@@ -3773,6 +3773,87 @@ public static class SelfTest
             }
         });
 
+        Test("notifier: channel gating refuses at the door, a full queue reports", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var key = new byte[32];
+                Array.Fill(key, (byte)11);
+                var store = new Notifications.NotificationStore(dir, new Notifications.SecretProtector(key));
+                var notifier = new Notifications.Notifier(store, "selftest");
+
+                Assert(!notifier.Send(new Notifications.Alert("a", false, "s", "h", "b")),
+                    "nothing configured: Send refuses");
+
+                store.Save(new Notifications.NotificationSettings
+                    { WebhookEnabled = true, WebhookUrl = "http://127.0.0.1:1/hook" }, null);
+                Assert(!notifier.Send(new Notifications.Alert("a", false, "s", "h", "b",
+                        Channels: Notifications.AlertChannels.Email)),
+                    "an email-only alert with only the webhook ready is refused");
+
+                // No reader is running, so the 100-slot queue must fill and then
+                // report full — TryWrite returning true for a DROPPED alert is
+                // the regression this pins (DropWrite mode ate the queue-full
+                // signal AND the cooldown rollback that rides on it).
+                int accepted = 0;
+                while (accepted < 500
+                       && notifier.Send(new Notifications.Alert($"q{accepted}", false, "s", "h", "b")))
+                    accepted++;
+                AssertEq(accepted, 100);
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+        });
+
+        Test("notification settings: Clone copies every property (reflection sweep)", () =>
+        {
+            // A property added to NotificationSettings but forgotten in Clone
+            // silently vanishes from every Snapshot(); this sweep has no list
+            // to forget to extend.
+            var seed = new Notifications.NotificationSettings();
+            var defaults = new Notifications.NotificationSettings();
+            var props = typeof(Notifications.NotificationSettings)
+                .GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
+                .Where(p => p.CanWrite).ToList();
+            Assert(props.Count >= 25, $"sweep sees the settings surface ({props.Count} properties)");
+            foreach (var p in props)
+            {
+                object? v = p.GetValue(defaults) switch
+                {
+                    string sv => sv + "zz",
+                    bool bv => !bv,
+                    int iv => iv + 13,
+                    Notifications.SmtpSecurity ev =>
+                        ev == Notifications.SmtpSecurity.None
+                            ? Notifications.SmtpSecurity.Ssl : Notifications.SmtpSecurity.None,
+                    List<string> => new List<string> { "zz" },
+                    Dictionary<string, int> => new Dictionary<string, int> { ["zz"] = 1 },
+                    var other => throw new InvalidOperationException(
+                        $"extend this sweep for {p.Name} ({other?.GetType().Name ?? "null"})"),
+                };
+                p.SetValue(seed, v);
+            }
+            var clone = seed.Clone();
+            foreach (var p in props)
+            {
+                var a = p.GetValue(seed);
+                var b = p.GetValue(clone);
+                bool same = a switch
+                {
+                    List<string> la => b is List<string> lb && la.SequenceEqual(lb) && !ReferenceEquals(la, lb),
+                    Dictionary<string, int> da => b is Dictionary<string, int> db
+                        && da.Count == db.Count && da.All(kv => db.TryGetValue(kv.Key, out var x) && x == kv.Value)
+                        && !ReferenceEquals(da, db),
+                    _ => Equals(a, b),
+                };
+                Assert(same, $"Clone must carry {p.Name} (deep for collections)");
+            }
+        });
+
         Test("smtp message: attachments nest the text/html pair inside multipart/mixed", () =>
         {
             var s = new Notifications.NotificationSettings
@@ -3831,13 +3912,35 @@ public static class SelfTest
             };
             using (var r = Notifications.WebhookSender.BuildRequest(s, "", alert, "selftest"))
             {
-                // JSON braces survive rendering; only the documented placeholders substitute.
-                AssertEq(Body(r), "{\"text\":\"Person — Driveway: body text [Driveway|person|ongoing|30]\"}");
+                // JSON braces survive rendering; only the documented placeholders
+                // substitute — and with a JSON Content-Type the VALUES are
+                // JSON-escaped (the em-dash becomes —, quotes cannot break out).
+                AssertEq(Body(r), "{\"text\":\"Person \\u2014 Driveway: body text [Driveway|person|ongoing|30]\"}");
                 AssertEq(r.Content!.Headers.ContentType!.MediaType, "application/json");
                 Assert(r.Headers.TryGetValues("X-Title", out var xt) && xt.First() == "Person - Driveway",
                     "header values render placeholders and fold to header-safe ASCII");
                 Assert(!r.Headers.Contains("Authorization"), "no token, no Authorization header");
             }
+
+            // A camera named with a quote must not 400 every delivery: escaped
+            // into JSON-shaped bodies, untouched in plain text.
+            var spicy = alert with
+            {
+                Headline = "He said \"hi\"",
+                Event = ev with { Camera = "Drive\"way" },
+            };
+            using (var r = Notifications.WebhookSender.BuildRequest(s, "", spicy, "selftest"))
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(Body(r));
+                Assert(doc.RootElement.GetProperty("text").GetString()!.Contains("He said \"hi\""),
+                    "escaped values decode back to the original text");
+            }
+            var savedHeaders = s.WebhookHeaders;
+            s.WebhookHeaders = new();
+            using (var r = Notifications.WebhookSender.BuildRequest(s, "", spicy, "selftest"))
+                Assert(Body(r).Contains("He said \"hi\""),
+                    "plain-text mode leaves quotes alone");
+            s.WebhookHeaders = savedHeaders;
 
             // The token field becomes a Bearer header (pasted scheme prefix
             // forgiven); an explicit Authorization line wins over it.
@@ -3889,9 +3992,56 @@ public static class SelfTest
                 Assert(body.Contains("filename=Driveway-1.jpg") || body.Contains("filename=\"Driveway-1.jpg\""),
                     "multipart carries the image file");
             }
+            // payload_json is JSON by definition: quotes in the title arrive escaped.
+            using (var r = Notifications.WebhookSender.BuildRequest(s, "", spicy, "selftest"))
+                Assert(Body(r).Contains("He said \\u0022hi\\u0022"),
+                    "multipart payload_json escapes substituted quotes");
 
             AssertEq(Notifications.WebhookSender.ParseHeaderLines(
                 new[] { "A: b", "bad", " : x", "C:d" }).Count, 2);
+            // A saved typo in a header NAME is dropped at parse time — it must
+            // never reach HttpHeaders, where it threw on every delivery.
+            AssertEq(Notifications.WebhookSender.ParseHeaderLines(
+                new[] { "X Title: x", "Ünicode: x", "Ok: y" }).Single().Name, "Ok");
+            s.WebhookBodyMode = "text";
+            s.WebhookHeaders = new() { "X Title: boom", "X-Fine: ok" };
+            using (var r = Notifications.WebhookSender.BuildRequest(s, "", alert, "selftest"))
+                Assert(r.Headers.Contains("X-Fine") && !r.Headers.Any(h => h.Key == "X Title"),
+                    "a malformed header line does not abort the delivery");
+
+            // The CR/LF fold is the header-injection defense, not cosmetics.
+            Assert(!Notifications.WebhookSender.HeaderValue("a\r\nX-Evil: b").Any(c => c is '\r' or '\n'),
+                "header values cannot smuggle CR/LF");
+
+            // Delivery budget scales with what the body carries.
+            Assert(Notifications.WebhookSender.TimeoutFor(alert with { Attachments = null })
+                   == TimeSpan.FromSeconds(15), "webhook base budget without attachments");
+            var heavy = alert with
+            {
+                Attachments = new[] { new Notifications.EmailAttachment("a.jpg", "image/jpeg", new byte[8_000_000]) },
+            };
+            Assert(Notifications.WebhookSender.TimeoutFor(heavy) > TimeSpan.FromMinutes(2),
+                "8 MB of snapshots buys minutes, not seconds");
+            Assert(Notifications.WebhookSender.TimeoutFor(heavy) <= TimeSpan.FromMinutes(10)
+                   && Notifications.SmtpSender.TimeoutFor(heavy.Attachments) <= TimeSpan.FromMinutes(10),
+                "budgets stay capped");
+            Assert(Notifications.SmtpSender.TimeoutFor(null) == TimeSpan.FromSeconds(25)
+                   && Notifications.SmtpSender.TimeoutFor(heavy.Attachments) > TimeSpan.FromMinutes(2),
+                "smtp budget scales the same way");
+
+            // {time} stays Gregorian whatever calendar the server locale uses.
+            var culture = System.Globalization.CultureInfo.CurrentCulture;
+            try
+            {
+                System.Globalization.CultureInfo.CurrentCulture =
+                    new System.Globalization.CultureInfo("th-TH");
+                var t = Notifications.WebhookSender.Render("{time}", alert, "selftest");
+                Assert(t.StartsWith(ev.StartUtc.ToLocalTime().Year.ToString(
+                        System.Globalization.CultureInfo.InvariantCulture)),
+                    $"{{time}} renders the Gregorian year under a Buddhist-calendar locale, got: {t}");
+            }
+            catch (System.Globalization.CultureNotFoundException) { /* trimmed ICU: nothing to pin */ }
+            finally { System.Globalization.CultureInfo.CurrentCulture = culture; }
         });
 
         Test("config editor: read-modify-write with validation", () =>
@@ -4825,6 +4975,18 @@ public static class SelfTest
             Assert(!test.IsNewer("v0.8.4"), "release older than a test build's base is not an update");
             Assert(!test.IsNewer("v0.8.5"), "the test build's own base release is not an update");
             Assert(test.IsNewer("v0.8.6"), "a genuinely newer release still is");
+
+            // A suffixed TAG never parses: prerelease tags reached via the
+            // tags fallback are not advertised as updates.
+            Assert(!chk.IsNewer("v0.7.0-rc1"), "prerelease tag is not offered as an update");
+        });
+
+        Test("update checker: newest-tag selection", () =>
+        {
+            AssertEq(Web.UpdateChecker.PickNewestTag(["v1.9.0", "v1.10.0", "v1.2.0"]) ?? "", "v1.10.0");
+            AssertEq(Web.UpdateChecker.PickNewestTag(["V0.9", "v0.10", "junk", null]) ?? "", "v0.10");
+            Assert(Web.UpdateChecker.PickNewestTag(["junk", "also-junk"]) == null, "no parseable tag yields null");
+            Assert(Web.UpdateChecker.PickNewestTag([]) == null, "empty list yields null");
         });
 
         Test("ai describe: endpoint normalization + think-block stripping", () =>
@@ -5252,6 +5414,10 @@ public static class SelfTest
                     RecordingSettings = new Recording.RecordingSettings(dir),
                     UserStore = new Web.UserStore(dir),
                     Secrets = new Neolink.Notifications.SecretProtector(dir),
+                    // Mounts /api/admin/notifications and the per-camera gates.
+                    Notifier = new Neolink.Notifications.Notifier(
+                        new Neolink.Notifications.NotificationStore(
+                            dir, new Neolink.Notifications.SecretProtector(dir)), "selftest"),
                     // The admin config endpoint reads the file — give it one.
                     Version = "0.0.0-selftest",
                     ConfigPath = Path.Combine(dir, "config.json"),
@@ -5544,6 +5710,97 @@ public static class SelfTest
                 var rec = GetJson(http, $"/api/cameras/apicam/recording{tokenQ}");
                 Assert(rec.GetProperty("events").GetBoolean(), "recording switch persisted via API");
                 Assert(rec.TryGetProperty("continuous", out _), "continuous switch exposed");
+
+                // Admin notifications API: the PUT sanitization layer, write-only
+                // token semantics, and the per-camera channel gates.
+                System.Net.Http.HttpResponseMessage NotifPut(string body)
+                {
+                    using var req = new HttpRequestMessage(HttpMethod.Put, $"/api/admin/notifications{tokenQ}")
+                    { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+                    return http.Send(req);
+                }
+                var notif0 = GetJson(http, $"/api/admin/notifications{tokenQ}");
+                Assert(!notif0.GetProperty("hasWebhookToken").GetBoolean(), "no webhook token stored yet");
+                Assert(!notif0.GetProperty("hasPassword").GetBoolean(), "no smtp password stored yet");
+
+                var longStr = new string('x', 5000);
+                var junkHeaders = string.Join(",",
+                    Enumerable.Range(0, 30).Select(i => $"\"H{i}: {new string('v', 600)}\""));
+                using (var res = NotifPut(
+                    $$"""
+                    {"webhookEnabled":false,"webhookMethod":"DELETE","webhookBodyMode":"weird",
+                     "webhookBodyTemplate":"{{longStr}}","webhookUrl":"http://x/{{longStr}}",
+                     "webhookHeaders":[{{junkHeaders}}],"webhookPreset":"{{longStr}}",
+                     "webhookToken":"Bearer tk_apitest","smtpPort":99999}
+                    """))
+                    AssertEq((int)res.StatusCode, 200);
+                var notif1 = GetJson(http, $"/api/admin/notifications{tokenQ}");
+                AssertEq(notif1.GetProperty("webhookMethod").GetString()!, "POST");
+                AssertEq(notif1.GetProperty("webhookBodyMode").GetString()!, "json");
+                AssertEq(notif1.GetProperty("webhookBodyTemplate").GetString()!.Length, 4000);
+                AssertEq(notif1.GetProperty("webhookUrl").GetString()!.Length, 2000);
+                AssertEq(notif1.GetProperty("webhookPreset").GetString()!.Length, 40);
+                AssertEq(notif1.GetProperty("smtpPort").GetInt32(), 65535);
+                var hs = notif1.GetProperty("webhookHeaders");
+                AssertEq(hs.GetArrayLength(), 20);
+                Assert(hs.EnumerateArray().All(h => h.GetString()!.Length <= 500), "header lines capped");
+                Assert(notif1.GetProperty("hasWebhookToken").GetBoolean(), "token recorded");
+                Assert(!notif1.TryGetProperty("webhookToken", out _), "token never echoed back");
+                Assert(!File.ReadAllText(Path.Combine(dir, "notifications.json")).Contains("tk_apitest"),
+                    "webhook token never plaintext on disk");
+
+                // Write-only: an absent field keeps the token, an empty one clears it.
+                using (var res = NotifPut("""{"enabled":false}""")) AssertEq((int)res.StatusCode, 200);
+                Assert(GetJson(http, $"/api/admin/notifications{tokenQ}")
+                    .GetProperty("hasWebhookToken").GetBoolean(), "absent token field keeps the stored token");
+                using (var res = NotifPut("""{"webhookToken":""}""")) AssertEq((int)res.StatusCode, 200);
+                Assert(!GetJson(http, $"/api/admin/notifications{tokenQ}")
+                    .GetProperty("hasWebhookToken").GetBoolean(), "empty token field clears it");
+
+                // Channel gates: switching a per-camera opt-in ON while the channel
+                // is unconfigured is refused (web-UI courtesy); OFF always lands.
+                System.Net.Http.HttpResponseMessage RecPost(string body)
+                {
+                    using var req = new HttpRequestMessage(HttpMethod.Post, $"/api/cameras/apicam/recording{tokenQ}")
+                    { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+                    return http.Send(req);
+                }
+                using (var res = RecPost("""{"emailEvents":true}""")) AssertEq((int)res.StatusCode, 409);
+                using (var res = RecPost("""{"webhookEvents":true}""")) AssertEq((int)res.StatusCode, 409);
+                var rec0 = GetJson(http, $"/api/cameras/apicam/recording{tokenQ}");
+                Assert(!rec0.GetProperty("emailAvailable").GetBoolean()
+                       && !rec0.GetProperty("webhookAvailable").GetBoolean(),
+                    "unconfigured channels report unavailable");
+
+                using (var res = NotifPut("""{"webhookEnabled":true,"webhookUrl":"http://127.0.0.1:1/hook"}"""))
+                    AssertEq((int)res.StatusCode, 200);
+                using (var res = RecPost("""{"webhookEvents":true}""")) AssertEq((int)res.StatusCode, 200);
+                var rec1 = GetJson(http, $"/api/cameras/apicam/recording{tokenQ}");
+                Assert(rec1.GetProperty("webhookAvailable").GetBoolean()
+                       && rec1.GetProperty("webhookEvents").GetBoolean(),
+                    "configured webhook opens the gate and reports available");
+
+                // Unconfiguring later leaves the stored opt-in alone (it just goes
+                // quiet), and OFF must still be accepted so the user can clean up.
+                using (var res = NotifPut("""{"webhookEnabled":false}""")) AssertEq((int)res.StatusCode, 200);
+                var rec2 = GetJson(http, $"/api/cameras/apicam/recording{tokenQ}");
+                Assert(!rec2.GetProperty("webhookAvailable").GetBoolean()
+                       && rec2.GetProperty("webhookEvents").GetBoolean(),
+                    "stored opt-in survives the channel going away");
+                using (var res = RecPost("""{"webhookEvents":false}""")) AssertEq((int)res.StatusCode, 200);
+
+                // The webhook test endpoint reports failure as a body, 502 — the
+                // UI shows the reason, nothing throws.
+                using (var req = new HttpRequestMessage(HttpMethod.Post,
+                    $"/api/admin/notifications/webhook-test{tokenQ}")
+                { Content = new StringContent("""{"webhookEnabled":true,"webhookUrl":"http://127.0.0.1:1/hook"}""",
+                    Encoding.UTF8, "application/json") })
+                using (var res = http.Send(req))
+                {
+                    AssertEq((int)res.StatusCode, 502);
+                    Assert(res.Content.ReadAsStringAsync().Result.Contains("error"),
+                        "webhook test failure carries the reason");
+                }
 
                 // Recorded-events listing sees the staged event, and the
                 // single-event lookup (notification deep links) round-trips.

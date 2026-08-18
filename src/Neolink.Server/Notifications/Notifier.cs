@@ -40,8 +40,10 @@ public sealed class Notifier
 
     private readonly NotificationStore _store;
     private readonly string _serverName;
+    // Wait mode: TryWrite reports a full queue as false (the Drop* modes discard
+    // the item and still return true, which silently defeats every drop check).
     private readonly Channel<Alert> _queue = Channel.CreateBounded<Alert>(
-        new BoundedChannelOptions(100) { FullMode = BoundedChannelFullMode.DropWrite });
+        new BoundedChannelOptions(100) { FullMode = BoundedChannelFullMode.Wait });
     private readonly Dictionary<string, DateTime> _active = new();  // key -> last emailed (UTC)
     private readonly object _gate = new();
 
@@ -95,9 +97,11 @@ public sealed class Notifier
             | (WebhookReady(s) && s.WebhookServerAlerts ? AlertChannels.Webhook : AlertChannels.None);
         if (ch == AlertChannels.None) return;
         Alert? toSend = null;
+        bool known;
+        DateTime last;
         lock (_gate)
         {
-            bool known = _active.TryGetValue(key, out var last);
+            known = _active.TryGetValue(key, out last);
             if (active)
             {
                 if (!known || DateTime.UtcNow - last >= RemindEvery)
@@ -113,7 +117,15 @@ public sealed class Notifier
                 toSend = recovery();
             }
         }
-        if (toSend != null) _queue.Writer.TryWrite(toSend with { Channels = ch });  // non-blocking; dropped if flooded
+        if (toSend == null || _queue.Writer.TryWrite(toSend with { Channels = ch })) return;
+        Log.Warn($"Notification queue is full — dropped: {toSend.Subject}");
+        // Un-stamp so the next poll retries instead of going quiet for hours
+        // (or, for a dropped recovery, forgetting the problem was ever emailed).
+        lock (_gate)
+        {
+            if (known) _active[key] = last;
+            else _active.Remove(key);
+        }
     }
 
     /// <summary>One-shot send, no edge detection — detection-event emails: each

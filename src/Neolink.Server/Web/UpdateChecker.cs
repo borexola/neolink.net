@@ -49,20 +49,15 @@ public sealed class UpdateChecker
     {
         if (Environment.TickCount64 - Interlocked.Read(ref _lastAttemptMs) < NudgeFloor.TotalMilliseconds)
             return;
-        if (Interlocked.CompareExchange(ref _checking, 1, 0) != 0) return;
         _ = Task.Run(async () =>
         {
             try
             {
-                await CheckAsync(CancellationToken.None).ConfigureAwait(false);
+                await CheckGuardedAsync(CancellationToken.None).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
                 Log.Debug($"Update check (page-load nudge) failed: {Log.Flatten(ex)}");
-            }
-            finally
-            {
-                Interlocked.Exchange(ref _checking, 0);
             }
         });
     }
@@ -73,7 +68,7 @@ public sealed class UpdateChecker
         {
             try
             {
-                await CheckAsync(ct).ConfigureAwait(false);
+                await CheckGuardedAsync(ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -82,6 +77,13 @@ public sealed class UpdateChecker
             try { await Task.Delay(Interval, ct).ConfigureAwait(false); }
             catch (OperationCanceledException) { return; }
         }
+    }
+
+    private async Task CheckGuardedAsync(CancellationToken ct)
+    {
+        if (Interlocked.CompareExchange(ref _checking, 1, 0) != 0) return;
+        try { await CheckAsync(ct).ConfigureAwait(false); }
+        finally { Interlocked.Exchange(ref _checking, 0); }
     }
 
     private async Task CheckAsync(CancellationToken ct)
@@ -122,8 +124,22 @@ public sealed class UpdateChecker
         using var tagsRes = await http.GetAsync(ApiTags, ct).ConfigureAwait(false);
         if (!tagsRes.IsSuccessStatusCode) return null;
         using var tags = JsonDocument.Parse(await tagsRes.Content.ReadAsStringAsync(ct).ConfigureAwait(false));
-        return tags.RootElement.ValueKind == JsonValueKind.Array && tags.RootElement.GetArrayLength() > 0
-            ? tags.RootElement[0].GetProperty("name").GetString()
-            : null;
+        if (tags.RootElement.ValueKind != JsonValueKind.Array) return null;
+        return PickNewestTag(tags.RootElement.EnumerateArray()
+            .Select(t => t.TryGetProperty("name", out var n) ? n.GetString() : null));
+    }
+
+    /// <summary>The highest parseable version among tag names. GitHub's tag list
+    /// carries no version ordering guarantee (lexically, v1.9 outranks v1.10).</summary>
+    internal static string? PickNewestTag(IEnumerable<string?> names)
+    {
+        string? best = null;
+        System.Version? bestVersion = null;
+        foreach (var name in names)
+        {
+            if (name == null || !System.Version.TryParse(name.TrimStart('v', 'V'), out var v)) continue;
+            if (bestVersion == null || v > bestVersion) { bestVersion = v; best = name; }
+        }
+        return best;
     }
 }

@@ -2795,8 +2795,10 @@
     {
         var kept = _notif!.WebhookHeaders.Where(h =>
         {
+            // A colon-less line (half-typed, pasted continuation) is the
+            // user's too — only recognizably preset-owned names get replaced.
             int i = h.IndexOf(':');
-            if (i <= 0) return false;
+            if (i <= 0) return true;
             return !PresetOwnedHeaders.Contains(h[..i].Trim().ToLowerInvariant());
         });
         _notif.WebhookHeaders = presetLines.Concat(kept).ToList();
@@ -3915,7 +3917,8 @@
         _confirmRestart = false;
         _adminEdits.Clear();
         _adminCams = null; _camEdit = null; _camTestResult = null; _camDeleteConfirm = null;
-        _notif = null; _notifStatus = null; _notifPassword = "";
+        _notif = null; _notifStatus = null; _notifPassword = ""; _webhookToken = "";
+        _emailTestStatus = null; _webhookTestStatus = null;
         _ai = null; _aiStatus = null; _aiApiKey = ""; _aiAnthropicKey = "";
         _security = null; _securityStatus = null;
         // Non-admins (and open installs) get the Connection tab; the admin-only
@@ -5167,6 +5170,7 @@
     private async Task OpenAlertsTabAsync()
     {
         _settingsTab = "alerts";
+        _alertTestStatus = null;
         try { _notifPerm = await JS.InvokeAsync<string>("neolink.notifState"); } catch { }
         try { _isShell = await JS.InvokeAsync<bool>("neolink.isShell"); } catch { }
     }

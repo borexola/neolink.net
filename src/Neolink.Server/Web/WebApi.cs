@@ -1270,19 +1270,23 @@ public static class WebApi
                     _ => fallback,
                 };
 
+            // Free-text fields are bounded here — notifications.json is echoed
+            // on every GET and nothing legitimate approaches these sizes.
+            static string Cap(string v, int max) => v.Length > max ? v[..max] : v;
+
             Neolink.Notifications.NotificationSettings MergedFrom(NotificationRequest req)
             {
                 var cur = notifier.Store.Snapshot();
                 return new Neolink.Notifications.NotificationSettings
                 {
                     Enabled = req.Enabled ?? cur.Enabled,
-                    Recipient = (req.Recipient ?? cur.Recipient).Trim(),
-                    SmtpHost = (req.SmtpHost ?? cur.SmtpHost).Trim(),
+                    Recipient = Cap((req.Recipient ?? cur.Recipient).Trim(), 320),
+                    SmtpHost = Cap((req.SmtpHost ?? cur.SmtpHost).Trim(), 253),
                     SmtpPort = Math.Clamp(req.SmtpPort ?? cur.SmtpPort, 1, 65535),
                     Security = ParseSecurity(req.Security, cur.Security),
-                    Username = req.Username ?? cur.Username,
-                    From = (req.From ?? cur.From).Trim(),
-                    FromName = req.FromName ?? cur.FromName,
+                    Username = Cap(req.Username ?? cur.Username, 320),
+                    From = Cap((req.From ?? cur.From).Trim(), 320),
+                    FromName = Cap(req.FromName ?? cur.FromName, 200),
                     AlertStorage = req.AlertStorage ?? cur.AlertStorage,
                     AlertOverload = req.AlertOverload ?? cur.AlertOverload,
                     AlertCameraOffline = req.AlertCameraOffline ?? cur.AlertCameraOffline,
@@ -1297,7 +1301,7 @@ public static class WebApi
                     EventCooldownMinutes = Math.Clamp(req.EventCooldownMinutes ?? cur.EventCooldownMinutes, 0, 1440),
                     EventEmailDelaySeconds = Math.Clamp(req.EventEmailDelaySeconds ?? cur.EventEmailDelaySeconds, 0, 300),
                     WebhookEnabled = req.WebhookEnabled ?? cur.WebhookEnabled,
-                    WebhookUrl = (req.WebhookUrl ?? cur.WebhookUrl).Trim(),
+                    WebhookUrl = Cap((req.WebhookUrl ?? cur.WebhookUrl).Trim(), 2000),
                     WebhookInsecureTls = req.WebhookInsecureTls ?? cur.WebhookInsecureTls,
                     WebhookMethod = req.WebhookMethod == null ? cur.WebhookMethod
                         : req.WebhookMethod.Equals("PUT", StringComparison.OrdinalIgnoreCase) ? "PUT" : "POST",
@@ -1313,7 +1317,7 @@ public static class WebApi
                         : req.WebhookBodyTemplate.Length > 4000 ? req.WebhookBodyTemplate[..4000] : req.WebhookBodyTemplate,
                     WebhookHeaders = req.WebhookHeaders == null ? new(cur.WebhookHeaders)
                         : req.WebhookHeaders.Take(20).Select(h => h.Length > 500 ? h[..500] : h).ToList(),
-                    WebhookPreset = req.WebhookPreset ?? cur.WebhookPreset,
+                    WebhookPreset = Cap(req.WebhookPreset ?? cur.WebhookPreset, 40),
                     WebhookServerAlerts = req.WebhookServerAlerts ?? cur.WebhookServerAlerts,
                 };
             }
@@ -2965,71 +2969,73 @@ public static class WebApi
                         ?? cam.Streams.FirstOrDefault())?.Kind ?? "mainStream";
             }
 
-            object ShapeSettings(WebCameraInfo cam, CameraRecordingSettings s) => new
+            object ShapeSettings(WebCameraInfo cam, CameraRecordingSettings s)
             {
-                events = s.Events,
-                eventsAvailable = cam.SupportsEvents,
-                // A battery camera Neolink lets doze (no always_on) never tapes
-                // 24/7 — taping would hold it awake until the battery dies. The
-                // panel shows the toggle disabled with this reason.
-                continuous = RecordingConfig.ContinuousEnabled && s.Continuous
-                             && cam.SleepFriendly?.Invoke() != true,
-                continuousAvailable = RecordingConfig.ContinuousEnabled,
-                continuousBlockedBySleep = cam.SleepFriendly?.Invoke() == true,
-                // The passive wake tap that replaces 24/7 on those cameras —
-                // self-wake footage lands on the timeline at zero battery cost.
-                wakeTimeline = s.WakeTimeline,
-                // Always the EFFECTIVE list (never null): unset means the default
-                // set, which excludes the opt-in perimeter labels — the UI chips
-                // must show those as off until the user ticks them.
-                eventTypes = (IEnumerable<string>?)s.EventTypes ?? CameraRecordingSettings.DefaultLabels,
-                knownTypes = CameraRecordingSettings.KnownLabels,
-                // Cached capability signals from the last live probe (null = never
-                // probed): the panel filters its event-type chips with these
-                // IMMEDIATELY instead of showing everything and pruning once the
-                // camera answers — the list only shifts on a firmware change.
-                supportedAiTypes = o.CameraState?.DetectionCaps(cam.Name).AiTypes,
-                supportedDoorbell = o.CameraState?.DetectionCaps(cam.Name).Doorbell,
-                // Per-camera retention overrides (null = default) + the server defaults
-                // so the UI can label what "default" currently means.
-                eventRetentionDays = s.EventRetentionDays,
-                continuousRetentionDays = s.ContinuousRetentionDays,
-                defaultEventRetentionDays = o.Recording?.RetentionDays ?? 7,
-                defaultContinuousRetentionDays = o.Recording?.EffectiveContinuousRetentionDays ?? 7,
-                // Which stream gets taped: the override, the resolved default, and
-                // what this camera actually serves (the UI's dropdown options).
-                recordStream = s.RecordStream,
-                defaultRecordStream = DefaultRecordKind(cam),
-                availableStreams = cam.Streams.Select(x => x.Kind).ToList(),
-                // Capture schedule, always in effective form: the day list is never
-                // null (the UI chips render it directly) and "" means midnight.
-                // It only takes effect while scheduleEnabled (opt-in).
-                scheduleEnabled = s.ScheduleEnabled,
-                scheduleDays = (IEnumerable<string>?)s.ScheduleDays ?? CameraRecordingSettings.WeekDays,
-                scheduleStart = s.ScheduleStart ?? "",
-                scheduleEnd = s.ScheduleEnd ?? "",
-                // Archiving: available only when the server config maps an archive
-                // tier; per camera AND per type (strict opt-in). Footage moves to
-                // the archive when its normal retention above expires.
-                archiveAvailable = o.ArchiveAvailable,
-                archiveEvents = s.ArchiveEvents,
-                archiveContinuous = s.ArchiveContinuous,
-                archiveRetentionDays = s.ArchiveRetentionDays,
-                // AI descriptions: the per-camera opt-in only shows (and only
-                // acts) while the feature is enabled globally in Settings → AI.
-                aiAvailable = o.Ai?.Enabled == true,
-                aiDescribe = s.AiDescribe,
-                aiContext = s.AiContext ?? "",
-                // Event notifications: per-camera opt-in per channel; "available"
-                // = that channel is configured, so the panel can say what to set
-                // up instead of offering a dead switch.
-                emailEvents = s.EmailEvents,
-                emailAvailable = o.Notifier?.Store.Snapshot() is { } ns
-                                 && Neolink.Notifications.Notifier.EmailReady(ns),
-                webhookEvents = s.WebhookEvents,
-                webhookAvailable = o.Notifier?.Store.Snapshot() is { } ns2
-                                   && Neolink.Notifications.Notifier.WebhookReady(ns2),
-            };
+                var ns = o.Notifier?.Store.Snapshot();
+                return new
+                {
+                    events = s.Events,
+                    eventsAvailable = cam.SupportsEvents,
+                    // A battery camera Neolink lets doze (no always_on) never tapes
+                    // 24/7 — taping would hold it awake until the battery dies. The
+                    // panel shows the toggle disabled with this reason.
+                    continuous = RecordingConfig.ContinuousEnabled && s.Continuous
+                                 && cam.SleepFriendly?.Invoke() != true,
+                    continuousAvailable = RecordingConfig.ContinuousEnabled,
+                    continuousBlockedBySleep = cam.SleepFriendly?.Invoke() == true,
+                    // The passive wake tap that replaces 24/7 on those cameras —
+                    // self-wake footage lands on the timeline at zero battery cost.
+                    wakeTimeline = s.WakeTimeline,
+                    // Always the EFFECTIVE list (never null): unset means the default
+                    // set, which excludes the opt-in perimeter labels — the UI chips
+                    // must show those as off until the user ticks them.
+                    eventTypes = (IEnumerable<string>?)s.EventTypes ?? CameraRecordingSettings.DefaultLabels,
+                    knownTypes = CameraRecordingSettings.KnownLabels,
+                    // Cached capability signals from the last live probe (null = never
+                    // probed): the panel filters its event-type chips with these
+                    // IMMEDIATELY instead of showing everything and pruning once the
+                    // camera answers — the list only shifts on a firmware change.
+                    supportedAiTypes = o.CameraState?.DetectionCaps(cam.Name).AiTypes,
+                    supportedDoorbell = o.CameraState?.DetectionCaps(cam.Name).Doorbell,
+                    // Per-camera retention overrides (null = default) + the server defaults
+                    // so the UI can label what "default" currently means.
+                    eventRetentionDays = s.EventRetentionDays,
+                    continuousRetentionDays = s.ContinuousRetentionDays,
+                    defaultEventRetentionDays = o.Recording?.RetentionDays ?? 7,
+                    defaultContinuousRetentionDays = o.Recording?.EffectiveContinuousRetentionDays ?? 7,
+                    // Which stream gets taped: the override, the resolved default, and
+                    // what this camera actually serves (the UI's dropdown options).
+                    recordStream = s.RecordStream,
+                    defaultRecordStream = DefaultRecordKind(cam),
+                    availableStreams = cam.Streams.Select(x => x.Kind).ToList(),
+                    // Capture schedule, always in effective form: the day list is never
+                    // null (the UI chips render it directly) and "" means midnight.
+                    // It only takes effect while scheduleEnabled (opt-in).
+                    scheduleEnabled = s.ScheduleEnabled,
+                    scheduleDays = (IEnumerable<string>?)s.ScheduleDays ?? CameraRecordingSettings.WeekDays,
+                    scheduleStart = s.ScheduleStart ?? "",
+                    scheduleEnd = s.ScheduleEnd ?? "",
+                    // Archiving: available only when the server config maps an archive
+                    // tier; per camera AND per type (strict opt-in). Footage moves to
+                    // the archive when its normal retention above expires.
+                    archiveAvailable = o.ArchiveAvailable,
+                    archiveEvents = s.ArchiveEvents,
+                    archiveContinuous = s.ArchiveContinuous,
+                    archiveRetentionDays = s.ArchiveRetentionDays,
+                    // AI descriptions: the per-camera opt-in only shows (and only
+                    // acts) while the feature is enabled globally in Settings → AI.
+                    aiAvailable = o.Ai?.Enabled == true,
+                    aiDescribe = s.AiDescribe,
+                    aiContext = s.AiContext ?? "",
+                    // Event notifications: per-camera opt-in per channel; "available"
+                    // = that channel is configured, so the panel can say what to set
+                    // up instead of offering a dead switch.
+                    emailEvents = s.EmailEvents,
+                    emailAvailable = ns != null && Neolink.Notifications.Notifier.EmailReady(ns),
+                    webhookEvents = s.WebhookEvents,
+                    webhookAvailable = ns != null && Neolink.Notifications.Notifier.WebhookReady(ns),
+                };
+            }
 
             app.MapGet("/api/cameras/{name}/recording", (string name, HttpContext ctx) =>
             {

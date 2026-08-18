@@ -18,14 +18,29 @@ namespace Neolink.Notifications;
 /// </summary>
 internal static class WebhookSender
 {
-    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(15) };
+    // The clients' own timeout is only a backstop — the real budget is
+    // per-request (TimeoutFor), scaled to what the body carries.
+    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(10) };
 
     // Homelab endpoints commonly sit behind an internal CA the server has no
     // root for; opt-in per settings, never the default.
     private static readonly HttpClient HttpInsecure = new(new HttpClientHandler
     {
         ServerCertificateCustomValidationCallback = (_, _, _, _) => true,
-    }) { Timeout = TimeSpan.FromSeconds(15) };
+    }) { Timeout = TimeSpan.FromMinutes(10) };
+
+    /// <summary>Per-request budget: a fixed window plus upload time by
+    /// attachment size (base64 in json mode makes the payload 4/3 the raw
+    /// bytes), sized for a ~256 kbit/s worst-case uplink, capped at ten
+    /// minutes — a fixed window can never deliver a snapshot-heavy body on a
+    /// slow uplink.</summary>
+    internal static TimeSpan TimeoutFor(Alert alert)
+    {
+        long bytes = 0;
+        if (alert.Attachments != null) foreach (var a in alert.Attachments) bytes += a.Data.LongLength;
+        var total = TimeSpan.FromSeconds(15) + TimeSpan.FromSeconds(bytes * 4.0 / 3.0 / 32_000);
+        return total > TimeSpan.FromMinutes(10) ? TimeSpan.FromMinutes(10) : total;
+    }
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -40,12 +55,14 @@ internal static class WebhookSender
         string serverName, CancellationToken ct)
     {
         using var req = BuildRequest(s, token, alert, serverName);
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(TimeoutFor(alert));
         using var res = await (s.WebhookInsecureTls ? HttpInsecure : Http)
-            .SendAsync(req, ct).ConfigureAwait(false);
+            .SendAsync(req, cts.Token).ConfigureAwait(false);
         if (!res.IsSuccessStatusCode)
         {
             var body = "";
-            try { body = (await res.Content.ReadAsStringAsync(ct).ConfigureAwait(false)).Trim(); }
+            try { body = (await res.Content.ReadAsStringAsync(cts.Token).ConfigureAwait(false)).Trim(); }
             catch { }
             if (body.Length > 200) body = body[..200];
             throw new IOException($"HTTP {(int)res.StatusCode} {res.ReasonPhrase}" +
@@ -68,10 +85,17 @@ internal static class WebhookSender
         bool snapshotFallback = mode == "snapshot" && first == null;
         if (snapshotFallback) mode = "text";
 
+        // A JSON-shaped template needs its substituted values escaped, or one
+        // quote in a camera name 400s every delivery. Text mode is JSON exactly
+        // when the user's Content-Type header says so (the Slack/Gotify presets).
+        bool jsonBody = ParseHeaderLines(s.WebhookHeaders).Any(h =>
+            h.Name.Equals("Content-Type", StringComparison.OrdinalIgnoreCase)
+            && h.Value.Contains("json", StringComparison.OrdinalIgnoreCase));
+
         req.Content = mode switch
         {
             "text" => new StringContent(
-                Render(Template(s.WebhookBodyTemplate, DefaultTextTemplate), alert, serverName),
+                Render(Template(s.WebhookBodyTemplate, DefaultTextTemplate), alert, serverName, jsonBody),
                 Encoding.UTF8),
             "snapshot" => ImageContent(first!),
             "multipart" => MultipartContent(s, alert, serverName),
@@ -121,7 +145,8 @@ internal static class WebhookSender
             message = alert.Body,
             camera = e?.Camera,
             labels = e?.Labels,
-            time = (e?.StartUtc ?? DateTime.UtcNow).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss"),
+            time = (e?.StartUtc ?? DateTime.UtcNow).ToLocalTime()
+                .ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture),
             durationSeconds = e == null ? (double?)null : Math.Round(e.DurationSeconds),
             ongoing = e?.Ongoing,
             snapshots = alert.Attachments is { Count: > 0 } att
@@ -135,7 +160,8 @@ internal static class WebhookSender
     {
         var mp = new MultipartFormDataContent();
         mp.Add(new StringContent(
-            Render(Template(s.WebhookBodyTemplate, DefaultMultipartTemplate), alert, serverName),
+            Render(Template(s.WebhookBodyTemplate, DefaultMultipartTemplate), alert, serverName,
+                jsonEscape: true),
             Encoding.UTF8, "application/json"), "payload_json");
         if (alert.Attachments != null)
             for (int i = 0; i < alert.Attachments.Count; i++)
@@ -149,24 +175,31 @@ internal static class WebhookSender
     }
 
     /// <summary>Substitutes the documented placeholders; anything else in the
-    /// template — JSON braces included — passes through untouched.</summary>
-    internal static string Render(string template, Alert alert, string serverName)
+    /// template — JSON braces included — passes through untouched. With
+    /// <paramref name="jsonEscape"/> the substituted VALUES are JSON-string
+    /// escaped (the template's own syntax is the user's business).</summary>
+    internal static string Render(string template, Alert alert, string serverName,
+        bool jsonEscape = false)
     {
+        string V(string v) => jsonEscape ? JsonEncodedText.Encode(v).ToString() : v;
         var e = alert.Event;
         return template
-            .Replace("{title}", alert.Headline)
-            .Replace("{message}", alert.Body)
-            .Replace("{subject}", alert.Subject)
-            .Replace("{camera}", e?.Camera ?? "")
-            .Replace("{labels}", e != null ? string.Join(" + ", e.Labels) : "")
-            .Replace("{time}", (e?.StartUtc ?? DateTime.UtcNow).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss"))
+            .Replace("{title}", V(alert.Headline))
+            .Replace("{message}", V(alert.Body))
+            .Replace("{subject}", V(alert.Subject))
+            .Replace("{camera}", V(e?.Camera ?? ""))
+            .Replace("{labels}", V(e != null ? string.Join(" + ", e.Labels) : ""))
+            .Replace("{time}", (e?.StartUtc ?? DateTime.UtcNow).ToLocalTime()
+                .ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture))
             .Replace("{duration}", e != null
                 ? Math.Round(e.DurationSeconds).ToString(CultureInfo.InvariantCulture) : "")
             .Replace("{status}", e == null ? "alert" : e.Ongoing ? "ongoing" : "ended")
-            .Replace("{server}", serverName);
+            .Replace("{server}", V(serverName));
     }
 
-    /// <summary>"Name: value" lines; blank or colon-less lines are skipped.</summary>
+    /// <summary>"Name: value" lines; blank lines, colon-less lines and lines
+    /// whose name is not an RFC 7230 token are skipped — one saved typo like
+    /// "X Title: x" must not abort every delivery at request-build time.</summary>
     internal static List<(string Name, string Value)> ParseHeaderLines(IEnumerable<string>? lines)
     {
         var result = new List<(string, string)>();
@@ -175,11 +208,16 @@ internal static class WebhookSender
             int i = raw.IndexOf(':');
             if (i <= 0) continue;
             var name = raw[..i].Trim();
-            if (name.Length == 0) continue;
+            if (name.Length == 0 || !name.All(IsTokenChar)) continue;
             result.Add((name, raw[(i + 1)..].Trim()));
         }
         return result;
     }
+
+    private static bool IsTokenChar(char c) =>
+        c is (>= 'a' and <= 'z') or (>= 'A' and <= 'Z') or (>= '0' and <= '9')
+            or '!' or '#' or '$' or '%' or '&' or '\'' or '*' or '+' or '-' or '.'
+            or '^' or '_' or '`' or '|' or '~';
 
     /// <summary>Header values must be Latin-1-safe and free of control
     /// characters (injection); em-dashes fold to '-', other non-ASCII to '?'.</summary>

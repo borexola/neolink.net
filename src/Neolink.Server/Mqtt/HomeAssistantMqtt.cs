@@ -1756,6 +1756,8 @@ internal sealed class CameraBridge
         await PublishDetectStateAsync(ct).ConfigureAwait(false);
         // ...and the 24/7 recording switch (also flippable from the web UI).
         await PublishContinuousStateAsync(ct).ConfigureAwait(false);
+        // ...and the per-camera notification opt-ins (same shared-with-web-UI shape).
+        await PublishNotifyStatesAsync(ct).ConfigureAwait(false);
         // Continuous segments start/stop without an event to ride on — the
         // periodic sweep keeps the Recording sensor honest for them (and heals
         // a publish that failed mid-outage). Runs regardless of online state:
@@ -1839,6 +1841,7 @@ internal sealed class CameraBridge
             await PublishSuspendStateAsync(ct).ConfigureAwait(false);
             await PublishDetectStateAsync(ct).ConfigureAwait(false);
             await PublishContinuousStateAsync(ct).ConfigureAwait(false);
+            await PublishNotifyStatesAsync(ct).ConfigureAwait(false);
             await PublishRecordingStateAsync(force: true).ConfigureAwait(false);
             if (_cam.EventRecorder is { } rec)
                 await _hub.PublishAsync(StateTopic("record"), rec.OnDemand != null ? "ON" : "OFF", ct)

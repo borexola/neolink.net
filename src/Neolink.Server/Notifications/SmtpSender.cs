@@ -21,6 +21,19 @@ internal static class SmtpSender
 {
     private static readonly TimeSpan Overall = TimeSpan.FromSeconds(25);
 
+    /// <summary>The session budget: a fixed window for the dialogue plus upload
+    /// time by attachment size — snapshot-heavy emails are megabytes of base64,
+    /// undeliverable on a slow uplink inside any fixed window. Sized for a
+    /// ~256 kbit/s worst-case uplink, capped at ten minutes.</summary>
+    internal static TimeSpan TimeoutFor(IReadOnlyList<EmailAttachment>? attachments)
+    {
+        long bytes = 0;
+        if (attachments != null) foreach (var a in attachments) bytes += a.Data.LongLength;
+        var upload = TimeSpan.FromSeconds(bytes * 4.0 / 3.0 / 32_000);
+        var total = Overall + upload;
+        return total > TimeSpan.FromMinutes(10) ? TimeSpan.FromMinutes(10) : total;
+    }
+
     public static async Task SendAsync(NotificationSettings s, string password,
         string subject, string htmlBody, string textBody, CancellationToken outerCt,
         IReadOnlyList<EmailAttachment>? attachments = null)
@@ -28,7 +41,7 @@ internal static class SmtpSender
         RequireAddress(s.EffectiveFrom, "sender address");
         RequireAddress(s.Recipient, "recipient address");
 
-        using var timeout = new CancellationTokenSource(Overall);
+        using var timeout = new CancellationTokenSource(TimeoutFor(attachments));
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(outerCt, timeout.Token);
         var ct = linked.Token;
 
@@ -36,42 +49,52 @@ internal static class SmtpSender
         await tcp.ConnectAsync(s.SmtpHost, s.SmtpPort, ct).ConfigureAwait(false);
 
         Stream stream = tcp.GetStream();
-        if (s.Security == SmtpSecurity.Ssl)
-            stream = await UpgradeAsync(stream, s.SmtpHost, ct).ConfigureAwait(false);
-
-        var buf = new byte[4096];
-        await ExpectAsync(stream, buf, 220, ct).ConfigureAwait(false);           // greeting
-
-        var ehloHost = string.IsNullOrWhiteSpace(s.EffectiveFrom) ? "neolink.local"
-            : (s.EffectiveFrom.Split('@').LastOrDefault() ?? "neolink.local");
-        var ehlo = await CommandAsync(stream, buf, $"EHLO {ehloHost}", ct).ConfigureAwait(false);
-        Check(ehlo, 250, "EHLO");
-
-        if (s.Security == SmtpSecurity.StartTls)
+        try
         {
-            Check(await CommandAsync(stream, buf, "STARTTLS", ct).ConfigureAwait(false), 220, "STARTTLS");
-            stream = await UpgradeAsync(stream, s.SmtpHost, ct).ConfigureAwait(false);
-            // Re-EHLO over the secured channel (required after upgrade).
-            Check(await CommandAsync(stream, buf, $"EHLO {ehloHost}", ct).ConfigureAwait(false), 250, "EHLO(tls)");
-        }
+            if (s.Security == SmtpSecurity.Ssl)
+                stream = await UpgradeAsync(stream, s.SmtpHost, ct).ConfigureAwait(false);
 
-        if (!string.IsNullOrEmpty(s.Username))
+            var buf = new byte[4096];
+            await ExpectAsync(stream, buf, 220, ct).ConfigureAwait(false);           // greeting
+
+            var ehloHost = string.IsNullOrWhiteSpace(s.EffectiveFrom) ? "neolink.local"
+                : (s.EffectiveFrom.Split('@').LastOrDefault() ?? "neolink.local");
+            var ehlo = await CommandAsync(stream, buf, $"EHLO {ehloHost}", ct).ConfigureAwait(false);
+            Check(ehlo, 250, "EHLO");
+
+            if (s.Security == SmtpSecurity.StartTls)
+            {
+                Check(await CommandAsync(stream, buf, "STARTTLS", ct).ConfigureAwait(false), 220, "STARTTLS");
+                stream = await UpgradeAsync(stream, s.SmtpHost, ct).ConfigureAwait(false);
+                // Re-EHLO over the secured channel (required after upgrade).
+                Check(await CommandAsync(stream, buf, $"EHLO {ehloHost}", ct).ConfigureAwait(false), 250, "EHLO(tls)");
+            }
+
+            if (!string.IsNullOrEmpty(s.Username))
+            {
+                Check(await CommandAsync(stream, buf, "AUTH LOGIN", ct).ConfigureAwait(false), 334, "AUTH");
+                Check(await CommandAsync(stream, buf, B64(s.Username), ct).ConfigureAwait(false), 334, "AUTH user");
+                Check(await CommandAsync(stream, buf, B64(password), ct).ConfigureAwait(false), 235, "AUTH pass");
+            }
+
+            Check(await CommandAsync(stream, buf, $"MAIL FROM:<{s.EffectiveFrom}>", ct).ConfigureAwait(false), 250, "MAIL FROM");
+            Check(await CommandAsync(stream, buf, $"RCPT TO:<{s.Recipient}>", ct).ConfigureAwait(false), 250, "RCPT TO");
+            Check(await CommandAsync(stream, buf, "DATA", ct).ConfigureAwait(false), 354, "DATA");
+
+            var message = BuildMessage(s, subject, htmlBody, textBody, attachments);
+            await WriteAsync(stream, message, ct).ConfigureAwait(false);
+            await WriteAsync(stream, "\r\n.\r\n", ct).ConfigureAwait(false);         // end of DATA
+            Check(await ReadReplyAsync(stream, buf, ct).ConfigureAwait(false), 250, "message body");
+
+            try { await CommandAsync(stream, buf, "QUIT", ct).ConfigureAwait(false); } catch { /* best effort */ }
+        }
+        finally
         {
-            Check(await CommandAsync(stream, buf, "AUTH LOGIN", ct).ConfigureAwait(false), 334, "AUTH");
-            Check(await CommandAsync(stream, buf, B64(s.Username), ct).ConfigureAwait(false), 334, "AUTH user");
-            Check(await CommandAsync(stream, buf, B64(password), ct).ConfigureAwait(false), 235, "AUTH pass");
+            // stream is upgraded in place (implicit TLS or STARTTLS); only the TLS
+            // wrapper needs disposing — the plain socket dies with tcp.
+            if (stream is SslStream ssl)
+                try { await ssl.DisposeAsync().ConfigureAwait(false); } catch { }
         }
-
-        Check(await CommandAsync(stream, buf, $"MAIL FROM:<{s.EffectiveFrom}>", ct).ConfigureAwait(false), 250, "MAIL FROM");
-        Check(await CommandAsync(stream, buf, $"RCPT TO:<{s.Recipient}>", ct).ConfigureAwait(false), 250, "RCPT TO");
-        Check(await CommandAsync(stream, buf, "DATA", ct).ConfigureAwait(false), 354, "DATA");
-
-        var message = BuildMessage(s, subject, htmlBody, textBody, attachments);
-        await WriteAsync(stream, message, ct).ConfigureAwait(false);
-        await WriteAsync(stream, "\r\n.\r\n", ct).ConfigureAwait(false);          // end of DATA
-        Check(await ReadReplyAsync(stream, buf, ct).ConfigureAwait(false), 250, "message body");
-
-        try { await CommandAsync(stream, buf, "QUIT", ct).ConfigureAwait(false); } catch { /* best effort */ }
     }
 
     /// <summary>An address is spliced verbatim into MAIL FROM/RCPT TO and into the

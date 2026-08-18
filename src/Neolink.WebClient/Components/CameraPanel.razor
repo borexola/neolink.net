@@ -1086,6 +1086,12 @@
                             @((MarkupString)T["No email is set up on this server yet. Add a recipient and mail server under <b>Server settings → Notifications</b> (and switch notifications on) — this toggle turns on once that is done."])
                         </div>
                     }
+                    else if (_recording.EmailEvents && !_recording.EmailAvailable)
+                    {
+                        <div class="notice setup">
+                            @((MarkupString)T["Email events are on for this camera, but this server no longer has email configured — nothing is being sent. Restore the recipient and mail server under <b>Server settings → Notifications</b>, or switch this off."])
+                        </div>
+                    }
                     else if (_recording.EmailEvents)
                     {
                         <div class="event-sub email-sub">
@@ -1109,6 +1115,12 @@
                     {
                         <div class="notice setup">
                             @((MarkupString)T["No webhook is set up on this server yet. Configure one under <b>Server settings → Notifications</b> (preset, URL, test) — this toggle turns on once that is done."])
+                        </div>
+                    }
+                    else if (_recording.WebhookEvents && !_recording.WebhookAvailable)
+                    {
+                        <div class="notice setup">
+                            @((MarkupString)T["Webhook events are on for this camera, but this server no longer has a webhook configured — nothing is being sent. Restore the URL under <b>Server settings → Notifications</b>, or switch this off."])
                         </div>
                     }
                     else if (_recording.WebhookEvents)

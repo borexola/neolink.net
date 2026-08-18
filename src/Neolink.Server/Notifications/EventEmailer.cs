@@ -28,6 +28,9 @@ public sealed class EventEmailer
     private readonly Dictionary<string, DateTime> _lastSent = new(StringComparer.OrdinalIgnoreCase);
     // Events the start path owns; the close hook must not mail them again.
     private readonly HashSet<string> _claimed = new();
+    // Events whose start hook saw a nonzero delay: the send decision was made
+    // there, and the close hook must not re-read the (possibly changed) setting.
+    private readonly HashSet<string> _deferred = new();
     // Detection time per event: the record's StartUtc reaches back into
     // pre-roll, and snapshots must not come from there.
     private readonly Dictionary<string, DateTime> _trigger = new();
@@ -56,6 +59,7 @@ public sealed class EventEmailer
             var s = _store.Snapshot();
             int delay = Math.Clamp(s.EventEmailDelaySeconds, 0, 300);
             if (delay <= 0) return;
+            lock (_gate) _deferred.Add(rec.Id);
             if (!Claim(rec, s, out var stamp, out var prev, out var channels)) return;
 
             _ = Task.Run(async () =>
@@ -70,9 +74,9 @@ public sealed class EventEmailer
         }
     }
 
-    /// <summary>The recorder's event-closed hook: sends when the delay is 0,
-    /// otherwise only clears the claim. Must not block or throw into the
-    /// recorder's pump.</summary>
+    /// <summary>The recorder's event-closed hook: sends when the start hook
+    /// deferred to it (delay 0 at the start), otherwise only clears the claim.
+    /// Must not block or throw into the recorder's pump.</summary>
     public void OnEventClosed(EventRecord rec)
     {
         try
@@ -81,10 +85,11 @@ public sealed class EventEmailer
             lock (_gate)
             {
                 if (_trigger.Remove(rec.Id, out var t)) trigger = t;
-                if (_claimed.Remove(rec.Id)) return;
+                bool startOwned = _deferred.Remove(rec.Id);
+                _claimed.Remove(rec.Id);
+                if (startOwned) return;
             }
             var s = _store.Snapshot();
-            if (Math.Clamp(s.EventEmailDelaySeconds, 0, 300) > 0) return;
             if (!Claim(rec, s, out var stamp, out var prev, out var channels)) return;
 
             _ = Task.Run(() => GuardedComposeAsync(rec, s, trigger, stamp, prev, channels));
@@ -273,6 +278,9 @@ public sealed class EventEmailer
     /// Must never bind before the clip ends, or snapshots bunch at its start.</summary>
     internal const int MaxDecodedFrames = 300;
 
+    // Generous: must clear feeding a max-length clip through the pipe on a slow NAS.
+    private static readonly TimeSpan DecodeTimeout = TimeSpan.FromSeconds(120);
+
     /// <summary>Decode rate for footage believed to span
     /// <paramref name="eventSeconds"/>, over-producing 2.5x for
     /// <see cref="PickEvenly"/>. The floor only guards ffmpeg against a
@@ -338,6 +346,9 @@ public sealed class EventEmailer
         }) psi.ArgumentList.Add(a);
 
         using var p = Process.Start(psi)!;
+        // The timeout must cover the stdout copy: it only ends when ffmpeg closes
+        // stdout, and a feed stalled on dead storage keeps ffmpeg alive forever.
+        using var cts = new CancellationTokenSource(DecodeTimeout);
         // Feed through the vault (decrypts transparently; plaintext passes as-is)
         // while draining stdout concurrently — one-sided pumping deadlocks pipes.
         var feed = Task.Run(async () =>
@@ -345,7 +356,7 @@ public sealed class EventEmailer
             try
             {
                 await using var src = FootageVault.OpenRead(clipPath);
-                await src.CopyToAsync(p.StandardInput.BaseStream).ConfigureAwait(false);
+                await src.CopyToAsync(p.StandardInput.BaseStream, cts.Token).ConfigureAwait(false);
             }
             catch { /* ffmpeg may close stdin once it has its frames — normal */ }
             finally
@@ -355,9 +366,21 @@ public sealed class EventEmailer
         });
         var drainErr = p.StandardError.ReadToEndAsync();
         using var stdout = new MemoryStream();
-        await p.StandardOutput.BaseStream.CopyToAsync(stdout).ConfigureAwait(false);
-        if (!p.WaitForExit(60_000)) { try { p.Kill(entireProcessTree: true); } catch { } }
-        try { await feed.ConfigureAwait(false); } catch { }
+        try
+        {
+            await p.StandardOutput.BaseStream.CopyToAsync(stdout, cts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            try { p.Kill(entireProcessTree: true); } catch { }
+            if (stdout.Length == 0)
+                throw new TimeoutException(
+                    $"ffmpeg produced nothing within {DecodeTimeout.TotalSeconds:0} s");
+        }
+        if (!p.WaitForExit(10_000)) { try { p.Kill(entireProcessTree: true); } catch { } }
+        // A feed wedged on unresponsive storage must not chain-hang the compose
+        // task; the grace only covers the normal post-kill unwind.
+        await Task.WhenAny(feed, Task.Delay(5_000)).ConfigureAwait(false);
         if (p.HasExited && p.ExitCode != 0 && stdout.Length == 0)
         {
             var err = (await drainErr.ConfigureAwait(false)).Split('\n')
