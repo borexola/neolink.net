@@ -8,126 +8,20 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Added
 
-- **Cameras can email their events, snapshots attached.** A per-camera
-  switch (camera ⚙ → Recording → Email events) mails every detection event
-  to the notification recipient — five seconds into the event by default,
-  because an alert that waits out a four-minute visit arrives four minutes
-  late. The delay is configurable (0 = send when the event ends and sample
-  the whole clip); the recording keeps rolling either way, and the email
-  says "still ongoing" when it is. Each mail carries 1–50 snapshots
-  (default 3) sampled evenly across the event's own footage — the pre-roll
-  that opens every clip is context for the recording, not the alert, so
-  sampling starts at the detection and the subject is in frame instead of
-  the empty scene before them. Encrypted footage samples the same as plain,
-  and without ffmpeg the event's thumbnail goes instead, so the mail is
-  never empty-handed. The camera's event-type chips
-  already decide what gets recorded, so they decide what gets emailed — one
-  filter, not two. The global knobs (snapshot count, send delay, a
-  per-camera cooldown defaulting to 2 minutes so a busy driveway can't
-  flood an inbox) sit with the rest of the mail setup under Server settings
-  → Notifications, and the whole path rides the existing notifier:
-  composition on its own task, the send on the bounded queue, a dead mail
-  server never touching recording. An email that fails to compose or queue
-  gives its cooldown window back — the next event in the window is then the
-  recipient's only shot.
-- **Webhook notifications — ntfy, Discord, Gotify, Slack, or anything with a
-  URL.** A second notification channel next to email, built for broad
-  compatibility: pick a preset, paste the URL, send a test. ntfy gets the
-  snapshot as a real push attachment, Discord gets the images uploaded into
-  the channel, Gotify and Slack get clean formatted messages, and the JSON
-  preset sends the full event (camera, labels, time, duration, ongoing,
-  snapshots as base64) for Node-RED, n8n, Home Assistant or your own
-  script. Under Advanced the raw knobs are yours: method, body mode (JSON /
-  text template / snapshot image / multipart), a template with placeholders
-  ({title} {message} {camera} {labels} {time} {duration} {status}
-  {server}), and extra headers — so a target nobody wrote a preset for is a
-  template away. Works with or without email configured; per camera it is
-  its own opt-in switch next to Email events, server alerts (storage,
-  offline…) can ride along or not, and the send timing, snapshot count and
-  cooldown are shared with event emails. Homelab TLS is a first-class
-  citizen: an "Accept self-signed certificates" switch covers reverse
-  proxies signed by an internal CA, and a failed test now reports the real
-  reason (certificate, DNS, refusal) instead of "see inner exception".
-  Protected endpoints get an Access token field — sent as Authorization:
-  Bearer, stored encrypted at rest like the SMTP password and write-only to
-  the API; a manual Authorization header line still wins for other schemes.
-  Same isolation contract: a dead endpoint is a log line, never a
-  recording problem.
-- **The two notification worlds stopped sharing a name.** The per-device
-  tab is now called Browser alerts (with its own icon), and each tab links
-  to the other — pop-ups on this device live one tab over from the email
-  and webhook channels the server sends on its own. The Notifications tab
-  itself is regrouped into Email settings, Webhook settings, Event
-  notification settings and Server alerts, with the per-camera offline
-  overrides folded behind an advanced button instead of stretching the
-  page by one row per camera.
-- **The per-camera notification opt-ins are Home Assistant switches now.**
-  Every recording camera's device grows "Email events" and "Webhook events"
-  switches — the same stored settings as the camera panel toggles — so an
-  automation can arm notifications when you leave and silence them when you
-  are home, or run them on a schedule. Like the Detection events switch
-  they stay controllable while the camera itself is offline or asleep,
-  battery cameras included.
-- **A "Send a test alert" button in the alerts panel.** Once permission is
-  granted, one click pops a real notification through the exact path a
-  detection uses — so "granted but nothing arrives" (OS focus modes, the
-  browser muted in system notification settings) is diagnosable on the
-  spot. In all seven languages.
-- **Shrinking a retention window now asks first.** Retention judges existing
-  footage on the next hourly cleanup pass, so typing 5 into a field that
-  said 30 quietly erased ~25 days of history within the hour. The camera
-  panel's three windows (event clips, continuous, archive) now confirm any
-  reduction, spelling out what happens and when — and saying "moved to the
-  archive" instead of "deleted" when archiving makes that the truth.
-  Cancelling snaps the field back.
-- **Retention now logs the window it is actually applying** (Debug, one
-  line per camera per hourly pass): which day is the cutoff, and whether
-  footage is being deleted or archived. "I shortened retention and nothing
-  was deleted" was otherwise unanswerable — the number the running server
-  uses never appeared anywhere.
+- **Cameras can email their events, snapshots attached.** A per-camera switch (camera ⚙ → Recording → Email events) mails every detection event to the notification recipient — five seconds into the event by default, because an alert that waits out a four-minute visit arrives four minutes late. The delay is configurable (0 = send when the event ends and sample the whole clip); the recording keeps rolling either way, and the email says "still ongoing" when it is. Each mail carries 1–50 snapshots (default 3) sampled evenly across the event's own footage — the pre-roll that opens every clip is context for the recording, not the alert, so sampling starts at the detection and the subject is in frame instead of the empty scene before them. Encrypted footage samples the same as plain, and without ffmpeg the event's thumbnail goes instead, so the mail is never empty-handed. The camera's event-type chips already decide what gets recorded, so they decide what gets emailed — one filter, not two. The global knobs (snapshot count, send delay, a per-camera cooldown defaulting to 2 minutes so a busy driveway can't flood an inbox) sit with the rest of the mail setup under Server settings → Notifications, and the whole path rides the existing notifier: composition on its own task, the send on the bounded queue, a dead mail server never touching recording. An email that fails to compose or queue gives its cooldown window back — the next event in the window is then the recipient's only shot.
+- **Webhook notifications — ntfy, Discord, Gotify, Slack, or anything with a URL.** A second notification channel next to email, built for broad compatibility: pick a preset, paste the URL, send a test. ntfy gets the snapshot as a real push attachment, Discord gets the images uploaded into the channel, Gotify and Slack get clean formatted messages, and the JSON preset sends the full event (camera, labels, time, duration, ongoing, snapshots as base64) for Node-RED, n8n, Home Assistant or your own script. Under Advanced the raw knobs are yours: method, body mode (JSON / text template / snapshot image / multipart), a template with placeholders ({title} {message} {camera} {labels} {time} {duration} {status} {server}), and extra headers — so a target nobody wrote a preset for is a template away. Works with or without email configured; per camera it is its own opt-in switch next to Email events, server alerts (storage, offline…) can ride along or not, and the send timing, snapshot count and cooldown are shared with event emails. Homelab TLS is a first-class citizen: an "Accept self-signed certificates" switch covers reverse proxies signed by an internal CA, and a failed test now reports the real reason (certificate, DNS, refusal) instead of "see inner exception". Protected endpoints get an Access token field — sent as Authorization: Bearer, stored encrypted at rest like the SMTP password and write-only to the API; a manual Authorization header line still wins for other schemes. Same isolation contract: a dead endpoint is a log line, never a recording problem.
+- **The two notification worlds stopped sharing a name.** The per-device tab is now called Browser alerts (with its own icon), and each tab links to the other — pop-ups on this device live one tab over from the email and webhook channels the server sends on its own. The Notifications tab itself is regrouped into Email settings, Webhook settings, Event notification settings and Server alerts, with the per-camera offline overrides folded behind an advanced button instead of stretching the page by one row per camera.
+- **The per-camera notification opt-ins are Home Assistant switches now.** Every recording camera's device grows "Email events" and "Webhook events" switches — the same stored settings as the camera panel toggles — so an automation can arm notifications when you leave and silence them when you are home, or run them on a schedule. Like the Detection events switch they stay controllable while the camera itself is offline or asleep, battery cameras included.
+- **A "Send a test alert" button in the alerts panel.** Once permission is granted, one click pops a real notification through the exact path a detection uses — so "granted but nothing arrives" (OS focus modes, the browser muted in system notification settings) is diagnosable on the spot. In all seven languages.
+- **Shrinking a retention window now asks first.** Retention judges existing footage on the next hourly cleanup pass, so typing 5 into a field that said 30 quietly erased ~25 days of history within the hour. The camera panel's three windows (event clips, continuous, archive) now confirm any reduction, spelling out what happens and when — and saying "moved to the archive" instead of "deleted" when archiving makes that the truth. Cancelling snaps the field back.
+- **Retention now logs the window it is actually applying** (Debug, one line per camera per hourly pass): which day is the cutoff, and whether footage is being deleted or archived. "I shortened retention and nothing was deleted" was otherwise unanswerable — the number the running server uses never appeared anywhere.
 
 ### Fixed
 
-- **Browser alerts over plain HTTP stop giving impossible advice.** Field
-  report (Firefox, HTTP on a LAN address): the alerts panel said
-  notifications were blocked and to re-allow them in the browser's site
-  settings — but no permission popup ever appeared, and allowing them
-  manually changed nothing. Notifications need a secure context, and the
-  browsers disagree on how to say no: Chrome removes the API entirely on
-  HTTP (which the panel detected), while Firefox keeps the API and silently
-  auto-denies every request (which read as "blocked"). The panel now checks
-  the secure context first, so Firefox-over-HTTP gets the honest answer —
-  use HTTPS (a reverse proxy) or localhost — instead of a settings goose
-  chase.
-- **"3 snapshots" now means three, spread across the whole event.** Two ways
-  the sampler under-delivered: the decode rate came from a duration estimate
-  the clip on disk didn't have to match (a 68 s event asked for 3 and got 1),
-  and a rate floor combined with a tight frame cap could stop the decode a
-  few seconds in, so a long event's snapshots all came from its opening
-  moments. The decode now over-produces at a rate honest to the event's
-  length, with a cap wide enough to reach the end of any clip — and a clip
-  that turns out far shorter than its event (recording started late, the
-  disk hiccupped) is re-sampled at the length the first pass proved.
-  Exactly the requested number is picked, evenly, first and last included.
-  When fewer can be attached, both the log and the email say why instead of
-  leaving a count that looks like a bug: no ffmpeg on this server (the
-  single attachment is then the event's thumbnail), no saved clip for that
-  event, or a clip with no more decodable frames. Installs without ffmpeg
-  now say so at startup whether or not AI descriptions are configured.
-- **Server settings uses the screen it is given.** The dialog was pinned to
-  700px tall, so a 1440p monitor scrolled through settings it had the room
-  to show. It now grows to 90% of the viewport (capped at 1200px, where a
-  dialog stops being easier to read), still fixed-height so switching tabs
-  never resizes it, and measured in `dvh` so a phone's URL bar can't push
-  the Save button off-screen.
-- **Deleting more than 1000 events at once stopped failing — and stopped
-  blaming your account.** The delete endpoint caps one request at 1000 ids,
-  so selecting 1063 events came back 400; the events page turned every
-  failed request into "are you signed in as an admin?", which sent people
-  looking in the wrong place entirely. The page now sends large selections
-  in batches of 500 and merges the summaries, and when a request really
-  does fail it shows the server's own reason — including, if a batched
-  delete is interrupted midway, how many events were already deleted.
+- **Browser alerts over plain HTTP stop giving impossible advice.** Field report (Firefox, HTTP on a LAN address): the alerts panel said notifications were blocked and to re-allow them in the browser's site settings — but no permission popup ever appeared, and allowing them manually changed nothing. Notifications need a secure context, and the browsers disagree on how to say no: Chrome removes the API entirely on HTTP (which the panel detected), while Firefox keeps the API and silently auto-denies every request (which read as "blocked"). The panel now checks the secure context first, so Firefox-over-HTTP gets the honest answer — use HTTPS (a reverse proxy) or localhost — instead of a settings goose chase.
+- **"3 snapshots" now means three, spread across the whole event.** Two ways the sampler under-delivered: the decode rate came from a duration estimate the clip on disk didn't have to match (a 68 s event asked for 3 and got 1), and a rate floor combined with a tight frame cap could stop the decode a few seconds in, so a long event's snapshots all came from its opening moments. The decode now over-produces at a rate honest to the event's length, with a cap wide enough to reach the end of any clip — and a clip that turns out far shorter than its event (recording started late, the disk hiccupped) is re-sampled at the length the first pass proved. Exactly the requested number is picked, evenly, first and last included. When fewer can be attached, both the log and the email say why instead of leaving a count that looks like a bug: no ffmpeg on this server (the single attachment is then the event's thumbnail), no saved clip for that event, or a clip with no more decodable frames. Installs without ffmpeg now say so at startup whether or not AI descriptions are configured.
+- **Server settings uses the screen it is given.** The dialog was pinned to 700px tall, so a 1440p monitor scrolled through settings it had the room to show. It now grows to 90% of the viewport (capped at 1200px, where a dialog stops being easier to read), still fixed-height so switching tabs never resizes it, and measured in `dvh` so a phone's URL bar can't push the Save button off-screen.
+- **Deleting more than 1000 events at once stopped failing — and stopped blaming your account.** The delete endpoint caps one request at 1000 ids, so selecting 1063 events came back 400; the events page turned every failed request into "are you signed in as an admin?", which sent people looking in the wrong place entirely. The page now sends large selections in batches of 500 and merges the summaries, and when a request really does fail it shows the server's own reason — including, if a batched delete is interrupted midway, how many events were already deleted.
 
 ## 1.0.2
 
