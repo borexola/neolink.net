@@ -4,6 +4,24 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
+## 1.0.4
+
+### Added
+
+- **Webhook notifications speak push now.** An event's `{message}` is the one line a phone notification wants — "Person on Driveway at 14:32" — instead of the email's full story (which is still there: a new `{detail}` placeholder carries it, and JSON mode gains a `detail` field). Snapshots ride along exactly as before, and server alerts are untouched.
+- **Notifications can link back to their event.** A new optional "Server address for links" field under Webhook settings tells the server the address you reach it at (behind Docker or a reverse proxy it cannot know this itself). Once set, every event notification carries a deep link that opens that event's clip in the web UI: ntfy opens it on tap (the native Click header, added automatically in snapshot mode — an explicit X-Click line still wins), JSON mode gains a `link` field, and the Discord, Gotify and Slack presets plus the default templates end with a `{link}` line — saved custom templates opt in by adding the placeholder. Leave the address blank and everything renders exactly as before.
+
+### Fixed
+
+- **A full notification queue is a real signal again.** The queue's drop mode reported success for alerts it silently discarded — so the "queue full" log could never fire, a dropped event email still burned that camera's cooldown window, and a dropped server alert went quiet for hours believing itself sent. Drops are now detected, logged, the cooldown is given back, and a dropped server alert retries on the next poll.
+- **The Home Assistant notification switches stay in sync.** Flipping Email/Webhook events from the web UI or camera panel never re-published the HA switch state, so a presence automation could read yesterday's value indefinitely. Both the periodic refresh and the immediate change republish now carry the notification switches.
+- **Snapshot-heavy notifications get the time they need to upload.** Email and webhook sends were bounded by fixed windows (25 and 15 seconds) that also covered uploading the body — fifty snapshots are megabytes of base64, undeliverable on a slow uplink inside any fixed window, and the cooldown was spent anyway. Both budgets now scale with attachment size, capped at ten minutes.
+- **Webhook deliveries survive their own configuration.** A typo in a saved header name ("X Title:") threw on every send and killed the whole delivery — bad names are now skipped. A quote in a camera name broke every Discord/Slack/Gotify delivery (placeholder values are now JSON-escaped wherever the body is JSON). And `{time}` stays Gregorian on servers with Buddhist- or Hijri-calendar locales.
+- **A wedged ffmpeg can no longer hang snapshot sampling forever.** The old 60-second kill sat after the read that stalls when storage does; the decode is now bounded by a 120-second cancellation that kills the process tree and keeps whatever frames arrived.
+- **Changing the email delay mid-event no longer loses that event's notification.** The event-close hook now honors the decision made when the event started instead of re-reading the changed setting and assuming someone else sent it.
+- **Notification dialog housekeeping.** An access token typed and then abandoned (dialog closed without saving) was silently saved along with the next unrelated Save — the field now resets when the dialog reopens, as do the green/red test verdicts, so a stale "Test failed" can't greet you hours later. Preset switches no longer discard half-typed header lines without a colon. And a camera whose Email/Webhook events switch is on after that channel was unconfigured now says plainly that nothing is being sent, instead of describing a healthy delivery.
+- **Update checks got two corrections.** The no-releases tag fallback trusted GitHub's tag order, where lexically v1.9 outranks v1.10 — it now picks the highest actual version. And the daily timer now shares the page-load nudge's one-check-in-flight gate.
+
 ## 1.0.3
 
 ### Added
