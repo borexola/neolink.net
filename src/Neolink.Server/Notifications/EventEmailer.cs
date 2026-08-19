@@ -200,7 +200,8 @@ public sealed class EventEmailer
             Headline: $"{Cap(labels)} — {rec.Camera}", body, Context: null,
             Attachments: attachments.Count > 0 ? attachments : null,
             Channels: channels,
-            Event: new EventInfo(rec.Camera, rec.Labels.ToArray(), rec.StartUtc, seconds, ongoing)));
+            Event: new EventInfo(rec.Camera, rec.Labels.ToArray(), rec.StartUtc, seconds, ongoing, rec.Id),
+            Brief: $"{Cap(labels)} on {rec.Camera} at {local:HH:mm}"));
     }
 
     private static string Cap(string s) =>

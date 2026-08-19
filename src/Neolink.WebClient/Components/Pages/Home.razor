@@ -2046,6 +2046,10 @@
                                     <button class="chip @(_notif.WebhookServerAlerts ? "" : "chip-off")"
                                             @onclick="() => _notif.WebhookServerAlerts = !_notif.WebhookServerAlerts">@(_notif.WebhookServerAlerts ? T["on"] : T["off"])</button>
                                 </div>
+                                <div class="control-row"><span>@T["Server address for links (optional)"]</span>
+                                    <input class="notif-input" placeholder="https://cams.example.com"
+                                           title="@T["This server as YOU reach it (it cannot see past Docker or a reverse proxy itself). When set, each event notification links back to its clip: ntfy opens it on tap, other targets get a {link} to tap or click."]"
+                                           @bind="_notif.PublicUrl" /></div>
                                 <div class="control-row">
                                     <span></span>
                                     <button class="chip" @onclick="() => _webhookAdvanced = !_webhookAdvanced">
@@ -2073,7 +2077,7 @@
                                     <div class="control-row"><span>@T["Extra headers, one per line (Name: value)"]</span></div>
                                     <textarea class="notif-input ai-prompt" rows="3" @bind="WebhookHeadersText"></textarea>
                                     <div class="event-sub email-sub">
-                                        @T["Placeholders for template and header values: {title} {message} {camera} {labels} {time} {duration} {status} {server}"]
+                                        @T["Placeholders for template and header values: {title} {message} {detail} {link} {camera} {labels} {time} {duration} {status} {server} — {message} is the short push text, {detail} the full story, {link} opens the event (needs the server address above)"]
                                     </div>
                                 }
                                 <div class="control-row">
@@ -2767,6 +2771,7 @@
         webhookHeaders = _notif.WebhookHeaders,
         webhookPreset = _notif.WebhookPreset,
         webhookServerAlerts = _notif.WebhookServerAlerts,
+        publicUrl = _notif.PublicUrl,
     };
 
     private bool _webhookAdvanced;
@@ -2821,19 +2826,19 @@
             case "discord":
                 _notif.WebhookMethod = "POST";
                 _notif.WebhookBodyMode = "multipart";
-                _notif.WebhookBodyTemplate = "{\"content\":\"**{title}**\\n{message}\"}";
+                _notif.WebhookBodyTemplate = "{\"content\":\"**{title}**\\n{message}\\n{link}\"}";
                 SetPresetHeaders();
                 break;
             case "gotify":
                 _notif.WebhookMethod = "POST";
                 _notif.WebhookBodyMode = "text";
-                _notif.WebhookBodyTemplate = "{\"title\":\"{title}\",\"message\":\"{message}\",\"priority\":5}";
+                _notif.WebhookBodyTemplate = "{\"title\":\"{title}\",\"message\":\"{message}\\n{link}\",\"priority\":5}";
                 SetPresetHeaders("Content-Type: application/json");
                 break;
             case "slack":
                 _notif.WebhookMethod = "POST";
                 _notif.WebhookBodyMode = "text";
-                _notif.WebhookBodyTemplate = "{\"text\":\"*{title}*\\n{message}\"}";
+                _notif.WebhookBodyTemplate = "{\"text\":\"*{title}*\\n{message}\\n{link}\"}";
                 SetPresetHeaders("Content-Type: application/json");
                 break;
             case "json":

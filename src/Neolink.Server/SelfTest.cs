@@ -4013,6 +4013,53 @@ public static class SelfTest
             Assert(!Notifications.WebhookSender.HeaderValue("a\r\nX-Evil: b").Any(c => c is '\r' or '\n'),
                 "header values cannot smuggle CR/LF");
 
+            // Push-length text: {message} prefers the Brief, {detail} keeps the
+            // story, {link} deep-links the event once PublicUrl is set.
+            var evAlert = alert with
+            {
+                Brief = "Person on Driveway at 14:32",
+                Event = ev with { Id = "cam/2026-01-01_1" },
+            };
+            var ls = new Notifications.NotificationSettings
+            {
+                WebhookUrl = "http://127.0.0.1:1/hook", WebhookBodyMode = "text",
+                WebhookBodyTemplate = "{message}|{detail}|{link}",
+                PublicUrl = "https://cams.example.com/",
+            };
+            using (var r = Notifications.WebhookSender.BuildRequest(ls, "", evAlert, "selftest"))
+                AssertEq(Body(r), "Person on Driveway at 14:32|body text|" +
+                    "https://cams.example.com/events?event=cam%2F2026-01-01_1");
+            ls.WebhookBodyMode = "json";
+            using (var r = Notifications.WebhookSender.BuildRequest(ls, "", evAlert, "selftest"))
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(Body(r));
+                AssertEq(doc.RootElement.GetProperty("message").GetString()!, "Person on Driveway at 14:32");
+                AssertEq(doc.RootElement.GetProperty("detail").GetString()!, "body text");
+                Assert(doc.RootElement.GetProperty("link").GetString()!.EndsWith("event=cam%2F2026-01-01_1"),
+                    "json mode carries the event link");
+            }
+            // Snapshot mode is the ntfy shape: the link rides the native Click
+            // header — automatically, and an explicit line wins over it.
+            ls.WebhookBodyMode = "snapshot";
+            using (var r = Notifications.WebhookSender.BuildRequest(ls, "", evAlert, "selftest"))
+                Assert(r.Headers.TryGetValues("X-Click", out var c)
+                       && c.Single().EndsWith("event=cam%2F2026-01-01_1"),
+                    "snapshot mode auto-adds the ntfy Click header");
+            ls.WebhookHeaders = new() { "X-Click: https://other.example.com/" };
+            using (var r = Notifications.WebhookSender.BuildRequest(ls, "", evAlert, "selftest"))
+                Assert(r.Headers.TryGetValues("X-Click", out var c)
+                       && c.Single() == "https://other.example.com/",
+                    "an explicit Click line wins over the auto link");
+            // No PublicUrl: no link anywhere — no Click header, {link} renders "",
+            // the json field is omitted entirely.
+            ls.PublicUrl = "";
+            ls.WebhookHeaders = new();
+            using (var r = Notifications.WebhookSender.BuildRequest(ls, "", evAlert, "selftest"))
+                Assert(!r.Headers.Contains("X-Click"), "no PublicUrl, no Click header");
+            ls.WebhookBodyMode = "json";
+            using (var r = Notifications.WebhookSender.BuildRequest(ls, "", evAlert, "selftest"))
+                Assert(!Body(r).Contains("\"link\""), "no PublicUrl, no link field");
+
             // Delivery budget scales with what the body carries.
             Assert(Notifications.WebhookSender.TimeoutFor(alert with { Attachments = null })
                    == TimeSpan.FromSeconds(15), "webhook base budget without attachments");
@@ -5772,8 +5819,11 @@ public static class SelfTest
                        && !rec0.GetProperty("webhookAvailable").GetBoolean(),
                     "unconfigured channels report unavailable");
 
-                using (var res = NotifPut("""{"webhookEnabled":true,"webhookUrl":"http://127.0.0.1:1/hook"}"""))
+                using (var res = NotifPut(
+                    """{"webhookEnabled":true,"webhookUrl":"http://127.0.0.1:1/hook","publicUrl":"  https://cams.example.com/  "}"""))
                     AssertEq((int)res.StatusCode, 200);
+                AssertEq(GetJson(http, $"/api/admin/notifications{tokenQ}")
+                    .GetProperty("publicUrl").GetString()!, "https://cams.example.com/");
                 using (var res = RecPost("""{"webhookEvents":true}""")) AssertEq((int)res.StatusCode, 200);
                 var rec1 = GetJson(http, $"/api/cameras/apicam/recording{tokenQ}");
                 Assert(rec1.GetProperty("webhookAvailable").GetBoolean()

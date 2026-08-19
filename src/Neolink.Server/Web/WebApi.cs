@@ -227,7 +227,7 @@ public static class WebApi
         string? WebhookToken = null, string? WebhookMethod = null,
         string? WebhookBodyMode = null, string? WebhookBodyTemplate = null,
         List<string>? WebhookHeaders = null, string? WebhookPreset = null,
-        bool? WebhookServerAlerts = null);
+        bool? WebhookServerAlerts = null, string? PublicUrl = null);
     /// <summary>Retention fields: null = unchanged, negative = back to the server default, 0 = keep forever.
     /// RecordStream: null = unchanged, "" = back to the server default, else a served stream kind.
     /// Capture schedule: applied only while ScheduleEnabled; ScheduleDays null = unchanged,
@@ -1257,6 +1257,7 @@ public static class WebApi
                     webhookHeaders = s.WebhookHeaders,
                     webhookPreset = s.WebhookPreset,
                     webhookServerAlerts = s.WebhookServerAlerts,
+                    publicUrl = s.PublicUrl,
                     cameras = cameras.Select(c => c.Name).ToList(),
                 };
             }
@@ -1319,6 +1320,7 @@ public static class WebApi
                         : req.WebhookHeaders.Take(20).Select(h => h.Length > 500 ? h[..500] : h).ToList(),
                     WebhookPreset = Cap(req.WebhookPreset ?? cur.WebhookPreset, 40),
                     WebhookServerAlerts = req.WebhookServerAlerts ?? cur.WebhookServerAlerts,
+                    PublicUrl = Cap((req.PublicUrl ?? cur.PublicUrl).Trim(), 2000),
                 };
             }
 

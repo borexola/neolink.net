@@ -11,16 +11,19 @@ namespace Neolink.Notifications;
 public enum AlertChannels { None = 0, Email = 1, Webhook = 2, All = Email | Webhook }
 
 /// <summary>Structured facts of a detection event, for webhook payloads and
-/// template placeholders. Null on server alerts.</summary>
+/// template placeholders. Null on server alerts. <paramref name="Id"/> is the
+/// event-store id, the anchor for deep links ("" when unknown).</summary>
 public sealed record EventInfo(string Camera, IReadOnlyList<string> Labels,
-    DateTime StartUtc, double DurationSeconds, bool Ongoing);
+    DateTime StartUtc, double DurationSeconds, bool Ongoing, string Id = "");
 
 /// <summary>One alert to deliver. <paramref name="Key"/> is the dedup identity
 /// (e.g. "storage", "camera:Driveway"); <paramref name="Recovery"/> marks the
-/// paired "resolved" message.</summary>
+/// paired "resolved" message. <paramref name="Brief"/> is the push-length text
+/// a webhook prefers over <paramref name="Body"/> — a phone notification wants
+/// "Person on Driveway at 14:32", not the email's story.</summary>
 public sealed record Alert(string Key, bool Recovery, string Subject, string Headline,
     string Body, string? Context = null, IReadOnlyList<EmailAttachment>? Attachments = null,
-    AlertChannels Channels = AlertChannels.All, EventInfo? Event = null);
+    AlertChannels Channels = AlertChannels.All, EventInfo? Event = null, string? Brief = null);
 
 /// <summary>A file riding along with an email (event snapshots).</summary>
 public sealed record EmailAttachment(string Name, string ContentType, byte[] Data);

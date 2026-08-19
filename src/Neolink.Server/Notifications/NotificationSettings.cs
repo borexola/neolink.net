@@ -90,6 +90,10 @@ public sealed class NotificationSettings
     public string WebhookPreset { get; set; } = "json";
     /// <summary>Send server alerts (storage, offline…) to the webhook too.</summary>
     public bool WebhookServerAlerts { get; set; } = true;
+    /// <summary>The server's address as the USER reaches it (proxy, Docker and
+    /// NAT hide it from the server itself). Optional; when set, webhook
+    /// notifications carry a link that opens the event. "" = no links.</summary>
+    public string PublicUrl { get; set; } = "";
 
     /// <summary>Per-camera overrides of <see cref="OfflineThresholdMinutes"/>
     /// (0 = never alert for that camera). Absent = use the default.</summary>
@@ -133,6 +137,7 @@ public sealed class NotificationSettings
         WebhookHeaders = new(WebhookHeaders),
         WebhookPreset = WebhookPreset,
         WebhookServerAlerts = WebhookServerAlerts,
+        PublicUrl = PublicUrl,
     };
 }
 

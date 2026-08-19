@@ -238,6 +238,7 @@ public sealed class ApiNotifications
     public List<string> WebhookHeaders { get; set; } = new();
     public string WebhookPreset { get; set; } = "json";
     public bool WebhookServerAlerts { get; set; } = true;
+    public string PublicUrl { get; set; } = "";
     public List<string> Cameras { get; set; } = new();
 }
 

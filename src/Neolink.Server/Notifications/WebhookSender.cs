@@ -48,8 +48,8 @@ internal static class WebhookSender
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
-    internal const string DefaultTextTemplate = "{title}\n{message}";
-    internal const string DefaultMultipartTemplate = "{\"content\":\"{title}\\n{message}\"}";
+    internal const string DefaultTextTemplate = "{title}\n{message}\n{link}";
+    internal const string DefaultMultipartTemplate = "{\"content\":\"{title}\\n{message}\\n{link}\"}";
 
     public static async Task SendAsync(NotificationSettings s, string token, Alert alert,
         string serverName, CancellationToken ct)
@@ -91,18 +91,19 @@ internal static class WebhookSender
         bool jsonBody = ParseHeaderLines(s.WebhookHeaders).Any(h =>
             h.Name.Equals("Content-Type", StringComparison.OrdinalIgnoreCase)
             && h.Value.Contains("json", StringComparison.OrdinalIgnoreCase));
+        var link = Link(s, alert);
 
         req.Content = mode switch
         {
             "text" => new StringContent(
-                Render(Template(s.WebhookBodyTemplate, DefaultTextTemplate), alert, serverName, jsonBody),
+                Render(Template(s.WebhookBodyTemplate, DefaultTextTemplate), alert, serverName, jsonBody, link),
                 Encoding.UTF8),
             "snapshot" => ImageContent(first!),
             "multipart" => MultipartContent(s, alert, serverName),
-            _ => JsonPayload(alert, serverName),
+            _ => JsonPayload(s, alert, serverName),
         };
 
-        bool hasAuthLine = false;
+        bool hasAuthLine = false, hasClickLine = false;
         foreach (var (name, value) in ParseHeaderLines(s.WebhookHeaders))
         {
             // ntfy reads the message from X-Message only when the body is the
@@ -110,7 +111,9 @@ internal static class WebhookSender
             if (snapshotFallback && name.Equals("X-Message", StringComparison.OrdinalIgnoreCase)) continue;
             if (snapshotFallback && name.Equals("X-Filename", StringComparison.OrdinalIgnoreCase)) continue;
             if (name.Equals("Authorization", StringComparison.OrdinalIgnoreCase)) hasAuthLine = true;
-            var v = HeaderValue(Render(value, alert, serverName));
+            if (name.Equals("Click", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("X-Click", StringComparison.OrdinalIgnoreCase)) hasClickLine = true;
+            var v = HeaderValue(Render(value, alert, serverName, jsonEscape: false, link));
             if (!req.Headers.TryAddWithoutValidation(name, v))
             {
                 req.Content.Headers.Remove(name);
@@ -121,7 +124,21 @@ internal static class WebhookSender
         // the escape hatch for other schemes and must win.
         if (!hasAuthLine && token.Length > 0)
             req.Headers.TryAddWithoutValidation("Authorization", "Bearer " + HeaderValue(token));
+        // Snapshot mode is the ntfy shape: a tap should open the event, so the
+        // deep link rides the native Click header (an explicit line wins).
+        if (mode == "snapshot" && !hasClickLine && link.Length > 0)
+            req.Headers.TryAddWithoutValidation("X-Click", HeaderValue(link));
         return req;
+    }
+
+    /// <summary>The deep link that opens this event in the web UI, or "" when
+    /// the server has no PublicUrl configured or the alert is not an event.</summary>
+    internal static string Link(NotificationSettings s, Alert alert)
+    {
+        var baseUrl = s.PublicUrl.Trim().TrimEnd('/');
+        return baseUrl.Length == 0 || alert.Event is not { Id.Length: > 0 } e
+            ? ""
+            : $"{baseUrl}/events?event={Uri.EscapeDataString(e.Id)}";
     }
 
     private static string Template(string configured, string fallback) =>
@@ -134,7 +151,7 @@ internal static class WebhookSender
         return content;
     }
 
-    private static HttpContent JsonPayload(Alert alert, string serverName)
+    private static HttpContent JsonPayload(NotificationSettings s, Alert alert, string serverName)
     {
         var e = alert.Event;
         var payload = new
@@ -142,7 +159,9 @@ internal static class WebhookSender
             type = e != null ? "event" : "alert",
             server = serverName,
             title = alert.Headline,
-            message = alert.Body,
+            message = alert.Brief ?? alert.Body,
+            detail = alert.Brief != null ? alert.Body : null,
+            link = Link(s, alert) is { Length: > 0 } l ? l : null,
             camera = e?.Camera,
             labels = e?.Labels,
             time = (e?.StartUtc ?? DateTime.UtcNow).ToLocalTime()
@@ -161,7 +180,7 @@ internal static class WebhookSender
         var mp = new MultipartFormDataContent();
         mp.Add(new StringContent(
             Render(Template(s.WebhookBodyTemplate, DefaultMultipartTemplate), alert, serverName,
-                jsonEscape: true),
+                jsonEscape: true, Link(s, alert)),
             Encoding.UTF8, "application/json"), "payload_json");
         if (alert.Attachments != null)
             for (int i = 0; i < alert.Attachments.Count; i++)
@@ -177,15 +196,19 @@ internal static class WebhookSender
     /// <summary>Substitutes the documented placeholders; anything else in the
     /// template — JSON braces included — passes through untouched. With
     /// <paramref name="jsonEscape"/> the substituted VALUES are JSON-string
-    /// escaped (the template's own syntax is the user's business).</summary>
+    /// escaped (the template's own syntax is the user's business). {message} is
+    /// the push-length Brief when the alert carries one; {detail} is always the
+    /// full body.</summary>
     internal static string Render(string template, Alert alert, string serverName,
-        bool jsonEscape = false)
+        bool jsonEscape = false, string link = "")
     {
         string V(string v) => jsonEscape ? JsonEncodedText.Encode(v).ToString() : v;
         var e = alert.Event;
         return template
             .Replace("{title}", V(alert.Headline))
-            .Replace("{message}", V(alert.Body))
+            .Replace("{message}", V(alert.Brief ?? alert.Body))
+            .Replace("{detail}", V(alert.Body))
+            .Replace("{link}", V(link))
             .Replace("{subject}", V(alert.Subject))
             .Replace("{camera}", V(e?.Camera ?? ""))
             .Replace("{labels}", V(e != null ? string.Join(" + ", e.Labels) : ""))
