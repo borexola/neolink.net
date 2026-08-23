@@ -79,6 +79,10 @@ public static class SelfTest
                 var refCipher = XmlCrypto.AesCfb(plain, key, encrypting: true);
                 AssertSeq(XmlCrypto.AesCfbEncrypt(plain, state), refCipher);
                 AssertSeq(XmlCrypto.AesCfbDecrypt(refCipher, state), plain);
+                // The truncating form (FullAes media drops its padding this way)
+                // yields exactly the reference's prefix, at every boundary shape.
+                foreach (var keep in new[] { 0, Math.Min(1, len), len / 2, Math.Max(0, len - 1), len })
+                    AssertSeq(XmlCrypto.AesCfbDecrypt(refCipher, state, keep), plain.AsSpan(0, keep).ToArray());
             }
 
             // Rekeying mid-session (relogin) must not serve stale keystream from
@@ -5165,6 +5169,18 @@ public static class SelfTest
                 new List<(DateTime Utc, byte[] Data)> { (ct0.AddSeconds(9), new byte[] { 9 }) }, 0, 2);
             AssertEq(tiny.Count, 2);
             AssertEq((int)tiny[^1].Data[0], 9);
+            // The closing window reaches back past the recorder's post-quiet to
+            // the departure that closed the event.
+            AssertEq((int)Neolink.Ai.AiCapture.ClosingWindowFor(0).TotalSeconds, 10);
+            AssertEq((int)Neolink.Ai.AiCapture.ClosingWindowFor(8).TotalSeconds, 18);
+            AssertEq((int)Neolink.Ai.AiCapture.ClosingWindowFor(600).TotalSeconds, 130);
+            // The unpaced closing buffer: time-pruned, then halved past its cap.
+            var cbuf = Enumerable.Range(0, 10)
+                .Select(i => (Utc: ct0.AddSeconds(i), Data: new[] { (byte)i })).ToList();
+            Neolink.Ai.AiCapture.PruneClosing(cbuf, ct0.AddSeconds(9), TimeSpan.FromSeconds(5), 100);
+            AssertEq(string.Join(",", cbuf.Select(f => f.Data[0])), "4,5,6,7,8,9");
+            Neolink.Ai.AiCapture.PruneClosing(cbuf, ct0.AddSeconds(9), TimeSpan.FromSeconds(60), 4);
+            AssertEq(string.Join(",", cbuf.Select(f => f.Data[0])), "4,5,7,9");
             // The prompts ask for the ending in both layers: the (replaceable)
             // default prompt and the always-appended grounding rules.
             Assert(Neolink.Ai.AiSettings.DefaultPrompt.Contains("final frames"),
@@ -6493,14 +6509,15 @@ public static class SelfTest
                     else if (dx.Contains("<C2D_DISC>", StringComparison.Ordinal)
                              && dx.Contains("<did>8</did>", StringComparison.Ordinal)) releasedOrphan++;
                 }
-                else if (BcUdp.TryParseData(r.Buffer, out _, out var pid, out var payload))
+                else if (BcUdp.TryParseData(r.Buffer, out _, out var pid, out var pOff, out var pLen))
                 {
                     clientDataPackets++;
+                    var payload = r.Buffer.AsSpan(pOff, pLen);
                     // The keepalive answer: msg 234 echoed with our msgNum and resp 200.
                     if (payload.Length >= 20
-                        && System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(4)) == Neolink.Bc.BcConstants.MsgIdUdpKeepAlive
-                        && System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(14)) == 777
-                        && System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(16)) == 200)
+                        && System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(payload[4..]) == Neolink.Bc.BcConstants.MsgIdUdpKeepAlive
+                        && System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(payload[14..]) == 777
+                        && System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(payload[16..]) == 200)
                         kaReplies++;
                     await cam.SendAsync(BcUdp.BuildAck(cid, 0, pid, 0, ReadOnlySpan<byte>.Empty), r.RemoteEndPoint, cts.Token);
                 }

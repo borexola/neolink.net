@@ -4843,10 +4843,17 @@
         {
             while (await _pollTimer.WaitForNextTickAsync())
             {
+                // Every tick, not just when battery tiles exist: the events fetch
+                // and the render below scale down while nobody can see the page.
+                try { _pageHidden = await JS.InvokeAsync<bool>("neolink.pageHidden"); }
+                catch { /* interop not ready — assume visible */ }
                 await RefreshCamerasAsync();
                 await RefreshEventsAsync();
                 await EvaluateBatteryTilesAsync();
-                StateHasChanged();
+                // A hidden page renders to nobody, and this is the monolith — a
+                // full render-tree diff per tick per circuit. The first visible
+                // tick repaints everything the quiet ones skipped.
+                if (!_pageHidden) StateHasChanged();
             }
         }
         catch (OperationCanceledException) { }
@@ -5109,8 +5116,16 @@
         }
         try
         {
-            // 500 covers a full busy day, so the panel's rolling 24h view is honest.
-            using var res = await Http.SendAsync(ApiRequest(HttpMethod.Get, "/api/events?limit=500"));
+            // 500 covers a full busy day, so the panel's rolling 24h view is
+            // honest. A HIDDEN tab only needs enough to keep browser alerts
+            // flowing (dedupe is by id, and anything older than 3 minutes never
+            // alerts — see MaybeNotifyAsync), so it fetches a fraction and leaves
+            // the panel's list untouched; the first visible tick restores the
+            // full view. The alert seeding fetch stays full-size either way, so a
+            // tab opened in the background seeds the same history it would shown.
+            bool alertsOnly = _pageHidden && _alertSeenSeeded;
+            using var res = await Http.SendAsync(ApiRequest(HttpMethod.Get,
+                alertsOnly ? "/api/events?limit=50" : "/api/events?limit=500"));
             if (res.StatusCode == System.Net.HttpStatusCode.Unauthorized)
             {
                 _authEnabled = true;
@@ -5124,11 +5139,14 @@
             }
             var list = await res.Content.ReadFromJsonAsync<List<ApiEvent>>();
             _eventsSupported = true;
-            _events.Clear();
-            if (list != null) _events.AddRange(list);
-            // Keep an open player in sync (the clip appears once an ongoing event closes).
-            if (_playEvent != null)
-                _playEvent = _events.FirstOrDefault(e => e.Id == _playEvent.Id) ?? _playEvent;
+            if (!alertsOnly)
+            {
+                _events.Clear();
+                if (list != null) _events.AddRange(list);
+                // Keep an open player in sync (the clip appears once an ongoing event closes).
+                if (_playEvent != null)
+                    _playEvent = _events.FirstOrDefault(e => e.Id == _playEvent.Id) ?? _playEvent;
+            }
             if (list != null) await MaybeNotifyAsync(list);
         }
         catch
@@ -6741,9 +6759,7 @@
     {
         SyncBatteryTiles();
         if (_batt.Count == 0) return;
-        try { _pageHidden = await JS.InvokeAsync<bool>("neolink.pageHidden"); }
-        catch { /* interop not ready — assume visible */ }
-
+        // _pageHidden is refreshed by the poll tick that calls this.
         foreach (var (slot, b) in _batt)
         {
             if (b.Released || !_attached.ContainsKey(slot)) continue;

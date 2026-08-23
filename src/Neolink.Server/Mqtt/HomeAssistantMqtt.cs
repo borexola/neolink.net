@@ -1,6 +1,7 @@
 ﻿// Copyright (c) 2026 Oluwabori Olaleye
 // Licensed under the GNU Affero General Public License v3.0; see the LICENSE file
 // in the repository root.
+using System.Text;
 using System.Text.Json;
 using System.Xml.Linq;
 using Neolink.Config;
@@ -230,13 +231,24 @@ public sealed class HomeAssistantMqtt
     private readonly Dictionary<string, string> _lastRetained = new();
     private readonly object _retainedGate = new();
 
+    /// <summary>What the dedupe map remembers for a payload: big ones (base64
+    /// snapshots run to hundreds of KB per camera) are held as a fingerprint so
+    /// the map never pins them for the process lifetime. The prefix keeps a real
+    /// payload from ever colliding with a stored fingerprint.</summary>
+    private static string RetainedKeyOf(string payload) =>
+        payload.Length <= 1024
+            ? payload
+            : "#sha256:" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                Encoding.UTF8.GetBytes(payload)));
+
     internal Task PublishAsync(string topic, string payload, CancellationToken ct = default)
     {
+        var key = RetainedKeyOf(payload);
         lock (_retainedGate)
         {
-            if (_lastRetained.TryGetValue(topic, out var prev) && prev == payload)
+            if (_lastRetained.TryGetValue(topic, out var prev) && prev == key)
                 return Task.CompletedTask;
-            _lastRetained[topic] = payload;
+            _lastRetained[topic] = key;
         }
         PublishObserver?.Invoke(topic, payload);
         return _client.PublishAsync(topic, payload, retain: true, ct);

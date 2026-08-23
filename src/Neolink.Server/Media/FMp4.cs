@@ -170,11 +170,16 @@ public static class FMp4
         return w.ToArray();
     }
 
+    /// <summary>The moof + mdat-header bytes around a single-sample fragment —
+    /// fixed because the box layout below is; lets the writer be sized exactly
+    /// so no resize or trailing copy happens per fragment.</summary>
+    private const int FragmentOverhead = 108;
+
     /// <summary>Builds one moof + mdat fragment containing a single sample (video or audio).</summary>
     public static byte[] BuildFragment(uint sequence, ulong decodeTime, uint duration, byte[] sample, bool keyframe,
         uint trackId = 1)
     {
-        var w = new Mp4Writer();
+        var w = new Mp4Writer(FragmentOverhead + sample.Length);
         int trunDataOffsetPos;
 
         using (w.Box("moof"))
@@ -208,7 +213,7 @@ public static class FMp4
         using (w.Box("mdat"))
             w.Bytes(sample);
 
-        return w.ToArray();
+        return w.Detach();
     }
 
     /// <summary>
@@ -521,11 +526,18 @@ public static class FMp4
 /// <summary>Big-endian MP4 box writer with automatic size back-patching.</summary>
 public sealed class Mp4Writer
 {
-    private byte[] _buf = new byte[4096];
+    private byte[] _buf;
     private int _len;
+
+    public Mp4Writer(int capacity = 4096) => _buf = new byte[Math.Max(capacity, 16)];
 
     public int Position => _len;
     public byte[] ToArray() => _buf.AsSpan(0, _len).ToArray();
+
+    /// <summary>The written bytes, without a copy when the pre-sized buffer is
+    /// exactly full (the per-fragment hot path). The writer must not be used
+    /// after this.</summary>
+    public byte[] Detach() => _len == _buf.Length ? _buf : ToArray();
 
     private void Ensure(int extra)
     {
@@ -540,7 +552,11 @@ public sealed class Mp4Writer
     public void U32(uint v) { Ensure(4); BinaryPrimitives.WriteUInt32BigEndian(_buf.AsSpan(_len), v); _len += 4; }
     public void U64(ulong v) { Ensure(8); BinaryPrimitives.WriteUInt64BigEndian(_buf.AsSpan(_len), v); _len += 8; }
     public void Bytes(ReadOnlySpan<byte> data) { Ensure(data.Length); data.CopyTo(_buf.AsSpan(_len)); _len += data.Length; }
-    public void Tag(string fourcc) { Bytes(Encoding.ASCII.GetBytes(fourcc)); }
+    public void Tag(string fourcc)
+    {
+        Ensure(fourcc.Length);
+        foreach (var c in fourcc) _buf[_len++] = (byte)c;
+    }
 
     public void PatchU32(int position, uint value) =>
         BinaryPrimitives.WriteUInt32BigEndian(_buf.AsSpan(position), value);

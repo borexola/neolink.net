@@ -31,15 +31,22 @@ public sealed class RtspPuller
     private readonly IMediaSink _sink;
 
     private NetworkStream _net = null!;
+    private Stream _read = null!;
     private int _cseq;
     private string? _session;
     private string? _authHeader;        // computed after a 401 challenge, reused afterwards
     private string? _digestRealm, _digestNonce;
 
+    private static readonly byte[] StartCode = { 0, 0, 0, 1 };
+
     // Depacketization state
     private VideoCodec _codec = VideoCodec.H264;
     private readonly List<byte[]> _auNals = new();
     private readonly MemoryStream _fu = new();
+    private readonly MemoryStream _au = new();
+    // Interleaved packets land here and are depacketized before the next read,
+    // so one grow-only buffer replaces an allocation per packet.
+    private byte[] _pkt = new byte[2048];
     private uint _auTimestamp;
     private bool _haveAuTs;
     private byte[]? _spropNals;         // SPS/PPS(/VPS) from the SDP, injected before the first keyframe
@@ -72,6 +79,10 @@ public sealed class RtspPuller
         await tcp.ConnectAsync(_url.Host, _url.Port > 0 ? _url.Port : 554, connectCts.Token).ConfigureAwait(false);
         tcp.NoDelay = true;
         _net = tcp.GetStream();
+        // Reads are buffered (the pump otherwise costs 3 recv syscalls per RTP
+        // packet, and the header scan one per byte — see BcConnection, which got
+        // the same treatment); writes stay on the raw stream so requests flush.
+        _read = new BufferedStream(_net, 64 * 1024);
 
         var (sdp, contentBase) = await DescribeAsync(ct).ConfigureAwait(false);
         var track = ParseSdpVideo(sdp, contentBase);
@@ -104,10 +115,10 @@ public sealed class RtspPuller
                 await ReadExactAsync(buf4.AsMemory(1, 3), ct).ConfigureAwait(false);
                 int channel = buf4[1];
                 int len = (buf4[2] << 8) | buf4[3];
-                var payload = new byte[len];
-                await ReadExactAsync(payload, ct).ConfigureAwait(false);
+                if (_pkt.Length < len) _pkt = new byte[Math.Max(len, _pkt.Length * 2)];
+                await ReadExactAsync(_pkt.AsMemory(0, len), ct).ConfigureAwait(false);
                 if (channel == 0)
-                    OnRtp(payload);
+                    OnRtp(_pkt.AsSpan(0, len));
                 // channel 1 = RTCP sender reports — nothing we need
             }
             else
@@ -173,9 +184,9 @@ public sealed class RtspPuller
             {
                 await ReadExactAsync(one.AsMemory(1, 3), ct).ConfigureAwait(false);
                 int len = (one[2] << 8) | one[3];
-                var payload = new byte[len];
-                await ReadExactAsync(payload, ct).ConfigureAwait(false);
-                if (one[1] == 0) OnRtp(payload);
+                if (_pkt.Length < len) _pkt = new byte[Math.Max(len, _pkt.Length * 2)];
+                await ReadExactAsync(_pkt.AsMemory(0, len), ct).ConfigureAwait(false);
+                if (one[1] == 0) OnRtp(_pkt.AsSpan(0, len));
                 continue;
             }
             var (headers, body) = await ReadMessageTailAsync(one[0], ct).ConfigureAwait(false);
@@ -224,10 +235,10 @@ public sealed class RtspPuller
             ?.Split(':', 2)[1].Trim();
 
     private async Task ReadExactAsync(Memory<byte> buffer, CancellationToken ct) =>
-        await _net.ReadExactlyAsync(buffer, ct).ConfigureAwait(false);
+        await _read.ReadExactlyAsync(buffer, ct).ConfigureAwait(false);
 
     private async Task ReadExactAsync(byte[] buffer, int count, CancellationToken ct) =>
-        await _net.ReadExactlyAsync(buffer.AsMemory(0, count), ct).ConfigureAwait(false);
+        await _read.ReadExactlyAsync(buffer.AsMemory(0, count), ct).ConfigureAwait(false);
 
     // ------------------------------------------------------------------ authentication
 
@@ -356,21 +367,21 @@ public sealed class RtspPuller
 
     // ------------------------------------------------------------------ RTP depacketization
 
-    private void OnRtp(byte[] pkt)
+    private void OnRtp(ReadOnlySpan<byte> pkt)
     {
         if (pkt.Length < 12 || (pkt[0] >> 6) != 2) return; // not RTP v2
         bool marker = (pkt[1] & 0x80) != 0;
-        uint ts = BinaryPrimitives.ReadUInt32BigEndian(pkt.AsSpan(4));
+        uint ts = BinaryPrimitives.ReadUInt32BigEndian(pkt[4..]);
         int headerLen = 12 + (pkt[0] & 0x0F) * 4;          // CSRC list
         if ((pkt[0] & 0x10) != 0)                          // extension header
         {
             if (pkt.Length < headerLen + 4) return;
-            headerLen += 4 + BinaryPrimitives.ReadUInt16BigEndian(pkt.AsSpan(headerLen + 2)) * 4;
+            headerLen += 4 + BinaryPrimitives.ReadUInt16BigEndian(pkt[(headerLen + 2)..]) * 4;
         }
         int padding = (pkt[0] & 0x20) != 0 && pkt.Length > headerLen ? pkt[^1] : 0;
         int payloadLen = pkt.Length - headerLen - padding;
         if (payloadLen <= 0) return;
-        var payload = pkt.AsSpan(headerLen, payloadLen);
+        var payload = pkt.Slice(headerLen, payloadLen);
 
         // A new RTP timestamp means a new access unit — flush what we hold.
         if (_haveAuTs && ts != _auTimestamp)
@@ -472,23 +483,23 @@ public sealed class RtspPuller
             ? H26x.H264NalType(n) == H26x.H264Sps
             : H26x.H265NalType(n) == H26x.H265Sps);
 
-        var au = new MemoryStream();
+        _au.SetLength(0);
         // Some cameras never repeat SPS/PPS in-band: seed them from the SDP so the
         // hub can answer DESCRIBE/init. Once injected, in-band sets take over.
         if (keyframe && !hasParams && _spropNals != null && !_spropInjected)
         {
-            au.Write(_spropNals);
+            _au.Write(_spropNals);
             _spropInjected = true;
         }
         foreach (var nal in _auNals)
         {
-            au.Write(new byte[] { 0, 0, 0, 1 });
-            au.Write(nal);
+            _au.Write(StartCode);
+            _au.Write(nal);
         }
         _auNals.Clear();
 
         // RTP timestamps are 90 kHz; the hub wants a wrapping microsecond counter.
         uint microseconds = unchecked((uint)(_auTimestamp * 100UL / 9));
-        _sink.PublishVideo(new VideoFrame(_codec, keyframe, microseconds, null, au.ToArray()));
+        _sink.PublishVideo(new VideoFrame(_codec, keyframe, microseconds, null, _au.ToArray()));
     }
 }

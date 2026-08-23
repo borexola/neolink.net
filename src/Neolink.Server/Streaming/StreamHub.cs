@@ -9,7 +9,11 @@ using Neolink.Media;
 namespace Neolink.Streaming;
 
 public abstract record HubPacket(long Index);
-public sealed record HubVideo(long Index, byte[] AnnexB, bool Keyframe, uint RtpTs) : HubPacket(Index);
+/// <summary>HasSps is only meaningful on keyframes (the hub's parameter-set scan
+/// always covers those); it saves every consumer a second full NAL scan of the
+/// same buffer.</summary>
+public sealed record HubVideo(long Index, byte[] AnnexB, bool Keyframe, uint RtpTs, bool HasSps = false)
+    : HubPacket(Index);
 /// <summary>One raw AAC access unit (no ADTS header). RTP clock = sample rate.</summary>
 public sealed record HubAudioAac(long Index, byte[] Au, uint RtpTs) : HubPacket(Index);
 /// <summary>16-bit little-endian mono PCM decoded from ADPCM. RTP clock = sample rate.</summary>
@@ -149,6 +153,7 @@ public sealed class StreamHub : IStreamHub, IMediaSink
         // so once they are known, P-frames skip the full-buffer NAL scan — that's
         // the hub's per-frame hot path across every stream.
         bool paramsUpdated = false;
+        bool frameHasSps = false;
         bool needParams = frame.Keyframe || Sps == null || Pps == null
             || (frame.Codec == VideoCodec.H265 && Vps == null);
         if (needParams)
@@ -160,7 +165,7 @@ public sealed class StreamHub : IStreamHub, IMediaSink
             {
                 switch (H26x.H264NalType(span))
                 {
-                    case H26x.H264Sps: Sps = nal.ToArray(); paramsUpdated = true; break;
+                    case H26x.H264Sps: Sps = nal.ToArray(); paramsUpdated = true; frameHasSps = true; break;
                     case H26x.H264Pps: Pps = nal.ToArray(); paramsUpdated = true; break;
                 }
             }
@@ -169,7 +174,7 @@ public sealed class StreamHub : IStreamHub, IMediaSink
                 switch (H26x.H265NalType(span))
                 {
                     case H26x.H265Vps: Vps = nal.ToArray(); paramsUpdated = true; break;
-                    case H26x.H265Sps: Sps = nal.ToArray(); paramsUpdated = true; break;
+                    case H26x.H265Sps: Sps = nal.ToArray(); paramsUpdated = true; frameHasSps = true; break;
                     case H26x.H265Pps: Pps = nal.ToArray(); paramsUpdated = true; break;
                 }
             }
@@ -196,7 +201,7 @@ public sealed class StreamHub : IStreamHub, IMediaSink
         if (ready)
             _videoReady.TrySetResult();
 
-        Emit(new HubVideo(Interlocked.Increment(ref _index), frame.Data, frame.Keyframe, _videoRtpTs),
+        Emit(new HubVideo(Interlocked.Increment(ref _index), frame.Data, frame.Keyframe, _videoRtpTs, frameHasSps),
              frame.Keyframe, frame.Data.Length);
     }
 

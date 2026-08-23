@@ -120,9 +120,7 @@ public static class BcCodec
         // Extension XML (always encrypted with the negotiated protocol)
         if (extLen > 0)
         {
-            var extRaw = new byte[extLen];
-            Array.Copy(body, 0, extRaw, 0, (int)extLen);
-            var extPlain = XmlCrypto.Decrypt(channelId, extRaw, ctx.Encryption);
+            var extPlain = XmlCrypto.Decrypt(channelId, body.AsSpan(0, (int)extLen), ctx.Encryption);
             var extension = Xml.ExtensionXml.TryParse(extPlain);
             if (extension != null)
             {
@@ -139,39 +137,34 @@ public static class BcCodec
         int payloadLen = (int)(bodyLen - extLen);
         if (payloadLen > 0)
         {
-            // No extension (the common case for every streaming media message):
-            // the body IS the payload — reuse it instead of allocating and copying
-            // the entire frame again. body is never referenced after this point.
-            byte[] payloadRaw;
-            if (extLen == 0)
-            {
-                payloadRaw = body;
-            }
-            else
-            {
-                payloadRaw = new byte[payloadLen];
-                Array.Copy(body, (int)extLen, payloadRaw, 0, payloadLen);
-            }
+            var payload = body.AsSpan((int)extLen, payloadLen);
             if (ctx.InBinMode.Contains(msgNum))
             {
                 var (kind, _) = ctx.Encryption.Snapshot();
                 var encLen = msg.Extension?.EncryptLen;
                 if (kind == EncryptionKind.FullAes && encLen.HasValue)
                 {
-                    // FullAes: the media stream is encrypted too. The ciphertext is padded,
-                    // so truncate to the plaintext length from this message's Extension.
-                    var plain = XmlCrypto.Decrypt(channelId, payloadRaw, ctx.Encryption);
-                    msg.Binary = encLen.Value <= (uint)plain.Length ? plain[..(int)encLen.Value] : plain;
+                    // FullAes: the media stream is encrypted too. The ciphertext is
+                    // padded, so only the plaintext length from this message's
+                    // Extension comes out — decrypting straight off the body span,
+                    // since FullAes media always carries an Extension, which used to
+                    // force a full frame copy before the decrypt and another after.
+                    msg.Binary = XmlCrypto.Decrypt(channelId, payload, ctx.Encryption,
+                        (int)Math.Min(encLen.Value, (uint)payloadLen));
                 }
                 else
                 {
-                    // Under None/BCEncrypt/plain AES (or no encryptLen), binary payloads are NOT encrypted
-                    msg.Binary = payloadRaw;
+                    // Under None/BCEncrypt/plain AES (or no encryptLen), binary
+                    // payloads are NOT encrypted. No extension (the common case for
+                    // every such media message): the body IS the payload — reuse it
+                    // instead of copying the entire frame. body is never referenced
+                    // after this point.
+                    msg.Binary = extLen == 0 ? body : payload.ToArray();
                 }
             }
             else
             {
-                var plain = XmlCrypto.Decrypt(channelId, payloadRaw, ctx.Encryption);
+                var plain = XmlCrypto.Decrypt(channelId, payload, ctx.Encryption);
                 var xml = Xml.BcXmlBody.TryParse(plain);
                 if (xml != null)
                 {
@@ -181,7 +174,7 @@ public static class BcCodec
                 {
                     // Be forgiving: deliver as binary rather than killing the connection.
                     Log.Debug($"Unparseable XML payload on msg {msgId}/{msgNum}; treating as binary ({payloadLen} bytes)");
-                    msg.Binary = payloadRaw;
+                    msg.Binary = extLen == 0 ? body : payload.ToArray();
                 }
             }
         }

@@ -643,7 +643,8 @@ public sealed class EventRecorder
         // usually gets discarded, and every shot would cost the battery camera
         // awake-time for nothing.
         var aiCapture = provisional ? null
-            : _ai?.TryBeginCapture(_camera, _control, ct, aiPreroll, PickAiStreamHub());
+            : _ai?.TryBeginCapture(_camera, _control, ct, aiPreroll, PickAiStreamHub(),
+                _cfg.PostSeconds);
 
         var hardStop = DateTime.UtcNow.AddSeconds(_cfg.MaxClipSeconds);
         var quietUntil = DateTime.UtcNow.AddSeconds(_cfg.PostSeconds);
@@ -712,7 +713,7 @@ public sealed class EventRecorder
                     // the timeline, not the events list.
                     provisional = false;
                     aiCapture ??= _ai?.TryBeginCapture(_camera, _control, ct,
-                        streamHub: PickAiStreamHub());
+                        streamHub: PickAiStreamHub(), postSeconds: _cfg.PostSeconds);
                     if (rec.Labels.Remove("wake")) _store.Save(rec);
                     Log.Info($"{_camera}: ⚡ event started ({string.Join("+", rec.Labels)} — " +
                              "confirmed self-wake, footage from the wake onward)");

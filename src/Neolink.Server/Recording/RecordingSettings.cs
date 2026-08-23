@@ -135,9 +135,15 @@ public sealed class RecordingSettings
         WriteIndented = true,
     };
 
+    private static readonly CameraRecordingSettings Default =
+        new(Events: true, Continuous: false, EventTypes: null);
+
     private readonly string _file;
     private readonly object _gate = new();
-    private Dictionary<string, CameraRecordingSettings> _cameras = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _saveGate = new();
+    // Copy-on-write: a published dictionary is never mutated, so Get — which the
+    // record pumps call per packet — reads it without the lock.
+    private volatile Dictionary<string, CameraRecordingSettings> _cameras = new(StringComparer.OrdinalIgnoreCase);
 
     public RecordingSettings(string stateDir, params string?[] legacyDirs)
     {
@@ -164,7 +170,7 @@ public sealed class RecordingSettings
                 if (loaded != null)
                     _cameras = new Dictionary<string, CameraRecordingSettings>(loaded, StringComparer.OrdinalIgnoreCase);
                 if (!ReferenceEquals(source, _file) && source != _file)
-                    lock (_gate) { SaveLocked(); }
+                    Save();
             }
         }
         catch (Exception ex)
@@ -178,20 +184,17 @@ public sealed class RecordingSettings
     {
         lock (_gate)
         {
-            if (!_cameras.ContainsKey(camera))
-                _cameras[camera] = new CameraRecordingSettings(eventsDefault, Continuous: false, EventTypes: null);
+            if (_cameras.ContainsKey(camera)) return;
+            var next = new Dictionary<string, CameraRecordingSettings>(_cameras, StringComparer.OrdinalIgnoreCase)
+            {
+                [camera] = new CameraRecordingSettings(eventsDefault, Continuous: false, EventTypes: null),
+            };
+            _cameras = next;
         }
     }
 
-    public CameraRecordingSettings Get(string camera)
-    {
-        lock (_gate)
-        {
-            return _cameras.TryGetValue(camera, out var s)
-                ? s
-                : new CameraRecordingSettings(Events: true, Continuous: false, EventTypes: null);
-        }
-    }
+    public CameraRecordingSettings Get(string camera) =>
+        _cameras.TryGetValue(camera, out var s) ? s : Default;
 
     /// <summary>
     /// Applies a partial update (null = leave unchanged; for the type filter and
@@ -214,12 +217,11 @@ public sealed class RecordingSettings
         string? aiContext = null, bool setAiContext = false,
         bool? emailEvents = null, bool? webhookEvents = null)
     {
+        CameraRecordingSettings next;
         lock (_gate)
         {
-            var cur = _cameras.TryGetValue(camera, out var s)
-                ? s
-                : new CameraRecordingSettings(Events: true, Continuous: false, EventTypes: null);
-            var next = new CameraRecordingSettings(
+            var cur = _cameras.TryGetValue(camera, out var s) ? s : Default;
+            next = new CameraRecordingSettings(
                 events ?? cur.Events,
                 continuous ?? cur.Continuous,
                 setEventTypes ? eventTypes : cur.EventTypes,
@@ -238,25 +240,35 @@ public sealed class RecordingSettings
                 setAiContext ? aiContext : cur.AiContext,
                 emailEvents ?? cur.EmailEvents,
                 webhookEvents ?? cur.WebhookEvents);
-            _cameras[camera] = next;
-            SaveLocked();
-            return next;
+            _cameras = new Dictionary<string, CameraRecordingSettings>(_cameras, StringComparer.OrdinalIgnoreCase)
+            {
+                [camera] = next,
+            };
         }
+        // Outside _gate: a stalled state volume must not hold the lock the
+        // record pumps and other updates need for the duration of a disk write.
+        Save();
+        return next;
     }
 
-    private void SaveLocked()
+    private void Save()
     {
-        try
+        // Serializes the CURRENT published snapshot under its own gate, so
+        // overlapping updates can never persist an older state last.
+        lock (_saveGate)
         {
-            var tmp = _file + ".tmp";
-            File.WriteAllText(tmp, JsonSerializer.Serialize(_cameras, JsonOpts));
-            File.Move(tmp, _file, overwrite: true);
-        }
-        catch (Exception ex)
-        {
-            // Never let a broken state volume take the settings update down with
-            // it — the in-memory switch already applied; only persistence failed.
-            Log.Warn($"Cannot persist recording settings: {ex.Message}");
+            try
+            {
+                var tmp = _file + ".tmp";
+                File.WriteAllText(tmp, JsonSerializer.Serialize(_cameras, JsonOpts));
+                File.Move(tmp, _file, overwrite: true);
+            }
+            catch (Exception ex)
+            {
+                // Never let a broken state volume take the settings update down with
+                // it — the in-memory switch already applied; only persistence failed.
+                Log.Warn($"Cannot persist recording settings: {ex.Message}");
+            }
         }
     }
 }

@@ -1512,12 +1512,31 @@ public static class WebApi
             }
         });
 
+        // Storage shape cached briefly: every open dashboard polls features every
+        // 10 s, and a fresh sample stats every tier's volume — a network round
+        // trip per tier on NAS mounts. Capacity moves far slower than that.
+        // Locked because concurrent polls race the stamp, and a torn DateTime
+        // read (32-bit hosts) could otherwise wedge the cache stale.
+        var storageShapeGate = new object();
+        object? storageShape = null;
+        var storageShapeAt = DateTime.MinValue;
+
         // Feature discovery, so clients can hide UI for what this server won't do.
         app.MapGet("/api/features", () =>
         {
             // Every page load reads this endpoint, so it doubles as the "check
             // for updates now" moment (throttled inside — see UpdateChecker.Nudge).
             o.Updates?.Nudge();
+            object? storage;
+            lock (storageShapeGate)
+            {
+                if (DateTime.UtcNow - storageShapeAt > TimeSpan.FromSeconds(5))
+                {
+                    storageShape = ShapeStorage(o.Storage);
+                    storageShapeAt = DateTime.UtcNow;
+                }
+                storage = storageShape;
+            }
             return Results.Json(new
             {
             events = events != null,
@@ -1536,7 +1555,7 @@ public static class WebApi
             // Worst storage tier state, for the live view's banner: "warn" when
             // any tier is >= 90% used, "full" when one is out of space (recording
             // to it has halted). Rides this endpoint so the wall needs no extra poll.
-            storage = ShapeStorage(o.Storage),
+            storage,
             // Server-condition signals for the dashboard's browser alerts (the
             // in-app twin of the email alerts): sustained high CPU, and recent
             // recording write failures. The client fires a notification on the
@@ -3811,10 +3830,13 @@ public static class WebApi
             uint prevAudioTs = 0;
             bool haveAudioTs = false;
 
+            // One growable batch buffer per connection: a fresh stream per flush
+            // re-grows to GOP size ~30x/s per viewer for nothing.
+            var batch = new MemoryStream();
             async Task FlushPendingAsync(uint totalDuration)
             {
                 if ((pending == null || pending.Count == 0) && audioFrags.Count == 0) { pending = null; return; }
-                using var batch = new MemoryStream();
+                batch.SetLength(0);
                 if (pending is { Count: > 0 })
                 {
                     uint per = Math.Clamp(totalDuration / (uint)pending.Count, 900u, 45_000u); // 10..500ms per frame

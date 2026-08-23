@@ -252,17 +252,27 @@ public sealed class EventStore
     public List<EventRecord> List(string? camera = null, bool? reviewed = null, int limit = 200,
         DateTime? localDate = null, bool excludeWakeOnly = false)
     {
+        // Filtering stays under the gate (Labels mutates after insert); the sort
+        // runs outside it — the recorder needs this same lock per event, and the
+        // UI polls this over the whole retained index every few seconds.
+        List<EventRecord> matched;
         lock (_gate)
         {
-            return _byId.Values.Select(e => e.Record)
-                .Where(r => camera == null || string.Equals(r.Camera, camera, StringComparison.OrdinalIgnoreCase))
-                .Where(r => reviewed == null || r.Reviewed == reviewed)
-                .Where(r => localDate == null || r.StartUtc.ToLocalTime().Date == localDate.Value.Date)
-                .Where(r => !excludeWakeOnly || !(r.Labels is ["wake"]))
-                .OrderByDescending(r => r.StartUtc)
-                .Take(Math.Clamp(limit, 1, localDate == null ? 1000 : 10_000))
-                .ToList();
+            matched = new List<EventRecord>(_byId.Count);
+            foreach (var e in _byId.Values)
+            {
+                var r = e.Record;
+                if (camera != null && !string.Equals(r.Camera, camera, StringComparison.OrdinalIgnoreCase)) continue;
+                if (reviewed != null && r.Reviewed != reviewed) continue;
+                if (localDate != null && r.StartUtc.ToLocalTime().Date != localDate.Value.Date) continue;
+                if (excludeWakeOnly && r.Labels is ["wake"]) continue;
+                matched.Add(r);
+            }
         }
+        return matched
+            .OrderByDescending(r => r.StartUtc)
+            .Take(Math.Clamp(limit, 1, localDate == null ? 1000 : 10_000))
+            .ToList();
     }
 
     /// <summary>
@@ -270,8 +280,21 @@ public sealed class EventStore
     /// events or continuous footage, for any camera — newest first. Feeds the
     /// timeline's calendar so days with footage can be highlighted at a glance.
     /// </summary>
+    // The day walks touch every camera×day directory — on a NAS mount that is a
+    // network round-trip each — and every calendar open repeats them verbatim.
+    // A few seconds of staleness is invisible next to how slowly days change.
+    private static readonly TimeSpan DaysCacheTtl = TimeSpan.FromSeconds(5);
+    private readonly object _daysGate = new();
+    private (List<string> Days, DateTime At)? _contentDays;
+    private readonly Dictionary<string, (List<string> Days, DateTime At)> _continuousDays =
+        new(StringComparer.OrdinalIgnoreCase);
+
     public List<string> ListContentDays()
     {
+        lock (_daysGate)
+            if (_contentDays is { } c && DateTime.UtcNow - c.At < DaysCacheTtl)
+                return c.Days;
+
         var days = new HashSet<string>(StringComparer.Ordinal);
         foreach (var root in Roots)
         {
@@ -283,7 +306,9 @@ public sealed class EventStore
                     if (IsDayName(name)) days.Add(name);
                 }
         }
-        return days.OrderByDescending(d => d).ToList();
+        var result = days.OrderByDescending(d => d).ToList();
+        lock (_daysGate) _contentDays = (result, DateTime.UtcNow);
+        return result;
     }
 
     // ------------------------------------------------------------------ continuous recordings
@@ -310,6 +335,10 @@ public sealed class EventStore
     /// <summary>Days with continuous footage for a camera (live or archived), newest first ("yyyy-MM-dd").</summary>
     public List<string> ListContinuousDays(string camera)
     {
+        lock (_daysGate)
+            if (_continuousDays.TryGetValue(camera, out var c) && DateTime.UtcNow - c.At < DaysCacheTtl)
+                return c.Days;
+
         var days = new HashSet<string>(StringComparer.Ordinal);
         foreach (var root in ContinuousRoots)
         {
@@ -319,7 +348,9 @@ public sealed class EventStore
                 if (IsDayName(d) && Directory.Exists(Path.Combine(camDir, d, "continuous")))
                     days.Add(d);
         }
-        return days.OrderByDescending(d => d).ToList();
+        var result = days.OrderByDescending(d => d).ToList();
+        lock (_daysGate) _continuousDays[camera] = (result, DateTime.UtcNow);
+        return result;
     }
 
     /// <summary>Segment files of one day (live and archived merged), oldest first:

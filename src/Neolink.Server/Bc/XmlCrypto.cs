@@ -39,6 +39,20 @@ public static class XmlCrypto
         };
     }
 
+    /// <summary>Like <see cref="Decrypt(uint, ReadOnlySpan{byte}, EncryptionState)"/>
+    /// but returns only the first <paramref name="outputLength"/> plaintext bytes —
+    /// FullAes media is padded, and slicing the padding off AFTER a full decrypt
+    /// copied every video frame once more.</summary>
+    public static byte[] Decrypt(uint offset, ReadOnlySpan<byte> buf, EncryptionState enc, int outputLength)
+    {
+        int len = Math.Clamp(outputLength, 0, buf.Length);
+        var (kind, key) = enc.Snapshot();
+        if (kind is EncryptionKind.Aes or EncryptionKind.FullAes && key != null)
+            return AesCfbDecrypt(buf, enc, len);
+        var full = Decrypt(offset, buf, enc);
+        return full.Length == len ? full : full[..len];
+    }
+
     public static byte[] Encrypt(uint offset, ReadOnlySpan<byte> buf, EncryptionState enc)
     {
         var (kind, key) = enc.Snapshot();
@@ -61,20 +75,21 @@ public static class XmlCrypto
     /// then XORed out word-wide. The per-16-byte TransformBlock loop this replaces
     /// cost 15-20% of a core per camera on FullAes firmwares.
     /// </summary>
-    internal static byte[] AesCfbDecrypt(ReadOnlySpan<byte> input, EncryptionState enc)
+    internal static byte[] AesCfbDecrypt(ReadOnlySpan<byte> input, EncryptionState enc, int outputLength = -1)
     {
-        if (input.Length == 0) return Array.Empty<byte>();
-        int blocks = (input.Length + 15) / 16;
+        int outLen = outputLength < 0 ? input.Length : Math.Min(outputLength, input.Length);
+        if (outLen == 0) return Array.Empty<byte>();
+        int blocks = (outLen + 15) / 16;
 
-        // Keystream input: IV, then every ciphertext block that feeds a successor.
-        var ksIn = new byte[blocks * 16];
-        Iv.CopyTo(ksIn, 0);
-        input[..((blocks - 1) * 16)].CopyTo(ksIn.AsSpan(16));
-
+        // Keystream input is IV, then every ciphertext block that feeds a
+        // successor — both already contiguous, so they encrypt straight into
+        // place instead of being staged in a frame-sized scratch copy.
         var keystream = new byte[blocks * 16];
-        enc.EcbEncrypt(ksIn, keystream);
+        enc.EcbEncrypt(Iv, keystream.AsSpan(0, 16));
+        if (blocks > 1)
+            enc.EcbEncrypt(input[..((blocks - 1) * 16)], keystream.AsSpan(16));
 
-        var output = new byte[input.Length];
+        var output = new byte[outLen];
         XorInto(input, keystream, output);
         return output;
     }

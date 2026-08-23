@@ -68,15 +68,20 @@ internal static class BcUdp
             : Kind.Unknown;
     }
 
-    public static bool TryParseData(ReadOnlySpan<byte> dgram, out int connId, out uint packetId, out byte[] payload)
+    /// <summary>The payload comes back as a position into <paramref name="dgram"/>,
+    /// not a copy — the receive path delivers most packets straight to its pipe,
+    /// and materializing an array per packet here forced a copy it then threw away.</summary>
+    public static bool TryParseData(ReadOnlySpan<byte> dgram, out int connId, out uint packetId,
+        out int payloadOffset, out int payloadLength)
     {
-        connId = 0; packetId = 0; payload = Array.Empty<byte>();
+        connId = 0; packetId = 0; payloadOffset = 0; payloadLength = 0;
         if (dgram.Length < DataHeader || PeekKind(dgram) != Kind.Data) return false;
         connId = BinaryPrimitives.ReadInt32LittleEndian(dgram[4..]);
         packetId = BinaryPrimitives.ReadUInt32LittleEndian(dgram[12..]);
         uint len = BinaryPrimitives.ReadUInt32LittleEndian(dgram[16..]);
         if (len > dgram.Length - DataHeader) return false;
-        payload = dgram.Slice(DataHeader, (int)len).ToArray();
+        payloadOffset = DataHeader;
+        payloadLength = (int)len;
         return true;
     }
 

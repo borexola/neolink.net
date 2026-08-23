@@ -21,9 +21,10 @@ namespace Neolink.Ai;
 /// triggered the event is in them. The rest of the budget SPREADS across the
 /// remainder: sampling continues at one frame per second, and whenever the
 /// budget fills, every other stored tail frame is dropped and the interval
-/// doubles. The final set is the dense opening plus frames spanning the entire
+/// doubles. The final set is the dense opening, frames spanning the entire
 /// tail (a person leaving 30s in tells a different story than the first 10s),
-/// stays within budget, and each frame remembers when it was taken so the model
+/// plus the rolling closing window (see <see cref="ClosingSeconds"/>), stays
+/// within budget, and each frame remembers when it was taken so the model
 /// can be told the real offsets. Frames live in memory only and die with the
 /// capture unless the event completes and the job is submitted.
 /// </summary>
@@ -32,6 +33,8 @@ public sealed class AiCapture
     private readonly ICameraControl _control;
     private readonly int _budget;
     private readonly TimeSpan _startInterval;
+    private readonly TimeSpan _closingWindow;
+    private readonly int _maxClosing;
     private readonly CancellationTokenSource _stop;
     private volatile bool _discarded;
     private int _disposeArmed;
@@ -54,13 +57,15 @@ public sealed class AiCapture
 
     internal AiCapture(string camera, ICameraControl control, int budget,
         TimeSpan startInterval, CancellationToken ct, AiPrerollVideo? preroll = null,
-        IStreamHub? streamHub = null)
+        IStreamHub? streamHub = null, int postSeconds = 0)
     {
         Camera = camera;
         _control = control;
         Preroll = preroll;
         StreamHub = streamHub;
         _budget = Math.Max(2, budget); // decimation needs headroom to halve
+        _closingWindow = ClosingWindowFor(postSeconds);
+        _maxClosing = Math.Max(2, _budget / 2);
         _startInterval = startInterval < TimeSpan.FromSeconds(1)
             ? TimeSpan.FromSeconds(1) : startInterval;
         _stop = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -117,6 +122,9 @@ public sealed class AiCapture
         // The spread phase keeps at least two budget slots — decimation needs
         // headroom to halve (the Math.Max(2, budget) floor, same reason).
         int maxLocked = Math.Clamp(_budget - 2, 0, OpeningSeconds);
+        var lastKept = DateTime.MinValue;
+        // Rolling closing window (see ClosingSeconds), folded in when the loop ends.
+        var closing = new List<(DateTime Utc, byte[] Jpeg)>();
         try
         {
             while (!_stop.IsCancellationRequested)
@@ -149,19 +157,25 @@ public sealed class AiCapture
                     var taken = DateTime.UtcNow;
                     if (jpeg is { Length: > 100 } && jpeg[0] == 0xFF && jpeg[1] == 0xD8)
                     {
-                        lock (Frames)
+                        closing.Add((taken, jpeg));
+                        PruneClosing(closing, taken, _closingWindow, _maxClosing);
+                        if (opening || taken - lastKept >= interval - TimeSpan.FromMilliseconds(200))
                         {
-                            if (opening)
+                            lock (Frames)
                             {
-                                locked++;
+                                if (opening)
+                                {
+                                    locked++;
+                                }
+                                else if (Frames.Count >= _budget)
+                                {
+                                    // Budget full: thin the tail, never the opening.
+                                    ThinTail(Frames, locked);
+                                    interval += interval;
+                                }
+                                Frames.Add((taken, jpeg));
                             }
-                            else if (Frames.Count >= _budget)
-                            {
-                                // Budget full: thin the tail, never the opening.
-                                ThinTail(Frames, locked);
-                                interval += interval;
-                            }
-                            Frames.Add((taken, jpeg));
+                            lastKept = taken;
                         }
                         failures = 0;
                         got = true;
@@ -185,16 +199,18 @@ public sealed class AiCapture
                     Log.Debug($"{Camera}: AI frame capture miss: {_lastMiss}");
                 }
                 // Pacing. The opening window ticks at one shot per second, hit
-                // or miss. After it, successes pace to the current interval and
-                // misses BACK OFF instead of giving up: events run minutes, and
-                // a camera too busy to answer while its streams spin up usually
-                // answers fine moments later — walking away after three early
-                // strikes cost every frame of a 4-minute event (live 2026-07-25).
-                // A camera with no snapshot support at all costs one failed
-                // command per ~30s, and only while an event records.
+                // or miss. After it, successes keep the BASE cadence — the
+                // doubled interval only selects which polls join Frames, since
+                // the closing buffer can only be dense if polling never slowed
+                // — and misses BACK OFF instead of giving up: events run
+                // minutes, and a camera too busy to answer while its streams
+                // spin up usually answers fine moments later — walking away
+                // after three early strikes cost every frame of a 4-minute
+                // event (live 2026-07-25). A camera with no snapshot support at
+                // all costs one failed command per ~30s.
                 var spent = DateTime.UtcNow - t0;
                 var slot = opening ? TimeSpan.FromSeconds(1)
-                         : got ? interval
+                         : got ? _startInterval
                          : RetryPause(failures);
                 if (slot > spent)
                 {
@@ -209,16 +225,41 @@ public sealed class AiCapture
             // nothing here may ever surface into the event lifecycle.
             Log.Debug($"{Camera}: AI frame capture aborted: {Log.Flatten(ex)}");
         }
+        finally
+        {
+            // Event over: fold the closing window in.
+            lock (Frames)
+                MergeClosing(Frames, closing, locked, _budget);
+        }
     }
 
     /// <summary>The event's LAST seconds get the same protection as its first:
-    /// every keyframe of this closing window rides a rolling side buffer
-    /// regardless of pacing, and merges into the kept set when the event ends.
-    /// The departure that closes an event — the car pulling away, the visitor
+    /// every frame of the closing window rides a rolling side buffer regardless
+    /// of pacing, and merges into the kept set when the event ends. The
+    /// departure that closes an event — the car pulling away, the visitor
     /// walking off — happens in exactly the stretch the doubled interval samples
     /// most thinly, and it cannot be re-sampled after the fact (live complaint
     /// 2026-07-27: "the AI doesn't see the driving-away part").</summary>
     private const int ClosingSeconds = 10;
+
+    /// <summary>An event closes only after the recorder's post-quiet seconds, so
+    /// the last ACTIVITY sits that far before the recording's end — the window
+    /// extends by <paramref name="postSeconds"/> to reach it.</summary>
+    internal static TimeSpan ClosingWindowFor(int postSeconds) =>
+        TimeSpan.FromSeconds(ClosingSeconds + Math.Clamp(postSeconds, 0, 120));
+
+    /// <summary>Bounds the unpaced closing buffer: frames older than the window
+    /// drop, and past <paramref name="maxCount"/> every other one goes (oldest
+    /// and newest always kept).</summary>
+    internal static void PruneClosing(List<(DateTime Utc, byte[] Data)> closing,
+        DateTime now, TimeSpan window, int maxCount)
+    {
+        while (closing.Count > 0 && now - closing[0].Utc > window)
+            closing.RemoveAt(0);
+        if (closing.Count <= maxCount) return;
+        for (int k = closing.Count - 2; k > 0; k -= 2)
+            closing.RemoveAt(k);
+    }
 
     /// <summary>Stream-tap mode: listen to the hub and keep keyframes on the
     /// same opening/budget/thin-and-double contract as the snapshot loop —
@@ -251,8 +292,7 @@ public sealed class AiCapture
                 if (packet is not HubVideo { Keyframe: true } kv) continue;
                 var now = DateTime.UtcNow;
                 closing.Add((now, kv.AnnexB));
-                while (now - closing[0].Utc > TimeSpan.FromSeconds(ClosingSeconds))
-                    closing.RemoveAt(0);
+                PruneClosing(closing, now, _closingWindow, _maxClosing);
                 bool opening = locked < maxLocked
                     && now - launched < TimeSpan.FromSeconds(OpeningSeconds);
                 // The 200ms grace keeps a GOP that lands just short of the
@@ -397,9 +437,11 @@ public sealed class AiDescriber
     /// feature is off for this camera. <paramref name="preroll"/> is the recorder's
     /// pre-roll copy (the seconds BEFORE the trigger), decoded at describe time;
     /// a non-null <paramref name="streamHub"/> switches the capture to the
-    /// stream tap (the event's own keyframes) instead of snapshot polling.</summary>
+    /// stream tap (the event's own keyframes) instead of snapshot polling;
+    /// <paramref name="postSeconds"/> is the recorder's post-quiet, widening the
+    /// closing window to reach the last activity (see ClosingWindowFor).</summary>
     public AiCapture? TryBeginCapture(string camera, ICameraControl control, CancellationToken ct,
-        AiPrerollVideo? preroll = null, IStreamHub? streamHub = null)
+        AiPrerollVideo? preroll = null, IStreamHub? streamHub = null, int postSeconds = 0)
     {
         if (!WantsCapture(camera)) return null;
         var cfg = _store.Snapshot();
@@ -408,7 +450,8 @@ public sealed class AiDescriber
         // kept set spans the whole event. The old budget/fixed-rate mode
         // switch was only ever two presets of exactly this.
         return new AiCapture(camera, control, Math.Max(1, cfg.MaxFrames),
-            TimeSpan.FromSeconds(Math.Clamp(cfg.SampleEverySeconds, 1, 600)), ct, preroll, streamHub);
+            TimeSpan.FromSeconds(Math.Clamp(cfg.SampleEverySeconds, 1, 600)), ct, preroll,
+            streamHub, postSeconds);
     }
 
     /// <summary>Event closed and saved: stop sampling and queue the description
@@ -883,7 +926,10 @@ public sealed class AiDescriber
                     {
                         type = "base64",
                         media_type = "image/jpeg",
-                        data = Convert.ToBase64String(jpeg),
+                        // byte[] serializes as base64 — same JSON, but written
+                        // straight into the UTF-8 buffer instead of via a
+                        // per-frame base64 UTF-16 string 8/3 the JPEG's size.
+                        data = jpeg,
                     },
                 });
             }
@@ -919,7 +965,7 @@ public sealed class AiDescriber
                             ? userText
                             : userText + "\nThe images are attached in this order:\n"
                               + string.Join("\n", labels),
-                        images = frames.Select(f => Convert.ToBase64String(f.Jpeg)).ToArray(),
+                        images = frames.Select(f => f.Jpeg).ToArray(), // byte[] → base64 (see the Anthropic path)
                     },
                 },
                 ["stream"] = false,
@@ -961,7 +1007,11 @@ public sealed class AiDescriber
         }
 
         using var req = new HttpRequestMessage(HttpMethod.Post, cfg.ActiveUrl());
-        req.Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+        // Straight to UTF-8: serializing megabytes of frames to a UTF-16 string
+        // and re-encoding it in StringContent peaked at several times the body.
+        req.Content = new ByteArrayContent(JsonSerializer.SerializeToUtf8Bytes(payload));
+        req.Content.Headers.ContentType =
+            new System.Net.Http.Headers.MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
         if (cfg.UsesAnthropic)
         {
             // The Messages API authenticates with x-api-key, not a Bearer token.

@@ -221,13 +221,17 @@
     }
     else
     {
+        @* Materialized once per render: the property re-filters and re-SORTS the
+           whole day (up to thousands of events) on every enumeration, and this
+           markup used to enumerate it twice per render pass. *@
+        var filtered = Filtered.ToList();
         <div class="ev-body">
             <div class="ev-list" role="list">
                 @if (_loading)
                 {
                     <div class="notice">@T["Loading…"]</div>
                 }
-                else if (!Filtered.Any())
+                else if (filtered.Count == 0)
                 {
                     <div class="notice">
                         @(_levelFilter.Length > 0 ? T["No events match the threat filter."]
@@ -236,7 +240,7 @@
                             : T["No events in the last 24 hours."])
                     </div>
                 }
-                @foreach (var day in Filtered.GroupBy(e => e.Start.ToLocalTime().Date))
+                @foreach (var day in filtered.GroupBy(e => e.Start.ToLocalTime().Date))
                 {
                     <div class="ev-day">
                         <div class="ev-day-head">@DayLabel(day.Key) <span class="event-day-count">@day.Count()</span></div>

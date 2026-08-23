@@ -76,6 +76,7 @@ public sealed class RtspConnection
                 session.Stop();
             _sessions.Clear();
             _client.Dispose();
+            _stallGuard?.Dispose();
             Log.Debug($"RTSP client disconnected: {_remote}");
         }
     }
@@ -543,58 +544,52 @@ public sealed class RtspConnection
     /// <summary>
     /// Sends one frame's worth of RTP packets as a SINGLE write. Interleaved video
     /// used to cost one send syscall per RTP packet — ~700/s per viewer on a 4K
-    /// stream, which is real CPU under virtualization. All the '$'-framed packets
-    /// of an access unit are coalesced into one pooled buffer and one write.
+    /// stream, which is real CPU under virtualization. The batch arrives already
+    /// '$'-framed (see <see cref="RtpBatch"/>), so no copy happens here either.
     /// </summary>
-    internal async Task SendInterleavedBatchAsync(byte channel, List<byte[]> rtpPackets, CancellationToken ct)
-    {
-        if (rtpPackets.Count == 0) return;
-        int total = 0;
-        foreach (var p in rtpPackets) total += 4 + p.Length;
-        var buf = System.Buffers.ArrayPool<byte>.Shared.Rent(total);
-        try
-        {
-            int off = 0;
-            foreach (var p in rtpPackets)
-            {
-                buf[off] = 0x24; // '$'
-                buf[off + 1] = channel;
-                BinaryPrimitives.WriteUInt16BigEndian(buf.AsSpan(off + 2), (ushort)p.Length);
-                p.CopyTo(buf, off + 4);
-                off += 4 + p.Length;
-            }
-            await WriteGuardedAsync(buf.AsMemory(0, total), ct).ConfigureAwait(false);
-        }
-        finally
-        {
-            System.Buffers.ArrayPool<byte>.Shared.Return(buf);
-        }
-    }
+    internal Task SendInterleavedRawAsync(ReadOnlyMemory<byte> framed, CancellationToken ct) =>
+        framed.IsEmpty ? Task.CompletedTask : WriteGuardedAsync(framed, ct);
+
+    /// <summary>Slow-client guard, one per connection instead of a linked CTS +
+    /// timer per write (writes run per frame per viewer): re-armed around every
+    /// write, and on firing it closes the socket, which faults the stuck write
+    /// and wakes the request loop. Serialized by _writeLock.</summary>
+    private CancellationTokenSource? _stallGuard;
 
     private async Task WriteGuardedAsync(ReadOnlyMemory<byte> data, CancellationToken ct)
     {
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(TimeSpan.FromSeconds(10)); // slow-client guard
+        await _writeLock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            await _writeLock.WaitAsync(cts.Token).ConfigureAwait(false);
+            if (_stallGuard == null)
+            {
+                _stallGuard = new CancellationTokenSource();
+                _stallGuard.Token.Register(() =>
+                {
+                    // The client stopped reading. A half-dead connection is worse
+                    // than a dead one (the client sits blind until its own watchdog
+                    // fires), so close it outright.
+                    Log.Warn($"RTSP client {_remote} stalled (did not accept data for 10s); closing connection");
+                    _client.Dispose();
+                });
+            }
+            _stallGuard.CancelAfter(TimeSpan.FromSeconds(10));
             try
             {
-                await _stream.WriteAsync(data, cts.Token).ConfigureAwait(false);
+                await _stream.WriteAsync(data, ct).ConfigureAwait(false);
+            }
+            catch (Exception) when (_stallGuard.IsCancellationRequested && !ct.IsCancellationRequested)
+            {
+                throw new IOException("RTSP client stalled");
             }
             finally
             {
-                _writeLock.Release();
+                _stallGuard.CancelAfter(Timeout.InfiniteTimeSpan);
             }
         }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        finally
         {
-            // The client stopped reading. A half-dead connection is worse than a dead
-            // one (the client sits blind until its own watchdog fires), so close it
-            // outright; that also wakes the request loop, which cleans up the sessions.
-            Log.Warn($"RTSP client {_remote} stalled (did not accept data for 10s); closing connection");
-            _client.Dispose();
-            throw new IOException("RTSP client stalled");
+            _writeLock.Release();
         }
     }
 
@@ -761,6 +756,10 @@ internal sealed class RtspSession
         var (subId, reader) = hub.Subscribe(viewer: true);
         long lastIndex = -1;
         bool waitKeyframe = true; // always start on a keyframe
+        // Owned by THIS pump, reused per frame: each send is awaited before the
+        // next frame packetizes, and a PAUSE/PLAY successor pump gets its own
+        // buffer rather than resetting one a cancelled write may still be reading.
+        var batch = new RtpBatch();
 
         // Opus sessions vote for the transcoder: ffmpeg runs only while at least
         // one Opus session is playing, and stops with the last one.
@@ -785,19 +784,20 @@ internal sealed class RtspSession
                             waitKeyframe = false;
                         }
                         var codec = hub.Codec ?? VideoCodec.H264;
-                        var au = v.Keyframe ? EnsureParameterSets(hub, codec, v.AnnexB) : v.AnnexB;
-                        var packets = Video.Packetizer.PacketizeVideo(codec, au, v.RtpTs);
+                        var au = v.Keyframe ? EnsureParameterSets(hub, codec, v.AnnexB, v.HasSps) : v.AnnexB;
+                        Video.Packetizer.PacketizeVideoInto(batch, codec, au, v.RtpTs, Video.RtpChannel);
                         if (Video.Tcp)
                         {
-                            // One write per frame instead of one per packet (see
-                            // SendInterleavedBatchAsync). UDP keeps per-packet sends:
-                            // datagram boundaries ARE the packet boundaries.
-                            await _conn.SendInterleavedBatchAsync(Video.RtpChannel, packets, ct).ConfigureAwait(false);
+                            // One write per frame instead of one per packet. UDP keeps
+                            // per-packet sends: datagram boundaries ARE the packet
+                            // boundaries — but they leave from the same batch buffer.
+                            await _conn.SendInterleavedRawAsync(batch.Framed, ct).ConfigureAwait(false);
                         }
-                        else
+                        else if (Video.UdpSocket != null && Video.ClientEndpoint != null)
                         {
-                            foreach (var rtp in packets)
-                                await SendAsync(Video, rtp, ct).ConfigureAwait(false);
+                            for (int i = 0; i < batch.Count; i++)
+                                await Video.UdpSocket.SendToAsync(batch.PacketAt(i), SocketFlags.None,
+                                    Video.ClientEndpoint, ct).ConfigureAwait(false);
                         }
                         break;
                     }
@@ -831,20 +831,11 @@ internal sealed class RtspSession
         }
     }
 
-    /// <summary>Prepends cached SPS/PPS(/VPS) to keyframes that lack them (players need them to decode).</summary>
-    private static byte[] EnsureParameterSets(IStreamHub hub, VideoCodec codec, byte[] annexB)
+    /// <summary>Prepends cached SPS/PPS(/VPS) to keyframes that lack them (players
+    /// need them to decode). <paramref name="hasSps"/> comes from the hub's own
+    /// keyframe scan, so no second scan of the buffer happens per viewer.</summary>
+    private static byte[] EnsureParameterSets(IStreamHub hub, VideoCodec codec, byte[] annexB, bool hasSps)
     {
-        bool hasSps = false;
-        foreach (var nal in H26x.SplitNals(annexB))
-        {
-            int type = codec == VideoCodec.H264 ? H26x.H264NalType(nal.Span) : H26x.H265NalType(nal.Span);
-            if ((codec == VideoCodec.H264 && type == H26x.H264Sps) ||
-                (codec == VideoCodec.H265 && type == H26x.H265Sps))
-            {
-                hasSps = true;
-                break;
-            }
-        }
         if (hasSps) return annexB;
 
         using var ms = new MemoryStream();

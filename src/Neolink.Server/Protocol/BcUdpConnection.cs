@@ -270,7 +270,7 @@ public sealed class BcUdpConnection : IBcConnection
                               $"(session endpoint {_camera})");
                 switch (BcUdp.PeekKind(d))
                 {
-                    case BcUdp.Kind.Data when BcUdp.TryParseData(d, out var dcid, out var pid, out var payload):
+                    case BcUdp.Kind.Data when BcUdp.TryParseData(d, out var dcid, out var pid, out var pOff, out var pLen):
                         _rxData++;
                         _lastDataUtc = DateTime.UtcNow;
                         _rxLastPid = pid;
@@ -283,8 +283,8 @@ public sealed class BcUdpConnection : IBcConnection
                             Log.Info($"{_tag}: UDP note — camera stamps data with connId {dcid}, not our cid {_cid}");
                         }
                         if (Dbg && _rxData == 1)
-                            Log.Debug($"{_tag}: udp {El} first DATA pid={pid} connId={dcid} ({payload.Length}B)");
-                        await OnDataAsync(pid, payload, ct).ConfigureAwait(false);
+                            Log.Debug($"{_tag}: udp {El} first DATA pid={pid} connId={dcid} ({pLen}B)");
+                        await OnDataAsync(pid, r.Buffer.AsMemory(pOff, pLen), ct).ConfigureAwait(false);
                         break;
                     case BcUdp.Kind.Ack when BcUdp.TryParseAck(d, out var acid, out var gid, out var apid,
                         out var alat, out var atlen):
@@ -361,9 +361,13 @@ public sealed class BcUdpConnection : IBcConnection
         finally { _pipe.Writer.Complete(fault); }
     }
 
-    private async Task OnDataAsync(uint pid, byte[] payload, CancellationToken ct)
+    private async Task OnDataAsync(uint pid, ReadOnlyMemory<byte> payload, CancellationToken ct)
     {
-        List<byte[]>? deliver = null;
+        // The in-order packet (the overwhelmingly common case) goes to the pipe
+        // straight from the datagram buffer — copied only once, by the pipe
+        // itself; only out-of-order holds materialize an array.
+        bool deliverDirect = false;
+        List<byte[]>? drained = null;
         lock (_rxGate)
         {
             // Duplicate forensics: the arrival spacing of repeat copies separates
@@ -412,12 +416,12 @@ public sealed class BcUdpConnection : IBcConnection
             }
             if (pid == _rxNext)
             {
-                deliver = new List<byte[]> { payload };
+                deliverDirect = true;
                 _rxNext++;
                 while (_rxBuffer.TryGetValue(_rxNext, out var next))
                 {
                     _rxBuffer.Remove(_rxNext);
-                    deliver.Add(next);
+                    (drained ??= new List<byte[]>()).Add(next);
                     _rxNext++;
                 }
             }
@@ -425,7 +429,7 @@ public sealed class BcUdpConnection : IBcConnection
             {
                 // Bounded: a gap this deep means the stream is already lost, and
                 // an unbounded hold is memory anyone on the path could grow.
-                _rxBuffer[pid] = payload; // out of order — hold until the gap fills
+                _rxBuffer[pid] = payload.ToArray(); // out of order — hold until the gap fills
             }
             // pid < _rxNext: already delivered; drop. The ack timer re-acks anyway.
         }
@@ -434,9 +438,13 @@ public sealed class BcUdpConnection : IBcConnection
         // cumulative ack continuously, so the camera keeps seeing acks even if this
         // delivery write briefly stalls. The generous pipe threshold keeps the write
         // synchronous under normal video rates, so the receive loop keeps draining.
-        if (deliver != null)
-            foreach (var chunk in deliver)
-                await _pipe.Writer.WriteAsync(chunk, ct).ConfigureAwait(false);
+        if (deliverDirect)
+        {
+            await _pipe.Writer.WriteAsync(payload, ct).ConfigureAwait(false);
+            if (drained != null)
+                foreach (var chunk in drained)
+                    await _pipe.Writer.WriteAsync(chunk, ct).ConfigureAwait(false);
+        }
     }
 
     /// <summary>Confirm the session: the camera sends D2C_T (with its sid and the
@@ -508,10 +516,13 @@ public sealed class BcUdpConnection : IBcConnection
         try
         {
             using var timer = new PeriodicTimer(AckInterval);
+            // Reused between ticks: this loop runs 100x/s while any hole exists,
+            // which on a saturated battery-camera radio is the normal state.
+            var truthBuf = new byte[1024];
             while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false))
             {
                 uint group, ackId;
-                byte[] truth = Array.Empty<byte>();
+                int truthLen = 0;
                 lock (_rxGate)
                 {
                     if (_rxNext == 0) { group = BcUdp.NoneReceived; ackId = BcUdp.NoneReceived; }
@@ -524,18 +535,25 @@ public sealed class BcUdpConnection : IBcConnection
                         // no idea we already hold everything past the hole), which eats
                         // its send budget and collapses live video to a keyframe
                         // slideshow. With it, the camera resends just the holes.
+                        // One ordered walk of the (sorted) buffer fills the table and
+                        // yields the top pid; per-slot tree lookups don't survive the
+                        // 10 ms cadence under _rxGate, which the receive path shares.
                         if (_rxBuffer.Count > 0)
                         {
-                            uint maxHeld = _rxBuffer.Keys.Last();
-                            int span = (int)Math.Min(maxHeld - _rxNext + 1, 1024);
-                            truth = new byte[span];
-                            for (int i = 0; i < span; i++)
-                                if (_rxBuffer.ContainsKey(_rxNext + (uint)i)) truth[i] = 1;
+                            uint maxHeld = 0;
+                            foreach (var k in _rxBuffer.Keys)
+                            {
+                                maxHeld = k;
+                                uint idx = k - _rxNext;
+                                if (idx < 1024) truthBuf[idx] = 1;
+                            }
+                            truthLen = (int)Math.Min(maxHeld - _rxNext + 1, 1024);
                         }
                     }
                 }
-                await SendRawAsync(BcUdp.BuildAck(_did, group, ackId, 0, truth), ct)
+                await SendRawAsync(BcUdp.BuildAck(_did, group, ackId, 0, truthBuf.AsSpan(0, truthLen)), ct)
                     .ConfigureAwait(false);
+                if (truthLen > 0) Array.Clear(truthBuf, 0, truthLen);
                 if (_txAck++ == 0) Log.Debug($"{_tag}: udp {El} → first ACK (connId=did {_did}, every {AckInterval.TotalMilliseconds:0}ms)");
             }
         }
@@ -571,9 +589,18 @@ public sealed class BcUdpConnection : IBcConnection
     {
         lock (_txGate)
         {
-            // Cumulative: everything up to and including pid is confirmed.
-            foreach (var k in _unacked.Keys.Where(k => k <= pid).ToList())
-                _unacked.Remove(k);
+            // Cumulative: everything up to and including pid is confirmed. The
+            // keys are sorted, so the walk stops at the first unconfirmed one —
+            // the common everything-already-acked ack costs one comparison.
+            List<uint>? drop = null;
+            foreach (var k in _unacked.Keys)
+            {
+                if (k > pid) break;
+                (drop ??= new List<uint>()).Add(k);
+            }
+            if (drop != null)
+                foreach (var k in drop)
+                    _unacked.Remove(k);
         }
     }
 
