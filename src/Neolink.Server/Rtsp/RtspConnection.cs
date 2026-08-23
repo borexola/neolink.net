@@ -76,7 +76,6 @@ public sealed class RtspConnection
                 session.Stop();
             _sessions.Clear();
             _client.Dispose();
-            _stallGuard?.Dispose();
             Log.Debug($"RTSP client disconnected: {_remote}");
         }
     }
@@ -550,46 +549,34 @@ public sealed class RtspConnection
     internal Task SendInterleavedRawAsync(ReadOnlyMemory<byte> framed, CancellationToken ct) =>
         framed.IsEmpty ? Task.CompletedTask : WriteGuardedAsync(framed, ct);
 
-    /// <summary>Slow-client guard, one per connection instead of a linked CTS +
-    /// timer per write (writes run per frame per viewer): re-armed around every
-    /// write, and on firing it closes the socket, which faults the stuck write
-    /// and wakes the request loop. Serialized by _writeLock.</summary>
-    private CancellationTokenSource? _stallGuard;
-
     private async Task WriteGuardedAsync(ReadOnlyMemory<byte> data, CancellationToken ct)
     {
-        await _writeLock.WaitAsync(ct).ConfigureAwait(false);
+        // Per-write on purpose: the timeout must cover the LOCK WAIT too — that
+        // is what transitively bounds RespondAsync's unguarded writes (a reply
+        // wedged on a half-dead client holds the lock, and it is the pump's timed
+        // wait here that detects it and closes the connection).
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(TimeSpan.FromSeconds(10)); // slow-client guard
         try
         {
-            if (_stallGuard == null)
-            {
-                _stallGuard = new CancellationTokenSource();
-                _stallGuard.Token.Register(() =>
-                {
-                    // The client stopped reading. A half-dead connection is worse
-                    // than a dead one (the client sits blind until its own watchdog
-                    // fires), so close it outright.
-                    Log.Warn($"RTSP client {_remote} stalled (did not accept data for 10s); closing connection");
-                    _client.Dispose();
-                });
-            }
-            _stallGuard.CancelAfter(TimeSpan.FromSeconds(10));
+            await _writeLock.WaitAsync(cts.Token).ConfigureAwait(false);
             try
             {
-                await _stream.WriteAsync(data, ct).ConfigureAwait(false);
-            }
-            catch (Exception) when (_stallGuard.IsCancellationRequested && !ct.IsCancellationRequested)
-            {
-                throw new IOException("RTSP client stalled");
+                await _stream.WriteAsync(data, cts.Token).ConfigureAwait(false);
             }
             finally
             {
-                _stallGuard.CancelAfter(Timeout.InfiniteTimeSpan);
+                _writeLock.Release();
             }
         }
-        finally
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            _writeLock.Release();
+            // The client stopped reading. A half-dead connection is worse than a dead
+            // one (the client sits blind until its own watchdog fires), so close it
+            // outright; that also wakes the request loop, which cleans up the sessions.
+            Log.Warn($"RTSP client {_remote} stalled (did not accept data for 10s); closing connection");
+            _client.Dispose();
+            throw new IOException("RTSP client stalled");
         }
     }
 

@@ -6759,7 +6759,11 @@
     {
         SyncBatteryTiles();
         if (_batt.Count == 0) return;
-        // _pageHidden is refreshed by the poll tick that calls this.
+        // Freshly, not the poll tick's copy: OnExpired also lands here, and a
+        // tile released against 10s-old visibility stops a stream the user is
+        // looking at.
+        try { _pageHidden = await JS.InvokeAsync<bool>("neolink.pageHidden"); }
+        catch { /* interop not ready — assume visible */ }
         foreach (var (slot, b) in _batt)
         {
             if (b.Released || !_attached.ContainsKey(slot)) continue;
