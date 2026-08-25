@@ -1259,9 +1259,13 @@ public sealed class CameraService : ILiveCameraSource
         if (MotionSink is not { } sink || !_config.WakeCapture) return;
         var started = DateTime.UtcNow.Ticks;
         Interlocked.Exchange(ref _lastMotionActiveTicks, started); // hold the session while the clip runs
-        sink(new MotionPush("wake", WakeLabel, External: true));
+        bool hintBacked = _config.HintEvents && _wakeDiag is { HintSource: not null };
+        if (hintBacked && _wakeDiag is { } wd) wd.HintKept = true;
+        sink(new MotionPush(hintBacked ? "hint" : "wake", WakeLabel, External: true));
         Log.Debug($"{Tag}: self-wake recording window open ({WakeClipWindow.TotalSeconds:0}s) — " +
-                  "the recorder keeps the footage only if a detection this camera's event types allow arrives");
+                  (hintBacked
+                      ? "hint-backed: the recorder keeps this footage as a motion event (hint_events)"
+                      : "the recorder keeps the footage only if a detection this camera's event types allow arrives"));
         // The closing timer deliberately ignores the session token: it is the ONLY
         // closer an unconfirmed tentative event has, and a session that dies before
         // the window elapses used to cancel it — the tentative then lingered open
@@ -1346,7 +1350,7 @@ public sealed class CameraService : ILiveCameraSource
                 Log.Info($"{Tag}: real catch — wake-scan skepticism reset");
             _fruitlessWakes = 0;
         }
-        else
+        else if (!d.HintKept)
         {
             _fruitlessWakes++;
             int shift = Math.Min(_fruitlessWakes, MaxWakeSkepticism);
@@ -1590,6 +1594,7 @@ internal sealed class WakeDiag
     /// Hints are event-grade — the router saw the camera itself calling the push
     /// service — so they may fire before the scan is even armed.</summary>
     public string? HintSource;
+    public bool HintKept;
 
     public double SinceArmedSeconds =>
         ArmedAt == default ? -1 : (EdgeAt - ArmedAt).TotalSeconds;
@@ -1637,6 +1642,10 @@ internal sealed class WakeDiag
                 ? "REAL self-wake (router wake hint) — the camera phoned home, the hint fired, and a " +
                   "detection followed"
                 : "REAL self-wake — a detection followed, which is exactly what wake-capture is for";
+        if (HintSource != null && HintKept)
+            return "HINT KEPT — no detection push followed, but hint_events keeps this wake's footage " +
+                   "as a motion event (this model may never re-deliver a detection to a session opened " +
+                   "after it classified)";
         // A hint that led to no detection is a rule problem, not a scan problem:
         // the router matched traffic that was not an event push (or the camera's
         // event-type filter discarded what followed).

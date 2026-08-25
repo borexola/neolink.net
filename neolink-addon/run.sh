@@ -68,6 +68,7 @@ build_config() {
               + (if $c.always_on == true then {always_on: true} else {} end)
               + (if $c.udp == true then {udp: true} else {} end)
               + (if $c.wake_capture == true then {wake_capture: true} else {} end)
+              + (if $c.hint_events == true then {hint_events: true} else {} end)
               + (if $c.channel_id != null then {channel_id: $c.channel_id} else {} end)
               + (if $c.keep_alive_hours != null then {keep_alive_hours: $c.keep_alive_hours} else {} end)
               + (if ($c.stream // "") != "" then {stream: $c.stream} else {} end)

@@ -1050,6 +1050,7 @@ public static class WebApi
                         ConfigEditor.Set(cam, "udp", null);
                         ConfigEditor.Set(cam, "udp_probe", null);
                         ConfigEditor.Set(cam, "wake_capture", null);
+                        ConfigEditor.Set(cam, "hint_events", null);
                         ConfigEditor.Set(cam, "keep_alive_hours", null);
                     }
                     // Event recording applies to both camera kinds, so it is set

@@ -539,11 +539,12 @@ public sealed class EventRecorder
             // event-type selection in the camera's settings stays in charge of
             // what actually becomes a stored video. The schedule applies too.
             bool wakeProvisional = push.External && push.Status == "wake";
+            bool hintWake = push.External && push.Status == "hint";
             List<string> labels;
-            if (wakeProvisional)
+            if (wakeProvisional || hintWake)
             {
                 if (!settings.ScheduleAllows(DateTime.Now)) continue;
-                labels = LabelsOf(push);
+                labels = hintWake ? new List<string> { "motion" } : LabelsOf(push);
             }
             else if (push.External)
             {
@@ -566,7 +567,8 @@ public sealed class EventRecorder
 
             try
             {
-                await RunEventAsync(labels, wakeProvisional, ct).ConfigureAwait(false);
+                await RunEventAsync(labels, wakeProvisional, ct,
+                    hintWake ? " — hint-opened wake, kept by hint_events" : null).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -590,7 +592,8 @@ public sealed class EventRecorder
         Log.Info($"{_camera}: detection push ({string.Join("+", LabelsOf(push))}) NOT recorded — {reason}");
     }
 
-    private async Task RunEventAsync(List<string> initialLabels, bool provisional, CancellationToken ct)
+    private async Task RunEventAsync(List<string> initialLabels, bool provisional,
+        CancellationToken ct, string? startNote = null)
     {
         // The stored start reaches back only as far as footage actually exists.
         // A battery camera's wake event has almost nothing buffered — its stream
@@ -611,7 +614,7 @@ public sealed class EventRecorder
         }
         else
         {
-            Log.Info($"{_camera}: ⚡ event started ({string.Join("+", rec.Labels)})");
+            Log.Info($"{_camera}: ⚡ event started ({string.Join("+", rec.Labels)}{startNote})");
             EventStarted?.Invoke(rec); // id out first: HA sees it with the trigger
         }
         _eventActive = true;
@@ -677,7 +680,7 @@ public sealed class EventRecorder
                 // re-add the wake label, and never extend the event. (Seen live:
                 // back-to-back wake sessions promoted a lingering tentative event
                 // with no labels at all — "event started ( — confirmed…".)
-                if (push.Status == "wake") continue;
+                if (push.Status is "wake" or "hint") continue;
                 // Filtered-out detection types don't extend the event either —
                 // as far as recording is concerned, they never happened.
                 // External holds always extend: the switch is still on.
