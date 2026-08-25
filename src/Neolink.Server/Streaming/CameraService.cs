@@ -1302,8 +1302,8 @@ public sealed class CameraService : ILiveCameraSource
             {
                 long last = Interlocked.Read(ref _lastMotionActiveTicks);
                 if (last <= started) break; // no real detection superseded — close now
-                if (_live == null && DateTime.UtcNow.Ticks - last >= WakeClipWindow.Ticks)
-                    break; // session gone, a full window of quiet — nothing else will end it
+                if (_live == null && DateTime.UtcNow.Ticks - last >= MotionDemandHold.Ticks)
+                    break; // session gone — no push can arrive, so close after the hold
                 await Task.Delay(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
             }
             sink(new MotionPush("none", Array.Empty<string>(), External: true));

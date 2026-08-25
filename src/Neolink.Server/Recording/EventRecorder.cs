@@ -568,7 +568,8 @@ public sealed class EventRecorder
             try
             {
                 await RunEventAsync(labels, wakeProvisional, ct,
-                    hintWake ? " — hint-opened wake" : null).ConfigureAwait(false);
+                    hintWake ? " — hint-opened wake" : null,
+                    wakeOpened: wakeProvisional || hintWake).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -593,7 +594,7 @@ public sealed class EventRecorder
     }
 
     private async Task RunEventAsync(List<string> initialLabels, bool provisional,
-        CancellationToken ct, string? startNote = null)
+        CancellationToken ct, string? startNote = null, bool wakeOpened = false)
     {
         // The stored start reaches back only as far as footage actually exists.
         // A battery camera's wake event has almost nothing buffered — its stream
@@ -621,7 +622,7 @@ public sealed class EventRecorder
         RecordingChanged?.Invoke(true);
         try
         {
-            await RunEventCoreAsync(rec, provisional, ct).ConfigureAwait(false);
+            await RunEventCoreAsync(rec, provisional, wakeOpened, ct).ConfigureAwait(false);
         }
         finally
         {
@@ -630,7 +631,8 @@ public sealed class EventRecorder
         }
     }
 
-    private async Task RunEventCoreAsync(EventRecord rec, bool provisional, CancellationToken ct)
+    private async Task RunEventCoreAsync(EventRecord rec, bool provisional, bool wakeOpened,
+        CancellationToken ct)
     {
         // The pre-roll buffers hold the trigger moment itself — the seconds the
         // live snapshot burst can never reach. StartClip is about to drain them
@@ -680,7 +682,18 @@ public sealed class EventRecorder
                 // re-add the wake label, and never extend the event. (Seen live:
                 // back-to-back wake sessions promoted a lingering tentative event
                 // with no labels at all — "event started ( — confirmed…".)
-                if (push.Status is "wake" or "hint") continue;
+                if (push.Status is "wake" or "hint")
+                {
+                    // A marker means a NEW wake session, so this event's own session
+                    // is gone: end it here and let the re-queued marker open its own.
+                    if (wakeOpened)
+                    {
+                        active = false;
+                        quietUntil = DateTime.UtcNow;
+                        OnMotion(push);
+                    }
+                    continue;
+                }
                 // Filtered-out detection types don't extend the event either —
                 // as far as recording is concerned, they never happened.
                 // External holds always extend: the switch is still on.
