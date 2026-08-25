@@ -895,6 +895,8 @@ foreach (var (services, name, recorderSink) in motionTargets)
     var window = TimeSpan.FromMilliseconds(400);
     foreach (var svc in services)
     {
+        var rs = recordingSettings;
+        svc.HintKeepAllowed = rs == null ? null : () => rs.Get(name).AllowsLabel("motion");
         svc.MotionSink = push =>
         {
             var sig = $"{push.Status}|{string.Join(",", push.AiTypes)}|{push.External}";

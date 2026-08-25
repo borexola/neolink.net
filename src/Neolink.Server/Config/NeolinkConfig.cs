@@ -159,7 +159,6 @@ public sealed class NeolinkConfig
         bool udpProbe = false;
         bool udp = false;
         bool wakeCapture = false;
-        bool hintEvents = false;
         double keepAliveHours = 0;
         bool? alwaysOn = null;
         List<string>? permitted = null;
@@ -190,7 +189,6 @@ public sealed class NeolinkConfig
                 case "udpprobe": udpProbe = prop.Value.GetBoolean(); break;
                 case "udp": udp = prop.Value.GetBoolean(); break;
                 case "wakecapture": wakeCapture = prop.Value.GetBoolean(); break;
-                case "hintevents": hintEvents = prop.Value.GetBoolean(); break;
                 case "keepalivehours": keepAliveHours = Math.Clamp(prop.Value.GetDouble(), 0, 24); break;
                 case "audiotranscode": audioTranscode = prop.Value.GetString(); break;
                 // Generic (non-Reolink) camera: pull these RTSP URLs directly.
@@ -209,7 +207,7 @@ public sealed class NeolinkConfig
         }
 
         return BuildCamera(name, username, password, address, uid, stream, channelId, permitted, httpAddress,
-            record, rtspMain, rtspSub, alwaysOn, udpProbe, udp, wakeCapture, hintEvents, onvifAddress,
+            record, rtspMain, rtspSub, alwaysOn, udpProbe, udp, wakeCapture, onvifAddress,
             keepAliveHours, audioTranscode);
     }
 
@@ -438,7 +436,6 @@ public sealed class NeolinkConfig
                 MiniToml.GetBool(c, "udp_probe") ?? false,
                 MiniToml.GetBool(c, "udp") ?? false,
                 MiniToml.GetBool(c, "wake_capture") ?? false,
-                MiniToml.GetBool(c, "hint_events") ?? false,
                 MiniToml.GetString(c, "onvif_address"),
                 Math.Clamp(MiniToml.GetDouble(c, "keep_alive_hours") ?? 0, 0, 24),
                 MiniToml.GetString(c, "audio_transcode")));
@@ -456,13 +453,11 @@ public sealed class NeolinkConfig
         string? address, string? uid, string stream, byte channelId, List<string>? permitted,
         string? httpAddress = null, bool record = true, string? rtspMain = null, string? rtspSub = null,
         bool? alwaysOn = null, bool udpProbe = false, bool udp = false, bool wakeCapture = false,
-        bool hintEvents = false, string? onvifAddress = null, double keepAliveHours = 0,
+        string? onvifAddress = null, double keepAliveHours = 0,
         string? audioTranscode = null)
     {
         if (name == null) throw new FormatException("camera entry missing \"name\"");
         audioTranscode = NormalizeAudioTranscode(name, audioTranscode);
-        if (hintEvents && !wakeCapture)
-            Log.Warn($"Camera \"{name}\": \"hint_events\" does nothing without \"wake_capture\": true");
 
         // Generic (non-Reolink) camera: RTSP URLs stand in for address/credentials
         // (put the login inside the URL: rtsp://user:pass@host/path).
@@ -522,7 +517,6 @@ public sealed class NeolinkConfig
             UdpProbe = udpProbe,
             Udp = udp,
             WakeCapture = wakeCapture,
-            HintEvents = hintEvents,
             KeepAliveHours = keepAliveHours,
             AudioTranscode = audioTranscode,
         };
@@ -885,7 +879,6 @@ public sealed class CameraConfig
     /// demand. Default false = the classic park-until-viewer behavior. No effect with
     /// always_on (never sleeps) or on non-battery cameras.</summary>
     public bool WakeCapture { get; init; }
-    public bool HintEvents { get; init; }
     /// <summary>Battery cameras (opt-in): keep this camera awake and connected for
     /// this many hours after startup (0–24, 0 = off), so every event is caught live
     /// instead of relying on the non-waking wake-scan. A deliberate battery cost — the

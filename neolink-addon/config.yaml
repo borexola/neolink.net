@@ -62,7 +62,6 @@ schema:
       uid: str?
       udp: bool?
       wake_capture: bool?
-      hint_events: bool?
       keep_alive_hours: float?
       http_address: str?
   auto_mqtt: bool

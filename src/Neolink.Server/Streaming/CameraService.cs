@@ -418,6 +418,10 @@ public sealed class CameraService : ILiveCameraSource
         }
     }
 
+    /// <summary>Whether this camera's event types allow "motion" — the label a
+    /// hint-kept wake records as. Null = allow (no recorder configured).</summary>
+    public Func<bool>? HintKeepAllowed { get; set; }
+
     /// <summary>
     /// When set (on the primary stream service), alarm pushes are requested on each
     /// connection and forwarded here. Assigned once during startup wiring.
@@ -1252,32 +1256,56 @@ public sealed class CameraService : ILiveCameraSource
     /// it bypasses the event-type filter the way the HA record switch does — only
     /// the master events switch can veto it. If no REAL detection follows within
     /// <see cref="WakeClipWindow"/>, a matching all-clear ends the clip through the
-    /// recorder's normal post-roll; a real one takes over the event's lifecycle.
+    /// recorder's normal post-roll; a real one takes over the event's lifecycle —
+    /// but only while its own all-clear can still arrive (live session). If the
+    /// session dies first, the closer re-arms and ends the event once motion has
+    /// been quiet for a full window, so it can't idle open to MaxClipSeconds and
+    /// swallow the wakes that follow.
     /// </summary>
     private void StartWakeClip()
     {
         if (MotionSink is not { } sink || !_config.WakeCapture) return;
         var started = DateTime.UtcNow.Ticks;
         Interlocked.Exchange(ref _lastMotionActiveTicks, started); // hold the session while the clip runs
-        bool hintBacked = _config.HintEvents && _wakeDiag is { HintSource: not null };
+        bool hintBacked = _wakeDiag is { HintSource: not null };
+        if (hintBacked && HintKeepAllowed?.Invoke() == false)
+        {
+            // Event types are the single authority: with Motion unticked the hint
+            // cannot keep the footage, so the wake falls back to the tentative path.
+            hintBacked = false;
+            Log.Info($"{Tag}: wake hint received but Motion is unticked in this camera's event " +
+                     "types — recording tentatively instead (tick Motion to keep hint wakes as events)");
+        }
         if (hintBacked && _wakeDiag is { } wd) wd.HintKept = true;
         sink(new MotionPush(hintBacked ? "hint" : "wake", WakeLabel, External: true));
         Log.Debug($"{Tag}: self-wake recording window open ({WakeClipWindow.TotalSeconds:0}s) — " +
                   (hintBacked
-                      ? "hint-backed: the recorder keeps this footage as a motion event (hint_events)"
+                      ? "hint-backed: the recorder keeps this footage as a motion event (Motion is ticked)"
                       : "the recorder keeps the footage only if a detection this camera's event types allow arrives"));
         // The closing timer deliberately ignores the session token: it is the ONLY
         // closer an unconfirmed tentative event has, and a session that dies before
         // the window elapses used to cancel it — the tentative then lingered open
         // with no end until the NEXT session's activity finally flushed it (live
         // 2026-07-22: discards reported 57 s and 191 s for ~20 s sessions). The
-        // recorder outlives sessions, so the late all-clear is always safe; a
-        // newer wake clip or a real detection supersedes via the ticks guard.
+        // recorder outlives sessions, so the late all-clear is always safe. A real
+        // detection defers the closer only while the session lives (the camera's
+        // own all-clear governs then); a session that dies with the detection
+        // still active would otherwise leave the event open to MaxClipSeconds,
+        // swallowing every wake in between (live 2026-08-25: a 240 s zombie ate
+        // two hint wakes). A stray late all-clear is harmless: outside an event
+        // the recorder drops it, inside one it only arms the normal post-roll.
         _ = Task.Run(async () =>
         {
             await Task.Delay(WakeClipWindow).ConfigureAwait(false);
-            // A real detection arrived meanwhile: its own all-clear governs.
-            if (Interlocked.Read(ref _lastMotionActiveTicks) > started) return;
+            var giveUp = DateTime.UtcNow + TimeSpan.FromMinutes(10); // viewer-held bound
+            while (DateTime.UtcNow < giveUp)
+            {
+                long last = Interlocked.Read(ref _lastMotionActiveTicks);
+                if (last <= started) break; // no real detection superseded — close now
+                if (_live == null && DateTime.UtcNow.Ticks - last >= WakeClipWindow.Ticks)
+                    break; // session gone, a full window of quiet — nothing else will end it
+                await Task.Delay(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+            }
             sink(new MotionPush("none", Array.Empty<string>(), External: true));
         }, CancellationToken.None);
     }
@@ -1643,9 +1671,9 @@ internal sealed class WakeDiag
                   "detection followed"
                 : "REAL self-wake — a detection followed, which is exactly what wake-capture is for";
         if (HintSource != null && HintKept)
-            return "HINT KEPT — no detection push followed, but hint_events keeps this wake's footage " +
-                   "as a motion event (this model may never re-deliver a detection to a session opened " +
-                   "after it classified)";
+            return "HINT KEPT — no detection push followed, but the wake footage is kept as a motion " +
+                   "event (Motion is ticked; some models never re-deliver a detection to a session " +
+                   "opened after they classified)";
         // A hint that led to no detection is a rule problem, not a scan problem:
         // the router matched traffic that was not an event push (or the camera's
         // event-type filter discarded what followed).

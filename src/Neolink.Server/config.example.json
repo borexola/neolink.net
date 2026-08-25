@@ -198,11 +198,6 @@
       // always_on (never sleeps) or on non-battery cameras.
       // "wake_capture": true,
 
-      // Hint events (needs wake_capture + wake hints): keep a hint-opened wake as
-      // a confirmed "motion" event even if no detection push follows - some models
-      // never deliver the push to a session opened after they classified.
-      // "hint_events": true,
-
       // Optional: restrict this camera to specific users from "users" above.
       // "permitted_users": [ "me" ]
     }

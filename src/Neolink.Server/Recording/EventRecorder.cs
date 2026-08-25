@@ -568,7 +568,7 @@ public sealed class EventRecorder
             try
             {
                 await RunEventAsync(labels, wakeProvisional, ct,
-                    hintWake ? " — hint-opened wake, kept by hint_events" : null).ConfigureAwait(false);
+                    hintWake ? " — hint-opened wake" : null).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
