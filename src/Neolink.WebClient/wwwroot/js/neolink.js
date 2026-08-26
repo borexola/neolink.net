@@ -662,6 +662,10 @@
 
     // ---------- monitor page (live server log tails) ----------
     const logTails = {};
+    let evMoreObs = null, evMoreScroll = null;
+    // A camera's log lines start "{name}: …" or "{name} (Main): …" — the
+    // delimiter keeps "Drive" from matching "Driveway".
+    const logCamHit = (msg, cam) => msg.startsWith(cam + ':') || msg.startsWith(cam + ' (');
 
     window.neolink = {
         freeInit,
@@ -2062,7 +2066,7 @@
             this.logsDetach(containerId);
             const el = document.getElementById(containerId);
             if (!el) return;
-            const state = { alive: true, ws: null, timer: 0, lastSeq: 0 };
+            const state = { alive: true, ws: null, timer: 0, lastSeq: 0, cam: '' };
             logTails[containerId] = state;
 
             const append = (e) => {
@@ -2081,6 +2085,7 @@
                 msg.className = 'log-msg';
                 msg.textContent = e.msg; // textContent: log content can never become markup
                 line.append(time, lvl, msg);
+                if (state.cam && !logCamHit(e.msg, state.cam)) line.classList.add('log-hide-cam');
                 el.appendChild(line);
                 while (el.childElementCount > 2000) el.firstElementChild.remove();
                 if (pinned) el.scrollTop = el.scrollHeight;
@@ -2116,6 +2121,50 @@
         },
         logsClear(containerId) {
             document.getElementById(containerId)?.replaceChildren();
+        },
+        // Events list: grow the page when the sentinel nears the viewport. The
+        // sentinel is also a real button, and a scroll fallback covers embedded
+        // webviews where IntersectionObserver never delivers.
+        evMoreObserve(el, dotnetRef) {
+            this.evMoreDetach();
+            if (!el) return;
+            let busy = false;
+            const fire = () => {
+                if (busy) return;
+                busy = true;
+                dotnetRef.invokeMethodAsync('LoadMoreEvents');
+                setTimeout(() => busy = false, 300);
+            };
+            evMoreObs = new IntersectionObserver(entries => {
+                if (entries.some(e => e.isIntersecting)) fire();
+            }, { rootMargin: '400px' });
+            evMoreObs.observe(el);
+            const sc = el.closest('.ev-list');
+            if (sc) {
+                evMoreScroll = { sc, fn: () => {
+                    if (sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 400) fire();
+                } };
+                sc.addEventListener('scroll', evMoreScroll.fn, { passive: true });
+            }
+        },
+        evMoreDetach() {
+            if (evMoreObs) { evMoreObs.disconnect(); evMoreObs = null; }
+            if (evMoreScroll) { evMoreScroll.sc.removeEventListener('scroll', evMoreScroll.fn); evMoreScroll = null; }
+        },
+
+        // Per-camera filter: retags every kept line and steers future appends.
+        logsFilterCam(containerId, cam) {
+            cam = cam || '';
+            const s = logTails[containerId];
+            if (s) s.cam = cam;
+            const el = document.getElementById(containerId);
+            if (!el) return;
+            for (const line of el.children) {
+                const msg = line.querySelector('.log-msg');
+                line.classList.toggle('log-hide-cam',
+                    !!cam && !(msg && logCamHit(msg.textContent, cam)));
+            }
+            el.scrollTop = el.scrollHeight;
         },
 
         defaultServer() {

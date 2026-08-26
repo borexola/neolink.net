@@ -28,6 +28,19 @@
                         title="@(_hiddenLevels.Contains(lvl) ? T["Hidden — click to show"] : T["Shown — click to hide"])"
                         @onclick="() => ToggleLevel(lvl)">@lvl</button>
             }
+            @if (_cameras.Count > 0)
+            {
+                <span class="tool-sep"></span>
+                <span class="tool-label">@T["CAMERA"]</span>
+                <select class="event-filter" @bind="_camFilter" @bind:after="ApplyCamFilterAsync"
+                        title="@T["Show one camera's lines, or all of them"]">
+                    <option value="">@T["all cameras"]</option>
+                    @foreach (var c in _cameras)
+                    {
+                        <option value="@c">@c</option>
+                    }
+                </select>
+            }
             <span class="tile-spacer"></span>
             <button class="tool-btn" title="@T["Empty the view (the server keeps its backlog)"]"
                     @onclick="ClearAsync">@T["Clear"]</button>
@@ -65,6 +78,8 @@
     private bool _admin;
     private bool _attached;
     private readonly HashSet<string> _hiddenLevels = new();
+    private readonly List<string> _cameras = new();
+    private string _camFilter = "";
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -115,9 +130,28 @@
             }
         }
         catch { }
+        if (_admin)
+        {
+            try
+            {
+                var req = new HttpRequestMessage(HttpMethod.Get, $"{ApiBase}/api/cameras");
+                if (!string.IsNullOrEmpty(_token))
+                    req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _token);
+                using var res = await Http.SendAsync(req);
+                if (res.IsSuccessStatusCode)
+                {
+                    var cams = await res.Content.ReadFromJsonAsync<List<ApiCamera>>();
+                    if (cams != null) _cameras.AddRange(cams.Select(c => c.Name));
+                }
+            }
+            catch { }
+        }
         _checked = true;
         StateHasChanged();
     }
+
+    private Task ApplyCamFilterAsync() =>
+        JS.InvokeVoidAsync("neolink.logsFilterCam", "logs-view", _camFilter).AsTask();
 
     /// <summary>Where the auth-status fetch goes. It runs SERVER-side (Blazor circuit),
     /// so when the configured server is the page's own origin it uses loopback

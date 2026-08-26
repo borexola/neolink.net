@@ -1524,6 +1524,7 @@ internal sealed class CameraBridge
 
     public void OnMotion(MotionPush push)
     {
+        if (push.External && push.Status == "wake") return; // tentative wake marker: sensors fire on confirmed events only
         var now = DateTime.UtcNow;
         var labels = EventRecorder.LabelsOf(push); // person/vehicle/animal/... or "motion"
         if (push.Active && labels.Contains("doorbell"))

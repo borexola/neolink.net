@@ -87,7 +87,14 @@ are two ways to catch the moment; use either (or both):
   are no hints and the ping scan carries on alone.
 - A hint-opened session records for a full **30 seconds** (extended by
   further pushes or ongoing motion), so short events still yield usable
-  footage.
+  footage. An early all-clear from the camera cannot cut that window short.
+- **A hint-opened wake is kept as a confirmed Motion event** when **Motion**
+  is ticked in the camera's event types — no detection push required. Some
+  models classify first and call home second, and never re-deliver the
+  detection to a session opened on the hint; the hint itself is the
+  confirmation (a push that does arrive still adds its labels). With Motion
+  unticked, hint wakes fall back to the tentative path and need a matching
+  classification. Scan-opened self-wakes always need one.
 
 ### Option A: firewall log (OPNsense/pfSense)
 
@@ -316,6 +323,12 @@ a detection the camera's event types allow arrives (~30 s window), labeled by
 the detection; otherwise deleted. "Wake" is never an event type — what wakes
 leave behind lives on the Timeline.
 
+A **hint-opened** wake skips the tentative stage when **Motion** is ticked:
+the event starts announced and confirmed as **Motion** at the first keyframe,
+and a detection push that does arrive adds its labels. Every wake session
+gets its own event — triggers within one session group, separate wakes never
+merge.
+
 ### Log lines worth knowing
 
 | Log line | Meaning |
@@ -325,6 +338,8 @@ leave behind lives on the Timeline.
 | `camera answered the transport probe after an all-silent park` | Ping filtered here; the fallback prober caught the wake. |
 | `self-wake — recording tentatively…` | Wake caught; capturing, nothing announced yet. |
 | `event started (motion — confirmed self-wake, footage from the wake onward)` | An allowed detection confirmed it; the event is real and announced. |
+| `event started (motion — hint-opened wake)` | The hint was the confirmation (Motion is ticked); kept without waiting for a detection push. |
+| `[wake-diag] HINT KEPT …` | No detection push followed, but the wake was kept as a motion event. |
 | `self-wake ended with no matching detection — footage discarded…` | Nothing allowed arrived; the tentative event was deleted. |
 | `taping this wake to the timeline (passive — never holds the camera awake)` | The timeline tap is writing a segment from frames already flowing. |
 | `held awake by …` (hourly) | Something is spending battery; this names it. |

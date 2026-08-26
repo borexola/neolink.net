@@ -271,7 +271,7 @@ public sealed class EventStore
         }
         return matched
             .OrderByDescending(r => r.StartUtc)
-            .Take(Math.Clamp(limit, 1, localDate == null ? 1000 : 10_000))
+            .Take(Math.Clamp(limit, 1, 100_000))
             .ToList();
     }
 

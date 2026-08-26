@@ -53,13 +53,13 @@
             </select>
             <button class="chip @(_unreviewedOnly ? "chip-active" : "chip-off")"
                     title="@(_unreviewedOnly ? T["Showing only events you haven't opened yet — click to show all"] : T["Show only events you haven't opened yet"])"
-                    @onclick="() => _unreviewedOnly = !_unreviewedOnly">@T["unreviewed only"]</button>
+                    @onclick="() => { _unreviewedOnly = !_unreviewedOnly; ResetPaging(); }">@T["unreviewed only"]</button>
             @if (AnyAiLevels)
             {
                 @* AI threat filter — the point of the threat level is "show me what
                    matters"; only offered once described events actually exist, so
                    setups without AI descriptions never see the extra control. *@
-                <select class="event-filter" @bind="_levelFilter"
+                <select class="event-filter" @bind="_levelFilter" @bind:after="ResetPaging"
                         title="@T["Show only events with a given AI threat level"]">
                     <option value="">@T["any threat"]</option>
                     <option value="flagged">@T["yellow + red"]</option>
@@ -101,6 +101,69 @@
         }
         <button class="icon-btn" title="@T["Refresh"]" @onclick="RefreshCurrentAsync">@UiIcon.Render("refresh", 14)</button>
     </div>
+
+    @if (!_sdMode)
+    {
+        <div class="ev-search-row">
+        <div class="ev-search-head">
+            <span class="ev-search-title">@T["AI Search"]</span>
+            <span class="beta-tag">@T["BETA"]</span>
+        </div>
+        <div class="ev-search">
+            <span class="ev-search-icon @(_searchAi ? "ai" : "")"
+                  title="@(_searchAi ? T["AI search is on — complex phrases use your local AI"] : T["AI is not configured — structured search only (type, camera, date)"])">
+                @UiIcon.Render(_searchAi ? "sparkles" : "zoom", 15)
+            </span>
+            <input class="ev-search-input" placeholder="@T["Search events — try: person in FrontDoor yesterday"]"
+                   @bind="_searchQ" @bind:event="oninput" @onkeydown="OnSearchKeyAsync" />
+            <button class="chip chip-active" disabled="@_searchBusy" @onclick="RunSearchAsync">@T["Search"]</button>
+            @if (_searchBusy)
+            {
+                <span class="btn-spinner"></span>
+            }
+            else if (_searchResults != null)
+            {
+                <button class="icon-btn" title="@T["Clear"]" @onclick="ClearSearch">@UiIcon.Render("x", 14)</button>
+            }
+        </div>
+        </div>
+        @if (_searchResults == null && !_searchBusy)
+        {
+            <div class="ev-search-hint">
+                @T["Search in plain language — event type, camera, time and what happened."]
+                @if (!_searchAi)
+                {
+                    <text> </text>@T["Configure a local AI model in the AI settings to unlock description-based matching."]
+                }
+            </div>
+        }
+        @if (_searchError && !_searchBusy)
+        {
+            <div class="notice ev-search-miss">@T["The search took too long or failed — try again, or narrow the period."]</div>
+        }
+        @if (_searchResults != null)
+        {
+            <div class="ev-search-info">
+                <span>@T["Understood as:"]</span>
+                <span class="ev-search-chips">@_searchSummary</span>
+                @if (_searchUsedAi)
+                {
+                    <span class="ev-search-ai">@UiIcon.Render("sparkles", 12) @T["refined by AI"]</span>
+                }
+                <span class="event-day-count">@_searchResults.Count</span>
+            </div>
+            @if (_searchKwMiss)
+            {
+                <div class="notice ev-search-miss">@(_searchJudged
+                    ? T.F("The AI reviewed that period but nothing matches {0} — showing everything the other filters allow.", "“" + _searchKwText + "”")
+                    : T.F("No event description mentions {0} — showing everything the other filters allow.", "“" + _searchKwText + "”"))</div>
+            }
+            else if (_searchKwPartial)
+            {
+                <div class="notice ev-search-miss">@T.F("No event description mentions all of {0} — showing the closest matches.", "“" + _searchKwText + "”")</div>
+            }
+        }
+    }
 
     @if (_selectMode)
     {
@@ -225,6 +288,8 @@
            whole day (up to thousands of events) on every enumeration, and this
            markup used to enumerate it twice per render pass. *@
         var filtered = Filtered.ToList();
+        var shown = filtered.Take(_shown).ToList();
+        _hasMore = filtered.Count > shown.Count;
         <div class="ev-body">
             <div class="ev-list" role="list">
                 @if (_loading)
@@ -240,7 +305,7 @@
                             : T["No events in the last 24 hours."])
                     </div>
                 }
-                @foreach (var day in filtered.GroupBy(e => e.Start.ToLocalTime().Date))
+                @foreach (var day in shown.GroupBy(e => e.Start.ToLocalTime().Date))
                 {
                     <div class="ev-day">
                         <div class="ev-day-head">@DayLabel(day.Key) <span class="event-day-count">@day.Count()</span></div>
@@ -259,7 +324,7 @@
                                 <div class="event-row-thumb">
                                     @if (ev.HasThumb)
                                     {
-                                        <img src="@Artifact(ev, "thumb")" loading="lazy" alt="" />
+                                        <img src="@Artifact(ev, "thumb")" loading="lazy" decoding="async" alt="" />
                                     }
                                     else
                                     {
@@ -293,6 +358,14 @@
                             </div>
                         }
                     </div>
+                }
+                @if (_hasMore)
+                {
+                    <button class="ev-more" @ref="_moreSentinel" @onclick="LoadMoreEvents">@T["Show more"]</button>
+                }
+                else if (filtered.Count > PageSize)
+                {
+                    <div class="ev-end">@T.F("That's all — {0} event(s)", filtered.Count)</div>
                 }
             </div>
 
@@ -564,6 +637,7 @@
                 _cameraFilter = Camera;
 
             await LoadCamerasAsync();
+            await LoadSearchInfoAsync();
             await RefreshAsync();
 
             // Deep link to one exact event (?event={id}): open and play it, even
@@ -599,6 +673,17 @@
             _pendingVideoUrl = null;
             await JS.InvokeVoidAsync("neolink.eventPlayer", "ev-video", url, _speed);
         }
+
+        // (Re)attach the load-more sentinel — the element moves on each page grow.
+        _selfRef ??= DotNetObjectReference.Create(this);
+        try
+        {
+            if (_hasMore && !_sdMode)
+                await JS.InvokeVoidAsync("neolink.evMoreObserve", _moreSentinel, _selfRef);
+            else
+                await JS.InvokeVoidAsync("neolink.evMoreDetach");
+        }
+        catch { }
     }
 
     // ------------------------------------------------------------ data plumbing
@@ -626,9 +711,11 @@
     /// own budget. Server-state reads are fast (20s is generous); the SD-card
     /// FILE search is answered by the camera walking its card and legitimately
     /// runs long, so its caller passes a budget above the server's own 90s.</summary>
-    private async Task<TValue?> GetJsonAsync<TValue>(string path, int timeoutSeconds = 20)
+    private async Task<TValue?> GetJsonAsync<TValue>(string path, int timeoutSeconds = 20,
+        CancellationToken abort = default)
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(abort);
+        cts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
         using var res = await Http.SendAsync(Req(HttpMethod.Get, path), cts.Token);
         if (res.StatusCode == System.Net.HttpStatusCode.Unauthorized)
         {
@@ -637,6 +724,137 @@
         }
         if (!res.IsSuccessStatusCode) return default;
         return await res.Content.ReadFromJsonAsync<TValue>();
+    }
+
+    // ------------------------------------------------------------ paging
+
+    private const int PageSize = 25;
+    private int _shown = PageSize;
+    private bool _hasMore;
+    private ElementReference _moreSentinel;
+    private DotNetObjectReference<Events>? _selfRef;
+
+    private void ResetPaging() => _shown = PageSize;
+
+    [JSInvokable]
+    public async Task LoadMoreEvents()
+    {
+        _shown += PageSize;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    // ------------------------------------------------------------ search
+
+    private string _searchQ = "";
+    private bool _searchAi;
+    private bool _searchBusy;
+    private bool _searchUsedAi;
+    private bool _searchKwMiss;
+    private bool _searchKwPartial;
+    private bool _searchJudged;
+    private bool _searchError;
+    private int _searchGen;
+    private CancellationTokenSource? _searchCts;
+    private string _searchKwText = "";
+    private List<ApiEvent>? _searchResults;
+    private string _searchSummary = "";
+
+    private async Task LoadSearchInfoAsync()
+    {
+        try
+        {
+            var info = await GetJsonAsync<ApiEventSearch>("/api/events/search");
+            _searchAi = info?.AiAvailable ?? false;
+        }
+        catch { }
+    }
+
+    private async Task OnSearchKeyAsync(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await RunSearchAsync();
+        else if (e.Key == "Escape") ClearSearch();
+    }
+
+    private async Task RunSearchAsync()
+    {
+        var q = _searchQ.Trim();
+        if (q.Length == 0) { ClearSearch(); return; }
+        var gen = ++_searchGen;
+        // A superseded search must release the LLM, not just be ignored.
+        _searchCts?.Cancel();
+        _searchCts = new CancellationTokenSource();
+        var abort = _searchCts.Token;
+        _searchBusy = true;
+        _searchError = false;
+        StateHasChanged();
+        try
+        {
+            // The AI translate + judge passes can take a while on a local model.
+            var res = await GetJsonAsync<ApiEventSearch>(
+                $"/api/events/search?q={Uri.EscapeDataString(q)}&limit=500", timeoutSeconds: 90,
+                abort: abort);
+            // A clear or newer search while this one was in flight wins.
+            if (gen != _searchGen) return;
+            if (res == null && !abort.IsCancellationRequested)
+            {
+                _searchError = true;
+            }
+            if (res?.Events != null)
+            {
+                _searchResults = res.Events;
+                _searchUsedAi = res.Ai;
+                _searchKwMiss = !res.KeywordsMatched;
+                _searchKwPartial = res.KeywordsPartial;
+                _searchJudged = res.Judged;
+                _searchKwText = string.Join(" ", res.Understood?.Keywords ?? []);
+                _searchSummary = SummaryOf(res.Understood);
+                _selected = null;
+                // The search owns the view: lingering list filters would silently
+                // empty it.
+                _cameraFilter = "";
+                _levelFilter = "";
+                _unreviewedOnly = false;
+                ResetPaging();
+            }
+        }
+        catch
+        {
+            // Timeout or network blip: keep the current view, but say so.
+            if (gen == _searchGen) _searchError = true;
+        }
+        finally
+        {
+            if (gen == _searchGen) _searchBusy = false;
+        }
+    }
+
+    private void ClearSearch()
+    {
+        _searchGen++;
+        _searchCts?.Cancel();
+        _searchBusy = false;
+        _searchError = false;
+        _searchQ = "";
+        _searchResults = null;
+        _searchUsedAi = false;
+        _searchKwMiss = false;
+        _searchKwPartial = false;
+        _searchJudged = false;
+        _searchKwText = "";
+        _searchSummary = "";
+        ResetPaging();
+    }
+
+    private string SummaryOf(ApiSearchUnderstood? u)
+    {
+        if (u == null) return "";
+        var parts = new List<string>();
+        if (u.Labels is { Count: > 0 }) parts.Add(string.Join(" + ", u.Labels));
+        if (u.NotLabels is { Count: > 0 }) parts.Add(string.Join(" + ", u.NotLabels.Select(l => T["not"] + " " + l)));
+        if (u.Cameras is { Count: > 0 }) parts.Add(string.Join(", ", u.Cameras));
+        if (u.From != null || u.To != null) parts.Add($"{u.From ?? "…"} → {u.To ?? "…"}");
+        if (u.Keywords is { Count: > 0 }) parts.Add("“" + string.Join(" ", u.Keywords) + "”");
+        return parts.Count == 0 ? T["everything"] : string.Join("  ·  ", parts);
     }
 
     private async Task LoadCamerasAsync()
@@ -685,6 +903,7 @@
 
     private async Task SetDateAsync(string? raw)
     {
+        ResetPaging();
         if (string.IsNullOrWhiteSpace(raw) || !DateTime.TryParse(raw, out var day))
         {
             _date = null;
@@ -703,6 +922,7 @@
 
     private async Task SetSdModeAsync(bool on)
     {
+        ResetPaging();
         _sdMode = on;
         if (!on)
         {
@@ -794,6 +1014,7 @@
 
     private void OnFilterChanged()
     {
+        ResetPaging();
         // Keep the URL honest so a refresh / share preserves the camera view.
         var target = string.IsNullOrEmpty(_cameraFilter) ? "events" : $"events/{Uri.EscapeDataString(_cameraFilter)}";
         Nav.NavigateTo(target, replace: true);
@@ -802,7 +1023,8 @@
     // ------------------------------------------------------------ selection & playback
 
     private IEnumerable<ApiEvent> Source() =>
-        _date == null ? _events.Where(e => e.Start >= DateTime.UtcNow.AddHours(-24)) : _eventsForDate;
+        _searchResults != null ? _searchResults
+        : _date == null ? _events.Where(e => e.Start >= DateTime.UtcNow.AddHours(-24)) : _eventsForDate;
 
     private IEnumerable<ApiEvent> Filtered =>
         Source()
@@ -974,6 +1196,7 @@
             var gone = _selectedIds.ToHashSet();
             _events.RemoveAll(e => gone.Contains(e.Id));
             _eventsForDate.RemoveAll(e => gone.Contains(e.Id));
+            _searchResults?.RemoveAll(e => gone.Contains(e.Id));
             if (_selected != null && gone.Contains(_selected.Id)) _selected = null;
             _selectedIds.Clear();
             _showDelete = false;
@@ -1146,6 +1369,7 @@
         catch { return; }
         Mark(_events, ev.Id);
         Mark(_eventsForDate, ev.Id);
+        if (_searchResults != null) Mark(_searchResults, ev.Id);
         if (_selected?.Id == ev.Id) _selected = _selected with { Reviewed = true };
     }
 
@@ -1183,8 +1407,15 @@
         return span.TotalSeconds < 60 ? T["just now"]
             : span.TotalMinutes < 60 ? T.F("{0}m ago", (int)span.TotalMinutes)
             : span.TotalHours < 24 ? T.F("{0}h ago", (int)span.TotalHours)
-            : T.F("{0}d ago", (int)span.TotalDays);
+            // Calendar days, not elapsed 24h blocks: Sunday evening seen on
+            // Tuesday is "2d ago", never "1d ago".
+            : T.F("{0}d ago", Math.Max(1, (DateTime.Now.Date - utc.ToLocalTime().Date).Days));
     }
 
-    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    public async ValueTask DisposeAsync()
+    {
+        try { await JS.InvokeVoidAsync("neolink.evMoreDetach"); } catch { }
+        _searchCts?.Cancel();
+        _selfRef?.Dispose();
+    }
 }

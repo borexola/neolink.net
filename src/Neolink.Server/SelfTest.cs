@@ -1299,6 +1299,589 @@ public static class SelfTest
                 "no filter ever allows 'wake' itself — only a confirming detection keeps the footage");
             var wakeClear = new Protocol.MotionPush("none", Array.Empty<string>(), External: true);
             Assert(!wakeClear.Active, "synthetic all-clear ends the wake window via the post-roll");
+
+            // Hint marker (sent only when Motion is ticked): keys the
+            // confirmed-at-start path; never a recordable type itself.
+            var hint = new Protocol.MotionPush("hint", new[] { "wake" }, External: true);
+            Assert(hint.Active, "synthetic hint push is an active detection");
+            Assert(!untouched.AllowsLabel("hint"), "no filter ever allows 'hint' itself");
+        });
+
+        Test("hint wakes kept as motion events; markers split events; plain wakes discard", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var store = new Recording.EventStore(Path.Combine(dir, "rec"));
+                var recorder = new Recording.EventRecorder("hintcam", new Streaming.StreamHub("hintcam"),
+                    new StubCameraControl("hintcam"), store,
+                    new Config.RecordingConfig { PostSeconds = 1, MaxClipSeconds = 10 },
+                    new Recording.RecordingSettings(dir));
+                var started = new List<Recording.EventRecord>();
+                var recFlags = new List<bool>();
+                recorder.EventStarted += r => { lock (started) started.Add(r); };
+                recorder.RecordingChanged += f => { lock (recFlags) recFlags.Add(f); };
+                using var cts = new CancellationTokenSource();
+                var run = Task.Run(() => recorder.RunAsync(cts.Token));
+                bool WaitUntil(Func<bool> cond, int ms)
+                {
+                    var until = DateTime.UtcNow.AddMilliseconds(ms);
+                    while (DateTime.UtcNow < until)
+                    {
+                        if (cond()) return true;
+                        Thread.Sleep(25);
+                    }
+                    return cond();
+                }
+                int Started() { lock (started) return started.Count; }
+
+                recorder.OnMotion(new Protocol.MotionPush("hint", new[] { "wake" }, External: true));
+                Assert(WaitUntil(() => Started() == 1, 5000),
+                    "a hint push must start an announced event immediately");
+                lock (started)
+                    Assert(started[0].Labels.SequenceEqual(new[] { "motion" }),
+                        $"a hint event is labeled motion, got: {string.Join("+", started[0].Labels)}");
+                lock (recFlags) Assert(recFlags.Contains(true), "a hint event drives the recording sensor");
+
+                // A second marker means a NEW wake session: it must END the open
+                // event and start its own.
+                recorder.OnMotion(new Protocol.MotionPush("hint", new[] { "wake" }, External: true));
+                Assert(WaitUntil(() => Started() == 2, 5000),
+                    "a marker inside a wake-opened event must split into a new event");
+                lock (started)
+                {
+                    Assert(started[0].Id != started[1].Id, "the split produces a distinct event");
+                    Assert(WaitUntil(() => store.Find(started[0].Id) is { Ongoing: false }, 5000),
+                        "the first event closed when the marker split it");
+                    Assert(store.Find(started[0].Id) != null, "the first event's footage is kept");
+                }
+                recorder.OnMotion(new Protocol.MotionPush("none", Array.Empty<string>(), External: true));
+                Recording.EventRecord second;
+                lock (started) second = started[1];
+                Assert(WaitUntil(() => store.Find(second.Id) is { Ongoing: false }, 8000),
+                    "the second event closes through the normal post-roll");
+
+                // The plain wake marker is unchanged: tentative, silent, discarded.
+                lock (recFlags) recFlags.Clear();
+                recorder.OnMotion(new Protocol.MotionPush("wake", new[] { "wake" }, External: true));
+                Assert(WaitUntil(() => store.List("hintcam").Count == 3, 5000),
+                    "a plain wake push opens a tentative record");
+                Assert(Started() == 2, "a plain wake push must not announce an event");
+                lock (recFlags) Assert(!recFlags.Contains(true),
+                    "a tentative wake must not drive the recording sensor");
+                recorder.OnMotion(new Protocol.MotionPush("none", Array.Empty<string>(), External: true));
+                Assert(WaitUntil(() => store.List("hintcam").Count == 2, 8000),
+                    "an unconfirmed wake is discarded");
+                cts.Cancel();
+                try { run.GetAwaiter().GetResult(); } catch { }
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+        });
+
+        Test("event search: deterministic parse, keyword scoring, LLM-plan intake", () =>
+        {
+            var cams = new List<string> { "FrontDoor", "Back Yard", "TestCam" };
+            var now = new DateTime(2026, 8, 25, 14, 0, 0); // deterministic clock for the date grammar
+
+            var p = Recording.EventSearch.Parse("person in FrontDoor yesterday", cams, now);
+            Assert(p.Labels is ["person"], "label parsed");
+            Assert(p.Cameras is ["FrontDoor"], "camera parsed");
+            Assert(p.FromLocal == new DateTime(2026, 8, 24) && p.ToLocal == new DateTime(2026, 8, 25),
+                "yesterday resolves to the full prior day");
+            Assert(p.Structured, "fully structured — no AI involved");
+
+            p = Recording.EventSearch.Parse("cars in back yard between 2 and 4pm today", cams, now);
+            Assert(p.Labels is ["vehicle"], "synonym maps to the canonical label");
+            Assert(p.Cameras is ["Back Yard"], "multi-word camera name parsed");
+            Assert(p.FromLocal == now.Date.AddHours(14) && p.ToLocal == now.Date.AddHours(16),
+                $"between 2 and 4pm parsed, got {p.FromLocal:HH:mm}-{p.ToLocal:HH:mm}");
+
+            // The live miss: "test cam" must bind the TestCam camera, phrasing
+            // words must not become keywords, and the query stays structured.
+            p = Recording.EventSearch.Parse("show me vehicles detected on test cam today", cams, now);
+            Assert(p.Cameras is ["TestCam"], "camel-case camera matches its spaced form");
+            Assert(p.Labels is ["vehicle"] && p.Structured,
+                $"phrasing words are filler, got keywords: {string.Join(",", p.Keywords)}");
+
+            // Negation excludes, never inverts.
+            p = Recording.EventSearch.Parse("no cars today", cams, now);
+            Assert(p.NotLabels is ["vehicle"] && p.Labels.Count == 0 && p.Structured,
+                "negation lands in NotLabels");
+
+            // Every common time-range syntax resolves to 14:00-16:00 today.
+            foreach (var form in new[] { "between 2pm and 4 today", "2-4pm today", "from 2 to 4pm today", "2pm to 4pm today" })
+            {
+                p = Recording.EventSearch.Parse(form, cams, now);
+                Assert(p.FromLocal == now.Date.AddHours(14) && p.ToLocal == now.Date.AddHours(16),
+                    $"\"{form}\" → {p.FromLocal:HH:mm}-{p.ToLocal:HH:mm}");
+            }
+            p = Recording.EventSearch.Parse("between 11 and 12pm today", cams, now);
+            Assert(p.FromLocal == now.Date.AddHours(11) && p.ToLocal == now.Date.AddHours(12),
+                "bare-first noon range prefers the morning reading over a 13h overnight");
+
+            // One-sided bounds.
+            p = Recording.EventSearch.Parse("before 9am", cams, now);
+            Assert(p.FromLocal == null && p.ToLocal == now.Date.AddHours(9), "before 9am is an upper bound");
+            p = Recording.EventSearch.Parse("since monday", cams, now);
+            Assert(p.FromLocal == now.Date.AddDays(-1) && p.ToLocal > now.AddMinutes(-1),
+                "since monday runs through now");
+
+            // Grammar coverage.
+            p = Recording.EventSearch.Parse("trucks today", cams, now);
+            Assert(p.Labels is ["vehicle"] && p.Structured, "plural synonyms map to labels");
+            p = Recording.EventSearch.Parse("deliveries yesterday", cams, now);
+            Assert(p.Labels is ["package"], "ies-plurals map too");
+            p = Recording.EventSearch.Parse("last month", cams, now);
+            Assert(p.FromLocal == new DateTime(2026, 7, 1) && p.ToLocal == new DateTime(2026, 8, 1),
+                "last month is calendar July");
+            p = Recording.EventSearch.Parse("2 days ago", cams, now);
+            Assert(p.FromLocal == now.Date.AddDays(-2) && p.ToLocal == now.Date.AddDays(-1),
+                "N days ago means that day");
+            p = Recording.EventSearch.Parse("the day before yesterday", cams, now);
+            Assert(p.FromLocal == now.Date.AddDays(-2), "day before yesterday");
+            p = Recording.EventSearch.Parse("over the weekend", cams, now);
+            Assert(p.FromLocal == new DateTime(2026, 8, 22) && p.ToLocal == new DateTime(2026, 8, 24),
+                "weekend is Sat 00:00 to Mon 00:00");
+            p = Recording.EventSearch.Parse("yesterday and today", cams, now);
+            Assert(p.FromLocal == now.Date.AddDays(-1) && p.ToLocal == now.Date.AddDays(1),
+                "compound days span both");
+            p = Recording.EventSearch.Parse("yesterday morning", cams, now);
+            Assert(p.FromLocal == now.Date.AddDays(-1).AddHours(6) && p.ToLocal == now.Date.AddDays(-1).AddHours(12),
+                "a day intersects with its time-of-day word");
+            p = Recording.EventSearch.Parse("8/20", cams, now);
+            Assert(p.FromLocal == new DateTime(2026, 8, 20) && p.ToLocal == new DateTime(2026, 8, 21),
+                "US slash date");
+            p = Recording.EventSearch.Parse("maybe 2 people at the door", cams, now);
+            Assert(p.FromLocal == null && p.Labels is ["person"], "\"maybe 2\" is not May 2nd");
+            p = Recording.EventSearch.Parse("line crossing yesterday", cams, now);
+            Assert(p.Labels is ["line-crossing"], "spaced label phrase maps");
+
+            // Verification-pass regressions, pinned.
+            p = Recording.EventSearch.Parse("did anyone come by yesterday", cams, now);
+            Assert(p.Labels is ["person"] && p.FromLocal == now.Date.AddDays(-1) && p.ToLocal == now.Date,
+                "phrasal \"come by\" never reads as a before-bound");
+            p = Recording.EventSearch.Parse("without the dog", cams, now);
+            Assert(p.NotLabels is ["animal"] && p.Labels.Count == 0, "\"without the\" negates");
+            p = Recording.EventSearch.Parse("no cars or people today", cams, now);
+            Assert(p.NotLabels.Contains("vehicle") && p.NotLabels.Contains("person") && p.Labels.Count == 0,
+                "negated lists distribute");
+            p = Recording.EventSearch.Parse("no line crossing today", cams, now);
+            Assert(p.NotLabels is ["line-crossing"], "spaced label phrase negates too");
+            p = Recording.EventSearch.Parse("between 11pm and 1 today", cams, now);
+            Assert(p.FromLocal == now.Date.AddHours(23) && p.ToLocal == now.Date.AddDays(1).AddHours(1),
+                $"bare second hour crosses midnight sanely, got {p.FromLocal}-{p.ToLocal}");
+            p = Recording.EventSearch.Parse("between 9am and 5 today", cams, now);
+            Assert(p.FromLocal == now.Date.AddHours(9) && p.ToLocal == now.Date.AddHours(17),
+                "bare second hour picks the nearest-forward reading");
+            p = Recording.EventSearch.Parse("since 10pm", cams, now);
+            Assert(p.FromLocal == now.Date.AddDays(-1).AddHours(22) && p.ToLocal > now.AddMinutes(-1),
+                "a since-time still ahead of now anchors to yesterday");
+            p = Recording.EventSearch.Parse("before 9am yesterday", cams, now);
+            Assert(p.FromLocal == now.Date.AddDays(-1) && p.ToLocal == now.Date.AddDays(-1).AddHours(9),
+                "before-time on a named day keeps the day's floor");
+            p = Recording.EventSearch.Parse("since last month", cams, now);
+            Assert(p.FromLocal == new DateTime(2026, 7, 1) && p.ToLocal > now.AddMinutes(-1),
+                "since + range phrase opens the bound");
+            p = Recording.EventSearch.Parse("friday last week", cams, now);
+            Assert(p.FromLocal == new DateTime(2026, 8, 21) && p.ToLocal == new DateTime(2026, 8, 22),
+                "a named day inside a range wins over the range");
+            p = Recording.EventSearch.Parse("last week at 3pm", cams, now);
+            Assert(p.FromLocal == new DateTime(2026, 8, 17) && p.ToLocal == new DateTime(2026, 8, 24),
+                "a clock time never collapses a multi-day range");
+            p = Recording.EventSearch.Parse("at 3 in the morning yesterday", cams, now);
+            Assert(p.FromLocal == now.Date.AddDays(-1).AddHours(3),
+                $"\"in the morning\" overrides the bare-hour daytime rule, got {p.FromLocal}");
+            p = Recording.EventSearch.Parse("june 5 2025", cams, now);
+            Assert(p.FromLocal == new DateTime(2025, 6, 5), "explicit years are honored");
+            p = Recording.EventSearch.Parse("from 8/20 to 8/22", cams, now);
+            Assert(p.FromLocal == new DateTime(2026, 8, 20) && p.ToLocal == new DateTime(2026, 8, 23),
+                "date pairs span");
+            p = Recording.EventSearch.Parse("past week", cams, now);
+            Assert(p.FromLocal == now.Date.AddDays(-7) && p.ToLocal > now.AddMinutes(-1),
+                "digit-less past week rolls");
+            p = Recording.EventSearch.Parse("between 2:30 and 4 today", cams, now);
+            Assert(p.FromLocal == now.Date.AddHours(14).AddMinutes(30) && p.ToLocal == now.Date.AddHours(16),
+                "meridiem-less clock ranges prefer daytime");
+            p = Recording.EventSearch.Parse("between 9 and 10", cams, now);
+            Assert(p.StrayDigits && p.FromLocal == null,
+                "unplaceable digits flag the query for the AI");
+
+            // The six UI languages parse through the translation pre-pass.
+            p = Recording.EventSearch.Parse("voitures hier", cams, now);
+            Assert(p.Labels is ["vehicle"] && p.FromLocal == now.Date.AddDays(-1) && p.ToLocal == now.Date,
+                "french folds into the grammar");
+            p = Recording.EventSearch.Parse("keine hunde letzte woche", cams, now);
+            Assert(p.NotLabels is ["animal"] && p.FromLocal == new DateTime(2026, 8, 17)
+                && p.ToLocal == new DateTime(2026, 8, 24), "german negation and ranges fold");
+            p = Recording.EventSearch.Parse("coches la semana pasada", cams, now);
+            Assert(p.Labels is ["vehicle"] && p.FromLocal == new DateTime(2026, 8, 17)
+                && p.ToLocal == new DateTime(2026, 8, 24), "spanish postpositive \"pasada\" reorders");
+            p = Recording.EventSearch.Parse("iemand tussen 14:00 en 16:00 gisteren", cams, now);
+            Assert(p.Labels is ["person"] && p.FromLocal == now.Date.AddDays(-1).AddHours(14)
+                && p.ToLocal == now.Date.AddDays(-1).AddHours(16), "dutch clock ranges fold");
+            p = Recording.EventSearch.Parse("pessoas ontem", cams, now);
+            Assert(p.Labels is ["person"] && p.FromLocal == now.Date.AddDays(-1),
+                "portuguese folds");
+            p = Recording.EventSearch.Parse("psy wczoraj", cams, now);
+            Assert(p.Labels is ["animal"] && p.FromLocal == now.Date.AddDays(-1),
+                "polish folds");
+            p = Recording.EventSearch.Parse("czerwony samochod dzisiaj", cams, now);
+            Assert(p.Labels is ["vehicle"] && p.FromLocal == now.Date,
+                "unaccented typing still hits the accented vocabulary");
+            p = Recording.EventSearch.Parse("coches en el jardín ayer", cams, now);
+            Assert(p.Labels is ["vehicle"] && p.Keywords.Contains("jardin") && p.FromLocal == now.Date.AddDays(-1),
+                "accented leftovers fold to ascii keywords without ICU");
+            p = Recording.EventSearch.Parse("hace 2 horas", cams, now);
+            Assert(p.FromLocal == now.AddHours(-2) && p.ToLocal > now.AddMinutes(-1),
+                "spanish prefix-ago becomes the postfix form");
+            p = Recording.EventSearch.Parse("voitures le 3/8", cams, now);
+            Assert(p.FromLocal == new DateTime(2026, 8, 3),
+                $"continental queries read 3/8 day-first, got {p.FromLocal}");
+            p = Recording.EventSearch.Parse("pies yesterday", cams, now);
+            Assert(p.Labels.Count == 0 && p.Keywords.Contains("pies") && p.FromLocal == now.Date.AddDays(-1),
+                "an english query is never hijacked by a colliding foreign word");
+
+            // Second review round: word times in ranges, 24h pairs, slang,
+            // bare time-of-day anchoring, dash ranges.
+            p = Recording.EventSearch.Parse("between midnight and 6am today", cams, now);
+            Assert(p.FromLocal == now.Date && p.ToLocal == now.Date.AddHours(6),
+                "midnight works as a range start");
+            p = Recording.EventSearch.Parse("person from noon to 2pm", cams, now);
+            Assert(p.FromLocal == now.Date.AddHours(12) && p.ToLocal == now.Date.AddHours(14),
+                "noon works as a range start");
+            p = Recording.EventSearch.Parse("noon to midnight yesterday", cams, now);
+            Assert(p.FromLocal == now.Date.AddDays(-1).AddHours(12) && p.ToLocal == now.Date,
+                "midnight as a range end means the NEXT midnight");
+            p = Recording.EventSearch.Parse("people yesterday between 20 and 22", cams, now);
+            Assert(p.FromLocal == now.Date.AddDays(-1).AddHours(20)
+                && p.ToLocal == now.Date.AddDays(-1).AddHours(22), "bare 24h pairs are unambiguous");
+            p = Recording.EventSearch.Parse("btwn 2 and 5pm 2day", cams, now);
+            Assert(p.FromLocal == now.Date.AddHours(14) && p.ToLocal == now.Date.AddHours(17)
+                && p.Keywords.Count == 0, "texting shorthand folds to english");
+            p = Recording.EventSearch.Parse("a wk ago", cams, now);
+            Assert(p.FromLocal == now.Date.AddDays(-7), "\"wk\" reads as week");
+            p = Recording.EventSearch.Parse("motion overnight", cams, now);
+            Assert(p.Labels is ["motion"] && p.FromLocal == now.Date.AddDays(-1).AddHours(22)
+                && p.ToLocal == now.Date.AddHours(6), "bare \"overnight\" means the night just past");
+            p = Recording.EventSearch.Parse("person morning", cams, now);
+            Assert(p.FromLocal == now.Date.AddHours(6) && p.ToLocal == now.Date.AddHours(12),
+                "a bare time-of-day anchors to today");
+            p = Recording.EventSearch.Parse("around 9 last night", cams, now);
+            Assert(p.FromLocal == now.Date.AddDays(-1).AddHours(21),
+                $"a bare hour inside a night window reads as pm, got {p.FromLocal}");
+            p = Recording.EventSearch.Parse("aug 20-22", cams, now);
+            Assert(p.FromLocal == new DateTime(2026, 8, 20) && p.ToLocal == new DateTime(2026, 8, 23),
+                "month day-day dashes span");
+            p = Recording.EventSearch.Parse("mon-fri", cams, now);
+            Assert(p.FromLocal == new DateTime(2026, 8, 24) && p.ToLocal == new DateTime(2026, 8, 29),
+                "weekday dash ranges resolve to this week");
+            p = Recording.EventSearch.Parse("coche ayer por la tarde", cams, now);
+            Assert(p.Labels is ["vehicle"] && p.Keywords.Count == 0
+                && p.FromLocal == now.Date.AddDays(-1).AddHours(12), "spanish \"por\" folds away");
+
+            // Adversarial-review round: romance dates and articles, ago variants,
+            // weekday bounds and ranges, night-window bounds, merge yields.
+            p = Recording.EventSearch.Parse("coches el 3 de agosto", cams, now);
+            Assert(p.FromLocal == new DateTime(2026, 8, 3) && p.ToLocal == new DateTime(2026, 8, 4),
+                "\"3 de agosto\" is one day, never the whole month");
+            p = Recording.EventSearch.Parse("coches desde el lunes", cams, now);
+            Assert(p.FromLocal == new DateTime(2026, 8, 24) && p.ToLocal > now.AddMinutes(-1),
+                "the mandatory spanish article does not break since-bounds");
+            p = Recording.EventSearch.Parse("carros ha 2 horas", cams, now);
+            Assert(p.Labels is ["vehicle"] && p.FromLocal == now.AddHours(-2),
+                "unaccented \"ha\" still reads as ago");
+            p = Recording.EventSearch.Parse("avant-hier à 15h", cams, now);
+            Assert(p.FromLocal == now.Date.AddDays(-2).AddHours(15),
+                "french day-before-yesterday folds");
+            p = Recording.EventSearch.Parse("cars sept 12", cams, now);
+            Assert(p.Labels is ["vehicle"] && p.FromLocal?.Month == 9 && p.FromLocal?.Day == 12,
+                "\"sept\" the month abbreviation is never french seven");
+            p = Recording.EventSearch.Parse("monday until friday", cams, now);
+            Assert(p.FromLocal == new DateTime(2026, 8, 24) && p.ToLocal == new DateTime(2026, 8, 28),
+                $"weekday-to-weekday bounds never invert, got {p.FromLocal}-{p.ToLocal}");
+            p = Recording.EventSearch.Parse("monday last week", cams, now);
+            Assert(p.FromLocal == new DateTime(2026, 8, 17) && p.ToLocal == new DateTime(2026, 8, 18),
+                "a weekday resolves INTO the named range");
+            p = Recording.EventSearch.Parse("last night before 9pm", cams, now);
+            Assert(p.FromLocal == now.Date.AddDays(-1).AddHours(20)
+                && p.ToLocal == now.Date.AddDays(-1).AddHours(21),
+                "a clock bound keeps the range phrase as its floor");
+            p = Recording.EventSearch.Parse("last night between 10pm and 2am", cams, now);
+            Assert(p.FromLocal == now.Date.AddDays(-1).AddHours(22) && p.ToLocal == now.Date.AddHours(2),
+                $"a midnight-crossing clock range keeps its far side, got {p.FromLocal}-{p.ToLocal}");
+            p = Recording.EventSearch.Parse("someone at 3:15", cams, now);
+            var aiDay = new Recording.EventQuery
+            {
+                FromLocal = now.Date.AddDays(-1).AddHours(15),
+                ToLocal = now.Date.AddDays(-1).AddHours(16),
+            };
+            var m2 = Recording.EventSearch.Merge(p, aiDay);
+            Assert(m2.FromLocal == aiDay.FromLocal && m2.ToLocal == aiDay.ToLocal,
+                "a time-only parser date yields to the AI's day");
+            var m3 = Recording.EventSearch.Merge(
+                Recording.EventSearch.Parse("someone yesterday at 3:15", cams, now), aiDay);
+            Assert(m3.FromLocal == now.Date.AddDays(-1).AddHours(15).AddMinutes(15),
+                "a day-anchored parser date still wins the merge");
+            p = Recording.EventSearch.Parse("people wearing red", cams, now);
+            Assert(p.Labels is ["person"] && p.Keywords is ["red"],
+                "\"wearing\" is the asking, not the scene");
+            var aiCam = new Recording.EventQuery();
+            aiCam.Cameras.Add("Back Yard");
+            aiCam.Keywords.Add("yard");
+            aiCam.Keywords.Add("red");
+            var m4 = Recording.EventSearch.Merge(Recording.EventSearch.Parse("person in the yard", cams, now), aiCam);
+            Assert(m4.Cameras is ["Back Yard"] && m4.Keywords is ["red"],
+                $"a bound camera's place words leave the keywords, got [{string.Join(",", m4.Keywords)}]");
+
+            // The AI judge pass: pool query, prompt shape, reply tolerance.
+            var so = Recording.EventSearch.Parse("person in FrontDoor wearing red yesterday", cams, now).StructuralOnly();
+            Assert(so.Labels is ["person"] && so.Cameras is ["FrontDoor"]
+                && so.FromLocal == now.Date.AddDays(-1) && so.Keywords.Count == 0,
+                "the judge pool keeps the hard filters and drops the keywords");
+            var jev = new List<Recording.EventRecord>
+            {
+                new() { Id = "a", Camera = "c", AiDescription = "A person in a gray shirt.\nSecond line." },
+                new() { Id = "b", Camera = "c", AiDescription = "A red car." },
+            };
+            var jp = Recording.EventSearch.JudgeUserPrompt("guy in a gray shirt", jev);
+            Assert(jp.Contains("Query: guy in a gray shirt") && jp.Contains("1. A person in a gray shirt. Second line.")
+                && jp.Contains("2. A red car."), "judge prompt numbers the descriptions");
+            Assert(Recording.EventSearch.ParseJudge("[2,5]", 6) is [2, 5], "clean judge reply");
+            Assert(Recording.EventSearch.ParseJudge("```json\n[1, 3]\n```", 6) is [1, 3], "fenced judge reply");
+            Assert(Recording.EventSearch.ParseJudge("Events 2 and 4 match.", 6) is [2, 4], "prose judge reply");
+            Assert(Recording.EventSearch.ParseJudge("[]", 6) is [], "empty judge reply");
+            Assert(Recording.EventSearch.ParseJudge("none of the events match", 6) is [],
+                "worded none-reply");
+            Assert(Recording.EventSearch.ParseJudge("[0, 3, 99]", 6) is [3], "out-of-range numbers drop");
+            Assert(Recording.EventSearch.ParseJudge("I cannot help with that.", 6) == null,
+                "garbage reply signals the keyword fallback");
+            Assert(Recording.EventSearch.ParseJudge(null, 6) == null,
+                "a failed LLM call is a fallback, never a crash");
+            Assert(Recording.EventSearch.ParseJudge("as requested, e.g. [2,5]. My answer: [4]", 6) is [4],
+                "an echoed example never becomes the answer");
+            Assert(Recording.EventSearch.ParseJudge("Events 3 and 5 do not match the query.", 6) is [],
+                "negative prose is a no-match, not a pick list");
+            var aiGh = new Recording.EventQuery();
+            aiGh.Cameras.Add("Greenhouse");
+            aiGh.Keywords.Add("green");
+            var m5 = Recording.EventSearch.Merge(new Recording.EventQuery(), aiGh);
+            Assert(m5.Keywords is ["green"],
+                "camera-name shadowing never deletes the last keywords");
+
+            p = Recording.EventSearch.Parse("blue car near the garage last night", cams, now);
+            Assert(p.Labels is ["vehicle"] && p.Keywords.Contains("blue") && p.Keywords.Contains("garage"),
+                "leftover words become keywords");
+            Assert(!p.Structured, "keywords mean the AI may refine");
+            Assert(p.FromLocal == now.Date.AddDays(-1).AddHours(20) && p.ToLocal == now.Date.AddHours(6),
+                "last night is yesterday 20:00 to 06:00");
+
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var store = new Recording.EventStore(dir);
+                var a = store.Create("FrontDoor", DateTime.UtcNow.AddMinutes(-10), new[] { "person" });
+                a.AiDescription = "A person in a blue jacket walks to the door.";
+                a.Ongoing = false;
+                store.Save(a);
+                var b = store.Create("TestCam", DateTime.UtcNow.AddMinutes(-5), new[] { "motion" });
+                b.AiDescription = "A red car reverses out of the driveway.";
+                b.AiLevel = "yellow";
+                b.Ongoing = false;
+                store.Save(b);
+
+                var hits = Recording.EventSearch.Execute(
+                    Recording.EventSearch.Parse("person in FrontDoor today", cams, DateTime.Now), store);
+                Assert(hits is [{ Camera: "FrontDoor" }], "structured filter hits the right event");
+
+                hits = Recording.EventSearch.Execute(
+                    Recording.EventSearch.Parse("red driveway", cams, DateTime.Now), store);
+                Assert(hits.Count == 1 && hits[0].Id == b.Id, "keywords match the stored AI description");
+
+                hits = Recording.EventSearch.Execute(
+                    Recording.EventSearch.Parse("suspicious", cams, DateTime.Now), store);
+                Assert(hits.Count == 1 && hits[0].Id == b.Id, "threat vocabulary reaches the AI level");
+
+                hits = Recording.EventSearch.Execute(
+                    Recording.EventSearch.Parse("purple in TestCam today", cams, DateTime.Now), store);
+                Assert(hits.Count == 1 && hits[0].Id == b.Id,
+                    "unmatched keywords fall back to the structured filters, never to zero");
+                hits = Recording.EventSearch.Execute(
+                    Recording.EventSearch.Parse("purple", cams, DateTime.Now), store);
+                Assert(hits.Count == 0, "keyword-only queries with no match stay empty");
+
+                var c1 = store.Create("FrontDoor", DateTime.UtcNow.AddMinutes(-8), new[] { "person" });
+                c1.AiDescription = "A person in a gray shirt stands by the gate.";
+                c1.Ongoing = false;
+                store.Save(c1);
+                var c2 = store.Create("FrontDoor", DateTime.UtcNow.AddMinutes(-7), new[] { "person" });
+                c2.AiDescription = "A person in a light shirt walks past.";
+                c2.Ongoing = false;
+                store.Save(c2);
+                hits = Recording.EventSearch.Execute(
+                    Recording.EventSearch.Parse("gray shirt", cams, DateTime.Now), store,
+                    out var km, out var kp);
+                Assert(km && !kp && hits.Count == 1 && hits[0].Id == c1.Id,
+                    "full keyword matches shut out the partial ones");
+                hits = Recording.EventSearch.Execute(
+                    Recording.EventSearch.Parse("green shirt", cams, DateTime.Now), store,
+                    out km, out kp);
+                Assert(km && kp && hits.Count == 2,
+                    "only partial matches left — returned but flagged as closest");
+
+                var old = store.Create("TestCam", DateTime.UtcNow.AddDays(-30), new[] { "person" });
+                old.Ongoing = false;
+                store.Save(old);
+                for (int i = 0; i < 1010; i++)
+                {
+                    var mo = store.Create("TestCam", DateTime.UtcNow.AddMinutes(-i), new[] { "motion" });
+                    mo.Ongoing = false;
+                    store.Save(mo);
+                }
+                hits = Recording.EventSearch.Execute(
+                    Recording.EventSearch.Parse("people", cams, DateTime.Now), store, 2000);
+                Assert(hits.Any(h => h.Id == old.Id),
+                    "an undated search reaches past the newest thousand events");
+
+                var oldRed = store.Create("TestCam", DateTime.UtcNow.AddDays(-35), new[] { "person" });
+                oldRed.AiDescription = "A person in a red coat crosses the lawn.";
+                oldRed.Ongoing = false;
+                store.Save(oldRed);
+                for (int i = 0; i < 310; i++)
+                {
+                    var pn = store.Create("TestCam", DateTime.UtcNow.AddSeconds(-i), new[] { "person" });
+                    pn.AiDescription = "A person walks by.";
+                    pn.Ongoing = false;
+                    store.Save(pn);
+                }
+                var jpool = Recording.EventSearch.JudgePool(
+                    Recording.EventSearch.Parse("people wearing red", cams, DateTime.Now), store);
+                Assert(jpool.Any(e => e.Id == oldRed.Id),
+                    "a keyword-hit event never ages out of the judge pool");
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+
+            var t = Recording.EventSearch.ParseTranslated(
+                "```json\n{\"labels\":[\"person\"],\"cameras\":[\"frontdoor\"]," +
+                "\"from\":\"2026-08-24 00:00\",\"to\":null,\"keywords\":[\"mailman\",\"Uniform\"]}\n```",
+                cams, now);
+            Assert(t != null && t.Labels is ["person"] && t.Cameras is ["FrontDoor"],
+                "translated plan normalizes labels and camera casing");
+            Assert(t!.FromLocal == new DateTime(2026, 8, 24) && t.ToLocal == null, "translated dates parse");
+            Assert(t.Keywords.Contains("mailman") && t.Keywords.Contains("uniform"), "translated keywords lowercase");
+            Assert(Recording.EventSearch.ParseTranslated("no json here", cams, now) == null, "garbage in, null out");
+
+            // Dumb-model tolerance: echoed schema, trailing comma, capitalized
+            // keys, scalar fields, word dates, camera variants — one answer.
+            var echo = Recording.EventSearch.ParseTranslated(
+                "{\"labels\":[],\"cameras\":[],\"from\":null,\"to\":null,\"keywords\":[]}\n" +
+                "{\"Labels\":\"car\",\"Cameras\":\"test cam\",\"From\":\"yesterday\",\"To\":\"today\",\"Keywords\":\"blue truck\",}",
+                cams, now);
+            Assert(echo != null, "echoed schema plus sloppy answer still parses");
+            Assert(echo!.Labels is ["vehicle"], "capitalized scalar label folds to canonical");
+            Assert(echo.Cameras is ["TestCam"], "camera variant from the model matches");
+            Assert(echo.FromLocal == now.Date.AddDays(-1) && echo.ToLocal == now.Date.AddDays(1),
+                $"word dates resolve through the grammar, got {echo.FromLocal}→{echo.ToLocal}");
+            Assert(echo.Keywords.Contains("blue") && !echo.Keywords.Contains("truck"),
+                "scalar keywords split; label synonyms fold out");
+            var py = Recording.EventSearch.ParseTranslated(
+                "{'labels': ['person'], 'cameras': [], 'from': None, 'to': None, 'keywords': ['jacket']}",
+                cams, now);
+            Assert(py != null && py.Labels is ["person"] && py.Keywords is ["jacket"],
+                "python-dict output repaired");
+            var wrapped = Recording.EventSearch.ParseTranslated(
+                "{\"filter\":{\"labels\":[\"animal\"],\"cameras\":[],\"from\":null,\"to\":null,\"keywords\":[]}}",
+                cams, now);
+            Assert(wrapped != null && wrapped.Labels is ["animal"], "wrapper object unwrapped");
+            var arrWrapped = Recording.EventSearch.ParseTranslated(
+                "{\"results\":[{\"labels\":[\"person\"],\"cameras\":[],\"from\":null,\"to\":null,\"keywords\":[]}]}",
+                cams, now);
+            Assert(arrWrapped != null && arrWrapped.Labels is ["person"], "array wrapper unwrapped");
+            var dup = Recording.EventSearch.ParseTranslated(
+                "{\"labels\":[],\"from\":null,\"labels\":[\"vehicle\"],\"from\":\"2026-08-20\",\"to\":\"2026-08-20\"}",
+                cams, now);
+            Assert(dup != null && dup.Labels is ["vehicle"] && dup.FromLocal == new DateTime(2026, 8, 20),
+                "duplicate keys: the filled repeat wins");
+            Assert(dup!.ToLocal == new DateTime(2026, 8, 21), "equal date-only from/to widens to the whole day");
+            var unm = Recording.EventSearch.ParseTranslated(
+                "{\"labels\":[],\"cameras\":[\"the garden\"],\"from\":null,\"to\":null,\"keywords\":[]}",
+                cams, now);
+            Assert(unm != null && unm.Cameras.Count == 0 && unm.Keywords.Contains("garden"),
+                "unmatched camera guesses fall back to keywords");
+
+            // Whole-word scoring: "red" must not match "covered"; plurals do match.
+            var cov = new Recording.EventRecord { Id = "x", Camera = "c", AiDescription = "driveway covered in snow" };
+            Assert(Recording.EventSearch.Score(cov, new[] { "red" }) == 0, "no substring false positives");
+            var dg = new Recording.EventRecord { Id = "y", Camera = "c", AiDescription = "a dog crosses the yard" };
+            Assert(Recording.EventSearch.Score(dg, new[] { "dogs" }) > 0, "plural keyword hits singular text");
+            var gry = new Recording.EventRecord { Id = "z", Camera = "c", AiDescription = "a man in a gray shirt" };
+            Assert(Recording.EventSearch.Score(gry, new[] { "grey", "shirt" }) == 4,
+                "British spelling matches the model's American one");
+
+            // AI refinements fill gaps only — the deterministic dates always win.
+            var det = Recording.EventSearch.Parse("cars last week", cams, now);
+            var sloppy = new Recording.EventQuery { FromLocal = now.AddDays(-7), ToLocal = now };
+            sloppy.Keywords.Add("grey");
+            var merged = Recording.EventSearch.Merge(det, sloppy);
+            Assert(merged.FromLocal == det.FromLocal && merged.ToLocal == det.ToLocal,
+                "merge keeps the parser's calendar dates over the model's rolling window");
+            Assert(merged.Labels is ["vehicle"] && merged.Keywords.Contains("grey"),
+                "merge unions labels and keywords");
+            var t2 = Recording.EventSearch.ParseTranslated(
+                "{\"labels\":[],\"cameras\":[],\"from\":null,\"to\":null,\"keywords\":[\"car\",\"frontdoor\",\"grey\"]}",
+                cams, now);
+            Assert(t2 != null && t2.Labels is ["vehicle"] && t2.Keywords is ["grey"],
+                "translated keyword hygiene: synonyms become labels, camera names drop");
+        });
+
+        Test("wake window holds through a camera all-clear (no truncated tentatives)", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var store = new Recording.EventStore(Path.Combine(dir, "rec"));
+                var recorder = new Recording.EventRecorder("holdcam", new Streaming.StreamHub("holdcam"),
+                    new StubCameraControl("holdcam"), store,
+                    new Config.RecordingConfig { PostSeconds = 1, MaxClipSeconds = 15 },
+                    new Recording.RecordingSettings(dir))
+                { WakeWindow = TimeSpan.FromSeconds(2) };
+                using var cts = new CancellationTokenSource();
+                var run = Task.Run(() => recorder.RunAsync(cts.Token));
+                bool WaitUntil(Func<bool> cond, int ms)
+                {
+                    var until = DateTime.UtcNow.AddMilliseconds(ms);
+                    while (DateTime.UtcNow < until)
+                    {
+                        if (cond()) return true;
+                        Thread.Sleep(25);
+                    }
+                    return cond();
+                }
+
+                recorder.OnMotion(new Protocol.MotionPush("wake", new[] { "wake" }, External: true));
+                Assert(WaitUntil(() => store.List("holdcam").Count == 1, 5000), "tentative opened");
+                recorder.OnMotion(new Protocol.MotionPush("none", Array.Empty<string>()));
+                Thread.Sleep(2200);
+                Assert(store.List("holdcam").Count == 1 && store.List("holdcam")[0].Ongoing,
+                    "a camera all-clear must not cut the wake window short");
+                recorder.OnMotion(new Protocol.MotionPush("none", Array.Empty<string>(), External: true));
+                Assert(WaitUntil(() => store.List("holdcam").Count == 0, 8000),
+                    "the synthetic closer still ends and discards the unconfirmed wake");
+                cts.Cancel();
+                try { run.GetAwaiter().GetResult(); } catch { }
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
         });
 
         Test("capture schedule (per-camera day/time gate on events)", () =>
@@ -1896,13 +2479,15 @@ public static class SelfTest
                 // "today" even if this runs across midnight.
                 var day = DateTime.Today;
 
-                // A day busier than the no-date cap: a date-scoped query must return
-                // the day whole; the no-date query (unbounded history) keeps its cap.
+                // A day busier than a caller's small cap: a date-scoped query must
+                // return the day whole, and an undated search asking big must see
+                // past it too (search filters run over the WHOLE retained index).
                 var baseUtc = day.AddHours(1).ToUniversalTime();
                 for (int i = 0; i < 1005; i++)
                     store.Create("busy", baseUtc.AddSeconds(i), new[] { "motion" });
                 AssertEq(store.List(camera: "busy", limit: 10_000, localDate: day).Count, 1005);
-                AssertEq(store.List(camera: "busy", limit: 10_000).Count, 1000);
+                AssertEq(store.List(camera: "busy", limit: 10_000).Count, 1005);
+                AssertEq(store.List(camera: "busy", limit: 200).Count, 200);
 
                 // Wake-only records excluded inside the limit: newest-first the list
                 // is [3 wake, 3 person], so a post-limit filter would return only
@@ -3495,6 +4080,35 @@ public static class SelfTest
             {
                 try { Directory.Delete(dir, recursive: true); } catch { }
             }
+        });
+
+        Test("HA motion sensor ignores the tentative wake marker (confirmed events only)", () =>
+        {
+            var cam = new Web.WebCameraInfo("wakecam",
+                new List<Web.WebStreamInfo>(), new StubCameraControl("wakecam"), null);
+            var hub = new Mqtt.HomeAssistantMqtt(
+                new Config.MqttConfig { Broker = "127.0.0.1", Port = 1 }, // never connected
+                new List<Web.WebCameraInfo> { cam }, "test");
+            var published = new Dictionary<string, string>();
+            hub.PublishObserver = (topic, payload) => { lock (published) published[topic] = payload; };
+
+            hub.OnMotion("wakecam", new Protocol.MotionPush("wake", new[] { "wake" }, External: true));
+            Thread.Sleep(300);
+            lock (published)
+                Assert(!published.ContainsKey("neolink/wakecam/motion"),
+                    "the tentative wake marker must not pulse the motion sensor");
+
+            // The hint marker is a confirmed event and must pulse it.
+            hub.OnMotion("wakecam", new Protocol.MotionPush("hint", new[] { "wake" }, External: true));
+            var until = DateTime.UtcNow.AddSeconds(5);
+            while (DateTime.UtcNow < until)
+            {
+                lock (published) { if (published.ContainsKey("neolink/wakecam/motion")) break; }
+                Thread.Sleep(25);
+            }
+            lock (published)
+                Assert(published.TryGetValue("neolink/wakecam/motion", out var on) && on == "ON",
+                    "a hint push is a confirmed event — motion must go ON");
         });
 
         Test("camera state store: suspend flag round-trip + restart persistence", () =>

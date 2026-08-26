@@ -368,6 +368,14 @@ public sealed record ApiSegment(string File, long Size, double Seconds = 0, bool
 
 // ------------------------------------------------------------ recorded events
 
+/// <summary>GET /api/events/search — natural-language search. Without q the
+/// server reports AI availability only (the search bar's icon).</summary>
+public sealed record ApiSearchUnderstood(List<string>? Labels, List<string>? Cameras,
+    string? From, string? To, List<string>? Keywords, List<string>? NotLabels = null);
+public sealed record ApiEventSearch(bool AiAvailable, bool Ai = false,
+    ApiSearchUnderstood? Understood = null, List<ApiEvent>? Events = null,
+    bool KeywordsMatched = true, bool KeywordsPartial = false, bool Judged = false);
+
 /// <summary>GET /api/events — one recorded detection event.</summary>
 public sealed record ApiEvent(string Id, string Camera, DateTime Start, DateTime End,
     List<string> Labels, bool Reviewed, bool Ongoing, bool HasClip, bool HasThumb,

@@ -889,22 +889,44 @@ public sealed class AiDescriber
         return text;
     }
 
+    /// <summary>One text-only completion with a caller-supplied system prompt —
+    /// the event search's query translator. Null when AI is disabled or on failure.</summary>
+    public static async Task<string?> CompleteTextAsync(AiStore store, string system, string user,
+        CancellationToken ct)
+    {
+        if (!store.Enabled) return null;
+        var cfg = store.Snapshot();
+        try
+        {
+            var (text, _, _) = await CompleteAsync(cfg, store.ActiveApiKey(cfg), user,
+                Array.Empty<(byte[], string?)>(), classify: false, ct, systemOverride: system)
+                .ConfigureAwait(false);
+            return text;
+        }
+        catch (Exception ex)
+        {
+            Log.Info($"AI search: translate failed ({Log.Flatten(ex)})");
+            return null;
+        }
+    }
+
     /// <summary>One chat request against the active backend (OpenAI-style or
     /// Ollama native). Returns the cleaned answer (level line still attached — the
     /// caller splits it), the model the server says it used, and a token count.</summary>
     private static async Task<(string? Text, string? Model, long? Tokens)> CompleteAsync(
         AiSettings cfg, string apiKey, string userText, IReadOnlyList<(byte[] Jpeg, string? Label)> frames,
-        bool classify, CancellationToken ct)
+        bool classify, CancellationToken ct, string? systemOverride = null)
     {
         // NoThink rides the prompt ("/no_think", the Qwen-family convention, which
         // Ollama templates honor too); <think> blocks are stripped either way.
         // Claude models don't use the marker — it would just be prompt noise.
         // Grounding rules ride event requests only (classify) — the Test button's
         // probe stays a bare connectivity check.
-        var system = cfg.EffectivePrompt
+        var system = (systemOverride
+                     ?? cfg.EffectivePrompt
                      + (classify ? "\n\n" + AiSettings.GroundingProtocol
-                                 + "\n\n" + AiSettings.LevelProtocol : "")
-                     + (cfg.NoThink && !cfg.UsesAnthropic ? " /no_think" : "");
+                                 + "\n\n" + AiSettings.LevelProtocol : ""))
+                     + (cfg.NoThink && !cfg.UsesAnthropic ? "\n/no_think" : "");
         object payload;
         if (cfg.UsesAnthropic)
         {
@@ -969,7 +991,9 @@ public sealed class AiDescriber
                     },
                 },
                 ["stream"] = false,
-                ["options"] = new { temperature = 0.2 },
+                // num_predict bounds a repetition-looping model; without it the
+                // request burns the whole timeout.
+                ["options"] = new { temperature = 0.2, num_predict = 1024 },
             };
         }
         else
@@ -1000,6 +1024,9 @@ public sealed class AiDescriber
                 },
                 ["temperature"] = 0.2,
                 ["stream"] = false,
+                // Core OpenAI spec (llama.cpp/LM Studio/vLLM all accept it):
+                // bounds a repetition-looping model to less than the timeout.
+                ["max_tokens"] = 1024,
             };
             if (!string.IsNullOrWhiteSpace(cfg.Model))
                 oai["model"] = cfg.Model.Trim();

@@ -671,7 +671,11 @@ public sealed class BcUdpConnection : IBcConnection
                 {
                     bool first;
                     lock (_subGate) { first = _reportedUnhandled.Add(msg.Meta.MsgId); }
-                    if (first) Log.Debug($"{_tag}: BC(udp) unhandled push msgId={msg.Meta.MsgId}{XmlPreview(msg)}");
+                    if (first && msg.Meta.MsgId == BcConstants.MsgIdMotion)
+                        Log.Info($"{_tag}: alarm push (msgId=33) arrived with no motion watch subscribed — " +
+                                 $"detection dropped{XmlPreview(msg)}");
+                    else if (first)
+                        Log.Debug($"{_tag}: BC(udp) unhandled push msgId={msg.Meta.MsgId}{XmlPreview(msg)}");
                 }
             }
         }

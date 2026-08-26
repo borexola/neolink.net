@@ -3,7 +3,9 @@
 > Point Neolink.NET at a vision-capable LLM and every detection event gets a
 > short written description ("A person in a red jacket walks up the driveway
 > carrying a box.") and a **threat classification** — GREEN, YELLOW or RED —
-> in the web UI, the event metadata, and Home Assistant.
+> in the web UI, the event metadata, and Home Assistant. The descriptions
+> also power **AI Search** on the Events page — find events by describing
+> them in plain language.
 >
 > **Beta — feedback is very welcome.** Safe to leave on: a slow or dead model
 > can never affect recording or streaming. Tested with **llama.cpp**,
@@ -81,6 +83,43 @@ The model must start its answer with **GREEN** (routine), **YELLOW**
 your prompt automatically, so editing the instructions can't break it. The
 level drives the colored dot/banner and the `ai_threat` HA sensor — the
 natural automation hook ("notify loudly on RED").
+
+## AI Search (BETA)
+
+The search bar at the top of the **Events** page takes plain language, in any
+of the UI's languages:
+
+> *person at the FrontDoor yesterday evening* · *no cars last week* ·
+> *im looking for people wearing something red* · *coches ayer por la tarde*
+
+Every query runs in two stages:
+
+1. **Structure first.** Event type, camera, dates and times are extracted
+   deterministically — "person at FrontDoor yesterday" never touches the
+   model and answers instantly. The **Understood as** line under the bar
+   always shows exactly what the search resolved to.
+2. **Description matching.** Whatever is left ("wearing something red") goes
+   to your configured LLM, which reads the **AI descriptions** of the
+   candidate events and picks the ones that truly match — so "red" finds a
+   crimson jacket but not a "light-colored shirt". If nothing fits, the page
+   says so plainly and shows the structural matches instead of an empty list.
+
+**It is only as good as your descriptions.** The model can only match what
+was written down when the event happened, so AI Search works best when **AI
+descriptions are enabled on the camera** (camera ⚙ → EVENTS) and the events
+you are looking for were captured with them. Events recorded before you
+enabled descriptions — or on cameras with the toggle off — have no text to
+match and can only be found the basic way: by type, camera and date.
+
+**Without an AI backend configured at all**, the bar still works as a basic
+search: the structured filters plus literal word matching against whatever
+descriptions exist. The hint under the bar says which mode you are in
+(sparkles icon = AI search active).
+
+Search calls are **text-only** — no frames are sent — and use the same
+configured backend as descriptions. A search makes at most a handful of
+short model calls (bounded to about a minute); if the model is slow or
+unreachable, the search falls back to word matching rather than failing.
 
 ## Getting good descriptions
 

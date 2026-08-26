@@ -105,7 +105,10 @@ public sealed class BcConnection : IBcConnection
                     // drowned real logs. Set NEOLINK_LOG=debug when hunting.
                     bool first;
                     lock (_subGate) { first = _reportedUnhandled.Add(msg.Meta.MsgId); }
-                    if (first)
+                    if (first && msg.Meta.MsgId == BcConstants.MsgIdMotion)
+                        Log.Info($"BC: alarm push (msgId=33) arrived with no motion watch subscribed — " +
+                                 $"detection dropped{XmlPreview(msg)}");
+                    else if (first)
                         Log.Debug($"BC: unhandled push msgId={msg.Meta.MsgId}{XmlPreview(msg)}");
                     else
                         Log.Trace($"Ignoring uninteresting message ID {msg.Meta.MsgId}");

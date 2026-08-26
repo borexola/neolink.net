@@ -3239,6 +3239,52 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 .ev-toolbar { flex: 0 0 auto; }
 
 /* ---- multi-select delete: action bar, row checkboxes, confirm dialog ---- */
+/* Label and bar share one line; on narrow screens the bar wraps below. */
+.ev-search-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin: 10px 0 4px; padding-left: 10px; }
+.ev-search-row .ev-search { flex: 1 1 auto; min-width: 260px; }
+.ev-search-head { display: flex; align-items: center; gap: 7px; flex: 0 0 auto; }
+.ev-search-title { font-size: 12px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); white-space: nowrap; }
+.ev-search-hint { font-size: 12px; color: var(--muted); margin: 4px 0 2px; max-width: 640px; }
+.ev-search {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 0 0 auto;
+    padding: 6px 14px;
+    border-bottom: 1px solid var(--line);
+}
+.ev-search-icon { display: inline-flex; color: var(--muted); flex: 0 0 auto; }
+.ev-search-icon.ai { color: var(--accent); }
+.ev-search-input {
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: 520px;
+    background: var(--panel-2, var(--panel));
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-size: 13px;
+}
+.ev-search-input:focus { outline: none; border-color: var(--accent); }
+.ev-search-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    flex: 0 0 auto;
+    padding: 4px 14px 6px;
+    border-bottom: 1px solid var(--line);
+    font-size: 12px;
+    color: var(--muted);
+}
+.ev-search-chips { color: var(--text); }
+.ev-search-ai { display: inline-flex; align-items: center; gap: 4px; color: var(--accent); }
+.ev-search-miss { color: #d9a13c; }
+.ev-more, .ev-end { padding: 12px; text-align: center; font-size: 12px; color: var(--muted); }
+.ev-more { display: block; width: 100%; background: none; border: none; cursor: pointer; }
+.ev-more:hover { color: var(--text); }
+
 .ev-selbar {
     display: flex;
     align-items: center;
@@ -5223,7 +5269,8 @@ body.tl-colresizing, body.tl-colresizing * { cursor: col-resize !important; user
 .mon-logs.log-hide-dbg :is(.log-dbg, .log-trc),
 .mon-logs.log-hide-inf .log-inf,
 .mon-logs.log-hide-wrn .log-wrn,
-.mon-logs.log-hide-err .log-err { display: none; }
+.mon-logs.log-hide-err .log-err,
+.mon-logs .log-line.log-hide-cam { display: none; }
 
 /* ------------------------------------------------------------ saved layouts */
 

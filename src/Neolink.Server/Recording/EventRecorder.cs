@@ -37,6 +37,9 @@ public sealed class EventRecorder
     private readonly Channel<MotionPush> _pushes = Channel.CreateUnbounded<MotionPush>(
         new UnboundedChannelOptions { SingleReader = true });
 
+    /// <summary>Matches CameraService.WakeClipWindow; settable for tests.</summary>
+    internal TimeSpan WakeWindow = CameraService.WakeClipWindow;
+
     // Pre-roll buffers and clip writers are handed between the pumps and the event
     // loop under one gate; all touch them briefly (never blocking on disk).
     // Each buffered packet carries its drop flag so a clip started later still
@@ -539,6 +542,9 @@ public sealed class EventRecorder
             // event-type selection in the camera's settings stays in charge of
             // what actually becomes a stored video. The schedule applies too.
             bool wakeProvisional = push.External && push.Status == "wake";
+            // A hint-opened wake: the camera's call home is itself the detection
+            // (some models never push one to a late session), so it starts
+            // announced as motion — sent only when Motion is ticked.
             bool hintWake = push.External && push.Status == "hint";
             List<string> labels;
             if (wakeProvisional || hintWake)
@@ -618,8 +624,13 @@ public sealed class EventRecorder
             Log.Info($"{_camera}: ⚡ event started ({string.Join("+", rec.Labels)}{startNote})");
             EventStarted?.Invoke(rec); // id out first: HA sees it with the trigger
         }
-        _eventActive = true;
-        RecordingChanged?.Invoke(true);
+        // Tentative wakes stay invisible: the MQTT bridge both listens for the
+        // edge AND polls EventInProgress on its refresh sweep.
+        if (!provisional)
+        {
+            _eventActive = true;
+            RecordingChanged?.Invoke(true);
+        }
         try
         {
             await RunEventCoreAsync(rec, provisional, wakeOpened, ct).ConfigureAwait(false);
@@ -654,6 +665,9 @@ public sealed class EventRecorder
         var hardStop = DateTime.UtcNow.AddSeconds(_cfg.MaxClipSeconds);
         var quietUntil = DateTime.UtcNow.AddSeconds(_cfg.PostSeconds);
         bool active = true; // the camera currently reports detection
+        // While a wake-opened event waits for the late push, a camera all-clear
+        // must not cut the window short; only the synthetic (External) closer can.
+        var wakeHold = wakeOpened ? DateTime.UtcNow + WakeWindow : DateTime.MinValue;
 
         while (!ct.IsCancellationRequested)
         {
@@ -712,10 +726,13 @@ public sealed class EventRecorder
                     continue;
                 }
                 active = true;
+                wakeHold = DateTime.MinValue; // a real detection takes over the lifecycle
                 var fresh = allowed.Where(l => !rec.Labels.Contains(l)).ToList();
                 if (fresh.Count > 0)
                 {
-                    rec.Labels.AddRange(fresh);
+                    // Reassign, never mutate: search/API threads enumerate Labels
+                    // outside the store gate.
+                    rec.Labels = rec.Labels.Concat(fresh).ToList();
                     rec.EndUtc = DateTime.UtcNow;
                     _store.Save(rec);
                 }
@@ -730,10 +747,16 @@ public sealed class EventRecorder
                     provisional = false;
                     aiCapture ??= _ai?.TryBeginCapture(_camera, _control, ct,
                         streamHub: PickAiStreamHub(), postSeconds: _cfg.PostSeconds);
-                    if (rec.Labels.Remove("wake")) _store.Save(rec);
+                    if (rec.Labels.Contains("wake"))
+                    {
+                        rec.Labels = rec.Labels.Where(l => l != "wake").ToList();
+                        _store.Save(rec);
+                    }
                     Log.Info($"{_camera}: ⚡ event started ({string.Join("+", rec.Labels)} — " +
                              "confirmed self-wake, footage from the wake onward)");
                     EventStarted?.Invoke(rec);
+                    _eventActive = true;
+                    RecordingChanged?.Invoke(true);
                 }
                 else if (fresh.Count > 0)
                 {
@@ -742,6 +765,7 @@ public sealed class EventRecorder
             }
             else if (active)
             {
+                if (!push.External && DateTime.UtcNow < wakeHold) continue;
                 // Arm the post-roll ONLY on the active→quiet transition. Cameras
                 // repeat all-clear pushes while idle, and re-arming on every one
                 // kept events open until the MaxClipSeconds hard stop (the

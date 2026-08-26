@@ -221,6 +221,9 @@ in exchange you get an integration light enough to leave running forever.
 - **AI event descriptions (BETA)**: a vision LLM writes what happened plus a
   GREEN/YELLOW/RED threat level — see
   [AI event descriptions](#ai-event-descriptions--beta)
+- **AI Search (BETA)**: search events in plain language ("people wearing
+  something red last week") — structured filters parse instantly, the LLM
+  matches descriptions; see [AI Search](docs/ai-descriptions.md#ai-search-beta)
 - **Battery cameras** (BETA) auto-detected and sleep-friendly — see
   [Battery cameras](#battery-cameras-argus-etc--beta)
 - **Tiered storage** (SSD clips tier + cold archive, capacity watching and
@@ -587,6 +590,12 @@ The short version:
 - Descriptions run on an isolated background queue: a slow or dead model can
   never delay recording or streaming — at worst an event goes undescribed
   with a log line.
+- **AI Search** on the Events page builds on the descriptions: ask in plain
+  language ("people wearing something red last week") and the LLM picks the
+  matching events by reading what it wrote. Works best on cameras with
+  descriptions enabled — events without one can only be found by type,
+  camera and date. Without an AI backend the bar still does basic
+  structured + word search.
 
 ## Using with Frigate
 

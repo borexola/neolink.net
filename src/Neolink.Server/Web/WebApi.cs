@@ -262,6 +262,15 @@ public static class WebApi
     /// Files that don't parse as our own fragmented shape fall back to plain
     /// file serving, the pre-existing behavior.
     /// </summary>
+    /// <summary>Event artifacts never change once the event has closed, so the
+    /// browser may cache them hard — without this every events-page visit
+    /// re-downloads every visible thumbnail (brutal on NAS-backed storage).</summary>
+    private static void SetArtifactCaching(HttpContext ctx, Neolink.Recording.EventRecord? rec)
+    {
+        if (rec is { Ongoing: false })
+            ctx.Response.Headers.CacheControl = "private, max-age=31536000, immutable";
+    }
+
     private static IResult ServeMp4(string path)
     {
         try
@@ -2763,6 +2772,100 @@ public static class WebApi
             // calendar highlights these. Literal "days" beats the {id} routes.
             app.MapGet("/api/events/days", () => Results.Json(events.ListContentDays()));
 
+            // Natural-language search. Deterministic first (labels, camera names,
+            // date phrases parse locally; leftover words match the stored AI
+            // descriptions); only a query with leftovers spends ONE LLM call, and
+            // solely to translate the phrase into the same structured plan.
+            // Without q this reports AI availability (the search bar's icon).
+            app.MapGet("/api/events/search", async (string? q, int? limit, CancellationToken ct) =>
+            {
+                bool aiAvailable = o.Ai?.Enabled == true;
+                if (string.IsNullOrWhiteSpace(q))
+                    return Results.Json(new { aiAvailable });
+                try
+                {
+                int cap = Math.Clamp(limit ?? 200, 1, 1000);
+                var names = cameras.Select(c => c.Name).ToList();
+                var plan = Neolink.Recording.EventSearch.Parse(q, names, DateTime.Now);
+                bool usedAi = false;
+                if ((!plan.Structured || plan.StrayDigits) && aiAvailable)
+                {
+                    var raw = await Neolink.Ai.AiDescriber.CompleteTextAsync(o.Ai!,
+                        Neolink.Recording.EventSearch.TranslateSystemPrompt(names, DateTime.Now), q, ct);
+                    if (Neolink.Recording.EventSearch.ParseTranslated(raw, names, DateTime.Now) is { } tplan)
+                    {
+                        usedAi = true;
+                        plan = Neolink.Recording.EventSearch.Merge(plan, tplan);
+                    }
+                }
+                // Descriptive queries with AI: the model reads the candidates'
+                // actual descriptions and picks the matches — keyword scoring is
+                // only the fallback (no AI, or the model's reply was unusable).
+                List<Neolink.Recording.EventRecord>? hits = null;
+                bool kwMatched = true, kwPartial = false, judged = false;
+                if (plan.Keywords.Count > 0 && aiAvailable)
+                {
+                    var pool = Neolink.Recording.EventSearch.JudgePool(plan, events);
+                    if (pool.Count > 0)
+                    {
+                        // Bounded below the client's 90s budget: a slow model falls
+                        // back to keyword scoring instead of a dead request.
+                        using var judgeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                        judgeCts.CancelAfter(TimeSpan.FromSeconds(70));
+                        var picked = new List<Neolink.Recording.EventRecord>();
+                        bool allReplies = true;
+                        foreach (var chunk in pool.Chunk(30))
+                        {
+                            var reply = await Neolink.Ai.AiDescriber.CompleteTextAsync(o.Ai!,
+                                Neolink.Recording.EventSearch.JudgeSystemPrompt(),
+                                Neolink.Recording.EventSearch.JudgeUserPrompt(q, chunk), judgeCts.Token);
+                            var idx = Neolink.Recording.EventSearch.ParseJudge(reply, chunk.Length);
+                            // One failed or garbled chunk poisons the whole verdict:
+                            // partial judging silently hides matches, keyword scoring
+                            // does not.
+                            if (idx == null) { allReplies = false; break; }
+                            picked.AddRange(idx.Select(i => chunk[i - 1]));
+                        }
+                        if (allReplies)
+                        {
+                            judged = true;
+                            usedAi = true;
+                            kwMatched = picked.Count > 0;
+                            // Nothing fit: fall back to the structural hits so the
+                            // page is never silently empty — the note explains.
+                            hits = picked.Count > 0
+                                ? picked.OrderByDescending(e => e.StartUtc).Take(cap).ToList()
+                                : Neolink.Recording.EventSearch.Execute(plan.StructuralOnly(), events, cap);
+                        }
+                    }
+                }
+                hits ??= Neolink.Recording.EventSearch.Execute(plan, events, out kwMatched, out kwPartial, cap);
+                return Results.Json(new
+                {
+                    aiAvailable,
+                    ai = usedAi,
+                    judged,
+                    keywordsMatched = kwMatched,
+                    keywordsPartial = kwPartial,
+                    understood = new
+                    {
+                        labels = plan.Labels,
+                        notLabels = plan.NotLabels,
+                        cameras = plan.Cameras,
+                        from = plan.FromLocal?.ToString("yyyy-MM-dd HH:mm"),
+                        to = plan.ToLocal?.ToString("yyyy-MM-dd HH:mm"),
+                        keywords = plan.Keywords,
+                    },
+                    events = hits.Take(cap).Select(Shape),
+                });
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn($"Event search failed: {Log.Flatten(ex)}");
+                    return Results.Json(new { error = "the query could not be searched" }, statusCode: 400);
+                }
+            });
+
             // Single-event lookup: notification deep links (/events?event={id})
             // resolve the exact event even after it ages out of the 24h list.
             app.MapGet("/api/events/{id}", (string id) =>
@@ -2801,18 +2904,20 @@ public static class WebApi
             {
                 if (EventMediaAuth(ctx, id) is { } denied) return denied;
                 var path = events.ArtifactPath(id, "clip.mp4");
-                return path == null
-                    ? Results.Json(new { error = "no clip for this event" }, statusCode: 404)
-                    : ServeMp4(path);
+                if (path == null)
+                    return Results.Json(new { error = "no clip for this event" }, statusCode: 404);
+                SetArtifactCaching(ctx, events.Find(id));
+                return ServeMp4(path);
             });
 
             app.MapGet("/api/events/{id}/thumb", (string id, HttpContext ctx) =>
             {
                 if (EventMediaAuth(ctx, id) is { } denied) return denied;
                 var path = events.ArtifactPath(id, "thumb.jpg");
-                return path == null
-                    ? Results.Json(new { error = "no thumbnail for this event" }, statusCode: 404)
-                    : Results.Stream(FootageVault.OpenRead(path), "image/jpeg"); // decrypts when encrypted
+                if (path == null)
+                    return Results.Json(new { error = "no thumbnail for this event" }, statusCode: 404);
+                SetArtifactCaching(ctx, events.Find(id));
+                return Results.Stream(FootageVault.OpenRead(path), "image/jpeg"); // decrypts when encrypted
             });
 
             // The clip's low-res sub-stream twin, used by the strip's ambient previews.
@@ -2820,9 +2925,10 @@ public static class WebApi
             {
                 if (EventMediaAuth(ctx, id) is { } denied) return denied;
                 var path = events.ArtifactPath(id, "preview.mp4");
-                return path == null
-                    ? Results.Json(new { error = "no preview for this event" }, statusCode: 404)
-                    : ServeMp4(path);
+                if (path == null)
+                    return Results.Json(new { error = "no preview for this event" }, statusCode: 404);
+                SetArtifactCaching(ctx, events.Find(id));
+                return ServeMp4(path);
             });
 
             app.MapPost("/api/events/{id}/review", (string id, ReviewRequest req, HttpContext ctx) =>

@@ -986,19 +986,36 @@ public sealed class CameraService : ILiveCameraSource
         var res = camera.DeviceInfo;
         Note($"{Tag}: logged in{(res != null && res.Width > 0 ? $", camera reports {res.Width}x{res.Height}" : "")}");
 
-        await ProbeBatteryAsync(camera, ct).ConfigureAwait(false);
-
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _activeStream = linked; // let SetSuspended interrupt this session at once
         if (_suspended) linked.Cancel(); // a suspend that raced the assignment above
+
+        // A wake-capture cycle handed us its evidence: this session is the rest of
+        // the experiment (see WakeDiag). Timed from the point we are logged in.
+        if (_wakeDiag is { Reported: false } wdConnect) wdConnect.ConnectedAt = DateTime.UtcNow;
+        // Alarm subscription before the battery probe: the probe can burn 3s, and
+        // a detection pushed in that window would be dropped unsubscribed.
+        Task? motionTask = MotionSink is { } sink
+            ? Task.Run(() => WatchMotionGuardedAsync(camera, sink, linked.Token), CancellationToken.None)
+            : null;
+
+        try
+        {
+            await ProbeBatteryAsync(camera, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            // The motion watch is already running: a probe that dies unexpectedly
+            // must not strand it on a disposed token/camera.
+            linked.Cancel();
+            if (motionTask != null) { try { await motionTask.ConfigureAwait(false); } catch { } }
+            throw;
+        }
 
         // Controls and sinks are live from HERE — they ride the control channel and
         // need no video subscription. That's what makes the on-demand hold below
         // free: sensors, detections and the settings panel all keep working.
         _live = camera;
-        // A wake-capture cycle handed us its evidence: this session is the rest of
-        // the experiment (see WakeDiag). Timed from the point we are logged in.
-        if (_wakeDiag is { Reported: false } wdConnect) wdConnect.ConnectedAt = DateTime.UtcNow;
         // One "held awake by …" line per session (then hourly if it never lets go),
         // so flickering demand can't turn the diagnostic into a flood.
         _lastHoldLog = default;
@@ -1007,9 +1024,6 @@ public sealed class CameraService : ILiveCameraSource
         if (!_servicesAudited)
             _ = Task.Run(() => AuditServicePortsAsync(camera, linked.Token), CancellationToken.None);
         Task? videoTask = null;
-        Task? motionTask = MotionSink is { } sink
-            ? Task.Run(() => WatchMotionGuardedAsync(camera, sink, linked.Token), CancellationToken.None)
-            : null;
         // The status watch always runs: battery pushes keep the sidebar reading
         // fresh even without MQTT; other pushes go to the external sink if any.
         var externalStatusSink = StatusSink;
@@ -1316,7 +1330,7 @@ public sealed class CameraService : ILiveCameraSource
     /// measured 25 s after the PIR on a genuine catch — a shorter window ends the
     /// tentative clip before the push lands, and the confirmed event then starts a
     /// second, beheaded clip missing the wake footage this feature exists to keep.</summary>
-    private static readonly TimeSpan WakeClipWindow = TimeSpan.FromSeconds(30);
+    internal static readonly TimeSpan WakeClipWindow = TimeSpan.FromSeconds(30);
 
     /// <summary>
     /// Closes out one wake-capture cycle: prints the evidence gathered by the probe
@@ -1363,7 +1377,8 @@ public sealed class CameraService : ILiveCameraSource
                  $"first frame {(d.FirstFrameMs is { } ff ? $"{ff:0}ms after connect" : "never arrived")}; " +
                  $"{(d.Blips > 0 ? $"{d.Blips} fast blip(s) ignored earlier this park; " : "")}" +
                  $"{(d.SuppressedEdges > 0 ? $"{d.SuppressedEdges} scan edge(s) treated as housekeeping (hints live); " : "")}" +
-                 $"detection during the session: {(d.SawDetection ? "YES" : "none")}.");
+                 $"detection during the session: {(d.SawDetection ? "YES" : "none")}; " +
+                 $"camera all-clears: {(d.AllClears.Count == 0 ? "none" : string.Join(", ", d.AllClears.Select(s => $"+{s:0.0}s")))}.");
 
         // Adaptive skepticism (live loop, 2026-07-21): connects on a wake edge
         // that yield NO detection — especially with the camera reporting it was
@@ -1378,7 +1393,7 @@ public sealed class CameraService : ILiveCameraSource
                 Log.Info($"{Tag}: real catch — wake-scan skepticism reset");
             _fruitlessWakes = 0;
         }
-        else if (!d.HintKept)
+        else if (!d.HintKept) // a kept hint wake is a catch — escalating would throttle the next hint
         {
             _fruitlessWakes++;
             int shift = Math.Min(_fruitlessWakes, MaxWakeSkepticism);
@@ -1514,6 +1529,11 @@ public sealed class CameraService : ILiveCameraSource
                 // wake was real — the whole point of the feature (see WakeDiag).
                 if (_wakeDiag is { Reported: false } wd) wd.SawDetection = true;
             }
+            else if (_wakeDiag is { Reported: false } wdc && wdc.ConnectedAt != default
+                     && wdc.AllClears.Count < 8)
+            {
+                wdc.AllClears.Add((DateTime.UtcNow - wdc.ConnectedAt).TotalSeconds);
+            }
             if (push.Active && (push.AiTypes.Contains("visitor") || push.AiTypes.Contains("doorbell")))
                 Log.Info($"{Tag}: doorbell pressed");
             // AI tokens we don't recognize still become events (raw label), but
@@ -1622,7 +1642,11 @@ internal sealed class WakeDiag
     /// Hints are event-grade — the router saw the camera itself calling the push
     /// service — so they may fire before the scan is even armed.</summary>
     public string? HintSource;
+    /// <summary>A hint-opened wake kept as an event — a catch, not a misfire.</summary>
     public bool HintKept;
+    /// <summary>Seconds after connect of each camera all-clear push (first 8) —
+    /// the evidence for a truncated wake window.</summary>
+    public readonly List<double> AllClears = new();
 
     public double SinceArmedSeconds =>
         ArmedAt == default ? -1 : (EdgeAt - ArmedAt).TotalSeconds;
@@ -1674,13 +1698,13 @@ internal sealed class WakeDiag
             return "HINT KEPT — no detection push followed, but the wake footage is kept as a motion " +
                    "event (Motion is ticked; some models never re-deliver a detection to a session " +
                    "opened after they classified)";
-        // A hint that led to no detection is a rule problem, not a scan problem:
-        // the router matched traffic that was not an event push (or the camera's
-        // event-type filter discarded what followed).
+        // A hint with no detection: rule too broad, or a model that never pushes
+        // to a late session. SawDetection is pre-filter, so the event-type
+        // selection cannot cause this.
         if (HintSource != null)
             return "HINT MISFIRE — the router reported the camera calling home, but no detection followed. " +
-                   "If this repeats, tighten the firewall rule to the push host only (TCP 443), or check " +
-                   "this camera's event-type selection";
+                   "If this repeats, tighten the firewall rule to the push host only (TCP 443), or tick " +
+                   "Motion to keep hint wakes as events";
         // Our own probe woke it: the answer came on the FIRST probe after arming,
         // i.e. the camera was asleep until we knocked. A real motion wake has no
         // reason to land inside that one interval. IMPOSSIBLE for the ICMP RTT
