@@ -1,5 +1,6 @@
 @page "/logs"
 @using System.Text.Json
+@inject NavigationManager Nav
 @inject HttpClient Http
 @inject IJSRuntime JS
 @inject LocalApiInfo Local
@@ -127,6 +128,13 @@
                 var status = await res.Content.ReadFromJsonAsync<ApiAuthStatus>();
                 _authEnabled = status?.Enabled ?? false;
                 _admin = status?.Admin ?? false;
+                // Auth on but no session: bounce to sign-in and come back here.
+                // A signed-in non-admin stays and sees the admin-only notice.
+                if (_authEnabled && string.IsNullOrEmpty(status?.User))
+                {
+                    Nav.NavigateTo("/?return=" + Uri.EscapeDataString("/" + Nav.ToBaseRelativePath(Nav.Uri)));
+                    return;
+                }
             }
         }
         catch { }

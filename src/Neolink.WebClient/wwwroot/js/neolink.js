@@ -712,7 +712,7 @@
         // muted (the decoder drops the audio pipeline entirely — that, not
         // video, is what stalled full-res clips at high rates), and the native
         // playbackRate does the rest. The previous mute state comes back at 1×.
-        eventPlayer(videoId, url, rate) {
+        eventPlayer(videoId, url, rate, fallback) {
             const v = document.getElementById(videoId);
             if (!v || !url) return;
             const applyRate = () => {
@@ -730,6 +730,16 @@
             // new source attaches.
             const errorBox = () => v.closest('.event-player-media') || v.parentElement;
             v.onerror = () => {
+                // The SD preview can be unplayable (a sub stream that never
+                // delivered a frame) while the HD clip is fine — swap once,
+                // silently, before surfacing an error.
+                if (fallback && v.dataset.evUrl !== fallback) {
+                    v.dataset.evUrl = fallback;
+                    v.src = fallback;
+                    try { v.load(); } catch { }
+                    v.play().catch(() => { v.muted = true; v.play().catch(() => { }); });
+                    return;
+                }
                 const box = errorBox();
                 if (!box || box.querySelector('.video-error')) return;
                 const d = document.createElement('div');

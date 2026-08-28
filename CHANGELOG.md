@@ -4,6 +4,23 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
+## 1.0.5 (beta)
+
+### Added
+
+- **AI Search on the Events page (beta).** Search in plain language, in all six UI languages. Structured queries (types, cameras, dates, times) answer instantly; descriptive ones ("someone in a red jacket") use the configured AI model and its stored event descriptions. Works best with AI event descriptions enabled; without a model, basic keyword search still works.
+- **Download button in the event player.** Saves the full-quality clip as a file.
+- **The Events page is live.** New events appear in the sidebar as they happen. An open event shows a clear "Still recording" banner and switches to the finished clip by itself when the event ends.
+- **Camera and threat-level filters are multi-select** and persist per user profile. New cameras are included by default; a funnel icon shows when a filter is active. The Logs page gains a camera filter.
+- Signing in from a deep link now returns to the page you asked for.
+
+### Fixed
+
+- **Playing an event while it was still recording could permanently break its playback in the browser**, while VLC played the file fine. The live index no longer points past what is on disk, clips reach the disk continuously, and an event only reports closed once its file is finalized.
+- **A camera failing mid-recording now ends the clip cleanly at the gap** instead of gluing resumed footage onto it, which corrupted playback. The event itself continues and closes normally.
+- **Recordings no longer lose their tail when event notifications sample the clip.** The snapshot decoder runs at low priority with capped threads so it cannot starve the camera connection feeding the recording.
+- The SD preview player falls back to the HD clip automatically when the preview cannot play, and events whose capture never received a frame stop advertising a clip or preview.
+
 ## 1.0.4
 
 ### Added

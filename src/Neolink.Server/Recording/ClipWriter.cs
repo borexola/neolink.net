@@ -105,6 +105,13 @@ public sealed class ClipWriter : IDisposable
     /// <summary>The file cannot be written (disk full/gone); callers should drop the writer.</summary>
     public bool Faulted => _faulted;
 
+    /// <summary>At least one video sample reached the file. Valid once
+    /// <see cref="Completion"/> finishes; an empty capture (a stream that never
+    /// delivered a frame) is not a playable artifact and must not be advertised
+    /// as one.</summary>
+    public bool WroteVideo => _wroteVideo;
+    private volatile bool _wroteVideo;
+
     /// <summary>Completes once the file is finalized (or given up on) after <see cref="Dispose"/>.</summary>
     public Task Completion => _done.Task;
 
@@ -275,6 +282,10 @@ public sealed class ClipWriter : IDisposable
             // encrypted (chunked AES-256-GCM) per the recording.encrypt setting.
             file = FootageVault.Create(_path);
             file.Write(init);
+            // Reach the disk now, not a megabyte later: mid-write readers (the
+            // event-email sampler, a viewer opening a still-recording clip) get
+            // a parseable file from the first moment instead of an empty one.
+            file.Flush();
             StorageMetrics.AddBytes(init.Length);
         }
         catch (Exception ex)
@@ -300,6 +311,12 @@ public sealed class ClipWriter : IDisposable
                     (uint)(item.Data.Length - moofSize - 8), item.Duration, item.DecodeTime,
                     pos + moofSize + 8));
                 file.Write(item.Data);
+                // A GOP-cadence flush keeps the on-disk file within seconds of
+                // live for mid-write readers, at a few large writes per GOP —
+                // still what HDDs want. (Torn tails between flushes stay possible;
+                // ScanFragmented clamps them.)
+                if (item.Keyframe)
+                    file.Flush();
                 StorageMetrics.AddBytes(item.Data.Length);
             }
             catch (Exception ex)
@@ -310,7 +327,8 @@ public sealed class ClipWriter : IDisposable
             }
         }
 
-        if (!failed && !samples.Any(s => s.Track == 1))
+        _wroteVideo = samples.Any(s => s.Track == 1);
+        if (!failed && !_wroteVideo)
         {
             // Only the init segment landed — a writer opened against a stream that
             // never sent a frame (seen live: a wake event's preview writer against
@@ -599,6 +617,11 @@ public sealed class ClipWriter : IDisposable
                 }
                 if (track == 0 || sampleSize == 0)
                     throw new InvalidOperationException("unexpected fragment layout");
+                // The payload lives in the NEXT box (mdat), which may be cut short
+                // on a growing or crash-truncated file — the write buffer flushes
+                // mid-fragment. Indexing that sample would point readers past the
+                // fragment region (into the synthesized moov, on the virtual view).
+                if (boxStart + dataOff + sampleSize > end) { pos = boxStart; break; }
                 samples.Add(new SampleRec(track, key, sampleSize, dur, dt, boxStart + dataOff));
             }
             else

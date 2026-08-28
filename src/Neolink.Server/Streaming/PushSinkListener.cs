@@ -100,7 +100,7 @@ public sealed class PushSinkListener
                 // override actually send the camera here" is the first thing
                 // every setup needs to verify.
                 if (firstContact)
-                    Log.Info($"Wake hints: push decoy contacted by {ip} (tcp/{port}) — the DNS override works");
+                    Log.Info($"Wake hints: push decoy contacted by {ip} (tcp/{port}) — the redirect works");
                 if (pass)
                     _hint(ip, $"{ip} called the decoy push service on tcp/{port}");
             }

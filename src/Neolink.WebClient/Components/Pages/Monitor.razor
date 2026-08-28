@@ -2,6 +2,7 @@
 @using System.Diagnostics
 @using System.Globalization
 @using System.Text.Json
+@inject NavigationManager Nav
 @inject HttpClient Http
 @inject IJSRuntime JS
 @inject LocalApiInfo Local
@@ -261,6 +262,17 @@
     private static readonly (string Label, int Sec)[] Windows =
         { ("5m", 300), ("15m", 900), ("1h", 3600), ("6h", 21600), ("24h", 86400) };
 
+    private bool _authRedirected;
+
+    /// <summary>No session: bounce to the sign-in page, which returns here
+    /// once the sign-in succeeds.</summary>
+    private void RedirectToSignIn()
+    {
+        if (_authRedirected) return;
+        _authRedirected = true;
+        Nav.NavigateTo("/?return=" + Uri.EscapeDataString("/" + Nav.ToBaseRelativePath(Nav.Uri)));
+    }
+
     private string _server = "";
     private string _origin = "";
     private string? _token;
@@ -358,7 +370,7 @@
             using var res = await Http.SendAsync(req);
             if (res.StatusCode == System.Net.HttpStatusCode.Unauthorized)
             {
-                _error = T["Authentication required — sign in on the live view first."];
+                RedirectToSignIn();
                 return;
             }
             if (res.StatusCode == System.Net.HttpStatusCode.NotFound)

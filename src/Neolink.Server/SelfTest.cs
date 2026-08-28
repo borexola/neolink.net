@@ -1684,11 +1684,13 @@ public static class SelfTest
             try
             {
                 var store = new Recording.EventStore(dir);
-                var a = store.Create("FrontDoor", DateTime.UtcNow.AddMinutes(-10), new[] { "person" });
+                // Anchored inside the local calendar day, not "minutes ago" — a
+                // run just after midnight must not push them into yesterday.
+                var a = store.Create("FrontDoor", DateTime.Today.AddHours(1).ToUniversalTime(), new[] { "person" });
                 a.AiDescription = "A person in a blue jacket walks to the door.";
                 a.Ongoing = false;
                 store.Save(a);
-                var b = store.Create("TestCam", DateTime.UtcNow.AddMinutes(-5), new[] { "motion" });
+                var b = store.Create("TestCam", DateTime.Today.AddHours(2).ToUniversalTime(), new[] { "motion" });
                 b.AiDescription = "A red car reverses out of the driveway.";
                 b.AiLevel = "yellow";
                 b.Ongoing = false;
@@ -4792,6 +4794,17 @@ public static class SelfTest
                 var path = Path.Combine(dir, "clip.mp4");
                 var writer = Recording.ClipWriter.TryCreate(path, hub);
                 Assert(writer != null, "writer created once params are known");
+                // The init segment must reach the disk at creation, not a megabyte
+                // later: mid-write readers (the event-email sampler, a viewer on a
+                // still-recording event) need a parseable file from the start.
+                var initDeadline = DateTime.UtcNow.AddSeconds(5);
+                long earlyLen = 0;
+                while (earlyLen == 0 && DateTime.UtcNow < initDeadline)
+                {
+                    try { earlyLen = new FileInfo(path).Length; } catch { }
+                    if (earlyLen == 0) Thread.Sleep(20);
+                }
+                Assert(earlyLen > 0, "init segment is flushed to disk before the buffer fills");
                 // Hub indices jump by 2, as they do when audio packets are
                 // interleaved. That is NOT a drop: the writer must keep every
                 // frame (regression: index-based gap detection dropped all
@@ -4816,6 +4829,15 @@ public static class SelfTest
                 writer.Dispose();
                 Assert(writer.Completion.Wait(TimeSpan.FromSeconds(10)), "writer finalizes in background");
                 Assert(!writer.Faulted, "no write faults");
+                Assert(writer.WroteVideo, "writer reports video landed");
+
+                // An empty capture (no frame ever arrived) must say so, so the
+                // recorder can strip HasClip/HasPreview instead of sending
+                // players to an unplayable stub.
+                var empty = Recording.ClipWriter.TryCreate(Path.Combine(dir, "empty.mp4"), hub)!;
+                empty.Dispose();
+                Assert(empty.Completion.Wait(TimeSpan.FromSeconds(10)), "empty writer completes");
+                Assert(!empty.WroteVideo, "empty capture reports no video");
 
                 var bytes = File.ReadAllBytes(path);
                 Assert(bytes.Length > 200, "file has content");
@@ -4967,6 +4989,82 @@ public static class SelfTest
                 Assert(!Recording.ClipWriter.RefinalizeClassic(path), "second run is a no-op");
                 using (var raw = Recording.VirtualMp4.Open(path))
                     AssertEq(raw.Length, new FileInfo(path).Length); // classic → served raw
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+        });
+
+        Test("virtual classic index clamps a torn tail fragment", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                // A growing clip between write-buffer flushes (and a crash-cut file
+                // forever) ends with a complete moof but a truncated mdat. Indexing
+                // that sample pointed past the fragment region — every browser then
+                // read the synthesized moov's own bytes ("trak") as a 1.9 GB NAL
+                // length and killed the video track mid-clip.
+                var sps = new byte[] { 0x67, 0x42, 0xE0, 0x1F, 0xA0 };
+                var pps = new byte[] { 0x68, 0xCE, 0x38, 0x80 };
+                var init = FMp4.BuildInit(VideoCodec.H264, sps, pps, null, 640, 360);
+                var ms = new MemoryStream();
+                ms.Write(init);
+                ulong dt = 0;
+                for (int i = 0; i < 10; i++)
+                {
+                    bool key = i % 5 == 0;
+                    var sample = new byte[24];
+                    System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(sample, 20);
+                    sample[4] = key ? (byte)0x65 : (byte)0x41;
+                    ms.Write(FMp4.BuildFragment((uint)(i + 1), dt, 3000, sample, key));
+                    dt += 3000;
+                }
+                var whole = ms.ToArray();
+                var path = Path.Combine(dir, "torn.mp4");
+                File.WriteAllBytes(path, whole.AsSpan(0, whole.Length - 10).ToArray());
+
+                byte[] served;
+                using (var v = Recording.VirtualMp4.Open(path))
+                {
+                    served = new byte[v.Length];
+                    v.ReadExactly(served);
+                }
+                int tailBase = served.Length - 1024;
+                var tail = Encoding.ASCII.GetString(served, tailBase, 1024);
+                uint After(string tag, int off) => System.Buffers.Binary.BinaryPrimitives
+                    .ReadUInt32BigEndian(served.AsSpan(tailBase + tail.IndexOf(tag, StringComparison.Ordinal) + off));
+                AssertEq(After("stsz", 12), 9u); // the torn tenth is not indexed
+                AssertEq(After("stco", 8), 9u);
+
+                // Every indexed payload must lie inside the mapped file region —
+                // never in the synthesized moov that follows it.
+                int moovStart = served.Length;
+                for (int p = 0; p + 8 <= served.Length;)
+                {
+                    uint size = System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(served.AsSpan(p));
+                    if (Encoding.ASCII.GetString(served, p + 4, 4) == "moov") moovStart = p;
+                    if (size < 8) break;
+                    p += (int)size;
+                }
+                int stszEntries = tailBase + tail.IndexOf("stsz", StringComparison.Ordinal) + 16;
+                int stcoEntries = tailBase + tail.IndexOf("stco", StringComparison.Ordinal) + 12;
+                for (int i = 0; i < 9; i++)
+                {
+                    uint size = System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(served.AsSpan(stszEntries + i * 4));
+                    uint off = System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(served.AsSpan(stcoEntries + i * 4));
+                    Assert(off + size <= moovStart, $"sample {i + 1} payload ends inside the file region");
+                }
+
+                // The in-place upgrade honours the same boundary.
+                Assert(Recording.ClipWriter.RefinalizeClassic(path), "torn file refinalizes");
+                var upgraded = File.ReadAllBytes(path);
+                int upBase = upgraded.Length - 1024;
+                var upTail = Encoding.ASCII.GetString(upgraded, upBase, 1024);
+                AssertEq(System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(
+                    upgraded.AsSpan(upBase + upTail.IndexOf("stsz", StringComparison.Ordinal) + 12)), 9u);
             }
             finally
             {

@@ -3189,6 +3189,33 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 
 .event-player-title .event-title { font-size: 15px; }
 
+/* Above a still-recording clip: solid amber, not the translucent warn style —
+   this one must be unmissable before the user judges the clip incomplete. */
+.ev-rec-note {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+    padding: 7px 12px;
+    border-radius: var(--radius-sm);
+    background: #e8b054;
+    color: #201607;
+    font-size: 12.5px;
+    font-weight: 650;
+    letter-spacing: .02em;
+}
+
+.ev-rec-dot {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #b3261e;
+    animation: ev-rec-blink 1.2s ease-in-out infinite;
+}
+
+@keyframes ev-rec-blink { 50% { opacity: .3; } }
+
 /* Wraps the clip so digital zoom has a clipping frame (same role as a tile) */
 .event-player-media {
     position: relative;
@@ -3244,7 +3271,31 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 .ev-search-row .ev-search { flex: 1 1 auto; min-width: 260px; }
 .ev-search-head { display: flex; align-items: center; gap: 7px; flex: 0 0 auto; }
 .ev-search-title { font-size: 12px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); white-space: nowrap; }
-.ev-search-hint { font-size: 12px; color: var(--muted); margin: 4px 0 2px; max-width: 640px; }
+.ev-search-hint { font-size: 12px; color: var(--muted); margin: 4px 0 2px; padding-left: 10px; max-width: 640px; }
+
+/* Camera multi-select: chip button + checkbox popover. */
+.cam-filter { position: relative; display: inline-flex; }
+.cam-filter > .chip { display: inline-flex; align-items: center; gap: 5px; }
+.cam-filter-backdrop { position: fixed; inset: 0; z-index: 39; }
+.cam-filter-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    z-index: 40;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 8px 12px;
+    min-width: 180px;
+    max-height: 60vh;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, .5);
+}
+.cam-filter-menu label { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; white-space: nowrap; }
+.cam-filter-menu .cam-filter-all { padding-bottom: 7px; border-bottom: 1px solid var(--line); }
 .ev-search {
     display: flex;
     align-items: center;
@@ -3255,6 +3306,21 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 }
 .ev-search-icon { display: inline-flex; color: var(--muted); flex: 0 0 auto; }
 .ev-search-icon.ai { color: var(--accent); }
+.ev-search-box { position: relative; flex: 1 1 auto; min-width: 0; max-width: 520px; display: flex; }
+.ev-search-box .ev-search-input { max-width: none; width: 100%; padding-right: 30px; }
+.ev-search-clear {
+    position: absolute;
+    right: 6px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: inline-flex;
+    padding: 3px;
+    background: none;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+}
+.ev-search-clear:hover { color: var(--text); }
 .ev-search-input {
     flex: 1 1 auto;
     min-width: 0;
@@ -3511,7 +3577,7 @@ button.ev-switch-opt {
 }
 
 .ev-back { display: none; } /* only shown when the list is hidden (phones) */
-.ev-golive { flex: 0 0 auto; align-self: center; white-space: nowrap; }
+.event-player-head > .chip { flex: 0 0 auto; align-self: center; white-space: nowrap; }
 
 .ev-detail-empty {
     margin: auto;

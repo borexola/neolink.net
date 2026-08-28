@@ -222,7 +222,7 @@ in exchange you get an integration light enough to leave running forever.
   GREEN/YELLOW/RED threat level — see
   [AI event descriptions](#ai-event-descriptions--beta)
 - **AI Search (BETA)**: search events in plain language ("people wearing
-  something red last week") — structured filters parse instantly, the LLM
+  something red last week"). Structured filters parse instantly, the LLM
   matches descriptions; see [AI Search](docs/ai-descriptions.md#ai-search-beta)
 - **Battery cameras** (BETA) auto-detected and sleep-friendly — see
   [Battery cameras](#battery-cameras-argus-etc--beta)
@@ -593,7 +593,7 @@ The short version:
 - **AI Search** on the Events page builds on the descriptions: ask in plain
   language ("people wearing something red last week") and the LLM picks the
   matching events by reading what it wrote. Works best on cameras with
-  descriptions enabled — events without one can only be found by type,
+  descriptions enabled; events without one can only be found by type,
   camera and date. Without an AI backend the bar still does basic
   structured + word search.
 

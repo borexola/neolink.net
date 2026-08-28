@@ -1552,11 +1552,11 @@
                     <div class="campanel-section">
                         <div class="campanel-section-title">@T["WAKE HINTS (BATTERY CAMERAS)"] <span class="beta-tag">@T["BETA"]</span></div>
                         <div class="notice small">
-                            @((MarkupString)T["Instant wake signals from the moment a battery camera calls Reolink's push service for a PIR event — recipes in <code>docs/battery-cameras.md</code>. <b>Syslog</b>: an OPNsense/pfSense router forwards its firewall log here. <b>Push decoy</b>: a DNS override on any router points <code>pushx.reolink.com</code> at this host and the camera's own push is the signal (Reolink app notifications stop for those cameras). Blank ports leave a source off."])
+                            @((MarkupString)T["Instant wake signals from the moment a battery camera calls Reolink's push service for a PIR event — recipes in <code>docs/battery-cameras.md</code>. <b>Syslog</b>: an OPNsense/pfSense router forwards its firewall log here. <b>Push decoy</b>: the camera's own push is steered to this host — a router NAT redirect of the camera's outbound 443 (recommended), or a DNS override pointing <code>pushx.reolink.com</code> here (Reolink app notifications stop for those cameras either way). Blank ports leave a source off."])
                         </div>
                         @AdminField(T["Router syslog UDP port (0 = off)"], "wakeHints.syslogPort", "number",
                             AdminIntError("wakeHints.syslogPort", 1, 65535, alsoAllowed: 0))
-                        @AdminField(T["Push decoy TCP ports (e.g. 443, 53 — blank = off)"], "wakeHints.pushPorts", "text",
+                        @AdminField(T["Push decoy TCP ports (e.g. 8443, 53 — blank = off)"], "wakeHints.pushPorts", "text",
                             AdminPushPortsError())
                         @AdminField(T["Listener bind (blank = server bind)"], "wakeHints.bind", "text",
                             AdminIpError("wakeHints.bind"))
@@ -2482,6 +2482,10 @@
                    JS owns the source (preserving position across an HD↔SD swap)
                    and mutes the audio pipeline above 1× — the timeline's recipe,
                    which is what lets full-res clips fast-forward smoothly. *@
+                @if (_playEvent.Ongoing)
+                {
+                    <div class="ev-rec-note" role="status"><span class="ev-rec-dot"></span>@T["Still recording — the clip plays what has been captured so far"]</div>
+                }
                 @* zoom-on: the recorded clip gets the same digital zoom as live
                    tiles (wheel at the cursor, drag to pan, HUD, dbl-click 1:1).
                    Keyed per event so zoom resets when navigating between events
@@ -3216,7 +3220,7 @@
         // Drive the event player from JS: pick the source for the current speed,
         // preserve position across a clip↔preview swap, and apply the rate.
         if (_playEvent is { HasClip: true })
-            await JS.InvokeVoidAsync("neolink.eventPlayer", "event-player-video", PlayerUrl, _playSpeed);
+            await JS.InvokeVoidAsync("neolink.eventPlayer", "event-player-video", PlayerUrl, _playSpeed, PlayerFallback);
     }
 
     /// <summary>Called from JS when the strip's resize-handle drag ends.</summary>
@@ -3640,6 +3644,18 @@
         // A deep link (/cameras/{name}) opened on an auth-enabled server could
         // not resolve until now — the camera list needed the session token.
         ApplyRoute();
+        ReturnToRequestedPage();
+    }
+
+    /// <summary>A protected page bounced here to sign in (?return=/timeline):
+    /// go back to it. Local paths only — never an open redirect.</summary>
+    private void ReturnToRequestedPage()
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(new Uri(Nav.Uri).Query, @"[?&]return=([^&]+)");
+        if (!m.Success) return;
+        var ret = Uri.UnescapeDataString(m.Groups[1].Value);
+        if (ret.StartsWith('/') && !ret.StartsWith("//") && !ret.Contains("://"))
+            Nav.NavigateTo(ret);
     }
 
     private bool _loginBusy;
@@ -5056,8 +5072,11 @@
 
     // ------------------------------------------------------------ recorded events
 
-    private string EventArtifactUrl(ApiEvent ev, string kind) =>
-        $"{_server.TrimEnd('/')}/api/events/{Uri.EscapeDataString(ev.Id)}/{kind}{TokenQuery('?')}";
+    private string EventArtifactUrl(ApiEvent ev, string kind)
+    {
+        var url = $"{_server.TrimEnd('/')}/api/events/{Uri.EscapeDataString(ev.Id)}/{kind}{TokenQuery('?')}";
+        return $"{url}{(url.Contains('?') ? '&' : '?')}v={ev.ArtifactVersion}";
+    }
 
     /// <summary>A cached snapshot still, used as a live tile's poster so the grid
     /// paints a real frame the instant it loads while the stream spins up. Served
@@ -5506,6 +5525,12 @@
             ? EventArtifactUrl(_playEvent, "preview")
             : EventArtifactUrl(_playEvent, "clip");
 
+    /// <summary>When the SD preview plays, the HD clip is the silent error
+    /// fallback — a preview can be an empty capture while the clip plays fine.</summary>
+    private string? PlayerFallback =>
+        _playEvent is { HasPreview: true, HasClip: true } && _playSd
+            ? EventArtifactUrl(_playEvent, "clip") : null;
+
     private async Task SetPlaySpeedAsync(double s)
     {
         _playSpeed = s;
@@ -5517,14 +5542,14 @@
                 s.ToString(System.Globalization.CultureInfo.InvariantCulture));
         }
         catch { }
-        await JS.InvokeVoidAsync("neolink.eventPlayer", "event-player-video", PlayerUrl, s);
+        await JS.InvokeVoidAsync("neolink.eventPlayer", "event-player-video", PlayerUrl, s, PlayerFallback);
     }
 
     private async Task SetPlayStreamAsync(bool sd)
     {
         _playSd = sd;
         try { await JS.InvokeVoidAsync("neolink.lsSet", "neolink.eventSd", sd ? "1" : "0"); } catch { }
-        await JS.InvokeVoidAsync("neolink.eventPlayer", "event-player-video", PlayerUrl, _playSpeed);
+        await JS.InvokeVoidAsync("neolink.eventPlayer", "event-player-video", PlayerUrl, _playSpeed, PlayerFallback);
     }
 
     // _playSpeed deliberately survives across events (loaded once per session).

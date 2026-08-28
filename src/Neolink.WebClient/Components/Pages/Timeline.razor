@@ -1,5 +1,6 @@
 @page "/timeline"
 @using System.Text.Json
+@inject NavigationManager Nav
 @inject HttpClient Http
 @inject IJSRuntime JS
 @inject LocalApiInfo Local
@@ -943,7 +944,7 @@
     private string TokenQuery(char sep) =>
         string.IsNullOrEmpty(_token) ? "" : $"{sep}token={Uri.EscapeDataString(_token)}";
 
-    /// <summary>Authenticated GET; null on failure (401 also sets the sign-in notice).</summary>
+    /// <summary>Authenticated GET; null on failure (401 bounces to sign-in).</summary>
     private async Task<TValue?> GetJsonAsync<TValue>(string path)
     {
         var req = new HttpRequestMessage(HttpMethod.Get, $"{ApiBase}{path}");
@@ -952,11 +953,22 @@
         using var res = await Http.SendAsync(req);
         if (res.StatusCode == System.Net.HttpStatusCode.Unauthorized)
         {
-            _error = T["Authentication required — sign in on the live view first."];
+            RedirectToSignIn();
             return default;
         }
         if (!res.IsSuccessStatusCode) return default;
         return await res.Content.ReadFromJsonAsync<TValue>();
+    }
+
+    private bool _authRedirected;
+
+    /// <summary>No session: bounce to the sign-in page, which returns here
+    /// once the sign-in succeeds.</summary>
+    private void RedirectToSignIn()
+    {
+        if (_authRedirected) return;
+        _authRedirected = true;
+        Nav.NavigateTo("/?return=" + Uri.EscapeDataString("/" + Nav.ToBaseRelativePath(Nav.Uri)));
     }
 
     private async Task LoadCamerasAsync()
@@ -1030,8 +1042,9 @@
                     var kind = ev.HasClip ? "clip" : "preview";
                     if (!_eventSegs.TryGetValue(ev.Camera, out var segs))
                         _eventSegs[ev.Camera] = segs = new List<Seg>();
+                    var url = $"{Base}/api/events/{Uri.EscapeDataString(ev.Id)}/{kind}{TokenQuery('?')}";
                     segs.Add(new Seg(s, dur,
-                        $"{Base}/api/events/{Uri.EscapeDataString(ev.Id)}/{kind}{TokenQuery('?')}"));
+                        $"{url}{(url.Contains('?') ? '&' : '?')}v={ev.ArtifactVersion}"));
                 }
             }
         }

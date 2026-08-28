@@ -340,6 +340,10 @@ public sealed class EventEmailer
         foreach (var a in new[]
         {
             "-hide_banner", "-loglevel", "error",
+            // Bounded appetite: an unthrottled full-speed decode of a 5 MP clip
+            // can starve the camera pumps on a small box — and a starved session
+            // is a dropped session, which cuts the very recording being sampled.
+            "-threads", "2",
             "-i", "pipe:0",
             "-vf", VideoFilter(skipSeconds, fps),
             "-frames:v", MaxDecodedFrames.ToString(),
@@ -347,6 +351,8 @@ public sealed class EventEmailer
         }) psi.ArgumentList.Add(a);
 
         using var p = Process.Start(psi)!;
+        try { p.PriorityClass = ProcessPriorityClass.BelowNormal; }
+        catch { /* the process may have exited already; priority is best-effort */ }
         // The timeout must cover the stdout copy: it only ends when ffmpeg closes
         // stdout, and a feed stalled on dead storage keeps ffmpeg alive forever.
         using var cts = new CancellationTokenSource(DecodeTimeout);

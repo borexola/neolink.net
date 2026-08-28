@@ -271,18 +271,20 @@ public static class WebApi
             ctx.Response.Headers.CacheControl = "private, max-age=31536000, immutable";
     }
 
-    private static IResult ServeMp4(string path)
+    private static IResult ServeMp4(string path, string? downloadName = null)
     {
         try
         {
-            return Results.Stream(VirtualMp4.Open(path), "video/mp4", enableRangeProcessing: true);
+            return Results.Stream(VirtualMp4.Open(path), "video/mp4",
+                fileDownloadName: downloadName, enableRangeProcessing: true);
         }
         catch (Exception ex)
         {
             Log.Debug($"Recordings: no virtual index for {Path.GetFileName(path)} ({Log.Flatten(ex)}); serving raw");
             // Still through the vault: an encrypted file must decrypt on this
             // fallback path too (a plaintext file comes back as a raw FileStream).
-            return Results.Stream(FootageVault.OpenRead(path), "video/mp4", enableRangeProcessing: true);
+            return Results.Stream(FootageVault.OpenRead(path), "video/mp4",
+                fileDownloadName: downloadName, enableRangeProcessing: true);
         }
     }
     private sealed record PasswordRequest(string? Password);
@@ -2906,8 +2908,15 @@ public static class WebApi
                 var path = events.ArtifactPath(id, "clip.mp4");
                 if (path == null)
                     return Results.Json(new { error = "no clip for this event" }, statusCode: 404);
-                SetArtifactCaching(ctx, events.Find(id));
-                return ServeMp4(path);
+                var rec = events.Find(id);
+                SetArtifactCaching(ctx, rec);
+                // ?dl=1: a save-as download instead of inline playback.
+                string? name = null;
+                if (ctx.Request.Query["dl"] == "1")
+                    name = rec != null
+                        ? $"{Neolink.Recording.EventStore.SafeName(rec.Camera)} {rec.StartUtc.ToLocalTime():yyyy-MM-dd HHmmss}.mp4"
+                        : $"{id}.mp4";
+                return ServeMp4(path, name);
             });
 
             app.MapGet("/api/events/{id}/thumb", (string id, HttpContext ctx) =>

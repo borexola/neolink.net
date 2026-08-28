@@ -101,16 +101,19 @@
   // calls Reolink's push service; catch that moment and Neolink connects
   // immediately instead of waiting for the ping-pattern scan. Two independent
   // sources, either or both — full recipes: docs/battery-cameras.md.
+  //  - push_ports: Neolink itself plays the push service. Recommended: a router
+  //    destination-NAT rule redirecting the camera's outbound 443 to this host
+  //    on 8443; it works even when the camera has cached the push service's
+  //    real IP. Alternative: a DNS override (pushx.reolink.com -> this host,
+  //    that hostname ONLY) on OpenWRT/Pi-hole/AdGuard/...; the camera then
+  //    dials 443 directly, so list [443, 53] instead. Either way Reolink app
+  //    notifications stop for those cameras; Home Assistant via Neolink
+  //    takes over.
   //  - syslog_port: OPNsense/pfSense forward their firewall log (remote syslog,
   //    filterlog) here; the camera's TCP/443 call is the signal. 0 = off.
-  //  - push_ports: Neolink itself plays the push service — add a DNS override on
-  //    the router (pushx.reolink.com -> this host, that hostname ONLY) and the
-  //    camera's own push lands here. Works on any router with DNS overrides
-  //    (OpenWRT, Pi-hole, AdGuard, ...), but Reolink app notifications stop for
-  //    cameras behind the override — Home Assistant via Neolink takes over.
   // "wake_hints": {
   //   "syslog_port": 5140,             // UDP port to receive the router's syslog on
-  //   "push_ports": [443, 53]          // decoy push service (DNS-override mode)
+  //   "push_ports": [8443, 53]         // decoy push service (NAT-redirect mode; use [443, 53] for a DNS override)
   // },
 
   // Optional: password-protect the RTSP server. Remove entries for open access.

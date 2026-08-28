@@ -51,6 +51,10 @@ public sealed class EventRecorder
     private readonly List<(HubPacket Packet, bool Gap)> _previewPreroll = new();
     private ClipWriter? _writer;
     private ClipWriter? _previewWriter;
+    // Writers closed AT a stream gap while their event stayed open: the close
+    // path must still await their finalize and read their WroteVideo verdict.
+    private ClipWriter? _gapClosedWriter;
+    private ClipWriter? _gapClosedPreview;
     /// <summary>The hub the record pump is subscribed to RIGHT NOW — clips must
     /// take their codec parameters from here, never from a just-changed selection.</summary>
     private volatile IStreamHub? _activeRecordHub;
@@ -333,7 +337,25 @@ public sealed class EventRecorder
                         var now = DateTime.UtcNow;
                         if (now - lastPacketAt > ContinuousRecorder.SilenceRoll)
                         {
-                            lock (_mediaGate) _preroll.Clear();
+                            bool closedAtGap = false;
+                            lock (_mediaGate)
+                            {
+                                _preroll.Clear();
+                                // A clip mid-write ends AT the gap (same rule as the
+                                // preview pump): gluing resumed footage in makes an
+                                // undecodable seam — the first frames back reference
+                                // pictures the clip never held — plus a time jump.
+                                // The event itself stays open; its clip is done.
+                                if (_writer != null)
+                                {
+                                    _writer.Dispose();
+                                    _gapClosedWriter = _writer;
+                                    _writer = null;
+                                    closedAtGap = true;
+                                }
+                            }
+                            if (closedAtGap)
+                                Log.Info($"{_camera}: stream gap while recording — the clip ends at the gap; the event continues");
                             lastIndex = -1; // the drop flag is meaningless across a gap
                         }
                         lastPacketAt = now;
@@ -411,8 +433,8 @@ public sealed class EventRecorder
                         if (open != null)
                         {
                             open.Dispose();
-                            if (preview) _previewWriter = null;
-                            else _writer = null;
+                            if (preview) { _previewWriter = null; _gapClosedPreview = open; }
+                            else { _writer = null; _gapClosedWriter = open; }
                         }
                     }
                     lastIndex = -1;
@@ -775,14 +797,40 @@ public sealed class EventRecorder
             }
         }
 
+        ClipWriter? closingWriter, closingPreview;
         lock (_mediaGate)
         {
-            _writer?.Dispose();
+            // A writer closed early at a stream gap still owes this event its
+            // finalize wait and its WroteVideo verdict.
+            closingWriter = _writer ?? _gapClosedWriter;
+            closingPreview = _previewWriter ?? _gapClosedPreview;
             _writer = null;
-            _previewWriter?.Dispose();
             _previewWriter = null;
+            _gapClosedWriter = null;
+            _gapClosedPreview = null;
         }
+        closingWriter?.Dispose();
+        closingPreview?.Dispose();
         rec.EndUtc = DateTime.UtcNow;
+        // Ongoing=false is every consumer's cue that clip.mp4 is complete (the
+        // browser may cache it as immutable; a delay-0 email samples it whole),
+        // and the store serves this same instance — so the finalize must land
+        // before the flag flips. Bounded: a dead disk faults the writer and
+        // completes it early.
+        foreach (var w in new[] { closingWriter, closingPreview })
+        {
+            if (w == null) continue;
+            try { await w.Completion.WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false); }
+            catch { }
+        }
+        // An empty capture (a stream that never delivered a frame) is not a
+        // playable artifact — the record must not send players to it. Only
+        // trusted when the writer actually finished (a timed-out wait proves
+        // nothing about what landed).
+        if (closingWriter is { } cw && cw.Completion.IsCompletedSuccessfully && !cw.WroteVideo)
+            rec.HasClip = false;
+        if (closingPreview is { } cp && cp.Completion.IsCompletedSuccessfully && !cp.WroteVideo)
+            rec.HasPreview = false;
         rec.Ongoing = false;
 
         if (provisional)
@@ -834,6 +882,8 @@ public sealed class EventRecorder
                 Log.Info($"{_camera}: storage has room again — event clips resume");
                 _fullLogged = false;
             }
+            _gapClosedWriter = null;
+            _gapClosedPreview = null;
             try
             {
                 _writer = ClipWriter.TryCreate(Path.Combine(_store.EventDir(rec), "clip.mp4"),
