@@ -271,7 +271,7 @@ public static class WebApi
             ctx.Response.Headers.CacheControl = "private, max-age=31536000, immutable";
     }
 
-    private static IResult ServeMp4(string path, string? downloadName = null)
+    private static IResult ServeMp4(HttpContext ctx, string path, string? downloadName = null)
     {
         // A validator per on-disk state: a browser streams a clip over MANY range
         // requests, and against a still-growing file each request would otherwise
@@ -288,11 +288,19 @@ public static class WebApi
             mtime = info.LastWriteTimeUtc;
         }
         catch { }
+        // Home Assistant's ingress proxy mishandles ranged media (field report:
+        // finished clips decode-fail mid-play through ingress while the same
+        // bytes download and play everywhere) — so behind ingress a clip is one
+        // plain 200 stream the proxy cannot mis-stitch. Direct port, Docker and
+        // reverse-proxy access keep full range support.
+        bool ranges = !ctx.Request.Headers.ContainsKey("X-Ingress-Path");
+        if (!ranges)
+            ctx.Response.Headers.AcceptRanges = "none";
         try
         {
             return Results.Stream(VirtualMp4.Open(path), "video/mp4",
                 fileDownloadName: downloadName, lastModified: mtime, entityTag: etag,
-                enableRangeProcessing: true);
+                enableRangeProcessing: ranges);
         }
         catch (Exception ex)
         {
@@ -301,7 +309,7 @@ public static class WebApi
             // fallback path too (a plaintext file comes back as a raw FileStream).
             return Results.Stream(FootageVault.OpenRead(path), "video/mp4",
                 fileDownloadName: downloadName, lastModified: mtime, entityTag: etag,
-                enableRangeProcessing: true);
+                enableRangeProcessing: ranges);
         }
     }
     private sealed record PasswordRequest(string? Password);
@@ -2933,7 +2941,7 @@ public static class WebApi
                     name = rec != null
                         ? $"{Neolink.Recording.EventStore.SafeName(rec.Camera)} {rec.StartUtc.ToLocalTime():yyyy-MM-dd HHmmss}.mp4"
                         : $"{id}.mp4";
-                return ServeMp4(path, name);
+                return ServeMp4(ctx, path, name);
             });
 
             app.MapGet("/api/events/{id}/thumb", (string id, HttpContext ctx) =>
@@ -2954,7 +2962,7 @@ public static class WebApi
                 if (path == null)
                     return Results.Json(new { error = "no preview for this event" }, statusCode: 404);
                 SetArtifactCaching(ctx, events.Find(id));
-                return ServeMp4(path);
+                return ServeMp4(ctx, path);
             });
 
             app.MapPost("/api/events/{id}/review", (string id, ReviewRequest req, HttpContext ctx) =>
@@ -3346,13 +3354,13 @@ public static class WebApi
                 return Results.Json(segments);
             });
 
-            app.MapGet("/api/recordings/{camera}/{date}/{file}", (string camera, string date, string file) =>
+            app.MapGet("/api/recordings/{camera}/{date}/{file}", (string camera, string date, string file, HttpContext ctx) =>
             {
                 var cam = cameras.FirstOrDefault(c => string.Equals(c.Name, camera, StringComparison.OrdinalIgnoreCase));
                 var path = cam == null ? null : events.SegmentPath(cam.Name, date, file);
                 return path == null
                     ? Results.Json(new { error = "no such recording" }, statusCode: 404)
-                    : ServeMp4(path);
+                    : ServeMp4(ctx, path);
             });
 
             // Bulk export: every segment overlapping [from, to] of one day (so at
