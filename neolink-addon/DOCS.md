@@ -122,11 +122,11 @@ The rules, designed so nothing you set ever gets lost:
   Reolink app from the same network. Battery cameras sleep: they are
   unreachable until PIR motion or the app wakes them (see the project README's
   battery section).
-- **Port conflict on 8654/8655** — the add-on uses host networking (required
-  for UDP battery cameras), so these ports bind directly on the Home Assistant
-  host and cannot be remapped. If another add-on already owns one of them,
-  change that add-on's port, or set this server's ports in `config.json`
-  (`bind_port`, `web_port`) — ingress and the sidebar panel follow the web UI
-  port only if it stays 8655, so prefer moving the other service.
+- **Port conflict on 8654/8655** — change the host ports in the add-on's
+  Network section; the web UI keeps working through **OPEN WEB UI**.
+- **A UDP-only battery camera (`"udp": true`) never connects** — these need
+  host networking, which the add-on does not use, so they are not supported
+  under the add-on today. Run the Docker image with `network_mode: host`
+  instead. See the project README's *UDP-only battery models*.
 
 Project docs, issues and source: https://github.com/borexola/neolink.net
