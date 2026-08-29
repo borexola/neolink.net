@@ -5,7 +5,8 @@
 # Ingress-only, no published ports, so it installs ALONGSIDE the stable add-on
 # without a 8654/8655 clash: use it to try the web UI and the HA sidebar. If you
 # also need this instance's RTSP/API reachable, add a `ports:` block and stop the
-# stable add-on first.
+# stable add-on first. Bridge networking also means UDP battery cameras cannot
+# connect from THIS add-on (the stable one runs host networking for that).
 #
 # NOTE: this file must live on the branch HA reads (the repo's default branch) to
 # appear in the store — the beta CODE + workflow change live on the `beta` branch,
@@ -50,5 +51,11 @@ schema:
       password: password?
       always_on: bool?
       channel_id: int(0,255)?
+      stream: list(mainStream|subStream|externStream|both|all)?
+      uid: str?
+      udp: bool?
+      wake_capture: bool?
+      keep_alive_hours: float?
+      http_address: str?
   auto_mqtt: bool
   log_verbose: bool
