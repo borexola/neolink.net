@@ -1,0 +1,54 @@
+# Host-networking test channel, served from the BETA BRANCH only: add the
+# store repository as https://github.com/borexola/neolink.net#beta to see it.
+# Exists to validate UDP battery cameras under the add-on (Baichuan-over-UDP
+# embeds the client port in its payload, so bridge NAT can never work) without
+# changing the stable add-on's networking for everyone.
+#
+# MUST NOT reach main: delete this folder before the next release, or every
+# store user sees a third add-on.
+name: Neolink.NET (host test)
+version: "1.0.6"
+slug: neolink_host
+description: >-
+  Neolink.NET on host networking — a test channel for UDP battery cameras.
+  Binds 8654/8655 directly on the host; stop the stable add-on first.
+url: https://github.com/borexola/neolink.net
+arch:
+  - amd64
+  - aarch64
+image: ghcr.io/borexola/neolink.net-addon-{arch}
+startup: services
+boot: manual
+hassio_api: true
+services:
+  - mqtt:want
+map:
+  - addon_config:rw
+  - media:rw
+  - share:rw
+host_network: true
+ingress: true
+ingress_port: 8655
+panel_icon: mdi:cctv
+panel_title: Neolink host
+webui: http://[HOST]:8655
+options:
+  cameras: []
+  auto_mqtt: true
+  log_verbose: false
+schema:
+  cameras:
+    - name: str
+      address: str
+      username: str
+      password: password?
+      always_on: bool?
+      channel_id: int(0,255)?
+      stream: list(mainStream|subStream|externStream|both|all)?
+      uid: str?
+      udp: bool?
+      wake_capture: bool?
+      keep_alive_hours: float?
+      http_address: str?
+  auto_mqtt: bool
+  log_verbose: bool
