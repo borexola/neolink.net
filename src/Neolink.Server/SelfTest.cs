@@ -5128,6 +5128,28 @@ public static class SelfTest
                     Assert(all.AsSpan().SequenceEqual(data), "patched file round-trips");
                 }
 
+                // A growing file's tail slot mid-reseal reads torn. The reader
+                // must pin its length to the sealed prefix at open instead of
+                // promising bytes it cannot serve — a short body against the
+                // Content-Length aborted every mid-write playback of an
+                // encrypted clip (and the email sampler with it).
+                var tornPath = Path.Combine(dir, "torn-tail.bin");
+                File.Copy(path, tornPath);
+                using (var f = File.Open(tornPath, FileMode.Open, FileAccess.ReadWrite))
+                {
+                    f.Seek(-10, SeekOrigin.End);
+                    f.Write(new byte[] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 });
+                }
+                using (var r = Recording.FootageVault.OpenRead(tornPath))
+                {
+                    AssertEq(r.Length, 3L * 65536); // pinned to the sealed full slots
+                    var head = new byte[r.Length];
+                    r.ReadExactly(head);
+                    Assert(head.AsSpan().SequenceEqual(data.AsSpan(0, head.Length)),
+                        "sealed prefix serves clean under a torn tail");
+                    AssertEq(r.Read(new byte[16], 0, 16), 0); // and ends exactly there
+                }
+
                 // A FUTURE format version must be rejected loudly — never sniffed
                 // as "not encrypted" and served as plaintext video.
                 var vNext = File.ReadAllBytes(path);

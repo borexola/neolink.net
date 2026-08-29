@@ -175,6 +175,18 @@ public sealed class EncryptedFootageStream : Stream
         _aes = new AesGcm(fileKey, tagSizeInBytes: 16);
         CryptographicOperations.ZeroMemory(fileKey);
         _plainLen = DiskPlainLength();
+        if (!writable && _plainLen > 0)
+        {
+            // A file still being written reseals its short tail slot in place,
+            // so that slot may not decrypt at any given instant. A reader's
+            // length is a promise (HTTP Content-Length): pin it at open to what
+            // provably decrypts, and never read past it — the sealed prefix of
+            // a growing file is immutable, so the whole response stays coherent.
+            long lastIdx = (_plainLen - 1) / _chunk;
+            _slotIdx = lastIdx;
+            _bufLen = ReadSlot(lastIdx, _buf);
+            _plainLen = Math.Min(_plainLen, lastIdx * _chunk + _bufLen);
+        }
     }
 
     /// <summary>Starts a fresh encrypted file (writes the header immediately).</summary>
@@ -249,9 +261,10 @@ public sealed class EncryptedFootageStream : Stream
             catch (CryptographicException)
             {
                 // A slot being rewritten right now (the recorder appending, or a
-                // finalize patch) reads torn — retry once; a final slot that still
-                // fails IS the growing tail, so treat it as not-there-yet.
-                if (attempt == 0) continue;
+                // finalize patch) reads torn — the window is microseconds, so a
+                // few retries ride it out; a final slot that still fails IS the
+                // growing tail, so treat it as not-there-yet.
+                if (attempt < 3) { Thread.Sleep(2); continue; }
                 bool last = HeaderLen + (idx + 1) * (long)SlotSize >= _inner.Length;
                 if (last) return 0;
                 throw new InvalidDataException(
@@ -306,9 +319,10 @@ public sealed class EncryptedFootageStream : Stream
     public override bool CanSeek => true;
     public override bool CanWrite => _writable;
 
-    /// <summary>Read mode recomputes from disk so a growing live file keeps
-    /// reporting its current size, exactly like a plain FileStream would.</summary>
-    public override long Length => _writable ? _plainLen : Math.Max(DiskPlainLength(), _plainLen);
+    /// <summary>Write mode tracks what was written; read mode is PINNED to the
+    /// decryptable length measured at open — a growing file's unsealed tail must
+    /// not be promised to a reader that could then come up short mid-response.</summary>
+    public override long Length => _plainLen;
 
     public override long Position
     {
@@ -338,9 +352,11 @@ public sealed class EncryptedFootageStream : Stream
         int total = 0;
         while (buffer.Length > 0)
         {
+            if (!_writable && _pos >= _plainLen) break; // pinned view ends here
             LoadSlot(_pos / _chunk);
             int inSlot = (int)(_pos % _chunk);
             int n = Math.Min(buffer.Length, _bufLen - inSlot);
+            if (!_writable) n = (int)Math.Min(n, _plainLen - _pos);
             if (n <= 0) break; // EOF (or the live tail hasn't landed yet)
             _buf.AsSpan(inSlot, n).CopyTo(buffer);
             buffer = buffer[n..];

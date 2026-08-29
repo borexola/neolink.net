@@ -4,6 +4,12 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
+## 1.0.6 (beta)
+
+### Fixed
+
+- **Playing an event while it was still recording could still fail intermittently.** Two causes. Encrypted clips: a reader could promise bytes the growing file's in-place resealed tail could not deliver, aborting the player mid-response and silently losing that event's email snapshots through the same read path; readers now serve exactly the decryptable prefix measured at open. All clips: responses now carry a validator (ETag), so a browser fetching a growing clip across several range requests restarts cleanly when the file grows instead of stitching two file states together and failing to decode.
+
 ## 1.0.5
 
 ### Added

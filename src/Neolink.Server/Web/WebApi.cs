@@ -273,10 +273,26 @@ public static class WebApi
 
     private static IResult ServeMp4(string path, string? downloadName = null)
     {
+        // A validator per on-disk state: a browser streams a clip over MANY range
+        // requests, and against a still-growing file each request would otherwise
+        // see a different total size — mixed representations the media stack
+        // aborts on. With an ETag, If-Range detects the change and the element
+        // restarts cleanly on a fresh 200 instead.
+        Microsoft.Net.Http.Headers.EntityTagHeaderValue? etag = null;
+        DateTimeOffset? mtime = null;
+        try
+        {
+            var info = new FileInfo(path);
+            etag = new Microsoft.Net.Http.Headers.EntityTagHeaderValue(
+                $"\"{info.Length:x}-{info.LastWriteTimeUtc.Ticks:x}\"");
+            mtime = info.LastWriteTimeUtc;
+        }
+        catch { }
         try
         {
             return Results.Stream(VirtualMp4.Open(path), "video/mp4",
-                fileDownloadName: downloadName, enableRangeProcessing: true);
+                fileDownloadName: downloadName, lastModified: mtime, entityTag: etag,
+                enableRangeProcessing: true);
         }
         catch (Exception ex)
         {
@@ -284,7 +300,8 @@ public static class WebApi
             // Still through the vault: an encrypted file must decrypt on this
             // fallback path too (a plaintext file comes back as a raw FileStream).
             return Results.Stream(FootageVault.OpenRead(path), "video/mp4",
-                fileDownloadName: downloadName, enableRangeProcessing: true);
+                fileDownloadName: downloadName, lastModified: mtime, entityTag: etag,
+                enableRangeProcessing: true);
         }
     }
     private sealed record PasswordRequest(string? Password);
