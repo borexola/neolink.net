@@ -713,10 +713,16 @@
         // video, is what stalled full-res clips at high rates), and the native
         // playbackRate does the rest. The previous mute state comes back at 1×.
         // `autoplay === false` attaches the source without starting playback;
-        // a swap made while the video is playing still resumes it.
-        eventPlayer(videoId, url, rate, fallback, autoplay) {
+        // a swap made while the video is playing still resumes it. `ongoing`
+        // delays the failure overlay: still-recording clips fail transiently
+        // and auto-retry, so only a persistent failure earns the message.
+        eventPlayer(videoId, url, rate, fallback, autoplay, ongoing) {
             const v = document.getElementById(videoId);
             if (!v || !url) return;
+            const clearErrTimer = () => {
+                clearTimeout(+v.dataset.evErrTimer || 0);
+                delete v.dataset.evErrTimer;
+            };
             const applyRate = () => {
                 v.defaultPlaybackRate = v.playbackRate = rate;
                 if (rate > 1) {
@@ -745,20 +751,28 @@
                 }
                 const box = errorBox();
                 if (!box || box.querySelector('.video-error')) return;
-                const d = document.createElement('div');
-                d.className = 'video-error';
-                d.textContent = 'Playback failed — the server could not fetch this video. ' +
-                    'The server log has the reason.';
-                box.appendChild(d);
+                const show = () => {
+                    if (box.querySelector('.video-error')) return;
+                    const d = document.createElement('div');
+                    d.className = 'video-error';
+                    d.textContent = 'Playback failed — the server could not fetch this video. ' +
+                        'The server log has the reason.';
+                    box.appendChild(d);
+                };
+                if (!ongoing) show();
+                else if (!v.dataset.evErrTimer)
+                    v.dataset.evErrTimer = String(setTimeout(show, 7000));
             };
             if (v.dataset.evUrl !== url) {
                 errorBox()?.querySelector('.video-error')?.remove();
+                clearErrTimer();
                 const at = (v.currentTime && isFinite(v.currentTime)) ? v.currentTime : 0;
                 const wasPlaying = !v.paused;
                 v.dataset.evUrl = url;
                 v.src = url;
                 const onMeta = () => {
                     v.removeEventListener('loadedmetadata', onMeta);
+                    clearErrTimer();
                     try { if (at > 0 && at < v.duration) v.currentTime = at; } catch { }
                     applyRate();
                     if (autoplay === false && !wasPlaying) return;
@@ -781,6 +795,7 @@
                     const onRetryMeta = () => {
                         delete v.dataset.evRetry;
                         errorBox()?.querySelector('.video-error')?.remove();
+                        clearErrTimer();
                         applyRate();
                         if (autoplay !== false)
                             v.play().catch(() => { v.muted = true; v.play().catch(() => { }); });

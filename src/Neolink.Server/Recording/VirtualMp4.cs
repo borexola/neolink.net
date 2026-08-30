@@ -48,11 +48,13 @@ public static class VirtualMp4
     /// synthesized at the end. The returned stream is seekable and reports the
     /// VIRTUAL length; hand it to range-processing file serving as-is.
     /// </summary>
-    public static Stream Open(string path) => Open(path, out _, out _);
+    public static Stream Open(string path) => Open(path, out _, out _, out _);
 
     /// <summary>The snapshot outputs identify the served file state — the
-    /// caller's ETag must come from these, not a fresh FileInfo.</summary>
-    public static Stream Open(string path, out long snapshotLength, out DateTime snapshotMTime)
+    /// caller's ETag must come from these, not a fresh FileInfo. `growing` =
+    /// fragmented with a fresh mtime, i.e. still being written.</summary>
+    public static Stream Open(string path, out long snapshotLength, out DateTime snapshotMTime,
+        out bool growing)
     {
         // The vault sniffs the format: encrypted footage decrypts transparently,
         // plaintext gets a big sequential-read buffer as before.
@@ -62,11 +64,15 @@ public static class VirtualMp4
             var info = new FileInfo(path);
             snapshotLength = info.Length;
             snapshotMTime = info.LastWriteTimeUtc;
+            growing = false;
             if (!ClipWriter.IsFragmented(file))
             {
                 file.Seek(0, SeekOrigin.Begin);
                 return file; // classic already — serve raw
             }
+            // The writer flushes at least per GOP, so an old mtime means an
+            // old-format archive, not a recording in progress.
+            growing = DateTime.UtcNow - info.LastWriteTimeUtc < TimeSpan.FromSeconds(15);
 
             var key = path;
             if (!Cache.TryGetValue(key, out var entry)

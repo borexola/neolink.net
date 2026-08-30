@@ -572,61 +572,71 @@ public sealed class ClipWriter : IDisposable
         while (pos + 8 <= end)
         {
             long boxStart = pos;
-            file.ReadExactly(boxHead);
-            pos += 8;
-            uint size = BinaryPrimitives.ReadUInt32BigEndian(boxHead);
-            if (size < 8 || boxStart + size > end) { pos = boxStart; break; } // truncated tail
-            if (IsBox(boxHead, "mfra"u8)) { pos = boxStart; break; } // legacy index; not media
-            if (IsBox(boxHead, "moof"u8))
+            try
             {
-                if (moofBuf.Length < size) moofBuf = new byte[size];
-                var moof = moofBuf;
-                boxHead.CopyTo(moof, 0);
-                file.ReadExactly(moof.AsSpan(8, (int)size - 8));
-                pos += size - 8;
-                byte track = 0; bool key = false; uint dur = 0, sampleSize = 0, dataOff = 0; ulong dt = 0;
-                int p1 = 8;
-                while (p1 + 8 <= (int)size)
+                file.ReadExactly(boxHead);
+                pos += 8;
+                uint size = BinaryPrimitives.ReadUInt32BigEndian(boxHead);
+                if (size < 8 || boxStart + size > end) { pos = boxStart; break; } // truncated tail
+                if (IsBox(boxHead, "mfra"u8)) { pos = boxStart; break; } // legacy index; not media
+                if (IsBox(boxHead, "moof"u8))
                 {
-                    uint s1 = BinaryPrimitives.ReadUInt32BigEndian(moof.AsSpan(p1));
-                    if (s1 < 8 || p1 + s1 > size) break;
-                    if (moof.AsSpan(p1 + 4, 4).SequenceEqual("traf"u8))
+                    if (moofBuf.Length < size) moofBuf = new byte[size];
+                    var moof = moofBuf;
+                    boxHead.CopyTo(moof, 0);
+                    file.ReadExactly(moof.AsSpan(8, (int)size - 8));
+                    pos += size - 8;
+                    byte track = 0; bool key = false; uint dur = 0, sampleSize = 0, dataOff = 0; ulong dt = 0;
+                    int p1 = 8;
+                    while (p1 + 8 <= (int)size)
                     {
-                        int trafEnd = p1 + (int)s1;
-                        int p2 = p1 + 8;
-                        while (p2 + 8 <= trafEnd)
+                        uint s1 = BinaryPrimitives.ReadUInt32BigEndian(moof.AsSpan(p1));
+                        if (s1 < 8 || p1 + s1 > size) break;
+                        if (moof.AsSpan(p1 + 4, 4).SequenceEqual("traf"u8))
                         {
-                            uint s2 = BinaryPrimitives.ReadUInt32BigEndian(moof.AsSpan(p2));
-                            if (s2 < 8 || p2 + s2 > trafEnd) break;
-                            var t2 = moof.AsSpan(p2 + 4, 4);
-                            if (t2.SequenceEqual("tfhd"u8)) track = moof[p2 + 15];
-                            else if (t2.SequenceEqual("tfdt"u8)) dt = BinaryPrimitives.ReadUInt64BigEndian(moof.AsSpan(p2 + 12));
-                            else if (t2.SequenceEqual("trun"u8))
+                            int trafEnd = p1 + (int)s1;
+                            int p2 = p1 + 8;
+                            while (p2 + 8 <= trafEnd)
                             {
-                                if (BinaryPrimitives.ReadUInt32BigEndian(moof.AsSpan(p2 + 12)) != 1)
-                                    throw new InvalidOperationException("not a single-sample fragment");
-                                dataOff = BinaryPrimitives.ReadUInt32BigEndian(moof.AsSpan(p2 + 16));
-                                key = BinaryPrimitives.ReadUInt32BigEndian(moof.AsSpan(p2 + 20)) == 0x02000000u;
-                                dur = BinaryPrimitives.ReadUInt32BigEndian(moof.AsSpan(p2 + 24));
-                                sampleSize = BinaryPrimitives.ReadUInt32BigEndian(moof.AsSpan(p2 + 28));
+                                uint s2 = BinaryPrimitives.ReadUInt32BigEndian(moof.AsSpan(p2));
+                                if (s2 < 8 || p2 + s2 > trafEnd) break;
+                                var t2 = moof.AsSpan(p2 + 4, 4);
+                                if (t2.SequenceEqual("tfhd"u8)) track = moof[p2 + 15];
+                                else if (t2.SequenceEqual("tfdt"u8)) dt = BinaryPrimitives.ReadUInt64BigEndian(moof.AsSpan(p2 + 12));
+                                else if (t2.SequenceEqual("trun"u8))
+                                {
+                                    if (BinaryPrimitives.ReadUInt32BigEndian(moof.AsSpan(p2 + 12)) != 1)
+                                        throw new InvalidOperationException("not a single-sample fragment");
+                                    dataOff = BinaryPrimitives.ReadUInt32BigEndian(moof.AsSpan(p2 + 16));
+                                    key = BinaryPrimitives.ReadUInt32BigEndian(moof.AsSpan(p2 + 20)) == 0x02000000u;
+                                    dur = BinaryPrimitives.ReadUInt32BigEndian(moof.AsSpan(p2 + 24));
+                                    sampleSize = BinaryPrimitives.ReadUInt32BigEndian(moof.AsSpan(p2 + 28));
+                                }
+                                p2 += (int)s2;
                             }
-                            p2 += (int)s2;
                         }
+                        p1 += (int)s1;
                     }
-                    p1 += (int)s1;
+                    if (track == 0 || sampleSize == 0)
+                        throw new InvalidOperationException("unexpected fragment layout");
+                    // The payload lives in the NEXT box (mdat), which may be cut short
+                    // on a growing or crash-truncated file — the write buffer flushes
+                    // mid-fragment. Indexing that sample would point readers past the
+                    // fragment region (into the synthesized moov, on the virtual view).
+                    if (boxStart + dataOff + sampleSize > end) { pos = boxStart; break; }
+                    samples.Add(new SampleRec(track, key, sampleSize, dur, dt, boxStart + dataOff));
                 }
-                if (track == 0 || sampleSize == 0)
-                    throw new InvalidOperationException("unexpected fragment layout");
-                // The payload lives in the NEXT box (mdat), which may be cut short
-                // on a growing or crash-truncated file — the write buffer flushes
-                // mid-fragment. Indexing that sample would point readers past the
-                // fragment region (into the synthesized moov, on the virtual view).
-                if (boxStart + dataOff + sampleSize > end) { pos = boxStart; break; }
-                samples.Add(new SampleRec(track, key, sampleSize, dur, dt, boxStart + dataOff));
+                else
+                {
+                    Discard(size - 8); // mdat payload (or any stray box): stream past it
+                }
             }
-            else
+            catch
             {
-                Discard(size - 8); // mdat payload (or any stray box): stream past it
+                // Torn tail, or a mount whose visible length outruns its readable
+                // bytes (network shares mid-write): keep the samples that parsed.
+                pos = boxStart;
+                break;
             }
         }
         if (!samples.Any(s => s.Track == 1))

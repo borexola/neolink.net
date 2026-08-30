@@ -268,8 +268,11 @@ public static class WebApi
     /// re-downloads every visible thumbnail (brutal on NAS-backed storage).</summary>
     private static void SetArtifactCaching(HttpContext ctx, Neolink.Recording.EventRecord? rec)
     {
-        if (rec is { Ongoing: false })
-            ctx.Response.Headers.CacheControl = "private, max-age=31536000, immutable";
+        // An ongoing event's artifacts change constantly under a constant URL
+        // (v=live) — never let a browser cache a partial clip against it.
+        ctx.Response.Headers.CacheControl = rec is { Ongoing: false }
+            ? "private, max-age=31536000, immutable"
+            : "no-store";
     }
 
     private static IResult ServeMp4(HttpContext ctx, string path, string? downloadName = null)
@@ -279,15 +282,18 @@ public static class WebApi
         // bytes download and play everywhere) — so behind ingress a clip is one
         // plain 200 stream the proxy cannot mis-stitch. Direct port, Docker and
         // reverse-proxy access keep full range support.
-        bool ranges = !ctx.Request.Headers.ContainsKey("X-Ingress-Path");
-        if (!ranges)
-            ctx.Response.Headers.AcceptRanges = "none";
+        bool ingress = ctx.Request.Headers.ContainsKey("X-Ingress-Path");
         try
         {
-            // The ETag comes from the snapshot the virtual view pins, so a
-            // growing clip's many range requests agree on one representation;
-            // when it rolls, If-Range restarts the element on a fresh 200.
-            var stream = VirtualMp4.Open(path, out var snapLen, out var snapTime);
+            var stream = VirtualMp4.Open(path, out var snapLen, out var snapTime, out var growing);
+            // A still-growing file gets the same one-plain-200 treatment as
+            // ingress: Chrome resumes a ranged stream with If-Range long after
+            // any snapshot of a growing file has rolled, and a mismatched
+            // resume is a FATAL media error, not a clean restart. One
+            // connection, one representation, nothing to mismatch.
+            bool ranges = !ingress && !growing;
+            if (!ranges)
+                ctx.Response.Headers.AcceptRanges = "none";
             return Results.Stream(stream, "video/mp4",
                 fileDownloadName: downloadName, lastModified: snapTime,
                 entityTag: new Microsoft.Net.Http.Headers.EntityTagHeaderValue(
@@ -307,11 +313,13 @@ public static class WebApi
                 mtime = info.LastWriteTimeUtc;
             }
             catch { }
+            if (ingress)
+                ctx.Response.Headers.AcceptRanges = "none";
             // Still through the vault: an encrypted file must decrypt on this
             // fallback path too (a plaintext file comes back as a raw FileStream).
             return Results.Stream(FootageVault.OpenRead(path), "video/mp4",
                 fileDownloadName: downloadName, lastModified: mtime, entityTag: etag,
-                enableRangeProcessing: ranges);
+                enableRangeProcessing: !ingress);
         }
     }
     private sealed record PasswordRequest(string? Password);

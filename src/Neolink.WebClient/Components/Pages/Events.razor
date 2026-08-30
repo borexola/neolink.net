@@ -744,7 +744,7 @@
         {
             _pendingVideoUrl = null;
             await JS.InvokeVoidAsync("neolink.eventPlayer", "ev-video", url, _speed,
-                _selected is { } fb ? PlayerFallback(fb) : null, _autoplay);
+                _selected is { } fb ? PlayerFallback(fb) : null, _autoplay, _selected?.Ongoing == true);
         }
 
         // (Re)attach the load-more sentinel — the element moves on each page grow.
@@ -1655,7 +1655,7 @@
         }
         catch { }
         if (_selected is { HasClip: true } ev)
-            await JS.InvokeVoidAsync("neolink.eventPlayer", "ev-video", PlayerUrl(ev), s, PlayerFallback(ev), _autoplay);
+            await JS.InvokeVoidAsync("neolink.eventPlayer", "ev-video", PlayerUrl(ev), s, PlayerFallback(ev), _autoplay, ev.Ongoing);
     }
 
     private async Task SetStreamAsync(bool sd)
@@ -1663,7 +1663,7 @@
         _sd = sd;
         try { await JS.InvokeVoidAsync("neolink.lsSet", "neolink.eventSd", sd ? "1" : "0"); } catch { }
         if (_selected is { HasClip: true } ev)
-            await JS.InvokeVoidAsync("neolink.eventPlayer", "ev-video", PlayerUrl(ev), _speed, PlayerFallback(ev), _autoplay);
+            await JS.InvokeVoidAsync("neolink.eventPlayer", "ev-video", PlayerUrl(ev), _speed, PlayerFallback(ev), _autoplay, ev.Ongoing);
     }
 
     /// <summary>Closing just clears the selection; the event was already marked
