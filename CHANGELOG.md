@@ -4,6 +4,23 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
+## 1.0.7
+
+### Added
+
+- **Event notifications can sample their snapshots in memory.** A new snapshot-source option (Server settings → Notifications) taps the camera's live stream in RAM instead of reading the clip file while it is still being written — for setups whose storage makes mid-write reads unreliable (#52). Clip sampling stays the default; the tap is budgeted (48 MB per event, oldest footage dropped whole-GOP first) and every failure still falls back to the thumbnail, so the notification is never lost to it.
+- **AutoPlay switch on the Events page.** Unchecked, selecting an event or opening an event link loads the clip paused until you press play. The choice is saved to your account and follows you across browsers; signed out, the browser remembers it.
+
+### Changed
+
+- **The event player marks a live event on its recording line** — an amber "recording…" chip replaces the banner that sat above the video. On phones, AI descriptions fold to one line behind "more…" (with "less" to refold), the AI description's BETA tag is gone, and a successful AI connection test shows its verdict in green.
+
+### Fixed
+
+- **Opening an event while it was still recording could randomly fail with "Playback failed" until you navigated away and back.** A browser streams a clip over several requests and resumes with a validator — but a growing file has no stable representation to validate against, and a mismatched resume is a fatal media error in the browser, not a retry. Still-growing clips are now served as one plain full stream with nothing to mismatch, the on-disk scan tolerates torn tails instead of degrading to an unplayable fallback, and the player quietly retries an ongoing clip for a few seconds rather than sticking on the error. Finished clips are byte-for-byte untouched: full seeking, hard caching.
+- **Finished clips now play through Home Assistant ingress.** The ingress proxy mis-stitches ranged media, which broke clip playback in browsers while the same bytes downloaded fine. Clips behind ingress are served as one plain stream; direct, Docker and reverse-proxy access keep full range support.
+- **The desktop app no longer strands you on the "Can't reach" screen after downloading a clip.** The download aborts its own page navigation, which the shell mistook for the server going away.
+
 ## 1.0.6
 
 ### Fixed
