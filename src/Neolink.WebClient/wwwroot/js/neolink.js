@@ -773,6 +773,26 @@
                 try { v.load(); } catch { }
             } else {
                 applyRate();
+                // An ongoing clip's fetch can fail transiently, and its URL never
+                // changes while recording — so the poll's same-url re-invocations
+                // drive retries here until the clip becomes fetchable.
+                if (v.error && !v.dataset.evRetry) {
+                    v.dataset.evRetry = '1';
+                    const onRetryMeta = () => {
+                        delete v.dataset.evRetry;
+                        errorBox()?.querySelector('.video-error')?.remove();
+                        applyRate();
+                        if (autoplay !== false)
+                            v.play().catch(() => { v.muted = true; v.play().catch(() => { }); });
+                    };
+                    v.addEventListener('loadedmetadata', onRetryMeta, { once: true });
+                    v.addEventListener('error', () => {
+                        delete v.dataset.evRetry;
+                        v.removeEventListener('loadedmetadata', onRetryMeta);
+                    }, { once: true });
+                    v.src = url;
+                    try { v.load(); } catch { delete v.dataset.evRetry; }
+                }
             }
         },
 

@@ -20,20 +20,26 @@ namespace Neolink.Recording;
 /// <see cref="Open"/> returns a plain FileStream for anything that is not an
 /// old-format file (already classic, foreign, unparseable) — serving then
 /// behaves exactly as before, making this a pure fast-path with a safe
-/// fallback. Growing (still-recording) files work too: each request gets a
-/// consistent snapshot covering the samples complete at open time.
+/// fallback. Growing (still-recording) files work too: requests inside a short
+/// window share one pinned snapshot covering the samples complete at scan time.
 /// </summary>
 public static class VirtualMp4
 {
     /// <summary>Synthesized moovs by path, keyed on length+mtime so a grown or
     /// replaced file never reuses a stale index. Closed files hit this forever;
-    /// a growing file naturally misses and re-scans (~tens of ms).</summary>
+    /// a growing file re-scans once its pinned snapshot expires (~tens of ms).</summary>
     private static readonly ConcurrentDictionary<string, CacheEntry> Cache = new();
     private const int CacheLimit = 32;
+
+    /// <summary>How long a growing file's scan keeps serving. A media element
+    /// parses an MP4 as a burst of range requests that must agree; re-scanning
+    /// per request makes If-Range restarts chase the writer forever.</summary>
+    private const long SnapshotTtlMs = 8000;
 
     private sealed record CacheEntry(long Length, DateTime MTime, byte[] Moov, long FragEnd, long MoovOff)
     {
         public long LastUse;
+        public long Created;
     }
 
     /// <summary>
@@ -42,28 +48,38 @@ public static class VirtualMp4
     /// synthesized at the end. The returned stream is seekable and reports the
     /// VIRTUAL length; hand it to range-processing file serving as-is.
     /// </summary>
-    public static Stream Open(string path)
+    public static Stream Open(string path) => Open(path, out _, out _);
+
+    /// <summary>The snapshot outputs identify the served file state — the
+    /// caller's ETag must come from these, not a fresh FileInfo.</summary>
+    public static Stream Open(string path, out long snapshotLength, out DateTime snapshotMTime)
     {
         // The vault sniffs the format: encrypted footage decrypts transparently,
         // plaintext gets a big sequential-read buffer as before.
         var file = FootageVault.OpenRead(path);
         try
         {
+            var info = new FileInfo(path);
+            snapshotLength = info.Length;
+            snapshotMTime = info.LastWriteTimeUtc;
             if (!ClipWriter.IsFragmented(file))
             {
                 file.Seek(0, SeekOrigin.Begin);
                 return file; // classic already — serve raw
             }
 
-            var info = new FileInfo(path);
             var key = path;
             if (!Cache.TryGetValue(key, out var entry)
-                || entry.Length != info.Length || entry.MTime != info.LastWriteTimeUtc)
+                || ((entry.Length != info.Length || entry.MTime != info.LastWriteTimeUtc)
+                    && Environment.TickCount64 - entry.Created > SnapshotTtlMs))
             {
                 var scan = ClipWriter.ScanFragmented(file);
                 entry = new CacheEntry(info.Length, info.LastWriteTimeUtc,
                     ClipWriter.BuildClassicMoov(scan.Init, scan.Layout, scan.Samples, scan.AudioRate),
-                    scan.FragEnd, scan.Layout.MoovOff);
+                    scan.FragEnd, scan.Layout.MoovOff)
+                {
+                    Created = Environment.TickCount64,
+                };
                 // Stamped before publishing: an entry inserted with LastUse 0 sorts
                 // as the oldest and a concurrent Open would trim it straight back out.
                 entry.LastUse = Environment.TickCount64;
@@ -71,6 +87,8 @@ public static class VirtualMp4
                 TrimCache(key);
             }
             entry.LastUse = Environment.TickCount64;
+            snapshotLength = entry.Length;
+            snapshotMTime = entry.MTime;
             return new VirtualClassicStream(file, entry.MoovOff, entry.FragEnd, entry.Moov);
         }
         catch

@@ -278,8 +278,11 @@ internal sealed class MainForm : Form
             // first: a reload that races a server restart used to fail silently
             // after the session was up, leaving whatever the WebView last showed
             // - sometimes nothing at all. OperationCanceled is the shell's own
-            // doing (external links bounced to the real browser), not a failure.
-            else if (args.WebErrorStatus != CoreWebView2WebErrorStatus.OperationCanceled)
+            // doing (external links bounced to the real browser), and
+            // ConnectionAborted is a navigation that became a file download —
+            // the page underneath is fine in both.
+            else if (args.WebErrorStatus is not (CoreWebView2WebErrorStatus.OperationCanceled
+                     or CoreWebView2WebErrorStatus.ConnectionAborted))
             {
                 DesktopLog.Write($"page load failed: {args.WebErrorStatus}");
                 ShowError($"Can't reach {_settings.ServerUrl}\r\n\r\n{Describe(args.WebErrorStatus)}");
@@ -627,7 +630,6 @@ internal sealed class MainForm : Form
 
     private static string Describe(CoreWebView2WebErrorStatus status) => status switch
     {
-        CoreWebView2WebErrorStatus.ConnectionAborted or
         CoreWebView2WebErrorStatus.ConnectionReset or
         CoreWebView2WebErrorStatus.CannotConnect => "Nothing answered on that address and port.",
         CoreWebView2WebErrorStatus.HostNameNotResolved => "That host name did not resolve.",

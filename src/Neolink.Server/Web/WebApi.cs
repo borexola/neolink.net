@@ -274,21 +274,6 @@ public static class WebApi
 
     private static IResult ServeMp4(HttpContext ctx, string path, string? downloadName = null)
     {
-        // A validator per on-disk state: a browser streams a clip over MANY range
-        // requests, and against a still-growing file each request would otherwise
-        // see a different total size — mixed representations the media stack
-        // aborts on. With an ETag, If-Range detects the change and the element
-        // restarts cleanly on a fresh 200 instead.
-        Microsoft.Net.Http.Headers.EntityTagHeaderValue? etag = null;
-        DateTimeOffset? mtime = null;
-        try
-        {
-            var info = new FileInfo(path);
-            etag = new Microsoft.Net.Http.Headers.EntityTagHeaderValue(
-                $"\"{info.Length:x}-{info.LastWriteTimeUtc.Ticks:x}\"");
-            mtime = info.LastWriteTimeUtc;
-        }
-        catch { }
         // Home Assistant's ingress proxy mishandles ranged media (field report:
         // finished clips decode-fail mid-play through ingress while the same
         // bytes download and play everywhere) — so behind ingress a clip is one
@@ -299,13 +284,29 @@ public static class WebApi
             ctx.Response.Headers.AcceptRanges = "none";
         try
         {
-            return Results.Stream(VirtualMp4.Open(path), "video/mp4",
-                fileDownloadName: downloadName, lastModified: mtime, entityTag: etag,
+            // The ETag comes from the snapshot the virtual view pins, so a
+            // growing clip's many range requests agree on one representation;
+            // when it rolls, If-Range restarts the element on a fresh 200.
+            var stream = VirtualMp4.Open(path, out var snapLen, out var snapTime);
+            return Results.Stream(stream, "video/mp4",
+                fileDownloadName: downloadName, lastModified: snapTime,
+                entityTag: new Microsoft.Net.Http.Headers.EntityTagHeaderValue(
+                    $"\"{snapLen:x}-{snapTime.Ticks:x}\""),
                 enableRangeProcessing: ranges);
         }
         catch (Exception ex)
         {
             Log.Debug($"Recordings: no virtual index for {Path.GetFileName(path)} ({Log.Flatten(ex)}); serving raw");
+            Microsoft.Net.Http.Headers.EntityTagHeaderValue? etag = null;
+            DateTimeOffset? mtime = null;
+            try
+            {
+                var info = new FileInfo(path);
+                etag = new Microsoft.Net.Http.Headers.EntityTagHeaderValue(
+                    $"\"{info.Length:x}-{info.LastWriteTimeUtc.Ticks:x}\"");
+                mtime = info.LastWriteTimeUtc;
+            }
+            catch { }
             // Still through the vault: an encrypted file must decrypt on this
             // fallback path too (a plaintext file comes back as a raw FileStream).
             return Results.Stream(FootageVault.OpenRead(path), "video/mp4",
