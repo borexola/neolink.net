@@ -2325,7 +2325,7 @@
                         @* AI settings save to ai.json (applied immediately, no restart). *@
                         @if (_aiStatus != null)
                         {
-                            <div class="notice small @(_aiError ? "error" : "")">@_aiStatus</div>
+                            <div class="notice small @(_aiError ? "error" : "ok")">@_aiStatus</div>
                         }
                         @if (AiDirty)
                         {
@@ -2481,6 +2481,10 @@
                     @if (_aiMoreId != _playEvent.Id)
                     {
                         <button class="ai-more" @onclick="() => _aiMoreId = _playEvent.Id">@T["more…"]</button>
+                    }
+                    else
+                    {
+                        <button class="ai-more" @onclick="() => _aiMoreId = null">@T["less"]</button>
                     }
                 </div>
             }

@@ -135,6 +135,10 @@
                    value="@_sdDate.ToString("yyyy-MM-dd")"
                    @onchange="e => SetSdDateAsync((string?)e.Value)" />
         }
+        <label class="ev-autoplay" title="@T["Start playing automatically when an event is selected or opened from a link"]">
+            <input type="checkbox" checked="@_autoplay" @onchange="ToggleAutoplayAsync" />
+            @T["AutoPlay"]
+        </label>
         <button class="icon-btn" title="@T["Refresh"]" @onclick="RefreshCurrentAsync">@UiIcon.Render("refresh", 14)</button>
     </div>
 
@@ -293,7 +297,7 @@
                     </div>
                     @* zoom-on: SD-card playback gets the same digital zoom as live views. *@
                     <div class="event-player-media zoom-on" @key="sr.File">
-                        <video id="ev-video" controls autoplay playsinline></video>
+                        <video id="ev-video" controls autoplay="@_autoplay" playsinline></video>
                         @ZoomHud
                     </div>
                     <div class="notice small">
@@ -452,6 +456,10 @@
                             {
                                 <button class="ai-more" @onclick="() => _aiMoreId = sel.Id">@T["more…"]</button>
                             }
+                            else
+                            {
+                                <button class="ai-more" @onclick="() => _aiMoreId = null">@T["less"]</button>
+                            }
                         </div>
                     }
                     else if (sel.AiPending)
@@ -466,7 +474,7 @@
                         @* zoom-on: the recorded clip gets the same digital zoom as live
                            views — wheel/pinch to zoom, drag to pan, HUD buttons at the side. *@
                         <div class="event-player-media zoom-on" @key="sel.Id">
-                            <video id="ev-video" controls autoplay playsinline></video>
+                            <video id="ev-video" controls autoplay="@_autoplay" playsinline></video>
                             @ZoomHud
                         </div>
                         <div class="player-speed">
@@ -609,6 +617,10 @@
     private double _speed = 1;
     private static readonly double[] Speeds = { 1, 2, 4, 8, 16 };
 
+    /// <summary>Unchecked, selecting or deep-linking an event only attaches the
+    /// clip — playback waits for the user. Part of the events prefs blob.</summary>
+    private bool _autoplay = true;
+
     // ---- multi-select delete ----
     private bool _selectMode;
     private readonly HashSet<string> _selectedIds = new();
@@ -732,7 +744,7 @@
         {
             _pendingVideoUrl = null;
             await JS.InvokeVoidAsync("neolink.eventPlayer", "ev-video", url, _speed,
-                _selected is { } fb ? PlayerFallback(fb) : null);
+                _selected is { } fb ? PlayerFallback(fb) : null, _autoplay);
         }
 
         // (Re)attach the load-more sentinel — the element moves on each page grow.
@@ -1146,6 +1158,7 @@
     {
         public List<string>? Hidden { get; set; }
         public List<string>? HiddenLevels { get; set; }
+        public bool? Autoplay { get; set; }
     }
 
     private static readonly string[] ThreatLevels = { "green", "yellow", "red" };
@@ -1229,6 +1242,7 @@
         {
             Hidden = _hiddenCams.ToList(),
             HiddenLevels = _hiddenLevels.ToList(),
+            Autoplay = _autoplay,
         });
 
     private void ApplyPrefs(EventsPrefs p)
@@ -1243,6 +1257,7 @@
             _hiddenLevels.Clear();
             foreach (var l in p.HiddenLevels) _hiddenLevels.Add(l);
         }
+        if (p.Autoplay is { } auto) _autoplay = auto;
     }
 
     /// <summary>Signed in, the account's server copy wins so the choice follows
@@ -1260,7 +1275,7 @@
         try
         {
             var p = await GetJsonAsync<EventsPrefs>("/api/me/settings/events");
-            if (p == null || (p.Hidden == null && p.HiddenLevels == null))
+            if (p == null || (p.Hidden == null && p.HiddenLevels == null && p.Autoplay == null))
                 return; // never saved yet — keep the local copy
             ApplyPrefs(p);
             try { await JS.InvokeVoidAsync("neolink.lsSet", CamPrefsKey, SerializeCamPrefs()); } catch { }
@@ -1280,6 +1295,12 @@
             using var _ = await Http.SendAsync(req);
         }
         catch { /* transient: localStorage still has it */ }
+    }
+
+    private async Task ToggleAutoplayAsync(ChangeEventArgs e)
+    {
+        _autoplay = e.Value is true;
+        await SaveCamPrefsAsync();
     }
 
     // ------------------------------------------------------------ selection & playback
@@ -1634,7 +1655,7 @@
         }
         catch { }
         if (_selected is { HasClip: true } ev)
-            await JS.InvokeVoidAsync("neolink.eventPlayer", "ev-video", PlayerUrl(ev), s, PlayerFallback(ev));
+            await JS.InvokeVoidAsync("neolink.eventPlayer", "ev-video", PlayerUrl(ev), s, PlayerFallback(ev), _autoplay);
     }
 
     private async Task SetStreamAsync(bool sd)
@@ -1642,7 +1663,7 @@
         _sd = sd;
         try { await JS.InvokeVoidAsync("neolink.lsSet", "neolink.eventSd", sd ? "1" : "0"); } catch { }
         if (_selected is { HasClip: true } ev)
-            await JS.InvokeVoidAsync("neolink.eventPlayer", "ev-video", PlayerUrl(ev), _speed, PlayerFallback(ev));
+            await JS.InvokeVoidAsync("neolink.eventPlayer", "ev-video", PlayerUrl(ev), _speed, PlayerFallback(ev), _autoplay);
     }
 
     /// <summary>Closing just clears the selection; the event was already marked

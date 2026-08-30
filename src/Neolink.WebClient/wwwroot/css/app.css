@@ -3288,6 +3288,18 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 
 .ev-toolbar { flex: 0 0 auto; }
 
+.ev-autoplay {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 12px;
+    color: var(--muted);
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+}
+.ev-autoplay input { cursor: pointer; margin: 0; }
+
 /* ---- multi-select delete: action bar, row checkboxes, confirm dialog ---- */
 /* Label and bar share one line; on narrow screens the bar wraps below. */
 .ev-search-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin: 10px 0 4px; padding-left: 10px; }

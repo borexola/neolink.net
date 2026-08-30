@@ -712,7 +712,9 @@
         // muted (the decoder drops the audio pipeline entirely — that, not
         // video, is what stalled full-res clips at high rates), and the native
         // playbackRate does the rest. The previous mute state comes back at 1×.
-        eventPlayer(videoId, url, rate, fallback) {
+        // `autoplay === false` attaches the source without starting playback;
+        // a swap made while the video is playing still resumes it.
+        eventPlayer(videoId, url, rate, fallback, autoplay) {
             const v = document.getElementById(videoId);
             if (!v || !url) return;
             const applyRate = () => {
@@ -734,10 +736,11 @@
                 // delivered a frame) while the HD clip is fine — swap once,
                 // silently, before surfacing an error.
                 if (fallback && v.dataset.evUrl !== fallback) {
+                    const resume = autoplay !== false || !v.paused;
                     v.dataset.evUrl = fallback;
                     v.src = fallback;
                     try { v.load(); } catch { }
-                    v.play().catch(() => { v.muted = true; v.play().catch(() => { }); });
+                    if (resume) v.play().catch(() => { v.muted = true; v.play().catch(() => { }); });
                     return;
                 }
                 const box = errorBox();
@@ -751,12 +754,14 @@
             if (v.dataset.evUrl !== url) {
                 errorBox()?.querySelector('.video-error')?.remove();
                 const at = (v.currentTime && isFinite(v.currentTime)) ? v.currentTime : 0;
+                const wasPlaying = !v.paused;
                 v.dataset.evUrl = url;
                 v.src = url;
                 const onMeta = () => {
                     v.removeEventListener('loadedmetadata', onMeta);
                     try { if (at > 0 && at < v.duration) v.currentTime = at; } catch { }
                     applyRate();
+                    if (autoplay === false && !wasPlaying) return;
                     // Fresh full-page load (notification deep link): start muted
                     // by design. Otherwise autoplay policy can still veto sound —
                     // retry muted so the clip starts either way; the user can
