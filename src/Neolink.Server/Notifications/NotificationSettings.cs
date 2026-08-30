@@ -64,6 +64,12 @@ public sealed class NotificationSettings
     /// the event so far. 0 = wait for the end and sample the whole clip.</summary>
     public int EventEmailDelaySeconds { get; set; } = 5;
 
+    /// <summary>Where event snapshots come from. "clip" (default) decodes the
+    /// saved clip file; "memory" samples the recording's own stream in RAM and
+    /// never opens the clip — for clip storage on network mounts, where reading
+    /// a file mid-write can damage it.</summary>
+    public string EventSnapshotMode { get; set; } = "clip";
+
     // Webhook channel: one HTTP endpoint, shaped by a preset in the UI or the
     // raw knobs below. Independent of the email master switch.
     public bool WebhookEnabled { get; set; }
@@ -127,6 +133,7 @@ public sealed class NotificationSettings
         EventSnapshots = EventSnapshots,
         EventCooldownMinutes = EventCooldownMinutes,
         EventEmailDelaySeconds = EventEmailDelaySeconds,
+        EventSnapshotMode = EventSnapshotMode,
         WebhookEnabled = WebhookEnabled,
         WebhookUrl = WebhookUrl,
         WebhookInsecureTls = WebhookInsecureTls,

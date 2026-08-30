@@ -2997,8 +2997,30 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 /* Model still working: quieter voice than a finished description. */
 .event-ai-pending { color: var(--muted); font-style: italic; }
 
-/* The PREVIEW tag rides the banner's right edge without stretching the row. */
-.event-ai .beta-tag { flex: 0 0 auto; align-self: flex-start; white-space: nowrap; }
+/* Mobile only: the description folds to one line behind "more…" so it cannot
+   crowd the player off a phone screen. */
+.ai-more {
+    display: none;
+    flex: 0 0 auto;
+    border: 0;
+    padding: 0;
+    background: none;
+    color: var(--accent);
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+@media (max-width: 760px) {
+    .event-ai-text.ai-clamped {
+        display: -webkit-box;
+        -webkit-line-clamp: 1;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+    }
+
+    .event-ai .ai-more { display: inline; }
+}
 
 .event-dismiss {
     position: absolute;
@@ -3189,20 +3211,21 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 
 .event-player-title .event-title { font-size: 15px; }
 
-/* Above a still-recording clip: solid amber, not the translucent warn style —
-   this one must be unmissable before the user judges the clip incomplete. */
-.ev-rec-note {
-    display: flex;
+/* The player's sub-line can carry the "recording…" chip — wrap on narrow
+   widths rather than ellipsize it away. */
+.event-player-title .event-sub { white-space: normal; }
+
+/* The player sub-line's "recording…": solid amber, not the translucent warn
+   style — it must register before the user judges the clip incomplete. */
+.ev-rec-inline {
+    display: inline-flex;
     align-items: center;
-    gap: 8px;
-    margin-bottom: 6px;
-    padding: 7px 12px;
-    border-radius: var(--radius-sm);
+    gap: 5px;
+    padding: 0 6px;
+    border-radius: 3px;
     background: #e8b054;
     color: #201607;
-    font-size: 12.5px;
     font-weight: 650;
-    letter-spacing: .02em;
 }
 
 .ev-rec-dot {

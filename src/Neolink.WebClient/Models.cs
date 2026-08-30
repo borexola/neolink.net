@@ -228,6 +228,7 @@ public sealed class ApiNotifications
     public int EventSnapshots { get; set; } = 3;
     public int EventCooldownMinutes { get; set; } = 2;
     public int EventEmailDelaySeconds { get; set; } = 5;
+    public string EventSnapshotMode { get; set; } = "clip";
     public bool WebhookEnabled { get; set; }
     public string WebhookUrl { get; set; } = "";
     public bool WebhookInsecureTls { get; set; }

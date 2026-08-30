@@ -414,7 +414,16 @@
                         <button class="icon-btn ev-back" title="@T["Back to the list"]" @onclick="CloseAsync">@UiIcon.Render("chev-left", 16)</button>
                         <div class="event-player-title">
                             <span class="event-title">@sel.Icon @EventTitle(sel)</span>
-                            <span class="event-sub">@sel.Camera · @T.DateShort(sel.Start.ToLocalTime()) @sel.Start.ToLocalTime().ToString("HH:mm:ss") · @DurationText(sel)</span>
+                            <span class="event-sub">@sel.Camera · @T.DateShort(sel.Start.ToLocalTime()) @sel.Start.ToLocalTime().ToString("HH:mm:ss") ·
+                                @if (sel.Ongoing)
+                                {
+                                    <span class="ev-rec-inline"><span class="ev-rec-dot"></span>@T["recording…"]</span>
+                                }
+                                else
+                                {
+                                    @DurationText(sel)
+                                }
+                            </span>
                         </div>
                         @if (sel.HasClip && !sel.Ongoing)
                         {
@@ -438,24 +447,22 @@
                             {
                                 <span class="ai-level-chip ai-@sel.AiLevel">@sel.AiLevel.ToUpperInvariant()</span>
                             }
-                            <span class="event-ai-text">@(sel.AiDescription ?? T["classified without a description"])</span>
-                            <span class="beta-tag" title="@T["AI event descriptions are in beta — feedback is very welcome"]">@T["BETA"]</span>
+                            <span class="event-ai-text @(_aiMoreId == sel.Id ? "" : "ai-clamped")">@(sel.AiDescription ?? T["classified without a description"])</span>
+                            @if (_aiMoreId != sel.Id)
+                            {
+                                <button class="ai-more" @onclick="() => _aiMoreId = sel.Id">@T["more…"]</button>
+                            }
                         </div>
                     }
                     else if (sel.AiPending)
                     {
                         <div class="event-ai ai-none">
                             <span class="event-ai-text event-ai-pending">🧠 @T["AI is describing this event — refresh in a moment to see the text…"]</span>
-                            <span class="beta-tag" title="@T["AI event descriptions are in beta — feedback is very welcome"]">@T["BETA"]</span>
                         </div>
                     }
 
                     @if (sel.HasClip)
                     {
-                        @if (sel.Ongoing)
-                        {
-                            <div class="ev-rec-note" role="status"><span class="ev-rec-dot"></span>@T["Still recording — the clip plays what has been captured so far"]</div>
-                        }
                         @* zoom-on: the recorded clip gets the same digital zoom as live
                            views — wheel/pinch to zoom, drag to pan, HUD buttons at the side. *@
                         <div class="event-player-media zoom-on" @key="sel.Id">
@@ -632,6 +639,7 @@
     /// Shared with the live view's popup player ("neolink.eventSd").</summary>
     private bool _sd;
 
+    private string? _aiMoreId; // event whose AI description is expanded past the mobile one-line fold
     private string? _pendingVideoUrl; // set when a clip needs (re)attaching after render
     private CancellationTokenSource? _ongoingCts; // follows the open, still-recording event
     private readonly CancellationTokenSource _pollCts = new(); // sidebar live poll, page lifetime

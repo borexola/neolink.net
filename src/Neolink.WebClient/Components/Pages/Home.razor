@@ -2105,6 +2105,14 @@
                                     <input class="ret-input" type="number" min="0" max="1440" @bind="_notif.EventCooldownMinutes" /></div>
                                 <div class="control-row"><span>@T["Send after (seconds into the event, 0 = when it ends)"]</span>
                                     <input class="ret-input" type="number" min="0" max="300" @bind="_notif.EventEmailDelaySeconds" /></div>
+                                <div class="control-row"><span>@T["Snapshot capture"]</span>
+                                    <select class="event-filter webhook-select" @bind="_notif.EventSnapshotMode">
+                                        <option value="clip">@T["From the saved clip (default)"]</option>
+                                        <option value="memory">@T["In memory"]</option>
+                                    </select></div>
+                                <div class="notice small">
+                                    @T["In memory samples the snapshots from the live stream instead of reading the clip file while it is still being recorded. Recommended when clips are stored on a NAS, where reading a file mid-write can damage it. Recording itself is untouched either way."]
+                                </div>
 
                                 <div class="campanel-divider"></div>
                                 <div class="campanel-subtitle">@T["SERVER ALERTS"]</div>
@@ -2447,7 +2455,15 @@
                 <div class="event-player-title">
                     <span class="event-title">@_playEvent.Icon @EventTitle(_playEvent)</span>
                     <span class="event-sub">
-                        @_playEvent.Camera · @T.DateShort(_playEvent.Start.ToLocalTime()) @_playEvent.Start.ToLocalTime().ToString("HH:mm:ss") · @DurationText(_playEvent)
+                        @_playEvent.Camera · @T.DateShort(_playEvent.Start.ToLocalTime()) @_playEvent.Start.ToLocalTime().ToString("HH:mm:ss") ·
+                        @if (_playEvent.Ongoing)
+                        {
+                            <span class="ev-rec-inline"><span class="ev-rec-dot"></span>@T["recording…"]</span>
+                        }
+                        else
+                        {
+                            @DurationText(_playEvent)
+                        }
                     </span>
                 </div>
                 <button class="icon-btn" title="@T["Close"]" data-esc-close @onclick="ClosePlayerAsync">✕</button>
@@ -2461,8 +2477,11 @@
                     {
                         <span class="ai-level-chip ai-@_playEvent.AiLevel">@_playEvent.AiLevel.ToUpperInvariant()</span>
                     }
-                    <span class="event-ai-text">@(_playEvent.AiDescription ?? T["classified without a description"])</span>
-                    <span class="beta-tag" title="@T["AI event descriptions are in beta — feedback is very welcome"]">@T["BETA"]</span>
+                    <span class="event-ai-text @(_aiMoreId == _playEvent.Id ? "" : "ai-clamped")">@(_playEvent.AiDescription ?? T["classified without a description"])</span>
+                    @if (_aiMoreId != _playEvent.Id)
+                    {
+                        <button class="ai-more" @onclick="() => _aiMoreId = _playEvent.Id">@T["more…"]</button>
+                    }
                 </div>
             }
             else if (_playEvent.AiPending)
@@ -2473,7 +2492,6 @@
                    10 s poll swaps in the finished description. *@
                 <div class="event-ai ai-none">
                     <span class="event-ai-text event-ai-pending">🧠 @T["AI is describing this event — the text appears here when the model answers…"]</span>
-                    <span class="beta-tag" title="@T["AI event descriptions are in beta — feedback is very welcome"]">@T["BETA"]</span>
                 </div>
             }
             @if (_playEvent.HasClip)
@@ -2482,10 +2500,6 @@
                    JS owns the source (preserving position across an HD↔SD swap)
                    and mutes the audio pipeline above 1× — the timeline's recipe,
                    which is what lets full-res clips fast-forward smoothly. *@
-                @if (_playEvent.Ongoing)
-                {
-                    <div class="ev-rec-note" role="status"><span class="ev-rec-dot"></span>@T["Still recording — the clip plays what has been captured so far"]</div>
-                }
                 @* zoom-on: the recorded clip gets the same digital zoom as live
                    tiles (wheel at the cursor, drag to pan, HUD, dbl-click 1:1).
                    Keyed per event so zoom resets when navigating between events
@@ -2764,6 +2778,7 @@
         eventSnapshots = _notif.EventSnapshots,
         eventCooldownMinutes = _notif.EventCooldownMinutes,
         eventEmailDelaySeconds = _notif.EventEmailDelaySeconds,
+        eventSnapshotMode = _notif.EventSnapshotMode,
         webhookEnabled = _notif.WebhookEnabled,
         webhookUrl = _notif.WebhookUrl,
         webhookInsecureTls = _notif.WebhookInsecureTls,
@@ -5517,6 +5532,7 @@
     /// sub-stream twin, the escape hatch when storage or decoder can't keep up.
     /// Persisted browser-side ("neolink.eventSd") — a deliberate choice sticks.</summary>
     private bool _playSd;
+    private string? _aiMoreId; // event whose AI description is expanded past the mobile one-line fold
 
     private static string FormatSpeed(double s) => s == 1 ? "1×" : $"{s:0}×";
 

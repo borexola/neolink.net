@@ -227,7 +227,8 @@ public static class WebApi
         string? WebhookToken = null, string? WebhookMethod = null,
         string? WebhookBodyMode = null, string? WebhookBodyTemplate = null,
         List<string>? WebhookHeaders = null, string? WebhookPreset = null,
-        bool? WebhookServerAlerts = null, string? PublicUrl = null);
+        bool? WebhookServerAlerts = null, string? PublicUrl = null,
+        string? EventSnapshotMode = null);
     /// <summary>Retention fields: null = unchanged, negative = back to the server default, 0 = keep forever.
     /// RecordStream: null = unchanged, "" = back to the server default, else a served stream kind.
     /// Capture schedule: applied only while ScheduleEnabled; ScheduleDays null = unchanged,
@@ -1283,6 +1284,7 @@ public static class WebApi
                     eventSnapshots = s.EventSnapshots,
                     eventCooldownMinutes = s.EventCooldownMinutes,
                     eventEmailDelaySeconds = s.EventEmailDelaySeconds,
+                    eventSnapshotMode = s.EventSnapshotMode,
                     webhookEnabled = s.WebhookEnabled,
                     webhookUrl = s.WebhookUrl,
                     webhookInsecureTls = s.WebhookInsecureTls,
@@ -1337,6 +1339,8 @@ public static class WebApi
                     EventSnapshots = Math.Clamp(req.EventSnapshots ?? cur.EventSnapshots, 1, 50),
                     EventCooldownMinutes = Math.Clamp(req.EventCooldownMinutes ?? cur.EventCooldownMinutes, 0, 1440),
                     EventEmailDelaySeconds = Math.Clamp(req.EventEmailDelaySeconds ?? cur.EventEmailDelaySeconds, 0, 300),
+                    EventSnapshotMode = req.EventSnapshotMode == null ? cur.EventSnapshotMode
+                        : req.EventSnapshotMode.Equals("memory", StringComparison.OrdinalIgnoreCase) ? "memory" : "clip",
                     WebhookEnabled = req.WebhookEnabled ?? cur.WebhookEnabled,
                     WebhookUrl = Cap((req.WebhookUrl ?? cur.WebhookUrl).Trim(), 2000),
                     WebhookInsecureTls = req.WebhookInsecureTls ?? cur.WebhookInsecureTls,

@@ -4306,6 +4306,22 @@ public static class SelfTest
             AssertEq(Ids(Notifications.EventEmailer.PickEvenly(Frames(11), 1)), "5");
             AssertEq(Notifications.EventEmailer.PickEvenly(Frames(0), 3).Count, 0);
             AssertEq(Notifications.EventEmailer.PickEvenly(Frames(5), 0).Count, 0);
+
+            // In-memory capture feed selection: leading P-frames (before any
+            // keyframe) can never decode and must go; under the cap everything
+            // is fed; over it only keyframes (standalone-decodable), thinned.
+            static List<(byte[] Au, bool Key)> Aus(int n, int gop) =>
+                Enumerable.Range(0, n).Select(i => (new[] { (byte)i }, i % gop == 0)).ToList();
+            AssertEq(Notifications.EventEmailer.SelectForDecode(Aus(50, 10), 300).Count, 50);
+            var headless = Aus(50, 10).Skip(3).ToList(); // starts mid-GOP; next key is item 10
+            AssertEq(Notifications.EventEmailer.SelectForDecode(headless, 300).Count, 40);
+            Assert(Notifications.EventEmailer.SelectForDecode(headless, 300)[0].Key,
+                "feed starts on a keyframe");
+            var thinned = Notifications.EventEmailer.SelectForDecode(Aus(4000, 10), 300);
+            AssertEq(thinned.Count, 300);
+            Assert(thinned.All(a => a.Key), "over the cap only keyframes are fed");
+            AssertEq(Notifications.EventEmailer.SelectForDecode(
+                Aus(50, 10).Select(a => (a.Au, false)).ToList(), 300).Count, 0);
         });
 
         Test("event email: the decode plan reaches the end of every clip", () =>
