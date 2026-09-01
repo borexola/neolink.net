@@ -211,4 +211,16 @@ assert_cameras '[
   {"name": "Drive", "address": "10.0.0.9", "username": "admin", "password": "b"}
 ]' "a name that is a substring of an existing camera is appended, not swallowed"
 
+# --- Changelog: Home Assistant reads CHANGELOG.md from THIS folder (not the
+# repo root) and slices the notes it shows by an exact "## <version>" heading.
+# A version bump without a matching section ships an empty update dialog, and
+# nothing else would catch it: once the file exists the Supervisor stops
+# complaining whatever is in it.
+[ -f ../CHANGELOG.md ] || fail "neolink-addon/CHANGELOG.md is missing (HA shows 'No changelog found')"
+ver=$(sed -n 's/^version: *"\?\([^"]*\)"\? *$/\1/p' ../config.yaml | head -1)
+[ -n "$ver" ] || fail "could not read version from neolink-addon/config.yaml"
+grep -qE "^#* ${ver//./\\.}$" ../CHANGELOG.md \
+  || fail "neolink-addon/CHANGELOG.md has no '## $ver' section (HA slices release notes by that heading)"
+echo "ok: changelog has a section for $ver"
+
 echo "all launcher checks passed"
