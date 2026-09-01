@@ -3231,7 +3231,9 @@
         // elements, which blocks autoplay — the helper mutes for real and plays.
         if (_eventsSupported && _events.Any(e => !e.Reviewed))
         {
-            await JS.InvokeVoidAsync("neolink.trickle", _trickleSpeed);
+            // The strip's looping previews hand their decoders back while the
+            // event player holds the screen.
+            await JS.InvokeVoidAsync("neolink.trickle", _trickleSpeed, _playEvent != null);
             _selfRef ??= DotNetObjectReference.Create(this);
             await JS.InvokeVoidAsync("neolink.stripResizeInit", "events-bar", _selfRef);
             await JS.InvokeVoidAsync("neolink.stripNavInit", "events-scroll-wrap");
@@ -3239,7 +3241,8 @@
         // Drive the event player from JS: pick the source for the current speed,
         // preserve position across a clip↔preview swap, and apply the rate.
         if (_playEvent is { HasClip: true })
-            await JS.InvokeVoidAsync("neolink.eventPlayer", "event-player-video", PlayerUrl, _playSpeed, PlayerFallback);
+            await JS.InvokeVoidAsync("neolink.eventPlayer", "event-player-video", PlayerUrl, _playSpeed, PlayerFallback,
+            true, _playEvent?.Ongoing == true);
     }
 
     /// <summary>Called from JS when the strip's resize-handle drag ends.</summary>
@@ -5545,11 +5548,12 @@
             ? EventArtifactUrl(_playEvent, "preview")
             : EventArtifactUrl(_playEvent, "clip");
 
-    /// <summary>When the SD preview plays, the HD clip is the silent error
-    /// fallback — a preview can be an empty capture while the clip plays fine.</summary>
+    /// <summary>The other stream is the silent error fallback, both ways: a
+    /// preview can be an empty capture while the clip plays fine, and a phone
+    /// out of decoders can fail the main stream but manage the sub-stream.</summary>
     private string? PlayerFallback =>
-        _playEvent is { HasPreview: true, HasClip: true } && _playSd
-            ? EventArtifactUrl(_playEvent, "clip") : null;
+        _playEvent is { HasPreview: true, HasClip: true }
+            ? EventArtifactUrl(_playEvent, _playSd ? "clip" : "preview") : null;
 
     private async Task SetPlaySpeedAsync(double s)
     {
@@ -5562,14 +5566,16 @@
                 s.ToString(System.Globalization.CultureInfo.InvariantCulture));
         }
         catch { }
-        await JS.InvokeVoidAsync("neolink.eventPlayer", "event-player-video", PlayerUrl, s, PlayerFallback);
+        await JS.InvokeVoidAsync("neolink.eventPlayer", "event-player-video", PlayerUrl, s, PlayerFallback,
+            true, _playEvent?.Ongoing == true);
     }
 
     private async Task SetPlayStreamAsync(bool sd)
     {
         _playSd = sd;
         try { await JS.InvokeVoidAsync("neolink.lsSet", "neolink.eventSd", sd ? "1" : "0"); } catch { }
-        await JS.InvokeVoidAsync("neolink.eventPlayer", "event-player-video", PlayerUrl, _playSpeed, PlayerFallback);
+        await JS.InvokeVoidAsync("neolink.eventPlayer", "event-player-video", PlayerUrl, _playSpeed, PlayerFallback,
+            true, _playEvent?.Ongoing == true);
     }
 
     // _playSpeed deliberately survives across events (loaded once per session).
@@ -6688,6 +6694,11 @@
             // Restore reattaches — recording/always-on cameras resume instantly
             // from the GOP prime, on-demand ones within the server's demand grace.
             if (desired != null && _maxIndex is { } max && max < _slots.Count && i != max)
+                desired = null;
+            // The event player is a full-screen modal on a phone, where video
+            // decoders are a scarce resource the clip needs one of — a tile
+            // decoding behind the modal can cost it playback entirely.
+            if (desired != null && _playEvent != null && _coarsePointer)
                 desired = null;
             // A sleeping battery camera is NEVER woken just by being on screen:
             // attaching is what connects, and connecting is what wakes it. These

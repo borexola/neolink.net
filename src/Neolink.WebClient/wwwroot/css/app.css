@@ -3254,6 +3254,9 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 .video-error {
     position: absolute;
     inset: 0;
+    /* The player's own controls stay reachable underneath: pressing play is
+       the first thing anyone tries. */
+    pointer-events: none;
     display: flex;
     align-items: center;
     justify-content: center;

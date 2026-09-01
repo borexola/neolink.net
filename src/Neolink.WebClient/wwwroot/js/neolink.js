@@ -695,8 +695,25 @@
 
         // Ambient event previews (review strip): ensure real muting, fast-forward
         // playback rate and looped playback. Idempotent, called per render.
-        trickle(speed) {
+        // `suspend` RELEASES their decoders (a phone has very few, and the event
+        // player needs one); the src is stashed so the next call restores it.
+        trickle(speed, suspend) {
             document.querySelectorAll('video[data-trickle]').forEach(v => {
+                if (suspend) {
+                    if (!v.dataset.trickleSrc && v.getAttribute('src')) {
+                        v.dataset.trickleSrc = v.getAttribute('src');
+                        v.pause();
+                        v.removeAttribute('src');
+                        try { v.load(); } catch { }
+                    }
+                    return;
+                }
+                if (v.dataset.trickleSrc) {
+                    // Blazor's diff sees no change, so the attribute is restored here.
+                    v.setAttribute('src', v.dataset.trickleSrc);
+                    delete v.dataset.trickleSrc;
+                    try { v.load(); } catch { }
+                }
                 v.muted = true;
                 v.defaultPlaybackRate = v.playbackRate = speed || 4;
                 if (v.paused) v.play().catch(() => { });
@@ -749,14 +766,25 @@
                     if (resume) v.play().catch(() => { v.muted = true; v.play().catch(() => { }); });
                     return;
                 }
+                // An aborted load is our own doing (a swap, a close) — never an error.
+                const code = v.error?.code ?? 0;
+                if (code === 1) return;
                 const box = errorBox();
                 if (!box || box.querySelector('.video-error')) return;
                 const show = () => {
                     if (box.querySelector('.video-error')) return;
                     const d = document.createElement('div');
                     d.className = 'video-error';
-                    d.textContent = 'Playback failed — the server could not fetch this video. ' +
-                        'The server log has the reason.';
+                    // Only a network/format failure is the server's to explain; a
+                    // decode failure is this device out of video decoders (phones
+                    // have few) and no server log will mention it.
+                    d.textContent = code === 3
+                        ? 'This device could not decode the video — close other camera views, ' +
+                          'or try SD quality or 1× speed.'
+                        : code === 2
+                            ? 'The connection dropped while loading this video.'
+                            : 'Playback failed — the server could not fetch this video. ' +
+                              'The server log has the reason.';
                     box.appendChild(d);
                 };
                 if (!ongoing) show();
@@ -787,11 +815,14 @@
                 try { v.load(); } catch { }
             } else {
                 applyRate();
-                // An ongoing clip's fetch can fail transiently, and its URL never
-                // changes while recording — so the poll's same-url re-invocations
-                // drive retries here until the clip becomes fetchable.
-                if (v.error && !v.dataset.evRetry) {
+                // A failed clip's URL does not change, so the caller's same-url
+                // re-invocations drive retries here. Rate-limited: the home page
+                // re-invokes on every render, which would otherwise reload the
+                // whole clip in a loop.
+                if (v.error && !v.dataset.evRetry
+                    && Date.now() - (+v.dataset.evRetryAt || 0) > 3000) {
                     v.dataset.evRetry = '1';
+                    v.dataset.evRetryAt = String(Date.now());
                     const onRetryMeta = () => {
                         delete v.dataset.evRetry;
                         errorBox()?.querySelector('.video-error')?.remove();

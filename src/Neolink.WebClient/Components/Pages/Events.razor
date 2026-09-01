@@ -1332,11 +1332,12 @@
     private string PlayerUrl(ApiEvent ev) =>
         _sd && ev.HasPreview ? Artifact(ev, "preview") : Artifact(ev, "clip");
 
-    /// <summary>When the SD preview is what plays, the HD clip is the silent
-    /// error fallback — a preview can be an empty capture (sub stream never
-    /// delivered a frame) while the clip is perfectly playable.</summary>
+    /// <summary>The other stream is the silent error fallback, both ways: a
+    /// preview can be an empty capture (sub stream never delivered a frame)
+    /// while the clip plays, and a device out of video decoders can fail the
+    /// main stream but manage the sub-stream.</summary>
     private string? PlayerFallback(ApiEvent ev) =>
-        _sd && ev.HasPreview && ev.HasClip ? Artifact(ev, "clip") : null;
+        ev.HasPreview && ev.HasClip ? Artifact(ev, _sd ? "clip" : "preview") : null;
 
     /// <summary>Resolve a ?event={id} deep link: find the event (the rolling list, or a
     /// direct lookup for older ones), bring its day into the list, and play it.</summary>
