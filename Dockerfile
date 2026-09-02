@@ -36,12 +36,10 @@ FROM mcr.microsoft.com/dotnet/aspnet:10.0
 WORKDIR /app
 COPY --from=build /app .
 
-# Time zone support: the base image ships no zoneinfo database, so the TZ env
-# var would otherwise be ignored and all timestamps (event folders, clip names,
-# the UI clock) would be UTC. Install tzdata so `TZ` is honoured.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends tzdata \
-    && rm -rf /var/lib/apt/lists/*
+# The base image ships tzdata (TZ is honoured for event folders, clip names and
+# the UI clock); fail the build rather than silently fall back to UTC should a
+# future base image stop shipping it.
+RUN test -d /usr/share/zoneinfo/America
 
 # ffmpeg (static, single binary — NOT the apt package and its dependency tree):
 # lets AI event descriptions decode pre-roll frames, the seconds BEFORE the

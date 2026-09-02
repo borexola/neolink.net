@@ -4915,6 +4915,221 @@ public static class SelfTest
             }
         });
 
+        Test("fragment writer path matches an independent reference byte for byte", () =>
+        {
+            var rng = new Random(20260901);
+            // The pre-refactor fragment layout, kept here verbatim as the oracle.
+            static byte[] Legacy(uint sequence, ulong decodeTime, uint duration, byte[] sample, bool keyframe, uint trackId = 1)
+            {
+                var w = new Mp4Writer(108 + sample.Length);
+                int trunDataOffsetPos;
+                using (w.Box("moof"))
+                {
+                    using (w.FullBox("mfhd", 0, 0)) w.U32(sequence);
+                    using (w.Box("traf"))
+                    {
+                        using (w.FullBox("tfhd", 0, 0x020000)) w.U32(trackId);
+                        using (w.FullBox("tfdt", 1, 0)) w.U64(decodeTime);
+                        using (w.FullBox("trun", 0, 0x000305))
+                        {
+                            w.U32(1);
+                            trunDataOffsetPos = w.Position;
+                            w.U32(0);
+                            w.U32(keyframe ? 0x02000000u : 0x01010000u);
+                            w.U32(duration);
+                            w.U32((uint)sample.Length);
+                        }
+                    }
+                }
+                int moofSize = w.Position;
+                w.PatchU32(trunDataOffsetPos, (uint)(moofSize + 8));
+                using (w.Box("mdat")) w.Bytes(sample);
+                return w.Detach();
+            }
+            static byte[] Nal(Random r, byte[] header, int len, int flagByte, bool? firstSlice)
+            {
+                var b = new byte[Math.Max(len, header.Length + 1)];
+                r.NextBytes(b);
+                for (int i = 0; i < b.Length; i++) if (b[i] == 0) b[i] = 1; // no start-code emulation
+                header.CopyTo(b, 0);
+                if (firstSlice is { } f)
+                    b[flagByte] = f ? (byte)(b[flagByte] | 0x80) : (byte)(b[flagByte] & 0x7F);
+                return b;
+            }
+            byte[] Sc(Random r) => r.Next(2) == 0 ? new byte[] { 0, 0, 0, 1 } : new byte[] { 0, 0, 1 };
+            foreach (var codec in new[] { VideoCodec.H264, VideoCodec.H265 })
+            {
+                for (int round = 0; round < 40; round++)
+                {
+                    // Several pictures per buffer: parameter sets and AUDs (stripped),
+                    // key and non-key slices, first-slice flags on and off, some
+                    // samples past the 85 KB large-object threshold. The expected
+                    // length-prefixed sample per picture is built by the generator
+                    // itself, independently of the code under test.
+                    using var ms = new MemoryStream();
+                    var expected = new List<(byte[] Sample, bool Key)>();
+                    int pictures = 1 + rng.Next(4);
+                    for (int p = 0; p < pictures; p++)
+                    {
+                        bool key = rng.Next(3) == 0;
+                        int big = rng.Next(3) == 0 ? 100_000 + rng.Next(50_000) : 200 + rng.Next(5000);
+                        using var sample = new MemoryStream();
+                        void Emit(byte[] nal, bool kept)
+                        {
+                            ms.Write(Sc(rng)); ms.Write(nal);
+                            if (!kept) return;
+                            var len = new byte[4];
+                            System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(len, (uint)nal.Length);
+                            sample.Write(len); sample.Write(nal);
+                        }
+                        if (codec == VideoCodec.H264)
+                        {
+                            if (rng.Next(2) == 0) Emit(Nal(rng, new byte[] { 0x67 }, 8, 1, null), kept: false);
+                            if (rng.Next(2) == 0) Emit(Nal(rng, new byte[] { 0x68 }, 4, 1, null), kept: false);
+                            if (rng.Next(3) == 0) Emit(Nal(rng, new byte[] { 0x09 }, 2, 1, null), kept: false);
+                            byte slice = key ? (byte)0x65 : (byte)0x41;
+                            Emit(Nal(rng, new[] { slice }, big, 1, true), kept: true);
+                            if (rng.Next(2) == 0) Emit(Nal(rng, new[] { slice }, 300 + rng.Next(2000), 1, false), kept: true);
+                        }
+                        else
+                        {
+                            static byte[] H(int type) => new[] { (byte)(type << 1), (byte)0x01 };
+                            if (rng.Next(2) == 0) Emit(Nal(rng, H(32), 6, 2, null), kept: false);
+                            if (rng.Next(2) == 0) Emit(Nal(rng, H(33), 12, 2, null), kept: false);
+                            if (rng.Next(2) == 0) Emit(Nal(rng, H(34), 5, 2, null), kept: false);
+                            var slice = H(key ? 19 : 1);
+                            Emit(Nal(rng, slice, big, 2, true), kept: true);
+                            if (rng.Next(2) == 0) Emit(Nal(rng, slice, 300 + rng.Next(2000), 2, false), kept: true);
+                        }
+                        expected.Add((sample.ToArray(), key));
+                    }
+                    var annexB = ms.ToArray();
+                    var copying = FMp4.SplitAccessUnits(codec, annexB);
+                    var raw = FMp4.SplitAccessUnitsRaw(codec, annexB);
+                    AssertEq(raw.Count, expected.Count);
+                    AssertEq(copying.Count, expected.Count);
+                    // Every unit of the buffer streams into ONE writer, so all but the
+                    // first start at a non-zero offset — data_offset must stay relative.
+                    var batch = new Mp4Writer(1024);
+                    using var wanted = new MemoryStream();
+                    for (int i = 0; i < raw.Count; i++)
+                    {
+                        var unit = raw.Units[i];
+                        var (sample, key) = expected[i];
+                        AssertEq(unit.Keyframe, key);
+                        AssertEq(unit.SampleBytes, sample.Length);
+                        Assert(copying[i].Sample.AsSpan().SequenceEqual(sample), "copying split == generator's sample");
+                        var legacy = Legacy((uint)(i + 1), (ulong)i * 3000, 3000, sample, key);
+                        AssertEq(legacy.Length, FMp4.FragmentSize(sample.Length));
+                        Assert(legacy.AsSpan().SequenceEqual(FMp4.BuildFragment((uint)(i + 1), (ulong)i * 3000, 3000, sample, key)),
+                            "BuildFragment(sample) == legacy layout");
+                        Assert(legacy.AsSpan().SequenceEqual(FMp4.BuildFragment((uint)(i + 1), (ulong)i * 3000, 3000, raw, unit)),
+                            "BuildFragment(units, unit) == legacy layout");
+                        FMp4.WriteFragmentHeader(batch, (uint)(i + 1), (ulong)i * 3000, 3000, unit.SampleBytes, unit.Keyframe);
+                        FMp4.WriteSample(batch, raw, unit);
+                        wanted.Write(legacy);
+                    }
+                    Assert(batch.Written.AsSpan().SequenceEqual(wanted.ToArray()), "streamed batch == concatenated legacy fragments");
+                }
+            }
+            // Audio rides the same header writer on track 2 (AAC access units, a
+            // few hundred bytes, always flagged as sync samples).
+            for (int i = 0; i < 20; i++)
+            {
+                var au = new byte[40 + rng.Next(600)];
+                rng.NextBytes(au);
+                var legacy = Legacy((uint)(1000 + i), (ulong)i * 1024, 1024, au, true, FMp4.AudioTrackId);
+                Assert(legacy.AsSpan().SequenceEqual(FMp4.BuildFragment((uint)(1000 + i), (ulong)i * 1024, 1024, au,
+                    keyframe: true, trackId: FMp4.AudioTrackId)), "audio fragment == legacy layout");
+            }
+        });
+
+        Test("event store listing matches a full sort: limits, days, ties, deletes, reload", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var store = new Recording.EventStore(dir);
+                var rng = new Random(7);
+                var all = new List<Recording.EventRecord>(); // insertion order = the reference's tie order
+                var baseUtc = new DateTime(2026, 6, 1, 12, 0, 0, DateTimeKind.Utc);
+                string[] cams = { "Front", "Back", "Garage" };
+                for (int i = 0; i < 300; i++)
+                {
+                    // Out-of-order arrival, exact ties, wake-only records, mixed cameras.
+                    var start = baseUtc.AddMinutes(rng.Next(0, 5 * 24 * 60)).AddSeconds(rng.Next(0, 2) * 30);
+                    var labels = rng.Next(10) == 0 ? new[] { "wake" } : new[] { rng.Next(2) == 0 ? "person" : "motion" };
+                    var rec = store.Create(cams[rng.Next(cams.Length)], start, labels);
+                    rec.Ongoing = false;
+                    if (rng.Next(3) == 0) rec.Reviewed = true;
+                    store.Save(rec);
+                    all.Add(rec);
+                }
+                foreach (var victim in all.Where((_, i) => i % 7 == 0).ToList())
+                {
+                    Assert(store.DeleteEvent(victim.Id), "delete an indexed event");
+                    all.Remove(victim);
+                }
+                // Exact ties with a delete in between: equal StartUtc lists in insertion order.
+                var tie = baseUtc.AddDays(10);
+                Recording.EventRecord Tied(string cam, DateTime at)
+                {
+                    var r = store.Create(cam, at, new[] { "person" });
+                    r.Ongoing = false;
+                    store.Save(r);
+                    return r;
+                }
+                var t1 = Tied("Front", tie);
+                var gone = Tied("Front", tie.AddMinutes(-5));
+                Assert(store.DeleteEvent(gone.Id), "delete between tied inserts");
+                var t2 = Tied("Back", tie);
+                var t3 = Tied("Front", tie);
+                all.Add(t1); all.Add(t2); all.Add(t3);
+                Assert(store.List(limit: 3).Select(r => r.Id).SequenceEqual(new[] { t1.Id, t2.Id, t3.Id }),
+                    "tied events list in insertion order");
+                IEnumerable<string> Reference(string? cam, bool? reviewed, int limit, DateTime? day, bool noWake) =>
+                    all.Where(r => cam == null || r.Camera.Equals(cam, StringComparison.OrdinalIgnoreCase))
+                       .Where(r => reviewed == null || r.Reviewed == reviewed)
+                       .Where(r => day == null || r.StartUtc.ToLocalTime().Date == day.Value.Date)
+                       .Where(r => !noWake || r.Labels is not ["wake"])
+                       .OrderByDescending(r => r.StartUtc).Take(limit).Select(r => r.Id);
+                void Check(string? cam, bool? reviewed, int limit, DateTime? day, bool noWake)
+                {
+                    var got = store.List(cam, reviewed, limit, day, noWake).Select(r => r.Id);
+                    Assert(got.SequenceEqual(Reference(cam, reviewed, limit, day, noWake)),
+                        $"list(cam={cam}, reviewed={reviewed}, limit={limit}, day={day:yyyy-MM-dd}, noWake={noWake})");
+                }
+                Check(null, null, 200, null, false);
+                Check(null, null, 10, null, true);
+                Check("Back", null, 100_000, null, true);
+                Check(null, true, 50, null, false);
+                Check(null, false, 5, null, true);
+                Check(null, null, 1, null, false);
+                var someDay = all[rng.Next(all.Count)].StartUtc.ToLocalTime().Date;
+                Check(null, null, 10_000, someDay, true);
+                Check("Front", false, 3, someDay, true);
+                Check(null, null, 10, someDay.AddDays(-30), false);
+
+                var reloaded = new Recording.EventStore(dir);
+                reloaded.Load();
+                var fromDisk = reloaded.List(limit: 100_000);
+                AssertEq(fromDisk.Count, all.Count);
+                Assert(fromDisk.Zip(fromDisk.Skip(1)).All(p => p.First.StartUtc >= p.Second.StartUtc),
+                    "reload lists newest first");
+                Assert(fromDisk.Select(r => r.Id).ToHashSet().SetEquals(all.Select(a => a.Id)),
+                    "reload indexes every surviving event");
+
+                // Retention prunes whole days; they must leave the sorted index too.
+                var keepA = Tied("Garage", DateTime.UtcNow.AddMinutes(-2));
+                var keepB = Tied("Garage", DateTime.UtcNow.AddMinutes(-1));
+                store.Cleanup(retentionDays: 1, continuousRetentionDays: 1);
+                Assert(store.List(limit: 100_000).Select(r => r.Id).SequenceEqual(new[] { keepB.Id, keepA.Id }),
+                    "retention prune leaves only today's events in the listing");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        });
+
         Test("virtual classic index serves old fragmented recordings untouched", () =>
         {
             var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");

@@ -175,11 +175,37 @@ public static class FMp4
     /// so no resize or trailing copy happens per fragment.</summary>
     private const int FragmentOverhead = 108;
 
+    /// <summary>Bytes a fragment for a sample of this size occupies.</summary>
+    public static int FragmentSize(int sampleBytes) => FragmentOverhead + sampleBytes;
+
     /// <summary>Builds one moof + mdat fragment containing a single sample (video or audio).</summary>
     public static byte[] BuildFragment(uint sequence, ulong decodeTime, uint duration, byte[] sample, bool keyframe,
         uint trackId = 1)
     {
-        var w = new Mp4Writer(FragmentOverhead + sample.Length);
+        var w = new Mp4Writer(FragmentSize(sample.Length));
+        WriteFragmentHeader(w, sequence, decodeTime, duration, sample.Length, keyframe, trackId);
+        w.Bytes(sample);
+        return w.Detach();
+    }
+
+    /// <summary>One fragment for an access unit, written straight from the
+    /// Annex-B source: a single exact-size allocation.</summary>
+    public static byte[] BuildFragment(uint sequence, ulong decodeTime, uint duration,
+        AccessUnits units, in AccessUnit unit, uint trackId = 1)
+    {
+        var w = new Mp4Writer(FragmentSize(unit.SampleBytes));
+        WriteFragmentHeader(w, sequence, decodeTime, duration, unit.SampleBytes, unit.Keyframe, trackId);
+        WriteSample(w, units, unit);
+        return w.Detach();
+    }
+
+    /// <summary>Writes moof + the mdat box header for a sample of
+    /// <paramref name="sampleBytes"/>; the caller must then write exactly that
+    /// many sample bytes.</summary>
+    public static void WriteFragmentHeader(Mp4Writer w, uint sequence, ulong decodeTime, uint duration,
+        int sampleBytes, bool keyframe, uint trackId = 1)
+    {
+        int start = w.Position;
         int trunDataOffsetPos;
 
         using (w.Box("moof"))
@@ -201,19 +227,41 @@ public static class FMp4
                     w.U32(0);                          // data_offset (patched below)
                     w.U32(keyframe ? 0x02000000u : 0x01010000u); // first sample flags
                     w.U32(duration);
-                    w.U32((uint)sample.Length);
+                    w.U32((uint)sampleBytes);
                 }
             }
         }
 
         // The sample data starts right after moof + mdat header
-        int moofSize = w.Position;
+        int moofSize = w.Position - start;
         w.PatchU32(trunDataOffsetPos, (uint)(moofSize + 8));
+        w.U32((uint)(8 + sampleBytes));
+        w.Tag("mdat");
+    }
 
-        using (w.Box("mdat"))
-            w.Bytes(sample);
+    /// <summary>Writes an access unit as length-prefixed (AVCC/HVCC) sample data.</summary>
+    public static void WriteSample(Mp4Writer w, AccessUnits units, in AccessUnit unit)
+    {
+        int end = unit.FirstNal + unit.NalCount;
+        for (int i = unit.FirstNal; i < end; i++)
+        {
+            var nal = units.Nals[i];
+            w.U32((uint)nal.Length);
+            w.Bytes(nal.Span);
+        }
+    }
 
-        return w.Detach();
+    /// <summary>An access unit within <see cref="AccessUnits"/>: a run of NALs and
+    /// the size they take length-prefixed.</summary>
+    public readonly record struct AccessUnit(int FirstNal, int NalCount, int SampleBytes, bool Keyframe);
+
+    /// <summary>A buffer's access units, referencing the source bytes — the sample
+    /// data is copied only when a fragment is written.</summary>
+    public sealed class AccessUnits
+    {
+        public readonly List<ReadOnlyMemory<byte>> Nals = new();
+        public readonly List<AccessUnit> Units = new();
+        public int Count => Units.Count;
     }
 
     /// <summary>
@@ -223,25 +271,32 @@ public static class FMp4
     /// </summary>
     public static List<(byte[] Sample, bool Keyframe)> SplitAccessUnits(VideoCodec codec, byte[] annexB)
     {
-        var result = new List<(byte[], bool)>();
-        var current = new List<ReadOnlyMemory<byte>>();
-        bool currentHasVcl = false, currentKey = false;
-        int currentBytes = 0;
+        var units = SplitAccessUnitsRaw(codec, annexB);
+        var result = new List<(byte[], bool)>(units.Count);
+        foreach (var unit in units.Units)
+        {
+            var w = new Mp4Writer(unit.SampleBytes);
+            WriteSample(w, units, unit);
+            result.Add((w.Detach(), unit.Keyframe));
+        }
+        return result;
+    }
+
+    /// <summary>The access units of an Annex-B buffer without copying any sample
+    /// data; the source must outlive the result.</summary>
+    public static AccessUnits SplitAccessUnitsRaw(VideoCodec codec, byte[] annexB)
+    {
+        var result = new AccessUnits();
+        var nals = result.Nals;
+        int first = 0, bytes = 0;
+        bool hasVcl = false, key = false;
 
         void Close()
         {
-            if (currentBytes == 0) return;
-            var sample = new byte[currentBytes];
-            int pos = 0;
-            foreach (var nal in current)
-            {
-                BinaryPrimitives.WriteUInt32BigEndian(sample.AsSpan(pos), (uint)nal.Length);
-                nal.Span.CopyTo(sample.AsSpan(pos + 4));
-                pos += 4 + nal.Length;
-            }
-            result.Add((sample, currentKey));
-            current.Clear();
-            currentHasVcl = false; currentKey = false; currentBytes = 0;
+            if (bytes == 0) return;
+            result.Units.Add(new AccessUnit(first, nals.Count - first, bytes, key));
+            first = nals.Count;
+            hasVcl = false; key = false; bytes = 0;
         }
 
         foreach (var nal in H26x.SplitNals(annexB))
@@ -271,13 +326,13 @@ public static class FMp4
             if (skip) continue;
 
             // A VCL NAL starting a new picture closes the previous access unit
-            if (isVcl && firstSlice && currentHasVcl)
+            if (isVcl && firstSlice && hasVcl)
                 Close();
 
-            current.Add(nal);
-            currentBytes += 4 + nal.Length;
-            currentHasVcl |= isVcl;
-            currentKey |= isKey;
+            nals.Add(nal);
+            bytes += 4 + nal.Length;
+            hasVcl |= isVcl;
+            key |= isKey;
         }
         Close();
         return result;
@@ -533,6 +588,12 @@ public sealed class Mp4Writer
 
     public int Position => _len;
     public byte[] ToArray() => _buf.AsSpan(0, _len).ToArray();
+
+    /// <summary>The written bytes, in place — valid until the next write.</summary>
+    public ArraySegment<byte> Written => new(_buf, 0, _len);
+
+    /// <summary>Rewinds for reuse; the buffer keeps its grown capacity.</summary>
+    public void Reset() => _len = 0;
 
     /// <summary>The written bytes, without a copy when the pre-sized buffer is
     /// exactly full (the per-fragment hot path). The writer must not be used

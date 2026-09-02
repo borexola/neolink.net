@@ -3973,7 +3973,7 @@ public static class WebApi
             uint prevTs = 0;
             ulong decodeTime = 0;
             uint sequence = 1;
-            List<(byte[] Sample, bool Keyframe)>? pending = null;
+            FMp4.AccessUnits? pending = null;
 
             // Audio fragments accumulate here and ship inside the next video batch:
             // sending each ~21ms AAC frame as its own WebSocket message would wreck
@@ -3983,30 +3983,30 @@ public static class WebApi
             uint prevAudioTs = 0;
             bool haveAudioTs = false;
 
-            // One growable batch buffer per connection: a fresh stream per flush
-            // re-grows to GOP size ~30x/s per viewer for nothing.
-            var batch = new MemoryStream();
+            // One growable batch buffer per connection, and the fragments are
+            // written into it straight from the hub's Annex-B bytes: no
+            // per-frame sample or fragment arrays, which for keyframes were
+            // large-object-heap allocations per viewer per GOP.
+            var batch = new Mp4Writer(64 * 1024);
             async Task FlushPendingAsync(uint totalDuration)
             {
                 if ((pending == null || pending.Count == 0) && audioFrags.Count == 0) { pending = null; return; }
-                batch.SetLength(0);
+                batch.Reset();
                 if (pending is { Count: > 0 })
                 {
                     uint per = Math.Clamp(totalDuration / (uint)pending.Count, 900u, 45_000u); // 10..500ms per frame
-                    foreach (var (sample, key) in pending)
+                    foreach (var unit in pending.Units)
                     {
-                        batch.Write(FMp4.BuildFragment(sequence++, decodeTime, per, sample, key));
+                        FMp4.WriteFragmentHeader(batch, sequence++, decodeTime, per, unit.SampleBytes, unit.Keyframe);
+                        FMp4.WriteSample(batch, pending, unit);
                         decodeTime += per;
                     }
                 }
                 pending = null;
                 foreach (var frag in audioFrags)
-                    batch.Write(frag);
+                    batch.Bytes(frag);
                 audioFrags.Clear();
-                // Send straight from the stream's buffer — copying it per batch would
-                // double the allocation on the per-frame hot path, per viewer.
-                var payload = new ArraySegment<byte>(batch.GetBuffer(), 0, (int)batch.Length);
-                await ws.SendAsync(payload, WebSocketMessageType.Binary, true, ct).ConfigureAwait(false);
+                await ws.SendAsync(batch.Written, WebSocketMessageType.Binary, true, ct).ConfigureAwait(false);
             }
 
             await foreach (var packet in reader.ReadAllAsync(ct).ConfigureAwait(false))
@@ -4060,7 +4060,7 @@ public static class WebApi
                 prevTs = v.RtpTs;
                 haveTs = true;
 
-                var aus = FMp4.SplitAccessUnits(codec, v.AnnexB);
+                var aus = FMp4.SplitAccessUnitsRaw(codec, v.AnnexB);
                 if (aus.Count > 0)
                     pending = aus;
             }

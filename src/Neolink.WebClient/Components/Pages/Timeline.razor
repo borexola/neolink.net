@@ -12,6 +12,10 @@
    detection events overlay the lanes color-coded by type. *@
 
 <PageTitle>@T["Neolink.NET — Timeline"]</PageTitle>
+@{
+    var included = Included.ToList();
+    var presentKinds = PresentKinds.ToList();
+}
 
 <div class="tl-page @(_studio ? "studio" : "")">
     <div class="toolbar tl-toolbar">
@@ -91,7 +95,7 @@
             <button class="chip tl-zoom-chip @(Zoomed ? "chip-active" : "chip-off")"
                     title="@(Zoomed ? T["Zoomed in — click (or press 0) to see the whole day again"] : T["Scroll or pinch on the timeline to zoom in for fine seeking"])"
                     @onclick="ResetZoomAsync">@UiIcon.Render("zoom", 12) @SpanLabel(_viewSpan)</button>
-            @if (_continuous && Included.Any())
+            @if (_continuous && included.Count > 0)
             {
                 <button class="tool-btn tl-export-btn @(_showExport ? "active" : "")"
                         title="@T["Export footage: download a period of this day (up to the whole day) as a zip of its recordings"]"
@@ -386,11 +390,11 @@
 
         @* Legend + filter in one: each chip carries the exact colour its marks are
            drawn in, and clicking it hides/shows that category on the lanes. *@
-        @if (PresentKinds.Any())
+        @if (presentKinds.Count > 0)
         {
             <div class="tl-cams tl-evfilter">
                 <span class="tool-label">@T["EVENTS"]</span>
-                @foreach (var kind in PresentKinds)
+                @foreach (var kind in presentKinds)
                 {
                     var on = _eventKinds.Contains(kind);
                     <button class="chip tl-ev-chip @(on ? "" : "chip-off")"
@@ -407,7 +411,7 @@
             </div>
         }
 
-        @if (!Included.Any())
+        @if (included.Count == 0)
         {
             <div class="notice">@T["Select cameras above to load their footage — colored marks on the lanes are events."]</div>
         }
@@ -564,13 +568,13 @@
                     @ZoomHud
                 </div>
             }
-            @if (FocusActive && Included.Count() > 1)
+            @if (FocusActive && included.Count > 1)
             {
                 @* Drag to trade width between the program monitor and the rail.
                    Lives in its own thin grid column between the two; the drag is
                    JS-owned like the board divider's (see tlColResizeInit). *@
                 <div class="tl-vresizer" id="tl-vresizer" role="separator" aria-orientation="vertical"
-                     style="grid-column: 2; grid-row: 1 / span @(Math.Max(1, Included.Count() - 1));"
+                     style="grid-column: 2; grid-row: 1 / span @(Math.Max(1, included.Count - 1));"
                      title="@T["Drag to make the thumbnail rail wider or narrower — double-click to reset"]"
                      @ondblclick="ResetRailWidthAsync">
                     <span class="tl-vresizer-grip"></span>

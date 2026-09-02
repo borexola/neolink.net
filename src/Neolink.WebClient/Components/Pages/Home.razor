@@ -330,12 +330,13 @@
            and also when the filters hide everything, EXCEPT while the filter
            editor is open: collapsing mid-edit would strand the user with no way
            to undo the click that hid the last visible event. *@
-        @if (_eventsSupported && (StripEvents.Any() || _showStripFilter))
+        @{ var strip = StripEvents.ToList(); }
+        @if (_eventsSupported && (strip.Count > 0 || _showStripFilter))
         {
             <div class="events-bar" id="events-bar" style="height:@(_stripHeight)px">
                 <div class="events-rail">
                     <span class="events-rail-label">@T["Detected"]</span>
-                    <span class="events-rail-count" title="@T["Unreviewed events (after filters)"]">@StripEvents.Count()</span>
+                    <span class="events-rail-count" title="@T["Unreviewed events (after filters)"]">@strip.Count</span>
                     <div class="events-rail-actions">
                         <button class="rail-btn @(_showStripFilter ? "open" : "")"
                                 title="@T["Filter which events appear here"]" @onclick="() => _showStripFilter = !_showStripFilter">
@@ -360,12 +361,12 @@
                    can-left/can-right on it from the real scroll state. *@
                 <div class="events-scroll-wrap" id="events-scroll-wrap">
                 <div class="events-bar-scroll">
-                    @if (!StripEvents.Any())
+                    @if (strip.Count == 0)
                     {
                         <span class="event-sub">@T["no unreviewed events match these filters — the strip hides itself when you close the filter editor"]</span>
                     }
                     @{ int trickleBudget = 8; }
-                    @foreach (var ev in StripEvents.Take(30))
+                    @foreach (var ev in strip.Take(30))
                     {
                         @* Ambient "trickle" preview: the newest few cards loop their clip
                            muted, so the strip shows what happened without any clicks.
@@ -962,7 +963,7 @@
                 <img class="tile-poster" src="@SnapshotPoster(qv.Camera)" alt=""
                      onerror="this.style.display='none'" />
                 <div class="tile-status">@T["connecting…"]</div>
-                @if (_cameras.FirstOrDefault(c => c.Name == qv.Camera) is { Suspended: true })
+                @if (qvCam is { Suspended: true })
                 {
                     <div class="tile-privacy tile-suspended" @onclick:stopPropagation="true">
                         <span class="tile-privacy-icon">@UiIcon.Render("eye-off", 22)</span>
@@ -975,7 +976,7 @@
                         </button>
                     </div>
                 }
-                else if (_cameras.FirstOrDefault(c => c.Name == qv.Camera) is { Privacy: true })
+                else if (qvCam is { Privacy: true })
                 {
                     <div class="tile-privacy">
                         <span class="tile-privacy-icon">🔒</span>
@@ -983,7 +984,7 @@
                         <small>@T["the camera is dark on purpose — switch it back in camera settings or the Reolink app"]</small>
                     </div>
                 }
-                else if (_cameras.FirstOrDefault(c => c.Name == qv.Camera) is { Online: false, Asleep: false })
+                else if (qvCam is { Online: false, Asleep: false })
                 {
                     <div class="tile-privacy tile-offline">
                         <span class="tile-privacy-icon">@UiIcon.Render("video-off", 22)</span>
@@ -3209,41 +3210,65 @@
         }
     }
 
-    /// <summary>The per-render JS wiring: helpers that must re-attach after every
-    /// render because the elements they drive come and go.</summary>
+    /// <summary>The per-render JS wiring (helpers whose elements come and go, plus
+    /// the event player), as ONE interop round trip: each call is a SignalR round
+    /// trip per client per render, and this runs on every poll tick.</summary>
     private async Task WireJsAsync()
     {
+        _selfRef ??= DotNetObjectReference.Create(this);
+        bool strip = _eventsSupported && _events.Any(e => !e.Reviewed);
+        // The strip's looping previews hand their decoders back while the
+        // event player holds the screen.
+        bool trickleSuspend = _playEvent != null;
+        var player = _playEvent is { HasClip: true } ev
+            ? new
+            {
+                id = "event-player-video", url = PlayerUrl, rate = _playSpeed,
+                fallback = PlayerFallback, autoplay = true, ongoing = ev.Ongoing,
+            }
+            : null;
+        if (!_legacyWire)
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("neolink.wire", _selfRef, new
+                {
+                    freeGrid = _mode == "free" ? "stage-grid" : null,
+                    strip,
+                    trickleSpeed = _trickleSpeed,
+                    trickleSuspend,
+                    player,
+                });
+                return;
+            }
+            catch (JSException ex) when (ex.Message.Contains("neolink.wire"))
+            {
+                // A tab left open across a server update reconnects with the
+                // previous script, which has no wire(): keep it working with the
+                // per-helper calls until it reloads.
+                _legacyWire = true;
+            }
+        }
         if (_mode == "free")
             await JS.InvokeVoidAsync("neolink.freeInit", "stage-grid");
-        // Digital zoom (theater/fullscreen/quick view). Re-invoked per render so
-        // zoom resets when a surface stops being zoomable (e.g. un-maximized).
         await JS.InvokeVoidAsync("neolink.zoomInit");
-        // Speaker toggles: re-sync glyphs/visibility after every render.
         await JS.InvokeVoidAsync("neolink.audioInit");
-        // Esc closes the event player / quick view pop-ups (and the tile menu).
         await JS.InvokeVoidAsync("neolink.escInit");
-        // Drag & drop shim (Firefox needs dataTransfer payloads) + grid resize grips.
-        _selfRef ??= DotNetObjectReference.Create(this);
         await JS.InvokeVoidAsync("neolink.dndInit");
         await JS.InvokeVoidAsync("neolink.tileResizeInit", _selfRef);
         await JS.InvokeVoidAsync("neolink.playerHostInit", _selfRef);
-        // Blazor's `muted` attribute only sets defaultMuted on dynamically created
-        // elements, which blocks autoplay — the helper mutes for real and plays.
-        if (_eventsSupported && _events.Any(e => !e.Reviewed))
+        if (strip)
         {
-            // The strip's looping previews hand their decoders back while the
-            // event player holds the screen.
-            await JS.InvokeVoidAsync("neolink.trickle", _trickleSpeed, _playEvent != null);
-            _selfRef ??= DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("neolink.trickle", _trickleSpeed, trickleSuspend);
             await JS.InvokeVoidAsync("neolink.stripResizeInit", "events-bar", _selfRef);
             await JS.InvokeVoidAsync("neolink.stripNavInit", "events-scroll-wrap");
         }
-        // Drive the event player from JS: pick the source for the current speed,
-        // preserve position across a clip↔preview swap, and apply the rate.
-        if (_playEvent is { HasClip: true })
-            await JS.InvokeVoidAsync("neolink.eventPlayer", "event-player-video", PlayerUrl, _playSpeed, PlayerFallback,
-            true, _playEvent?.Ongoing == true);
+        if (player != null)
+            await JS.InvokeVoidAsync("neolink.eventPlayer", player.id, player.url, player.rate,
+                player.fallback, player.autoplay, player.ongoing);
     }
+
+    private bool _legacyWire;
 
     /// <summary>Called from JS when the strip's resize-handle drag ends.</summary>
     [JSInvokable]

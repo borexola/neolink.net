@@ -58,6 +58,9 @@ public sealed class EventStore
     private readonly string? _archiveRoot; // aged footage moves here instead of being deleted
     private readonly object _gate = new();
     private readonly Dictionary<string, (EventRecord Record, string Dir)> _byId = new();
+    // The same records ordered by StartUtc (ties: newest insert first), so the
+    // newest-first listings the UI polls walk from the end and stop at the limit.
+    private readonly List<EventRecord> _byStart = new();
 
     public EventStore(string root, string? clipsRoot = null, string? archiveRoot = null)
     {
@@ -102,7 +105,7 @@ public sealed class EventStore
                     var rec = JsonSerializer.Deserialize<EventRecord>(File.ReadAllText(file), JsonOpts);
                     if (rec == null) continue;
                     rec.Ongoing = false; // whatever was ongoing did not survive the restart
-                    lock (_gate) { _byId[rec.Id] = (rec, Path.GetDirectoryName(file)!); }
+                    lock (_gate) { PutLocked(rec, Path.GetDirectoryName(file)!); }
                     loaded++;
                 }
                 catch (Exception ex)
@@ -145,9 +148,48 @@ public sealed class EventStore
             Labels = labels.Distinct().ToList(),
             Ongoing = true,
         };
-        lock (_gate) { _byId[id] = (rec, dir); }
+        lock (_gate) { PutLocked(rec, dir); }
         Save(rec);
         return rec;
+    }
+
+    private void PutLocked(EventRecord rec, string dir)
+    {
+        if (_byId.TryGetValue(rec.Id, out var old))
+            UnindexLocked(old.Record);
+        _byId[rec.Id] = (rec, dir);
+        _byStart.Insert(LowerBoundLocked(rec.StartUtc), rec);
+    }
+
+    private void RemoveLocked(string id)
+    {
+        if (_byId.Remove(id, out var e))
+            UnindexLocked(e.Record);
+    }
+
+    /// <summary>First index whose StartUtc is not below <paramref name="at"/>.</summary>
+    private int LowerBoundLocked(DateTime at)
+    {
+        int lo = 0, hi = _byStart.Count;
+        while (lo < hi)
+        {
+            int mid = (lo + hi) >> 1;
+            if (_byStart[mid].StartUtc < at) lo = mid + 1;
+            else hi = mid;
+        }
+        return lo;
+    }
+
+    /// <summary>Drops the record from the sorted index: a binary search to its
+    /// StartUtc run, then a scan of that run — retention prunes whole days under
+    /// the lock the recorder needs, so this must not be linear in the index.</summary>
+    private void UnindexLocked(EventRecord rec)
+    {
+        for (int i = LowerBoundLocked(rec.StartUtc); i < _byStart.Count && _byStart[i].StartUtc == rec.StartUtc; i++)
+        {
+            if (ReferenceEquals(_byStart[i], rec)) { _byStart.RemoveAt(i); return; }
+        }
+        _byStart.Remove(rec); // StartUtc changed underneath (it never should): fall back to a scan
     }
 
     /// <summary>Persists the record (atomic replace so a crash can't corrupt it).</summary>
@@ -228,7 +270,7 @@ public sealed class EventStore
             dir = e.Dir;
         }
         if (!DeleteTree(dir)) return false;
-        lock (_gate) { _byId.Remove(id); }
+        lock (_gate) { RemoveLocked(id); }
         // {root}/{camera}/{date}/detections/{event} → prune detections, then the day.
         try
         {
@@ -252,27 +294,29 @@ public sealed class EventStore
     public List<EventRecord> List(string? camera = null, bool? reviewed = null, int limit = 200,
         DateTime? localDate = null, bool excludeWakeOnly = false)
     {
-        // Filtering stays under the gate (Labels mutates after insert); the sort
-        // runs outside it — the recorder needs this same lock per event, and the
-        // UI polls this over the whole retained index every few seconds.
-        List<EventRecord> matched;
+        limit = Math.Clamp(limit, 1, 100_000);
+        var day = localDate?.Date;
+        var matched = new List<EventRecord>(Math.Min(limit, 512));
         lock (_gate)
         {
-            matched = new List<EventRecord>(_byId.Count);
-            foreach (var e in _byId.Values)
+            // Newest first off the sorted index, stopping at the limit — and, for
+            // a day query, at the first event older than that day.
+            for (int i = _byStart.Count - 1; i >= 0 && matched.Count < limit; i--)
             {
-                var r = e.Record;
+                var r = _byStart[i];
                 if (camera != null && !string.Equals(r.Camera, camera, StringComparison.OrdinalIgnoreCase)) continue;
                 if (reviewed != null && r.Reviewed != reviewed) continue;
-                if (localDate != null && r.StartUtc.ToLocalTime().Date != localDate.Value.Date) continue;
                 if (excludeWakeOnly && r.Labels is ["wake"]) continue;
+                if (day is { } d)
+                {
+                    var rd = r.StartUtc.ToLocalTime().Date;
+                    if (rd > d) continue;
+                    if (rd < d) break;
+                }
                 matched.Add(r);
             }
         }
-        return matched
-            .OrderByDescending(r => r.StartUtc)
-            .Take(Math.Clamp(limit, 1, 100_000))
-            .ToList();
+        return matched;
     }
 
     /// <summary>
@@ -698,7 +742,7 @@ public sealed class EventStore
                          .Where(kv => kv.Value.Dir.Equals(dir, StringComparison.OrdinalIgnoreCase)
                                    || kv.Value.Dir.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
                          .Select(kv => kv.Key).ToList())
-                _byId.Remove(id);
+                RemoveLocked(id);
         }
     }
 
@@ -780,7 +824,7 @@ public sealed class EventStore
                              .Where(kv => kv.Value.Dir.Equals(entry, StringComparison.OrdinalIgnoreCase)
                                        || kv.Value.Dir.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
                              .Select(kv => kv.Key).ToList())
-                    _byId.Remove(id);
+                    RemoveLocked(id);
             }
         }
         return removed;

@@ -57,7 +57,7 @@ public sealed class ClipWriter : IDisposable
     private bool _haveTs;
     private uint _prevTs;
     private bool _waitKeyframe = true; // clips must start decodable
-    private List<(byte[] Sample, bool Keyframe)>? _pending;
+    private FMp4.AccessUnits? _pending;
     private bool _dropping;
     private int _dropped;
     private bool _disposed;
@@ -170,7 +170,7 @@ public sealed class ClipWriter : IDisposable
         _prevTs = v.RtpTs;
         _haveTs = true;
 
-        var aus = FMp4.SplitAccessUnits(_codec, v.AnnexB);
+        var aus = FMp4.SplitAccessUnitsRaw(_codec, v.AnnexB);
         if (aus.Count > 0)
             _pending = aus;
     }
@@ -201,10 +201,10 @@ public sealed class ClipWriter : IDisposable
     {
         if (_pending == null || _pending.Count == 0) { _pending = null; return; }
         uint per = Math.Clamp(totalDuration / (uint)_pending.Count, 900u, 45_000u); // 10..500ms per frame
-        foreach (var (sample, key) in _pending)
+        foreach (var unit in _pending.Units)
         {
-            Enqueue(FMp4.BuildFragment(_sequence++, (ulong)_decodeTime, per, sample, key),
-                key, (ulong)_decodeTime, track: 1, per);
+            Enqueue(FMp4.BuildFragment(_sequence++, (ulong)_decodeTime, per, _pending, unit),
+                unit.Keyframe, (ulong)_decodeTime, track: 1, per);
             _decodeTime += per;
         }
         _pending = null;

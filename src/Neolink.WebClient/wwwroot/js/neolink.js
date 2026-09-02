@@ -693,6 +693,28 @@
             setTimeout(() => el.classList.remove('tile-flash'), 950);
         },
 
+        // The home page's per-render wiring in one interop call. Every helper is
+        // idempotent, so calling all of them each render is safe; batching keeps
+        // it to a single round trip.
+        wire(ref, o) {
+            if (o.freeGrid) this.freeInit(o.freeGrid);
+            // Digital zoom: re-run per render so zoom resets when a surface stops
+            // being zoomable (e.g. un-maximized).
+            this.zoomInit();
+            this.audioInit();
+            this.escInit();
+            this.dndInit();
+            this.tileResizeInit(ref);
+            this.playerHostInit(ref);
+            if (o.strip) {
+                this.trickle(o.trickleSpeed, o.trickleSuspend);
+                this.stripResizeInit('events-bar', ref);
+                this.stripNavInit('events-scroll-wrap');
+            }
+            const p = o.player;
+            if (p) this.eventPlayer(p.id, p.url, p.rate, p.fallback, p.autoplay, p.ongoing);
+        },
+
         // Ambient event previews (review strip): ensure real muting, fast-forward
         // playback rate and looped playback. Idempotent, called per render.
         // `suspend` RELEASES their decoders (a phone has very few, and the event
