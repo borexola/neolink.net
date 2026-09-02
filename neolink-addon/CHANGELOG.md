@@ -3,6 +3,15 @@
 Release notes for the Neolink.NET Home Assistant add-on. Home Assistant shows
 the sections between your installed version and the update on offer.
 
+## 1.0.8
+
+### Changed
+
+- **Live video and recordings do less work per frame.** The server used to copy every video frame two or three times before sending it to your browser or writing it to disk. Now it copies once. That removes about 99% of the memory churn per viewer, so a busy server stutters less. The video itself is byte-for-byte the same.
+- **The events list answers 40× faster.** Every few seconds the events page asks the server what is new, and the server used to re-sort every event it had ever kept to answer. It now keeps them sorted and reads off the top. Same list, same order.
+- **The home page sets itself up in one step instead of nine.** Each screen refresh used to make nine separate round trips to the browser; now it makes one. Most noticeable on phones and remote connections.
+- The Docker image no longer installs time zone data itself, because the base image already includes it. Builds are quicker; time zones behave exactly as before.
+
 ## 1.0.7
 
 ### Added
