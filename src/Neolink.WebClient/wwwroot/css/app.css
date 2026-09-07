@@ -3307,6 +3307,16 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 /* Label and bar share one line; on narrow screens the bar wraps below. */
 .ev-search-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin: 10px 0 4px; padding-left: 10px; }
 .ev-search-row .ev-search { flex: 1 1 auto; min-width: 260px; }
+
+/* Phones: the "AI SEARCH" heading is what pushed the field onto a second row.
+   The magnifier (or sparkle, when a local model is configured) already sits
+   inside the field and says the same thing. */
+@media (max-width: 700px) {
+    .ev-search-row { gap: 0; flex-wrap: nowrap; padding-left: 0; }
+    .ev-search-row .ev-search-head { display: none; }
+    .ev-search-row .ev-search { min-width: 0; gap: 6px; padding: 6px 10px; }
+    .ev-search-hint { padding-left: 10px; }
+}
 .ev-search-head { display: flex; align-items: center; gap: 7px; flex: 0 0 auto; }
 .ev-search-title { font-size: 12px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); white-space: nowrap; }
 .ev-search-hint { font-size: 12px; color: var(--muted); margin: 4px 0 2px; padding-left: 10px; max-width: 640px; }
@@ -3334,6 +3344,22 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 }
 .cam-filter-menu label { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; white-space: nowrap; }
 .cam-filter-menu .cam-filter-all { padding-bottom: 7px; border-bottom: 1px solid var(--line); }
+
+/* Phones: the toolbar scrolls sideways (overflow-x: auto), which clips an
+   absolute popover to the strip. A fixed bottom sheet escapes the clip. */
+@media (max-width: 700px) {
+    .cam-filter-menu {
+        position: fixed;
+        top: auto;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        border-radius: 12px 12px 0 0;
+        padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+        max-height: 60vh;
+    }
+    .cam-filter-menu label { font-size: 15px; padding: 4px 0; }
+}
 .ev-search {
     display: flex;
     align-items: center;
@@ -4924,14 +4950,23 @@ body.tl-colresizing, body.tl-colresizing * { cursor: col-resize !important; user
 .player-speed {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     margin-top: 2px;
-    flex-wrap: wrap; /* speed + quality groups wrap on narrow screens */
+    flex-wrap: nowrap; /* speed and quality stay on one line, phone included */
 }
 
-/* The HD/SD group sits apart from the speed chips. */
-.player-quality-label {
-    margin-left: 10px;
+.player-group { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+
+/* Divider standing in for the SPEED / QUALITY headings, which cost more width
+   than they were worth once the chips themselves say what they do. */
+.player-div { color: var(--muted); opacity: 0.45; user-select: none; }
+
+/* Phones: seven chips have to share the width, so they lose their roomy padding
+   rather than the row losing its shape. */
+@media (max-width: 560px) {
+    .player-speed { gap: 6px; }
+    .player-speed .chip { padding: 3px 7px; font-size: 11px; }
+    .player-group { gap: 4px; }
 }
 
 /* Admin server-settings fields */
@@ -5582,6 +5617,14 @@ body.tl-colresizing, body.tl-colresizing * { cursor: col-resize !important; user
     vertical-align: 1px;
 }
 
+/* The preview callout on the Experimental tab: the purple of .preview-tag, with a
+   left rule so it reads as a warning rather than an intro paragraph. */
+.notice.preview-note {
+    border-left: 3px solid color-mix(in srgb, #b48ce8 55%, transparent);
+    padding-left: 8px;
+    margin-bottom: 8px;
+}
+
 /* A staged (not yet applied) camera-setting value: amber + dashed = provisional. */
 .chip-pending,
 .chip.chip-pending {
@@ -5822,6 +5865,54 @@ textarea.ai-prompt {
     padding-right: 2px;
 }
 
+/* Emergency mode (beta): armed reads as a red state everywhere it appears, and
+   the per-camera grid keeps its four chips in fixed columns. */
+.settings-tab .tab-dot-armed { color: var(--err); }
+.emg-arm-row { align-items: center; }
+.emg-armed { color: var(--err); font-weight: 600; letter-spacing: .04em; }
+
+.chip-armed {
+    color: var(--err);
+    border-color: color-mix(in srgb, var(--err) 55%, transparent);
+    background: color-mix(in srgb, var(--err) 14%, transparent);
+}
+
+.notice.emg-warn {
+    border-color: color-mix(in srgb, var(--err) 45%, transparent);
+    background: color-mix(in srgb, var(--err) 10%, transparent);
+}
+
+.emg-warn-list {
+    margin: 6px 0 8px;
+    padding-left: 18px;
+    line-height: 1.5;
+}
+
+.emg-cam-cols {
+    display: inline-grid;
+    grid-template-columns: repeat(4, 52px);
+    gap: 4px;
+    text-align: center;
+}
+
+.emg-cam-head .emg-cam-cols {
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: .05em;
+}
+
+/* Full-width in its column so the pills line up under the headings. .chip is a
+   flex container, which packs its label left — centre it, or the text sits off
+   to one side of a pill that is wider than the word. */
+.emg-cam-chip {
+    padding: 2px 0;
+    width: 100%;
+    justify-content: center;
+}
+/* "auto" = inheriting the all-cameras choice: present, but not asserting. */
+.chip-auto { opacity: 0.7; border-style: dashed; }
+
 /* Invalid email field + its inline reason, and the "edited but unsaved" accent
    on config.json fields (mirrors the header badge / footer note). */
 .notif-input.input-error,
@@ -6045,4 +6136,102 @@ textarea.ai-prompt {
     }
 
     .settings-panel.settings-wide { width: min(96vw, 760px); }
+}
+
+/* Armed emergency mode, on the brand line: the one state that must be visible
+   without opening a dialog. */
+.brand-emg {
+    display: inline-flex;
+    align-items: center;
+    color: var(--err);
+    cursor: pointer;
+    animation: emg-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes emg-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+}
+
+/* Home grid while the saved layout is still being read back: one calm panel in
+   place of the tiles, in both grid and free modes. */
+.stage-loading {
+    grid-column: 1 / -1;
+    align-self: center;
+    justify-self: center;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 18px;
+    color: var(--muted);
+    font-size: 14px;
+}
+
+.grid.mode-free .stage-loading {
+    position: absolute;
+    inset: 0;
+    justify-content: center;
+}
+
+/* Emergency mode armed: the toolbar pulses red until it is switched off, and
+   carries its own off switch at the right end. */
+.toolbar-emg {
+    border-bottom-color: var(--err);
+    animation: toolbar-emg 1.3s ease-in-out infinite;
+}
+
+@keyframes toolbar-emg {
+    0%, 100% { background: var(--panel); }
+    50% { background: color-mix(in srgb, var(--err) 26%, var(--panel)); }
+}
+
+.emg-toolbar-btn {
+    color: var(--err);
+    border-color: color-mix(in srgb, var(--err) 45%, transparent);
+    margin-left: 6px;
+}
+
+.emg-toolbar-btn:hover:not(:disabled) {
+    color: var(--err);
+    border-color: var(--err);
+    background: color-mix(in srgb, var(--err) 16%, transparent);
+}
+
+/* A flashing bar is exactly what motion sensitivity asks us not to do: hold a
+   steady red instead, so the state is still unmistakable. */
+@media (prefers-reduced-motion: reduce) {
+    .toolbar-emg {
+        animation: none;
+        background: color-mix(in srgb, var(--err) 20%, var(--panel));
+    }
+}
+
+/* Phones scroll the toolbar sideways, which would park the off switch past the
+   right edge. Pin it so it is always on screen — the one control that must
+   never need hunting for. */
+@media (max-width: 700px) {
+    .emg-toolbar-btn {
+        position: sticky;
+        right: 0;
+        margin-left: auto;
+        background: var(--panel);
+        box-shadow: -10px 0 10px -6px var(--panel);
+    }
+
+    .toolbar-emg .emg-toolbar-btn {
+        background: color-mix(in srgb, var(--err) 22%, var(--panel));
+        box-shadow: -10px 0 10px -6px color-mix(in srgb, var(--err) 22%, var(--panel));
+    }
+}
+
+/* A toolbar disarm that failed: the settings dialog is closed, so this is the
+   only place the reason can appear. */
+.toolbar-emg-error {
+    max-width: 40ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--err);
+    font-size: 11px;
+    padding-left: 8px;
 }

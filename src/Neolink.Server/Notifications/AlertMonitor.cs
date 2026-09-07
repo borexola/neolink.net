@@ -29,6 +29,8 @@ public sealed class AlertMonitor
     private readonly Func<IEnumerable<CameraHealth>> _cameras;
     private readonly RecordingHealth? _recording;
     private readonly Dictionary<string, DateTime> _offlineSince = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, IReadOnlyList<EmailAttachment>> _offlineImages =
+        new(StringComparer.OrdinalIgnoreCase);
     private readonly string _server;
 
     public AlertMonitor(Notifier notifier, string serverName, StorageLocations? storage,
@@ -42,25 +44,33 @@ public sealed class AlertMonitor
         _recording = recording;
     }
 
+    /// <summary>Snapshots from a camera's last detection, attached to its offline
+    /// alert when the setting is on. Null leaves the alert text-only.</summary>
+    public Func<string, DateTime, Task<IReadOnlyList<EmailAttachment>>>? LastDetectionImages { get; set; }
+
+    /// <summary>Decoding a clip can take many seconds; the monitor drives three
+    /// other alert types on this same tick and must not stall behind it.</summary>
+    private static readonly TimeSpan ImageFetchBudget = TimeSpan.FromSeconds(25);
+
     public async Task RunAsync(CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
         {
-            try { Tick(); }
+            try { await TickAsync().ConfigureAwait(false); }
             catch (Exception ex) { Log.Debug($"Alert monitor tick failed: {ex.Message}"); }
             try { await Task.Delay(Period, ct).ConfigureAwait(false); }
             catch (OperationCanceledException) { return; }
         }
     }
 
-    private void Tick()
+    private async Task TickAsync()
     {
         var cfg = _notifier.Store.Snapshot();
         if (!cfg.Enabled) return;
 
         if (cfg.AlertStorage && _storage != null) ReportStorage();
         if (cfg.AlertOverload && _monitor != null) ReportOverload();
-        if (cfg.AlertCameraOffline) ReportCameras(cfg);
+        if (cfg.AlertCameraOffline) await ReportCamerasAsync(cfg).ConfigureAwait(false);
         if (cfg.AlertWriteFailure && _recording != null) ReportWriteFailures();
     }
 
@@ -94,8 +104,11 @@ public sealed class AlertMonitor
                 "Server load has returned to normal", "CPU usage has dropped back to normal levels."));
     }
 
-    private void ReportCameras(NotificationSettings cfg)
+    private async Task ReportCamerasAsync(NotificationSettings cfg)
     {
+        // One budget for the whole tick, not per camera: a site with six cameras
+        // off the air must not push the storage and overload checks minutes late.
+        var deadline = DateTime.UtcNow + ImageFetchBudget;
         foreach (var cam in _cameras())
         {
             int minutes = cfg.OfflineMinutesFor(cam.Name);
@@ -113,11 +126,41 @@ public sealed class AlertMonitor
             }
 
             var name = cam.Name; var min = minutes;
+            // What the camera last saw, fetched once per outage (the answer cannot
+            // change while it stays offline) and only when the alert is armed.
+            if (!active || !cfg.OfflineAttachSnapshots) _offlineImages.Remove(name);
+            else if (LastDetectionImages != null && !_offlineImages.ContainsKey(name)
+                     // Nothing to attach them to if no channel can carry the alert.
+                     && (Notifier.EmailReady(cfg) || (Notifier.WebhookReady(cfg) && cfg.WebhookServerAlerts)))
+            {
+                var left = deadline - DateTime.UtcNow;
+                if (left <= TimeSpan.Zero)
+                {
+                    // Out of budget this tick; the next one picks it up.
+                    Log.Debug($"{name}: offline-alert snapshots deferred — tick budget spent");
+                }
+                else
+                {
+                    try
+                    {
+                        _offlineImages[name] = await LastDetectionImages(name, _offlineSince[name])
+                            .WaitAsync(left).ConfigureAwait(false);
+                    }
+                    catch (TimeoutException)
+                    {
+                        _offlineImages[name] = Array.Empty<EmailAttachment>();
+                        Log.Debug($"{name}: offline-alert snapshots gave up after {ImageFetchBudget.TotalSeconds:0}s");
+                    }
+                }
+            }
+            var shots = _offlineImages.TryGetValue(name, out var imgs) && imgs.Count > 0 ? imgs : null;
+            var evidence = shots == null ? "" :
+                $" The last {shots.Count} image(s) it captured before going offline are attached.";
             _notifier.Report($"camera:{name}", active,
                 () => new Alert($"camera:{name}", false, $"{_server}: {name} is offline",
                     $"Camera \"{name}\" is offline",
-                    $"{name} has been unreachable for more than {min} minute(s). Check its power and network connection.",
-                    name),
+                    $"{name} has been unreachable for more than {min} minute(s). Check its power and network connection.{evidence}",
+                    name, shots),
                 () => new Alert($"camera:{name}", true, $"{_server}: {name} is back online",
                     $"Camera \"{name}\" is back online", $"{name} has reconnected and is streaming again.", name));
         }

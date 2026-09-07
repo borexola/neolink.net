@@ -86,6 +86,12 @@
                the toolbar's Restore view button (no-op when nothing is maximized). *@
             <span class="brand-home" role="button" title="@T["Back to the full camera wall"]"
                   @onclick="RestoreView">
+                @if (_emgArmed)
+                {
+                    @* Sirens may be sounding right now: say so where it cannot be missed. *@
+                    <span class="brand-emg" title="@T["Emergency mode is armed — click to open it"]"
+                          @onclick:stopPropagation="true" @onclick="OpenEmergencyTabAsync">@UiIcon.Render("siren", 12)</span>
+                }
                 @if (_footageEncrypted)
                 {
                     <span class="brand-lock" title="@T["Footage encryption is on — recordings are stored encrypted"]">@UiIcon.Render("lock", 12)</span>
@@ -459,7 +465,7 @@
             }
         }
 
-        <div class="toolbar">
+        <div class="toolbar @(_emgArmed ? "toolbar-emg" : "")">
             <button class="tool-btn menu-btn" title="@T["Cameras"]" @onclick="() => _sidebarOpen = !_sidebarOpen">@UiIcon.Render("menu", 16)</button>
 
             @* Restore view leads the toolbar while a maximize is active: it's the
@@ -524,9 +530,29 @@
             <span class="tool-sep"></span>
             <a class="tool-btn" href="monitor" title="@T["Server & browser resource usage, live"]">@UiIcon.Render("activity", 14) <span class="tool-name">@T["Monitor"]</span></a>
 
+            @* Right end of the bar. The spacer absorbs the free space so both the
+               version and the disarm button sit right whichever of them renders. *@
+            <span class="tile-spacer"></span>
             @if (!string.IsNullOrEmpty(_version))
             {
                 <span class="toolbar-version" title="@T["Neolink.NET server version"]">v@(_version)</span>
+            }
+            @if (_emgError && _emgStatus != null && !_showServerSettings)
+            {
+                @* The settings dialog owns the usual status line; without this the
+                   toolbar's off switch would fail in complete silence. *@
+                <span class="toolbar-emg-error" title="@_emgStatus">@_emgStatus</span>
+            }
+            @if (_emgArmed)
+            {
+                @* Reachable without opening Server settings: switching the sirens
+                   off must never be more than one click away. *@
+                <button class="tool-btn emg-toolbar-btn" disabled="@_emgBusy"
+                        title="@T["Stop the sirens and lights and hand control back to your camera settings"]"
+                        @onclick="DisarmEmergencyAsync">
+                    @UiIcon.Render("siren", 14)
+                    <span class="tool-name">@(_emgBusy ? T["Working…"] : T["Turn off emergency"])</span>
+                </button>
             }
         </div>
 
@@ -604,7 +630,15 @@
         }
 
         <div id="stage-grid" class="grid mode-@_mode @(_maxIndex != null ? "has-max" : "")" style="@ContainerStyle()">
-            @for (int i = 0; i < _slots.Count; i++)
+            @* The saved layout is not known until the first render has read it
+               back (localStorage, then the account); until then the grid would
+               show the default empty tiles and snap. The stage stays mounted for
+               the JS that measures it; only the tiles wait. *@
+            @if (_layoutLoading)
+            {
+                <div class="stage-loading"><span class="tile-spinner"></span><span>@T["Loading…"]</span></div>
+            }
+            @for (int i = 0; i < (_layoutLoading ? 0 : _slots.Count); i++)
             {
                 var index = i;
                 var slot = _slots[index];
@@ -770,7 +804,7 @@
                                             ? T["Watch now — the camera is already up"]
                                             : T.F("Wake {0} and open the feed — waking spends battery", slot.Camera))"
                                         @onclick="() => ResumeBatteryTileAsync(index)" @onclick:stopPropagation="true">
-                                    @UiIcon.Render("play", 12) @(awake ? T["Watch"] : T["Wake & watch"])
+                                    @UiIcon.Render("play", 12) @(awake ? T["Watch now"] : T["Wake & watch"])
                                 </button>
                             </div>
                         }
@@ -1197,6 +1231,18 @@
                             }
                         </button>
                     }
+                    @if (_emg != null)
+                    {
+                        <button class="settings-tab @(_settingsTab == "experimental" ? "active" : "")" role="tab"
+                                @onclick='() => _settingsTab = "experimental"'>
+                            @UiIcon.Render("sparkles", 13) @T["Experimental"]
+                            <span class="preview-tag">@T["PREVIEW"]</span>
+                            @if (_emg?.Enabled == true)
+                            {
+                                <span class="tab-dot tab-dot-armed" title="@T["Emergency mode is armed"]">●</span>
+                            }
+                        </button>
+                    }
                 </div>
                 <div class="settings-body">
                     @if (_settingsTab == "connection")
@@ -1515,7 +1561,7 @@
                         </div>
                     }
 
-                    @if (_settingsTab is not ("connection" or "users" or "alerts") && _adminConfig == null)
+                    @if (_settingsTab is not ("connection" or "users" or "alerts" or "experimental") && _adminConfig == null)
                     {
                         @if (_adminError != null)
                         {
@@ -1527,7 +1573,7 @@
                         }
                     }
 
-                    @if (_adminConfig != null && _settingsTab is not ("notifications" or "ai" or "connection" or "users" or "alerts" or "language"))
+                    @if (_adminConfig != null && _settingsTab is not ("notifications" or "ai" or "experimental" or "connection" or "users" or "alerts" or "language"))
                     {
                         <div class="notice small">
                             @T["Editing"] <code>@_adminConfigPath</code>.
@@ -2004,7 +2050,7 @@
                             }
 
                             <div class="campanel-divider"></div>
-                            <div class="campanel-subtitle">@T["WEBHOOK SETTINGS"] <span class="new-tag">@T["NEW"]</span></div>
+                            <div class="campanel-subtitle">@T["WEBHOOK SETTINGS"]</div>
                             <div class="notice small">
                                 @((MarkupString)T["Push alerts over HTTP to <b>ntfy</b>, <b>Discord</b>, <b>Gotify</b>, <b>Slack</b> or anything with a URL: pick a preset, paste the URL, send a test. Event snapshots ride along where the target supports them."])
                             </div>
@@ -2128,6 +2174,23 @@
                                 {
                                     <div class="control-row"><span>@T["Camera offline after (minutes)"]</span>
                                         <input class="ret-input" type="number" min="1" max="1440" @bind="_notif.OfflineThresholdMinutes" /></div>
+                                    @* Written out rather than via NotifToggle so the label can carry the badge. *@
+                                    <div class="control-row">
+                                        <span>@T["Attach what the camera last saw"] <span class="new-tag">@T["NEW"]</span></span>
+                                        <button class="chip @(_notif.OfflineAttachSnapshots ? "" : "chip-off")"
+                                                @onclick="() => _notif.OfflineAttachSnapshots = !_notif.OfflineAttachSnapshots">
+                                            @(_notif.OfflineAttachSnapshots ? T["on"] : T["off"])</button>
+                                    </div>
+                                    @if (_notif.OfflineAttachSnapshots)
+                                    {
+                                        <div class="notice small">
+                                            @T["When a camera goes offline, its alert carries snapshots from the last detection before it stopped answering — so a cut feed still tells you what was there."]
+                                        </div>
+                                        <div class="control-row"><span>@T["Images to attach"]</span>
+                                            <input class="ret-input" type="number" min="1" max="10" @bind="_notif.OfflineSnapshotCount" /></div>
+                                        <div class="control-row"><span>@T["Only if the detection was within (minutes, 0 = any)"]</span>
+                                            <input class="ret-input" type="number" min="0" max="10080" @bind="_notif.OfflineSnapshotLookbackMinutes" /></div>
+                                    }
                                     @if (_notif.Cameras.Count > 0)
                                     {
                                         <div class="control-row">
@@ -2291,7 +2354,177 @@
                         </div>
                     }
 
-                    @if (_adminConfig != null && _settingsTab is not ("notifications" or "ai" or "connection" or "users" or "alerts" or "language")
+                    @if (_settingsTab == "experimental")
+                    {
+                        <div class="notice small preview-note">
+                            @((MarkupString)T["<b>Preview features — still being built.</b> They work today, but how they behave, what their settings are called and what they store may change in a future release. Recording, streaming and notifications carry on either way."])
+                        </div>
+                    }
+
+                    @if (_settingsTab == "experimental" && _emg != null)
+                    {
+                        <div class="campanel-section">
+                            <div class="campanel-section-title">
+                                @UiIcon.Render("siren", 13) @T["EMERGENCY MODE"] <span class="preview-tag">@T["PREVIEW"]</span>
+                            </div>
+                            <div class="notice small">
+                                @T["One switch for when something is happening. While it is armed, every camera's detections are sent through the channels you have set up — ignoring each camera's own notification switches and the cooldown that normally spaces alerts out — and the cameras you pick hold their siren and light on until you switch it off."]
+                                <text> </text>@T["Every camera is also brought live for the duration — suspended ones reconnect, privacy mode is lifted, and battery cameras stop dozing — and all of it is put back when you switch it off."]
+                                <text> </text>@T["It forwards the detections a camera already records: one with event recording turned off stays silent."]
+                            </div>
+                            @if (_emg.Issues.Count > 0)
+                            {
+                                <div class="notice emg-warn">
+                                    @T["Some cameras did not take the change — they are offline or asleep. It is retried every minute until it sticks."]
+                                    <ul class="emg-warn-list">
+                                        @foreach (var issue in _emg.Issues)
+                                        {
+                                            <li>@issue.Camera — @issue.Reason</li>
+                                        }
+                                    </ul>
+                                </div>
+                            }
+
+                            <div class="control-row emg-arm-row">
+                                <span class="@(_emg.Enabled ? "emg-armed" : "")">
+                                    @(_emg.Enabled ? T["ARMED"] : T["Not armed"])
+                                    @if (_emg.Enabled && _emg.ArmedUtc is { } since)
+                                    {
+                                        <span class="event-sub"> — @T.F("since {0}", since.ToLocalTime().ToString("HH:mm"))</span>
+                                    }
+                                </span>
+                                <span>
+                                    <button class="chip @(_emg.Enabled ? "chip-armed" : "chip-off")" disabled="@_emgBusy"
+                                            title="@(_emg.Enabled ? T["Stop the sirens and lights and hand control back to your camera settings"] : T["Arm emergency mode"])"
+                                            @onclick="ToggleEmergencyAsync">
+                                        @(_emgBusy ? T["Working…"] : _emg.Enabled ? T["Turn off"] : T["off"])</button>
+                                    <button class="icon-btn" title="@T["Emergency mode settings"]"
+                                            @onclick="() => _emgConfig = !_emgConfig">@UiIcon.Render("gear", 15)</button>
+                                </span>
+                            </div>
+
+                            @if (_emgArmConfirm)
+                            {
+                                @* Arming is loud and immediate: say exactly what happens first. *@
+                                <div class="notice emg-warn">
+                                    <b>@T["This takes effect immediately:"]</b>
+                                    @{
+                                        int warnEmail = _emg.EmailAvailable ? EmgCount("email") : 0;
+                                        int warnHook = _emg.WebhookAvailable ? EmgCount("webhook") : 0;
+                                        int warnSiren = EmgCount("siren");
+                                        int warnLights = EmgCount("lights");
+                                        int camTotal = _emg.Cameras.Count;
+                                    }
+                                    <ul class="emg-warn-list">
+                                        @if (warnEmail > 0)
+                                        {
+                                            <li>@T.F("Every detection emails you, on {0} of {1} cameras — the per-camera switches and the cooldown are ignored.", warnEmail, camTotal)</li>
+                                        }
+                                        @if (warnHook > 0)
+                                        {
+                                            <li>@T.F("Every detection fires your webhook, on {0} of {1} cameras.", warnHook, camTotal)</li>
+                                        }
+                                        @if (warnSiren > 0)
+                                        {
+                                            <li><b>@T["Sirens sound now"]</b> @T.F("on {0} of {1} cameras (those that have one), and keep sounding until you switch this off.", warnSiren, camTotal)</li>
+                                        }
+                                        @if (warnLights > 0)
+                                        {
+                                            <li>@T.F("Lights turn on now on {0} of {1} cameras and stay on until you switch this off.", warnLights, camTotal)</li>
+                                        }
+                                        @* Always, on every camera — not optional, so it is stated
+                                           even when nothing else is switched on. *@
+                                        <li>@T["Every camera is brought live: suspended ones reconnect, any sitting in privacy mode start seeing again, and battery cameras stop dozing (which uses their charge faster)."]</li>
+                                        <li>@T["All of that is put back exactly as it was when you switch emergency mode off."]</li>
+                                        @if (warnEmail + warnHook + warnSiren + warnLights == 0)
+                                        {
+                                            <li>@T["Nothing else is switched on yet — open the settings to choose what else emergency mode should do."]</li>
+                                        }
+                                    </ul>
+                                    <div class="settings-foot-btns">
+                                        <button class="chip" @onclick="() => _emgArmConfirm = false">@T["Cancel"]</button>
+                                        <span class="tile-spacer"></span>
+                                        <button class="chip chip-armed" disabled="@_emgBusy" @onclick="() => ArmEmergencyAsync(true)">
+                                            @T["Arm emergency mode"]</button>
+                                    </div>
+                                </div>
+                            }
+
+                            @if (_emgConfig)
+                            {
+                                @if (!_emg.EmailAvailable && !_emg.WebhookAvailable)
+                                {
+                                    <div class="notice">
+                                        @T["No way to reach you yet. Set up email or a webhook under Notifications first — emergency mode uses whichever you have configured."]
+                                        <button class="chip" @onclick='() => _settingsTab = "notifications"'>@T["Open Notifications"]</button>
+                                    </div>
+                                }
+                                @if (!_emg.DetectionsAvailable)
+                                {
+                                    <div class="notice">@T["This server records no events, so there are no detections to forward. The siren and light options still work."]</div>
+                                }
+                                <div class="campanel-subtitle">@T["WHAT IT DOES"]</div>
+                                @if (_emg.EmailAvailable)
+                                {
+                                    @EmgToggle(T["Email every detection"], _emg.Email, v => _emg.Email = v)
+                                }
+                                @if (_emg.WebhookAvailable)
+                                {
+                                    @EmgToggle(T["Webhook every detection"], _emg.Webhook, v => _emg.Webhook = v)
+                                }
+                                @EmgToggle(T["Sound the siren"], _emg.Siren, v => _emg.Siren = v)
+                                @EmgToggle(T["Turn the lights on"], _emg.Lights, v => _emg.Lights = v)
+                                @if (_notif != null && (_emg.EmailAvailable || _emg.WebhookAvailable))
+                                {
+                                    <div class="notice small">
+                                        @T.F("Notifications go out with your event settings: {0} snapshot(s) per event, {1}.",
+                                             _notif.EventSnapshots,
+                                             _notif.EventEmailDelaySeconds > 0
+                                                 ? T.F("sent {0}s into the event", _notif.EventEmailDelaySeconds)
+                                                 : T["sent when the event ends"])
+                                        @if (_notif.EventCooldownMinutes > 0)
+                                        {
+                                            <text> </text>@T.F("Your {0}-minute cooldown does not apply while armed.", _notif.EventCooldownMinutes)
+                                        }
+                                    </div>
+                                }
+                                <div class="control-row">
+                                    <span></span>
+                                    <button class="chip" @onclick="() => _emgAdvanced = !_emgAdvanced">
+                                        @(_emgAdvanced ? T["Hide advanced"] : T["Show advanced"])</button>
+                                </div>
+                                @if (_emgAdvanced)
+                                {
+                                    <div class="notice small">
+                                        @T["Per camera — auto follows the choices above. A camera without a siren or light simply skips that part."]
+                                    </div>
+                                    <div class="cam-override-list">
+                                        <div class="control-row emg-cam-head">
+                                            <span></span>
+                                            <span class="emg-cam-cols">
+                                                <span>@T["Email"]</span><span>@T["Webhook"]</span><span>@T["Siren"]</span><span>@T["Lights"]</span>
+                                            </span>
+                                        </div>
+                                        @foreach (var cam in _emg.Cameras)
+                                        {
+                                            var name = cam;
+                                            <div class="control-row">
+                                                <span>@name</span>
+                                                <span class="emg-cam-cols">
+                                                    @EmgCamChip(name, "email")
+                                                    @EmgCamChip(name, "webhook")
+                                                    @EmgCamChip(name, "siren")
+                                                    @EmgCamChip(name, "lights")
+                                                </span>
+                                            </div>
+                                        }
+                                    </div>
+                                }
+                            }
+                        </div>
+                    }
+
+                    @if (_adminConfig != null && _settingsTab is not ("notifications" or "ai" or "experimental" or "connection" or "users" or "alerts" or "language")
                          && !(_settingsTab == "cameras" && _camEdit != null))
                     {
                         @* Hidden while the camera editor is open — its footer replaces the
@@ -2342,6 +2575,14 @@
                             <button class="chip @(AiDirty ? "chip-active" : "")" disabled="@(_aiBusy || AiHasErrors)" @onclick="SaveAiAsync">
                                 @(_aiSaving ? T["Saving…"] : (_ai.Enabled ? T["Save AI settings"] : T["Save"]))</button>
                         </div>
+                    }
+                    else if (_settingsTab == "experimental")
+                    {
+                        @* Preview switches apply as they are flipped; no Save button. *@
+                        @if (_emgStatus != null && _emg != null)
+                        {
+                            <div class="notice small @(_emgError ? "error" : "ok")">@_emgStatus</div>
+                        }
                     }
                     else if (_settingsTab is "connection" or "users" or "alerts" or "language")
                     {
@@ -2514,20 +2755,23 @@
                     @ZoomHud
                 </div>
                 <div class="player-speed">
-                    <span class="tool-label">@T["SPEED"]</span>
-                    @foreach (var s in PlaybackSpeeds)
-                    {
-                        <button class="chip @(_playSpeed == s ? "chip-active" : "")"
-                                @onclick="() => SetPlaySpeedAsync(s)">@FormatSpeed(s)</button>
-                    }
+                    <span class="player-group" title="@T["Playback speed"]">
+                        @foreach (var s in PlaybackSpeeds)
+                        {
+                            <button class="chip @(_playSpeed == s ? "chip-active" : "")"
+                                    @onclick="() => SetPlaySpeedAsync(s)">@FormatSpeed(s)</button>
+                        }
+                    </span>
                     @if (_playEvent.HasPreview)
                     {
-                        <span class="tool-label player-quality-label">@T["QUALITY"]</span>
-                        <button class="chip @(_playSd ? "" : "chip-active")" title="@T["Full-quality main-stream recording"]"
-                                @onclick="() => SetPlayStreamAsync(sd: false)">HD</button>
-                        <button class="chip @(_playSd ? "chip-active" : "")"
-                                title="@T["Low-res sub-stream recording — smoother fast-forward on slow storage"]"
-                                @onclick="() => SetPlayStreamAsync(sd: true)">SD</button>
+                        <span class="player-div" aria-hidden="true">|</span>
+                        <span class="player-group" title="@T["Recording quality"]">
+                            <button class="chip @(_playSd ? "" : "chip-active")" title="@T["Full-quality main-stream recording"]"
+                                    @onclick="() => SetPlayStreamAsync(sd: false)">HD</button>
+                            <button class="chip @(_playSd ? "chip-active" : "")"
+                                    title="@T["Low-res sub-stream recording — smoother fast-forward on slow storage"]"
+                                    @onclick="() => SetPlayStreamAsync(sd: true)">SD</button>
+                        </span>
                     }
                 </div>
             }
@@ -2570,6 +2814,9 @@
 
     private readonly List<ApiCamera> _cameras = new();
     private List<ViewSlot> _slots = new();
+    // True from construction so the PRERENDERED frame shows the loader too: that
+    // static pass has no localStorage and would otherwise paint the default tiles.
+    private bool _layoutLoading = true;
     private string _mode = "grid";
     private int _count = 4;
     private ViewSnapshot? _backup; // legacy theater-detour maximize (old persisted states)
@@ -2779,6 +3026,9 @@
         alertCameraOffline = _notif.AlertCameraOffline,
         alertWriteFailure = _notif.AlertWriteFailure,
         offlineThresholdMinutes = _notif.OfflineThresholdMinutes,
+        offlineAttachSnapshots = _notif.OfflineAttachSnapshots,
+        offlineSnapshotCount = _notif.OfflineSnapshotCount,
+        offlineSnapshotLookbackMinutes = _notif.OfflineSnapshotLookbackMinutes,
         cameraOfflineOverrides = _notif.CameraOfflineOverrides,
         eventSnapshots = _notif.EventSnapshots,
         eventCooldownMinutes = _notif.EventCooldownMinutes,
@@ -3055,6 +3305,301 @@
         timeoutSeconds = _ai.TimeoutSeconds,
     };
 
+    /// <summary>?settings=&lt;tab&gt; opens Server settings on that tab — how another
+    /// page sends an admin straight to a switch that lives here. Silently ignored
+    /// for a tab this session does not have (not an admin, feature unavailable),
+    /// and the URL is cleaned either way so a refresh does not reopen it.</summary>
+    private async Task ApplySettingsLinkAsync()
+    {
+        var tab = System.Text.RegularExpressions.Regex
+            .Match(new Uri(Nav.Uri).Query, @"[?&]settings=([a-z]+)").Groups[1].Value;
+        if (tab.Length == 0) return;
+        Nav.NavigateTo("", replace: true);
+        if (_authEnabled && !_authAdmin) return;
+        await OpenServerSettingsAsync();
+        if (tab == "experimental" && _emg != null) _settingsTab = tab;
+    }
+
+    // ---- emergency mode (preview) ----
+
+    /// <summary>Armed, as of the last poll — drives the header badge so a live
+    /// emergency is visible without opening Server settings. Admin-only, because
+    /// only an admin can see or change it.</summary>
+    private bool _emgArmed;
+
+    private async Task RefreshEmergencyArmedAsync()
+    {
+        // Admin-only endpoint: with auth off, or on the login screen, the answer is
+        // always a refusal — no point asking every 10 seconds.
+        if (!_authAdmin) { _emgArmed = false; return; }
+        int seq = _emgSaveSeq;
+        try
+        {
+            using var res = await Http.SendAsync(ApiRequest(HttpMethod.Get, "/api/admin/emergency"));
+            if (!res.IsSuccessStatusCode) return;
+            var cur = await res.Content.ReadFromJsonAsync<ApiEmergency>();
+            // A save started meanwhile: its answer is newer than this one.
+            if (cur == null || seq != _emgSaveSeq || _emgBusy) return;
+            // Every successful poll is server truth, so the fallback a failed save
+            // reverts to can never lag behind it. There are no unsaved edits to
+            // protect — the tab saves on every click.
+            if (!_emgArmConfirm) ConfirmEmergency(cur);
+            else _emgArmed = cur.Enabled;
+        }
+        catch { /* emergency mode simply stays unreported this tick */ }
+    }
+
+    private ApiEmergency? _emg;
+    // The last state the SERVER confirmed, kept as JSON so a failed save can put
+    // it back even when the follow-up read fails too: the tab must never show an
+    // arm or disarm the server did not do.
+    private string? _emgConfirmed;
+    // Bumped per save, so a poll that started before the save cannot land its
+    // stale answer on top of the saved one.
+    private int _emgSaveSeq;
+    private bool _emgBusy;
+
+    private void ConfirmEmergency(ApiEmergency e)
+    {
+        _emg = e;
+        _emgArmed = e.Enabled;
+        _emgConfirmed = JsonSerializer.Serialize(e);
+    }
+
+    private void RevertEmergency()
+    {
+        if (_emgConfirmed == null) return;
+        _emg = JsonSerializer.Deserialize<ApiEmergency>(_emgConfirmed) ?? _emg;
+        _emgArmed = _emg?.Enabled == true;
+    }
+    private bool _emgConfig;
+    private bool _emgAdvanced;
+    private bool _emgArmConfirm;
+    private string? _emgStatus;
+    private bool _emgError;
+
+    /// <summary>Emergency options save the moment they are flipped — the tab has no
+    /// Save button, so a half-set emergency can never sit there unapplied.</summary>
+    private RenderFragment EmgToggle(string label, bool value, Action<bool> set) => __b =>
+    {
+        __b.OpenElement(0, "div");
+        __b.AddAttribute(1, "class", "control-row");
+        __b.OpenElement(2, "span");
+        __b.AddContent(3, label);
+        __b.CloseElement();
+        __b.OpenElement(4, "button");
+        __b.AddAttribute(5, "class", "chip " + (value ? "" : "chip-off"));
+        __b.AddAttribute(6, "disabled", _emgBusy);
+        __b.AddAttribute(7, "onclick", EventCallback.Factory.Create(this, async () =>
+        {
+            // Check before mutating: a swallowed save would otherwise leave the UI
+            // showing a choice that was never sent.
+            if (_emgBusy) return;
+            set(!value);
+            await SaveEmergencyAsync();
+        }));
+        __b.AddContent(8, value ? T["on"] : T["off"]);
+        __b.CloseElement();
+        __b.CloseElement();
+    };
+
+    private bool? EmgCamValue(string cam, string field) =>
+        _emg != null && _emg.Overrides.TryGetValue(cam, out var o)
+            ? field switch
+            {
+                "email" => o.Email,
+                "webhook" => o.Webhook,
+                "siren" => o.Siren,
+                _ => o.Lights,
+            }
+            : null;
+
+    /// <summary>Per-camera chip: auto (follow the all-cameras choice) → on → off.</summary>
+    private RenderFragment EmgCamChip(string cam, string field) => __b =>
+    {
+        var v = EmgCamValue(cam, field);
+        __b.OpenElement(0, "button");
+        __b.AddAttribute(1, "class", "chip emg-cam-chip " + (v == null ? "chip-auto" : v == true ? "" : "chip-off"));
+        __b.AddAttribute(2, "disabled", _emgBusy);
+        __b.AddAttribute(3, "onclick", EventCallback.Factory.Create(this, async () =>
+        {
+            if (_emgBusy) return;
+            EmgCamCycle(cam, field);
+            await SaveEmergencyAsync();
+        }));
+        __b.AddContent(4, v == null ? T["auto"] : v == true ? T["on"] : T["off"]);
+        __b.CloseElement();
+    };
+
+    /// <summary>How many cameras a given deterrent/channel will actually act on,
+    /// counting per-camera overrides — the arm warning must not promise sirens on
+    /// cameras the user has switched off.</summary>
+    private int EmgCount(string field) => _emg == null ? 0 : _emg.Cameras.Count(c =>
+        EmgCamValue(c, field) ?? field switch
+        {
+            "email" => _emg.Email,
+            "webhook" => _emg.Webhook,
+            "siren" => _emg.Siren,
+            _ => _emg.Lights,
+        });
+
+    private void EmgCamCycle(string cam, string field)
+    {
+        if (_emg == null) return;
+        if (!_emg.Overrides.TryGetValue(cam, out var o))
+        {
+            o = new ApiEmergencyCamera();
+            _emg.Overrides[cam] = o;
+        }
+        bool? next = EmgCamValue(cam, field) switch { null => true, true => false, _ => null };
+        switch (field)
+        {
+            case "email": o.Email = next; break;
+            case "webhook": o.Webhook = next; break;
+            case "siren": o.Siren = next; break;
+            default: o.Lights = next; break;
+        }
+        // An all-auto camera carries no override at all.
+        if (o.Email == null && o.Webhook == null && o.Siren == null && o.Lights == null)
+            _emg.Overrides.Remove(cam);
+    }
+
+    /// <summary>Disarm straight from the toolbar. Must not depend on the settings
+    /// tab having been opened, so it posts the one field it changes.</summary>
+    private async Task DisarmEmergencyAsync()
+    {
+        if (_emgBusy) return;
+        _emgBusy = true;
+        _emgSaveSeq++;
+        _emgStatus = null;
+        try
+        {
+            var req = ApiRequest(HttpMethod.Put, "/api/admin/emergency");
+            req.Content = JsonContent.Create(new { enabled = false });
+            using var res = await Http.SendAsync(req);
+            if (res.IsSuccessStatusCode && await res.Content.ReadFromJsonAsync<ApiEmergency>() is { } cur)
+            {
+                ConfirmEmergency(cur);
+                _emgError = false;
+                _emgStatus = T["Emergency mode is off — your camera settings apply again."];
+            }
+            else
+            {
+                _emgError = true;
+                if (!await ReloadEmergencyAsync()) RevertEmergency();
+                _emgStatus = T.F("Save failed ({0}) — emergency mode is still {1}.",
+                    (int)res.StatusCode, _emgArmed ? T["armed"] : T["off"]);
+            }
+        }
+        catch (Exception ex)
+        {
+            _emgError = true;
+            if (!await ReloadEmergencyAsync()) RevertEmergency();
+            _emgStatus = T.F("Save failed ({0}) — emergency mode is still {1}.",
+                ex.Message, _emgArmed ? T["armed"] : T["off"]);
+        }
+        finally { _emgBusy = false; }
+    }
+
+    private async Task OpenEmergencyTabAsync()
+    {
+        await OpenServerSettingsAsync();
+        // Only if the tab exists for this session; a badge left over from a
+        // session that just ended must not open an empty panel.
+        if (_emg != null) _settingsTab = "experimental";
+    }
+
+    private Task ToggleEmergencyAsync()
+    {
+        // A click queued behind an in-flight save must not open the arm prompt.
+        if (_emg == null || _emgBusy) return Task.CompletedTask;
+        // Arming is loud and immediate, so it asks first; disarming never does.
+        if (!_emg.Enabled)
+        {
+            _emgArmConfirm = true;
+            return Task.CompletedTask;
+        }
+        return ArmEmergencyAsync(false);
+    }
+
+    private Task ArmEmergencyAsync(bool on)
+    {
+        if (_emg == null) return Task.CompletedTask;
+        _emgArmConfirm = false;
+        _emg.Enabled = on;
+        return SaveEmergencyAsync();
+    }
+
+    /// <summary>Server truth, re-read after a failed save so the tab can never
+    /// show an armed state (or a setting) the server did not accept.</summary>
+    private async Task<bool> ReloadEmergencyAsync()
+    {
+        try
+        {
+            using var res = await Http.SendAsync(ApiRequest(HttpMethod.Get, "/api/admin/emergency"));
+            if (!res.IsSuccessStatusCode) return false;
+            if (await res.Content.ReadFromJsonAsync<ApiEmergency>() is not { } cur) return false;
+            ConfirmEmergency(cur);
+            return true;
+        }
+        catch { return false; }
+    }
+
+    private async Task SaveEmergencyAsync()
+    {
+        if (_emg == null || _emgBusy) return;
+        _emgBusy = true;
+        _emgSaveSeq++;
+        _emgStatus = null;
+        try
+        {
+            var req = ApiRequest(HttpMethod.Put, "/api/admin/emergency");
+            req.Content = JsonContent.Create(new
+            {
+                enabled = _emg.Enabled,
+                email = _emg.Email,
+                webhook = _emg.Webhook,
+                siren = _emg.Siren,
+                lights = _emg.Lights,
+                cameras = _emg.Overrides.ToDictionary(kv => kv.Key, kv => new
+                {
+                    email = kv.Value.Email,
+                    webhook = kv.Value.Webhook,
+                    siren = kv.Value.Siren,
+                    lights = kv.Value.Lights,
+                }),
+            });
+            using var res = await Http.SendAsync(req);
+            if (res.IsSuccessStatusCode && await res.Content.ReadFromJsonAsync<ApiEmergency>() is { } saved)
+            {
+                // The header badge follows at once; waiting for the next poll would
+                // leave it claiming an emergency that is already over.
+                ConfirmEmergency(saved);
+                _emgError = false;
+                _emgStatus = saved.Enabled
+                    ? T["Emergency mode is armed."]
+                    : T["Emergency mode is off — your camera settings apply again."];
+            }
+            else
+            {
+                _emgError = true;
+                // Show what the server actually holds — an optimistic "off" while
+                // the sirens are still sounding is the one lie this must not tell.
+                if (!await ReloadEmergencyAsync()) RevertEmergency();
+                _emgStatus = T.F("Save failed ({0}) — emergency mode is still {1}.",
+                    (int)res.StatusCode, _emg?.Enabled == true ? T["armed"] : T["off"]);
+            }
+        }
+        catch (Exception ex)
+        {
+            _emgError = true;
+            if (!await ReloadEmergencyAsync()) RevertEmergency();
+            _emgStatus = T.F("Save failed ({0}) — emergency mode is still {1}.",
+                ex.Message, _emg?.Enabled == true ? T["armed"] : T["off"]);
+        }
+        finally { _emgBusy = false; }
+    }
+
     private async Task SaveAiAsync()
     {
         if (_ai == null || _aiBusy) return;
@@ -3190,6 +3735,10 @@
             await RefreshCamerasAsync();
             await RefreshEventsAsync();
             ApplyRoute(); // deep links (/cameras/{name}) need the camera list first
+            await ApplySettingsLinkAsync();
+            // Every path lands here — no saved layout, auth off, server unreachable —
+            // so the tiles can never stay hidden.
+            _layoutLoading = false;
             StateHasChanged();
             _ = PollLoopAsync();
             _ = BgTasksLoopAsync();
@@ -3701,7 +4250,10 @@
         var m = System.Text.RegularExpressions.Regex.Match(new Uri(Nav.Uri).Query, @"[?&]return=([^&]+)");
         if (!m.Success) return;
         var ret = Uri.UnescapeDataString(m.Groups[1].Value);
-        if (ret.StartsWith('/') && !ret.StartsWith("//") && !ret.Contains("://"))
+        // Browsers read "/\evil" as "//evil" and drop tabs and newlines before
+        // parsing, so those are refused along with the plain forms.
+        if (ret.Length > 1 && ret[0] == '/' && ret[1] != '/' && ret[1] != '\\'
+            && !ret.Contains("://") && !ret.Any(c => c == '\\' || char.IsControl(c)))
             Nav.NavigateTo(ret);
     }
 
@@ -3800,9 +4352,35 @@
         _authToken = null;
         _authUser = null;
         _authAdmin = false;
+        _emgArmed = false; // the badge is admin-only knowledge
         _showServerSettings = false; // admin tabs are gone with the session
         await JS.InvokeVoidAsync("neolink.lsSet", "neolink.auth", "");
         _showLogin = _authEnabled;
+    }
+
+    /// <summary>
+    /// The server answered 401 mid-session: our token is dead. Drop the credentials
+    /// NOW — Locked keys on _authUser, and while it stayed false every live player
+    /// stayed attached, so a session expiring behind the login overlay left cameras
+    /// streaming (and playing audio) underneath it: the stream WebSocket is only
+    /// authenticated at connect, so it keeps flowing until the client closes it.
+    /// Re-attaching after sign-in is automatic — AcceptTokenAsync changes every
+    /// WsUrl, and the next render reconciles.
+    /// </summary>
+    private async Task InvalidateSessionAsync()
+    {
+        _authToken = null;
+        _authUser = null;
+        _authAdmin = false;
+        _emgArmed = false; // the badge is admin-only knowledge
+        _showServerSettings = false; // admin tabs are gone with the session
+        _showLogin = true;
+        // Detach immediately instead of waiting for the next render: a hidden tab
+        // renders to nobody, and audio must not outlive the session it was paid for.
+        try { await ReconcilePlayersAsync(); }
+        catch (Exception ex) when (ex is JSDisconnectedException or TaskCanceledException)
+        {
+        }
     }
 
     private async Task DismissSetupAsync()
@@ -3989,6 +4567,9 @@
         _emailTestStatus = null; _webhookTestStatus = null;
         _ai = null; _aiStatus = null; _aiApiKey = ""; _aiAnthropicKey = "";
         _security = null; _securityStatus = null;
+        // Cleared with the rest: the tab must not survive into a session that is
+        // no longer an admin, and a stale arm prompt must never reopen primed.
+        _emg = null; _emgStatus = null; _emgArmConfirm = false; _emgConfig = false; _emgAdvanced = false;
         // Non-admins (and open installs) get the Connection tab; the admin-only
         // tabs and their loads are skipped entirely.
         if (!_authAdmin)
@@ -4018,6 +4599,14 @@
             }
         }
         catch { /* AI tab just stays hidden */ }
+        try
+        {
+            using var eres = await Http.SendAsync(ApiRequest(HttpMethod.Get, "/api/admin/emergency"));
+            if (eres.IsSuccessStatusCode)
+                if (await eres.Content.ReadFromJsonAsync<ApiEmergency>() is { } loaded)
+                    ConfirmEmergency(loaded);
+        }
+        catch { /* emergency tab just stays hidden */ }
         try
         {
             using var sres = await Http.SendAsync(ApiRequest(HttpMethod.Get, "/api/admin/security"));
@@ -4873,7 +5462,7 @@
             {
                 // Reachable, but a session is required (or ours expired).
                 _authEnabled = true;
-                _showLogin = true;
+                await InvalidateSessionAsync();
                 _cameras.Clear();
                 _error = null;
                 return true;
@@ -4913,6 +5502,7 @@
                 await RefreshCamerasAsync();
                 await RefreshEventsAsync();
                 await EvaluateBatteryTilesAsync();
+                await RefreshEmergencyArmedAsync();
                 // A hidden page renders to nobody, and this is the monolith — a
                 // full render-tree diff per tick per circuit. The first visible
                 // tick repaints everything the quiet ones skipped.
@@ -5195,7 +5785,7 @@
             if (res.StatusCode == System.Net.HttpStatusCode.Unauthorized)
             {
                 _authEnabled = true;
-                _showLogin = true;
+                await InvalidateSessionAsync();
                 return;
             }
             if (!res.IsSuccessStatusCode)

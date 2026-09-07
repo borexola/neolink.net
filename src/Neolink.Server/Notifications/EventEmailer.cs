@@ -54,6 +54,11 @@ public sealed class EventEmailer
         _events = events;
     }
 
+    /// <summary>Emergency mode overlay, when the feature is wired: while armed it
+    /// forces the configured channels on regardless of the per-camera opt-ins and
+    /// suspends the cooldown. Null leaves every decision to the camera settings.</summary>
+    public Func<EmergencySettings>? Emergency { get; set; }
+
     /// <summary>The camera's record-stream hub, for in-memory snapshot capture.</summary>
     public void RegisterHub(string camera, IStreamHub hub)
     {
@@ -116,25 +121,45 @@ public sealed class EventEmailer
         }
     }
 
+    /// <summary>Which channels this camera's events go out on: the per-camera
+    /// opt-ins, plus whatever emergency mode forces on while armed. One place, so
+    /// the snapshot tap and the send decision can never disagree.</summary>
+    private AlertChannels ChannelsFor(string camera, NotificationSettings s, out bool forced)
+    {
+        var cam = _settings.Get(camera);
+        var em = Emergency?.Invoke();
+        bool armed = em is { Enabled: true };
+        // "Forced" means the emergency is what puts a channel on for THIS camera.
+        // Armed alone is not enough: a camera the user excluded from emergency
+        // mode keeps its own cooldown like any other day.
+        forced = armed && ((Notifier.EmailReady(s) && em!.EmailFor(camera))
+                           || (Notifier.WebhookReady(s) && em!.WebhookFor(camera)));
+        var channels = AlertChannels.None;
+        if (Notifier.EmailReady(s) && (cam.EmailEvents || (armed && em!.EmailFor(camera))))
+            channels |= AlertChannels.Email;
+        if (Notifier.WebhookReady(s) && (cam.WebhookEvents || (armed && em!.WebhookFor(camera))))
+            channels |= AlertChannels.Webhook;
+        return channels;
+    }
+
     /// <summary>Config on, camera opted in, cooldown clear. The cooldown window
     /// is claimed up front so a burst cannot double-send; a failed hand-off to
     /// the queue gives it back (see <see cref="GuardedComposeAsync"/>).</summary>
-    private bool Claim(EventRecord rec, NotificationSettings s,
+    internal bool Claim(EventRecord rec, NotificationSettings s,
         out DateTime stamp, out DateTime? prev, out AlertChannels channels)
     {
         stamp = default;
         prev = null;
-        var cam = _settings.Get(rec.Camera);
-        channels = AlertChannels.None;
-        if (Notifier.EmailReady(s) && cam.EmailEvents) channels |= AlertChannels.Email;
-        if (Notifier.WebhookReady(s) && cam.WebhookEvents) channels |= AlertChannels.Webhook;
+        channels = ChannelsFor(rec.Camera, s, out bool forced);
         if (channels == AlertChannels.None) return false;
 
         lock (_gate)
         {
             if (_lastSent.TryGetValue(rec.Camera, out var last))
             {
-                if (s.EventCooldownMinutes > 0
+                // Emergency mode means every detection sends: the cooldown that
+                // normally protects an inbox is exactly what would hide them.
+                if (!forced && s.EventCooldownMinutes > 0
                     && DateTime.UtcNow - last < TimeSpan.FromMinutes(s.EventCooldownMinutes))
                 {
                     Log.Debug($"{rec.Camera}: event email skipped (cooldown, " +
@@ -330,6 +355,45 @@ public sealed class EventEmailer
         return (result, why);
     }
 
+    /// <summary>Should a detection that started at <paramref name="detectionUtc"/>
+    /// be attached to the offline alert for a camera last seen at
+    /// <paramref name="offlineSinceUtc"/>? The window is measured from when the
+    /// camera stopped answering, not from now — the offline threshold would
+    /// otherwise eat it, and any threshold past the lookback would silently turn
+    /// the feature off.</summary>
+    internal static bool ShouldAttach(NotificationSettings s, DateTime detectionUtc, DateTime offlineSinceUtc) =>
+        s.OfflineAttachSnapshots
+        && (s.OfflineSnapshotLookbackMinutes <= 0
+            || offlineSinceUtc - detectionUtc <= TimeSpan.FromMinutes(s.OfflineSnapshotLookbackMinutes));
+
+    /// <summary>Snapshots from a camera's most recent detection, for its offline
+    /// alert: what the camera last saw before it stopped answering. Empty when the
+    /// feature is off, nothing was detected, or the last detection is older than
+    /// the configured lookback.</summary>
+    public async Task<IReadOnlyList<EmailAttachment>> LastDetectionImagesAsync(
+        string camera, DateTime offlineSinceUtc)
+    {
+        var s = _store.Snapshot();
+        if (!s.OfflineAttachSnapshots) return Array.Empty<EmailAttachment>();
+        try
+        {
+            if (_events.List(camera, limit: 1, excludeWakeOnly: true).FirstOrDefault() is not { } rec)
+                return Array.Empty<EmailAttachment>();
+            if (!ShouldAttach(s, rec.StartUtc, offlineSinceUtc))
+                return Array.Empty<EmailAttachment>();
+            int want = Math.Clamp(s.OfflineSnapshotCount, 1, 10);
+            double span = Math.Max(1, (rec.EndUtc - rec.StartUtc).TotalSeconds);
+            // Always samples the clip: the live tap the event used is long gone.
+            var (shots, _) = await SnapshotsAsync(rec, want, 0, span, "clip").ConfigureAwait(false);
+            return shots;
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"{camera}: offline-alert snapshots unavailable: {Log.Flatten(ex)}");
+            return Array.Empty<EmailAttachment>();
+        }
+    }
+
     /// <summary>Frames decoded per pass (~30 MB of 720p JPEG at the extreme).
     /// Must never bind before the clip ends, or snapshots bunch at its start.</summary>
     internal const int MaxDecodedFrames = 300;
@@ -350,7 +414,7 @@ public sealed class EventEmailer
     internal static double RetryRate(int want, double fps, int got) =>
         Math.Min(10, want * 2.5 * fps / Math.Max(1, got));
 
-    private static async Task<List<byte[]>> SampleClipAsync(string ffmpeg, string clipPath,
+    internal static async Task<List<byte[]>> SampleClipAsync(string ffmpeg, string clipPath,
         double skipSeconds, double spanSeconds, int want)
     {
         double fps = InitialRate(want, spanSeconds);
@@ -385,12 +449,16 @@ public sealed class EventEmailer
     private static Task<List<byte[]>> DecodeAsync(string ffmpeg, string clipPath,
         double skipSeconds, double fps) =>
         RunDecodeAsync(ffmpeg, new[] { "-i", "pipe:0" }, VideoFilter(skipSeconds, fps),
-            // Feed through the vault (decrypts transparently; plaintext passes as-is).
-            async (stdin, ct) =>
-            {
-                await using var src = FootageVault.OpenRead(clipPath);
-                await src.CopyToAsync(stdin, ct).ConfigureAwait(false);
-            });
+            (stdin, ct) => FeedClipAsync(clipPath, stdin, ct));
+
+    /// <summary>The clip through the vault (encrypted footage decrypts on the way),
+    /// in pipe order: a finished clip keeps its index behind the media, which a
+    /// reader on stdin cannot go back for.</summary>
+    internal static async Task FeedClipAsync(string clipPath, Stream stdin, CancellationToken ct)
+    {
+        await using var src = FootageVault.OpenRead(clipPath);
+        await Mp4Pipe.Open(src).CopyToAsync(stdin, ct).ConfigureAwait(false);
+    }
 
     /// <summary>Decodes tapped access units: an elementary stream fed from RAM —
     /// the clip file is never opened.</summary>
@@ -505,10 +573,10 @@ public sealed class EventEmailer
     {
         if (!string.Equals(s.EventSnapshotMode, "memory", StringComparison.OrdinalIgnoreCase))
             return;
-        var cam = _settings.Get(rec.Camera);
-        bool armed = (Notifier.EmailReady(s) && cam.EmailEvents)
-                     || (Notifier.WebhookReady(s) && cam.WebhookEvents);
-        if (!armed) return;
+        // Same channel decision as the send: an emergency-forced event needs its
+        // tap too, or memory mode would attach nothing to the very events the
+        // feature exists to deliver.
+        if (ChannelsFor(rec.Camera, s, out _) == AlertChannels.None) return;
         IStreamHub? hub;
         lock (_gate) _hubs.TryGetValue(rec.Camera, out hub);
         if (hub?.Codec == null)

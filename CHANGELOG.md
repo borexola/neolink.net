@@ -4,6 +4,30 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
+## 1.0.9 — unreleased
+
+### Added
+
+- **Emergency mode (beta).** One switch for when something is actually happening. Arm it and every camera's detections go out through whichever channels you have set up, ignoring the per-camera notification switches and the cooldown that normally spaces alerts out. The cameras you pick sound their siren and turn their lights on the moment you arm it, and hold them until you switch it off. It lives under Server settings → Experimental, tells you exactly what is about to happen before it arms, and shows up in Home Assistant as an "Emergency mode" switch on the Neolink.NET Server device, so an automation or a dashboard button can arm it too. While it is armed the whole system is brought live: a camera you had suspended reconnects, one sitting in privacy mode starts seeing again, and battery cameras stop dozing (which uses their charge faster) — all of it put back exactly as it was when you switch emergency mode off. The toolbar pulses red while it is armed and carries its own off switch. It only forwards detections from cameras that record events. Nothing is written to your cameras' own settings: switch it off and sirens stop and lights go back to how they were (after a server restart while armed, lights are switched off rather than restored, since the earlier state is no longer known).
+- **Camera-offline alerts can carry what the camera last saw.** Turn it on under Notifications and the alert arrives with snapshots from the last detection before the camera stopped answering, so a cut feed still tells you what was there. Off by default, and you choose how many images and how recent that detection has to be.
+
+### Changed
+
+- **The event player fits a phone.** Playback speed and recording quality now share one row at every screen width, separated by a thin divider instead of the SPEED and QUALITY headings that pushed them onto two lines; the chips say what they are, and a tooltip names the group.
+- **Search as you type.** The Search button under AI Search is gone: the box searches by itself a second after you stop typing, or the moment you press Enter, and Escape clears it. A single letter never fires a search. The BETA badge has come off, and on a phone the heading steps aside so the field gets the whole row.
+- **Small tidy-ups.** The NEW badges on Detection zone, Notifications and Webhook settings have come off. The Events page stops polling while its browser tab is hidden and catches up the moment you look again.
+
+### Fixed
+
+- **A siren that could not be silenced no longer lets its camera doze.** When switching emergency mode off failed to reach a battery camera, the camera was allowed back to sleep with its siren still latched, where the retry could not reach it. It now stays awake until the siren is confirmed off.
+- **Search fixes.** "before Tuesday" reaches all the way back instead of stopping 31 days earlier, and words with a hyphen or an apostrophe ("high-vis", "o'clock") find their matches.
+- **The threat filter no longer hides events that have no AI rating**, so it cannot strand you on "No events match the threat filter." after AI descriptions are switched off.
+- **A session that expires behind the sign-in screen now stops every live stream at once.** The server's refusal used to bring up the sign-in overlay while the cameras carried on streaming — and playing audio — underneath it, because a live stream is only checked when it connects. Signing in again reconnects them.
+- **Sign-in return links are checked more strictly**, so a crafted link cannot bounce you to another site after signing in.
+- **Translations.** The battery tile's "Watch now" and the zone editor's "Watch" had shared one translation, and the "NEW" badge was untranslated.
+- **No more flash of empty tiles on a page refresh.** The home page used to paint a default grid of empty "+" tiles first and then snap to your saved layout once it had been read back. It now shows a small "Loading…" panel until the layout is known, then paints it once.
+- **Event notifications no longer lose their snapshots when the clip has already finished.** A finished recording keeps its index at the end of the file, and the snapshot sampler fed the file to the decoder front to back, so the decoder never reached the index and gave up without a single frame. Those emails and webhooks then carried only the thumbnail. The sampler now hands the index over first, and snapshots come out of finished and still-recording clips alike, encrypted footage included.
+
 ## 1.0.8
 
 ### Changed

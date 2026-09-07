@@ -811,7 +811,7 @@
                     </div>
                 }
                 <div class="control-row">
-                    <span>@T["Detection zone"] <span class="new-tag">@T["NEW"]</span></span>
+                    <span>@T["Detection zone"]</span>
                     <button class="chip" @onclick="OpenZoneAsync">@T["Edit zone…"]</button>
                 </div>
                 <div class="notice small">
@@ -1066,7 +1066,7 @@
                        a mail setup it sits off and disabled, and the line below
                        says exactly what to do about it. *@
                     <div class="campanel-divider"></div>
-                    <div class="campanel-section-title">@UiIcon.Render("bell", 13) @T["NOTIFICATIONS"] <span class="new-tag">@T["NEW"]</span></div>
+                    <div class="campanel-section-title">@UiIcon.Render("bell", 13) @T["NOTIFICATIONS"]</div>
                     <div class="control-row">
                         <span>@T["Email events"]</span>
                         <button class="chip @(_recording.EmailEvents ? "" : "chip-off")"

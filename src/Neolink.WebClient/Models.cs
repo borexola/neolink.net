@@ -240,7 +240,43 @@ public sealed class ApiNotifications
     public string WebhookPreset { get; set; } = "json";
     public bool WebhookServerAlerts { get; set; } = true;
     public string PublicUrl { get; set; } = "";
+    public bool OfflineAttachSnapshots { get; set; }
+    public int OfflineSnapshotCount { get; set; } = 3;
+    public int OfflineSnapshotLookbackMinutes { get; set; } = 60;
     public List<string> Cameras { get; set; } = new();
+}
+
+/// <summary>One camera's emergency overrides; null follows the all-cameras value.</summary>
+public sealed class ApiEmergencyCamera
+{
+    public bool? Email { get; set; }
+    public bool? Webhook { get; set; }
+    public bool? Siren { get; set; }
+    public bool? Lights { get; set; }
+}
+
+/// <summary>A camera whose siren or light emergency mode could not set.</summary>
+public sealed class ApiEmergencyIssue
+{
+    public string Camera { get; set; } = "";
+    public string Reason { get; set; } = "";
+}
+
+/// <summary>GET/PUT /api/admin/emergency — emergency mode (beta).</summary>
+public sealed class ApiEmergency
+{
+    public bool Enabled { get; set; }
+    public bool Email { get; set; } = true;
+    public bool Webhook { get; set; } = true;
+    public bool Siren { get; set; }
+    public bool Lights { get; set; }
+    public DateTime? ArmedUtc { get; set; }
+    public List<string> Cameras { get; set; } = new();
+    public bool EmailAvailable { get; set; }
+    public bool WebhookAvailable { get; set; }
+    public bool DetectionsAvailable { get; set; } = true;
+    public List<ApiEmergencyIssue> Issues { get; set; } = new();
+    public Dictionary<string, ApiEmergencyCamera> Overrides { get; set; } = new();
 }
 
 /// <summary>GET /api/auth/status — whether/how the UI must authenticate.

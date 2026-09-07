@@ -1841,6 +1841,10 @@ public static class SelfTest
                 cams, now);
             Assert(t2 != null && t2.Labels is ["vehicle"] && t2.Keywords is ["grey"],
                 "translated keyword hygiene: synonyms become labels, camera names drop");
+            var vis = new Recording.EventRecord { Id = "v", Camera = "c", AiDescription = "A worker in a high-vis jacket at 5 o'clock." };
+            Assert(Recording.EventSearch.Score(vis, ["high-vis"]) == 2 && Recording.EventSearch.Score(vis, ["o'clock"]) == 2,
+                "hyphenated and apostrophised keywords match the description's split words");
+            Assert(Recording.EventSearch.Score(vis, ["high-viz"]) == 0, "…but only when every part is there");
         });
 
         Test("wake window holds through a camera all-clear (no truncated tentatives)", () =>
@@ -6870,6 +6874,657 @@ public static class SelfTest
             Console.WriteLine("(pass --config <path-to-rust-neolink-repo> to also run protocol sample tests)");
         }
 
+        Test("mp4 pipe: a trailing index moves ahead of the media for a non-seeking reader", () =>
+        {
+            static byte[] U32(uint v) { var b = new byte[4]; System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(b, v); return b; }
+            static byte[] Cat(params byte[][] parts) { var ms = new MemoryStream(); foreach (var p in parts) ms.Write(p); return ms.ToArray(); }
+            static byte[] Box(string type, params byte[][] parts) { var body = Cat(parts); return Cat(U32((uint)(8 + body.Length)), Encoding.ASCII.GetBytes(type), body); }
+            static byte[] Full(string type, params byte[][] parts) => Box(type, new byte[4], Cat(parts));
+            static string TypeAt(byte[] buf, int pos) => Encoding.ASCII.GetString(buf, pos + 4, 4);
+            static uint ReadU32(byte[] buf, int pos) => System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(buf.AsSpan(pos));
+
+            var ftyp = Box("ftyp", Encoding.ASCII.GetBytes("iso5"), U32(0));
+            var media = Enumerable.Range(0, 100).Select(i => (byte)(i * 7)).ToArray();
+            var free = Box("free", media);
+            uint chunk0 = (uint)(ftyp.Length + 8), chunk1 = chunk0 + 40;
+            var stbl = Box("stbl",
+                Full("stss", U32(3), U32(1), U32(5), U32(9)),
+                Full("stco", U32(2), U32(chunk0), U32(chunk1)));
+            var hdlr = Full("hdlr", U32(0), Encoding.ASCII.GetBytes("vide"), new byte[12]);
+            var mvhd = Full("mvhd", U32(0), U32(0), U32(1000), U32(22131), new byte[80]);
+            var moov = Box("moov", mvhd, Box("trak", Box("mdia", hdlr, Box("minf", stbl))));
+            var classic = Cat(ftyp, free, moov);
+
+            var pipe = Mp4Pipe.Open(new MemoryStream(classic));
+            Assert(pipe.Rewritten, "an index behind the media is moved");
+            AssertEq(pipe.VideoKeyframes, 3);
+            Assert(Math.Abs((pipe.DurationSeconds ?? 0) - 22.131) < 1e-9, "duration read from mvhd");
+            var outMs = new MemoryStream();
+            pipe.CopyToAsync(outMs, default).GetAwaiter().GetResult();
+            var piped = outMs.ToArray();
+            AssertEq(piped.Length, classic.Length);
+            AssertEq(TypeAt(piped, 0), "ftyp");
+            AssertEq(TypeAt(piped, ftyp.Length), "moov");
+            AssertEq(TypeAt(piped, ftyp.Length + moov.Length), "mdat");
+            Assert(piped.AsSpan(ftyp.Length + moov.Length + 8, media.Length).SequenceEqual(media), "the media bytes follow the index untouched");
+            int stco = piped.AsSpan().IndexOf(Encoding.ASCII.GetBytes("stco"));
+            AssertEq(ReadU32(piped, stco + 12), (uint)(chunk0 + moov.Length));
+            AssertEq(ReadU32(piped, stco + 16), (uint)(chunk1 + moov.Length));
+            Assert(ReadU32(classic, classic.AsSpan().IndexOf(Encoding.ASCII.GetBytes("stco")) + 12) == chunk0, "the source index is left alone");
+
+            var fragmented = Cat(ftyp, moov, Box("moof", new byte[16]), Box("mdat", media));
+            var asIs = Mp4Pipe.Open(new MemoryStream(fragmented));
+            Assert(!asIs.Rewritten && asIs.VideoKeyframes == 3, "an index ahead of the media stays put");
+            var out2 = new MemoryStream();
+            asIs.CopyToAsync(out2, default).GetAwaiter().GetResult();
+            Assert(out2.ToArray().AsSpan().SequenceEqual(fragmented), "copied byte for byte");
+
+            var growing = fragmented[..^7];
+            var cut = Mp4Pipe.Open(new MemoryStream(growing));
+            var out3 = new MemoryStream();
+            cut.CopyToAsync(out3, default).GetAwaiter().GetResult();
+            Assert(!cut.Rewritten && out3.ToArray().AsSpan().SequenceEqual(growing), "a file cut mid-box (still being written) copies as-is");
+
+            var tmp = Path.Combine(Path.GetTempPath(), "neolink-selftest-clip-" + Guid.NewGuid().ToString("n") + ".mp4");
+            File.WriteAllBytes(tmp, classic);
+            try
+            {
+                var fed = new MemoryStream();
+                Notifications.EventEmailer.FeedClipAsync(tmp, fed, default).GetAwaiter().GetResult();
+                Assert(fed.ToArray().AsSpan().SequenceEqual(piped), "event-email snapshots feed the clip in pipe order");
+            }
+            finally
+            {
+                try { File.Delete(tmp); } catch { }
+            }
+        });
+
+        Test("email snapshots: a finalized clip samples through the pipe (NEOLINK_FACE_CLIP)", () =>
+        {
+            var clip = Environment.GetEnvironmentVariable("NEOLINK_FACE_CLIP");
+            if (string.IsNullOrEmpty(clip) || !File.Exists(clip) || Ffmpeg.ExePath is not { } ffmpeg)
+            {
+                Console.WriteLine("    (NEOLINK_FACE_CLIP unset or no ffmpeg — skipped)");
+                return;
+            }
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var frames = Notifications.EventEmailer.SampleClipAsync(ffmpeg, clip, 0, 20, 5).GetAwaiter().GetResult();
+            Console.WriteLine($"    {frames.Count} snapshot(s) in {sw.Elapsed.TotalSeconds:0.0}s");
+            AssertEq(frames.Count, 5);
+            var trimmed = Notifications.EventEmailer.SampleClipAsync(ffmpeg, clip, 5, 15, 3).GetAwaiter().GetResult();
+            AssertEq(trimmed.Count, 3);
+        });
+
+        Test("emergency mode: settings resolve per camera, persist, and stamp the arm time", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var store = new Notifications.EmergencyStore(dir);
+                // No cameras: the deterrent pass is a no-op, so this exercises the
+                // persistence and arm/disarm bookkeeping on its own.
+                var mode = new Notifications.EmergencyMode(store,
+                    () => Array.Empty<Notifications.EmergencyCamera>());
+                int changed = 0;
+                mode.Changed += () => { changed++; return Task.CompletedTask; };
+
+                var next = store.Snapshot();
+                Assert(next is { Enabled: false, Email: true, Webhook: true, Siren: false, Lights: false },
+                    "a fresh install is disarmed, with the notify channels pre-picked and nothing loud");
+                next.Enabled = true;
+                next.Siren = true;
+                next.Cameras["Quiet"] = new Notifications.EmergencyCameraOptions { Siren = false };
+                var armed = mode.ApplyAsync(next, default).GetAwaiter().GetResult();
+                AssertEq(changed, 1);
+                Assert(armed.ArmedUtc != null, "arming stamps the time");
+                Assert(armed.SirenFor("Loud"), "an unlisted camera follows the all-cameras choice");
+                Assert(!armed.SirenFor("Quiet"), "a per-camera override wins over it");
+                Assert(armed.EmailFor("Quiet"), "an override only covers the fields it sets");
+
+                var reloaded = new Notifications.EmergencyStore(dir).Snapshot();
+                Assert(reloaded is { Enabled: true, Siren: true }, "armed state survives a restart");
+                Assert(!reloaded.SirenFor("Quiet"), "per-camera overrides survive with it");
+
+                var stamp = armed.ArmedUtc;
+                var again = mode.ApplyAsync(reloaded, default).GetAwaiter().GetResult();
+                AssertEq(again.ArmedUtc, stamp); // editing while armed must not reset "since"
+                var off = mode.SetEnabledAsync(false, default).GetAwaiter().GetResult();
+                Assert(off.ArmedUtc == null, "disarming clears the stamp");
+                Assert(off.Siren, "the options it was armed with are kept for next time");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        });
+
+        Test("emergency mode latches sirens and lights, and gives every light back on disarm", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var lit = new DeterrentControl("Lit");
+                var ownLight = new DeterrentControl("OwnLight");
+                var noGear = new DeterrentControl("Bare", siren: false, light: false);
+                ownLight.LightState = "open"; // the user had this floodlight on already
+                var cams = new List<Notifications.EmergencyCamera>
+                {
+                    new Notifications.EmergencyCamera("Lit", lit), new Notifications.EmergencyCamera("OwnLight", ownLight), new Notifications.EmergencyCamera("Bare", noGear),
+                };
+                var store = new Notifications.EmergencyStore(dir);
+                var mode = new Notifications.EmergencyMode(store, () => cams);
+
+                var next = store.Snapshot();
+                next.Enabled = true;
+                next.Siren = true;
+                next.Lights = true;
+                // Only "Lit" gets the light; the others must be left untouched by it.
+                next.Cameras["OwnLight"] = new Notifications.EmergencyCameraOptions { Lights = false };
+                mode.ApplyAsync(next, default).GetAwaiter().GetResult();
+                AssertEq(lit.SirenState, true);
+                AssertEq(lit.LightState, "open");
+                AssertEq(ownLight.LightWrites, 0);
+                Assert(noGear.SirenState == null, "a camera with no siren is not asked to sound one");
+                AssertEq(noGear.LightWrites, 0);
+
+                mode.SetEnabledAsync(false, default).GetAwaiter().GetResult();
+                AssertEq(lit.SirenState, false);
+                AssertEq(lit.LightState, "close");
+                Assert(ownLight.LightWrites == 0 && ownLight.LightState == "open",
+                    "disarming never touches a light emergency mode did not turn on");
+
+                // A restart while armed: fresh instance, empty prior-light memory,
+                // and the camera's light is ALREADY forced on. Reading it back as
+                // the state to restore would strand it on forever.
+                lit.LightState = "open";
+                var armed = store.Snapshot();
+                armed.Enabled = true;
+                armed.Siren = true;
+                armed.Lights = true;
+                armed.Cameras.Clear();
+                store.Save(armed);
+                var resumed = new Notifications.EmergencyMode(
+                    new Notifications.EmergencyStore(dir), () => cams);
+                resumed.ResumeAsync(default).GetAwaiter().GetResult();
+                AssertEq(lit.SirenState, true);
+                resumed.SetEnabledAsync(false, default).GetAwaiter().GetResult();
+                AssertEq(lit.LightState, "close");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        });
+
+        Test("emergency mode retries only offline cameras and never nags one that has no siren", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var sleepy = new DeterrentControl("Sleepy") { Offline = true };
+                // Advertises a siren but rejects the command — a refusal, not an outage.
+                var refuser = new DeterrentControl("Refuser", light: false) { RefusesSiren = true };
+                var bare = new DeterrentControl("Bare", siren: false, light: false);
+                var cams = new List<Notifications.EmergencyCamera>
+                {
+                    new Notifications.EmergencyCamera("Sleepy", sleepy), new Notifications.EmergencyCamera("Refuser", refuser), new Notifications.EmergencyCamera("Bare", bare),
+                };
+                var store = new Notifications.EmergencyStore(dir);
+                var mode = new Notifications.EmergencyMode(store, () => cams);
+
+                var next = store.Snapshot();
+                next.Enabled = true;
+                next.Siren = true;
+                next.Lights = true;
+                mode.ApplyAsync(next, default).GetAwaiter().GetResult();
+                var issues = mode.Issues.OrderBy(i => i.Camera).ToList();
+                AssertEq(issues.Count, 2); // Sleepy's siren AND light failed: one line, not two
+                AssertEq(issues[0].Camera, "Refuser");
+                Assert(issues[0].Reason.StartsWith("siren on:"), "a refusal is reported with the command and reason");
+                AssertEq(issues[1].Camera, "Sleepy");
+                AssertEq(issues[1].Reason, "offline");
+                AssertEq(refuser.SirenWrites, 1);
+                AssertEq(bare.SirenWrites, 0);
+
+                // Still asleep: retried, still failing. The refusal is NOT retried,
+                // but its issue stays: nothing will ever sound that siren.
+                mode.RetryPendingAsync(default).GetAwaiter().GetResult();
+                AssertEq(sleepy.SirenWrites, 0);
+                AssertEq(refuser.SirenWrites, 1);
+                AssertEq(mode.Issues.Count, 2);
+
+                // Editing options while armed must not wipe the refusal either.
+                mode.ApplyAsync(cur => { cur.Email = false; return cur; }, default).GetAwaiter().GetResult();
+                Assert(mode.Issues.Any(i => i.Camera == "Refuser"), "a refused siren stays reported while armed");
+
+                // Sleepy wakes up: the sweep latches it and its issue clears.
+                sleepy.Offline = false;
+                mode.RetryPendingAsync(default).GetAwaiter().GetResult();
+                AssertEq(sleepy.SirenState, true);
+                AssertEq(sleepy.LightState, "open");
+                AssertEq(mode.Issues.Count, 1);
+
+                mode.SetEnabledAsync(false, default).GetAwaiter().GetResult();
+                AssertEq(sleepy.SirenState, false);
+                AssertEq(sleepy.LightState, "close");
+                Assert(refuser.SirenWrites == 1 && bare.SirenWrites == 0,
+                    "a camera whose siren never started is never told to stop one, so it cannot refuse and be retried forever");
+                AssertEq(mode.Issues.Count, 0);
+                mode.RetryPendingAsync(default).GetAwaiter().GetResult();
+                AssertEq(refuser.SirenWrites, 1);
+
+                // Asleep for the whole arm..disarm: nothing was ever sent to it, so
+                // nothing is owed, reported, or retried once it wakes.
+                int writes = sleepy.SirenWrites;
+                sleepy.Offline = true;
+                mode.SetEnabledAsync(true, default).GetAwaiter().GetResult();
+                mode.SetEnabledAsync(false, default).GetAwaiter().GetResult();
+                AssertEq(mode.Issues.Count, 0);
+                sleepy.Offline = false;
+                mode.RetryPendingAsync(default).GetAwaiter().GetResult();
+                AssertEq(sleepy.SirenWrites, writes);
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        });
+
+        Test("emergency mode silences a siren that was latched before a restart, even when disarmed before the camera returns", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                // Before the restart: armed, siren latched. After it: the camera is
+                // unreachable, and the user disarms before it comes back.
+                var late = new DeterrentControl("Late") { Offline = true, SirenState = true, LightState = "open" };
+                var cams = new List<Notifications.EmergencyCamera> { new Notifications.EmergencyCamera("Late", late) };
+                var armed = new Notifications.EmergencySettings { Enabled = true, Siren = true, Lights = true };
+                new Notifications.EmergencyStore(dir).Save(armed);
+
+                var mode = new Notifications.EmergencyMode(new Notifications.EmergencyStore(dir), () => cams);
+                mode.ResumeAsync(default).GetAwaiter().GetResult();
+                AssertEq(mode.Issues.Count, 1);
+                mode.SetEnabledAsync(false, default).GetAwaiter().GetResult();
+                AssertEq(late.SirenWrites, 0); // still unreachable
+
+                late.Offline = false;
+                mode.RetryPendingAsync(default).GetAwaiter().GetResult();
+                AssertEq(late.SirenState, false);
+                AssertEq(late.LightState, "close");
+                AssertEq(mode.Issues.Count, 0);
+                mode.RetryPendingAsync(default).GetAwaiter().GetResult();
+                AssertEq(late.SirenWrites, 1); // nothing left to retry
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        });
+
+        Test("emergency mode: a dropped link is retried, a disarm before the resume pass still silences, and a restart while disarmed clears leftovers", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var cam = new DeterrentControl("Cam");
+                var noSiren = new DeterrentControl("Mute", siren: false);
+                var cams = new List<Notifications.EmergencyCamera> { new Notifications.EmergencyCamera("Cam", cam), new Notifications.EmergencyCamera("Mute", noSiren) };
+                var store = new Notifications.EmergencyStore(dir);
+                var mode = new Notifications.EmergencyMode(store, () => cams);
+                var armed = store.Snapshot();
+                armed.Enabled = true;
+                armed.Siren = true;
+                armed.Lights = true;
+                mode.ApplyAsync(armed, default).GetAwaiter().GetResult();
+                AssertEq(cam.SirenState, true);
+
+                // The link drops (IOException, not "offline") exactly as the user
+                // disarms: the latch must survive and the sweep must finish the job.
+                cam.Flaky = 1;
+                mode.SetEnabledAsync(false, default).GetAwaiter().GetResult();
+                AssertEq(cam.SirenState, true);
+                Assert(mode.Issues.Any(i => i.Camera == "Cam" && i.Reason.StartsWith("siren off:")),
+                    "an unacknowledged siren-off is reported");
+                mode.RetryPendingAsync(default).GetAwaiter().GetResult();
+                AssertEq(cam.SirenState, false);
+                AssertEq(cam.LightState, "close");
+                AssertEq(mode.Issues.Count, 0);
+
+                // Restart while ARMED, then disarm in the window before the resume
+                // pass has run: the fresh process must still reach the sirens.
+                mode.ApplyAsync(armed, default).GetAwaiter().GetResult();
+                File.Delete(Path.Combine(dir, "emergency-runtime.json")); // an install from before the file existed
+                var fresh = new Notifications.EmergencyMode(new Notifications.EmergencyStore(dir), () => cams);
+                fresh.SetEnabledAsync(false, default).GetAwaiter().GetResult();
+                AssertEq(cam.SirenState, false);
+                AssertEq(cam.LightState, "close");
+                Assert(noSiren.SirenWrites == 0, "a camera without a siren is not told to stop one, even after a restart");
+                AssertEq(fresh.Issues.Count, 0);
+
+                // Restart while DISARMED, with a siren still latched on a camera
+                // that was offline at the disarm: the new process must remember
+                // it and switch it off once the camera returns.
+                var again = new Notifications.EmergencyMode(new Notifications.EmergencyStore(dir), () => cams);
+                again.ApplyAsync(armed, default).GetAwaiter().GetResult();
+                AssertEq(cam.SirenState, true);
+                cam.Offline = true;
+                again.SetEnabledAsync(false, default).GetAwaiter().GetResult();
+                AssertEq(cam.SirenState, true); // unreachable, still sounding
+                var afterRestart = new Notifications.EmergencyMode(new Notifications.EmergencyStore(dir), () => cams);
+                afterRestart.ResumeAsync(default).GetAwaiter().GetResult();
+                cam.Offline = false;
+                afterRestart.RetryPendingAsync(default).GetAwaiter().GetResult();
+                AssertEq(cam.SirenState, false);
+                AssertEq(cam.LightState, "close");
+                AssertEq(afterRestart.Issues.Count, 0);
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        });
+
+        Test("emergency mode brings every camera live and hands each state back on disarm", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var suspended = new DeterrentControl("Suspended");
+                var dark = new DeterrentControl("Dark") { Privacy = true };
+                var dozing = new DeterrentControl("Dozing");
+                var normal = new DeterrentControl("Normal");
+                bool suspendedIsSuspended = true, dozingHeld = false, normalHeld = false;
+                var cams = new List<Notifications.EmergencyCamera>
+                {
+                    new("Suspended", suspended)
+                    {
+                        Suspended = () => suspendedIsSuspended,
+                        SetSuspended = v => suspendedIsSuspended = v,
+                        PrivacyOn = () => suspended.Privacy,
+                    },
+                    new("Dark", dark) { PrivacyOn = () => dark.Privacy },
+                    new("Dozing", dozing)
+                    {
+                        PrivacyOn = () => dozing.Privacy,
+                        SetHoldAwake = v => dozingHeld = v,
+                    },
+                    // Already live and never dark: must be left completely alone.
+                    new("Normal", normal)
+                    {
+                        Suspended = () => false,
+                        SetSuspended = _ => throw new InvalidOperationException("must not touch a live camera"),
+                        PrivacyOn = () => normal.Privacy,
+                        SetHoldAwake = v => normalHeld = v,
+                    },
+                };
+                var store = new Notifications.EmergencyStore(dir);
+                var mode = new Notifications.EmergencyMode(store, () => cams);
+
+                mode.SetEnabledAsync(true, default).GetAwaiter().GetResult();
+                Assert(!suspendedIsSuspended, "a suspended camera reconnects");
+                Assert(!dark.Privacy, "a camera sitting in privacy mode can see again");
+                Assert(dozingHeld && normalHeld, "battery cameras stop dozing while armed");
+                AssertEq(normal.PrivacyWrites, 0);
+                AssertEq(suspended.PrivacyWrites, 0); // it was suspended, not dark
+
+                mode.SetEnabledAsync(false, default).GetAwaiter().GetResult();
+                Assert(suspendedIsSuspended, "the suspension the user chose comes back");
+                Assert(dark.Privacy, "privacy mode comes back");
+                Assert(!dozingHeld && !normalHeld, "battery cameras are allowed to doze again");
+                AssertEq(normal.PrivacyWrites, 0);
+                Assert(!normal.Privacy, "a camera that was never dark is not put INTO privacy mode by disarming");
+                AssertEq(mode.Issues.Count, 0);
+
+                // Armed a second time with the states already as emergency mode
+                // wants them: nothing to force, nothing to restore afterwards.
+                int darkWrites = dark.PrivacyWrites;
+                dark.Privacy = false;
+                mode.SetEnabledAsync(true, default).GetAwaiter().GetResult();
+                mode.SetEnabledAsync(false, default).GetAwaiter().GetResult();
+                AssertEq(dark.PrivacyWrites, darkWrites);
+                Assert(!dark.Privacy, "a camera the user took out of privacy mode stays out of it");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        });
+
+        Test("emergency mode reaches a camera that was unreachable for the privacy change, both ways", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                // A dark battery camera with no siren and no light: nothing else is
+                // pending for it, so only a privacy-aware sweep can ever reach it.
+                var dark = new DeterrentControl("Dark", siren: false, light: false)
+                {
+                    Privacy = true,
+                    Offline = true,
+                };
+                var cams = new List<Notifications.EmergencyCamera>
+                {
+                    new("Dark", dark) { PrivacyOn = () => dark.Privacy },
+                };
+                var store = new Notifications.EmergencyStore(dir);
+                var mode = new Notifications.EmergencyMode(store, () => cams);
+
+                mode.SetEnabledAsync(true, default).GetAwaiter().GetResult();
+                Assert(dark.Privacy, "it could not be reached, so it is still dark");
+                Assert(mode.Issues.Any(i => i.Camera == "Dark"), "and that is reported, not silently dropped");
+                dark.Offline = false;
+                mode.RetryPendingAsync(default).GetAwaiter().GetResult();
+                Assert(!dark.Privacy, "the sweep lifts privacy mode once the camera answers");
+                AssertEq(mode.Issues.Count, 0);
+
+                // Disarm while it is away again: the restore must be owed, retried,
+                // and completed — not forgotten because nothing else was pending.
+                dark.Offline = true;
+                mode.SetEnabledAsync(false, default).GetAwaiter().GetResult();
+                Assert(!dark.Privacy, "still unreachable, so not yet restored");
+                dark.Offline = false;
+                mode.RetryPendingAsync(default).GetAwaiter().GetResult();
+                Assert(dark.Privacy, "the privacy mode the user configured comes back");
+                AssertEq(mode.Issues.Count, 0);
+                // And nothing is owed any more, so the sweep goes quiet.
+                int writes = dark.PrivacyWrites;
+                mode.RetryPendingAsync(default).GetAwaiter().GetResult();
+                AssertEq(dark.PrivacyWrites, writes);
+
+                // A camera that has not yet said whether it is dark must be looked
+                // at again, not written off as "not dark".
+                bool? pushed = null;
+                var quiet = new DeterrentControl("Quiet", siren: false, light: false) { Privacy = true };
+                var cams2 = new List<Notifications.EmergencyCamera>
+                {
+                    new("Quiet", quiet) { PrivacyOn = () => pushed },
+                };
+                var mode2 = new Notifications.EmergencyMode(
+                    new Notifications.EmergencyStore(dir + "b"), () => cams2);
+                Directory.CreateDirectory(dir + "b");
+                mode2.SetEnabledAsync(true, default).GetAwaiter().GetResult();
+                AssertEq(quiet.PrivacyWrites, 0); // nothing known yet
+                pushed = true;                    // the camera reports in
+                mode2.RetryPendingAsync(default).GetAwaiter().GetResult();
+                Assert(!quiet.Privacy, "once it says it is dark, the sweep lifts it");
+            }
+            finally
+            {
+                try { Directory.Delete(dir, true); } catch { }
+                try { Directory.Delete(dir + "b", true); } catch { }
+            }
+        });
+
+        Test("emergency mode keeps a camera awake while its siren is still sounding", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var cam = new DeterrentControl("Dozing");
+                bool held = false;
+                var cams = new List<Notifications.EmergencyCamera>
+                {
+                    new("Dozing", cam) { PrivacyOn = () => cam.Privacy, SetHoldAwake = v => held = v },
+                };
+                var store = new Notifications.EmergencyStore(dir);
+                var mode = new Notifications.EmergencyMode(store, () => cams);
+                var armed = store.Snapshot();
+                armed.Enabled = true;
+                armed.Siren = true;
+                mode.ApplyAsync(armed, default).GetAwaiter().GetResult();
+                Assert(held && cam.SirenState == true, "armed: held awake, siren on");
+
+                // The link drops exactly as the user disarms: a camera allowed to
+                // doze with its siren latched is one the retry can never reach.
+                cam.Flaky = 1;
+                mode.SetEnabledAsync(false, default).GetAwaiter().GetResult();
+                Assert(cam.SirenState == true && held, "disarmed with the siren unreached: still held awake");
+                Assert(mode.Issues.Any(i => i.Camera == "Dozing"), "…and reported");
+
+                mode.RetryPendingAsync(default).GetAwaiter().GetResult();
+                Assert(cam.SirenState == false && !held, "the retry silences it, and only then may it doze");
+                AssertEq(mode.Issues.Count, 0);
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        });
+
+        Test("emergency mode does not re-suspend a camera while its siren is still sounding", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var cam = new DeterrentControl("Gate");
+                bool suspended = true;
+                var cams = new List<Notifications.EmergencyCamera>
+                {
+                    new("Gate", cam)
+                    {
+                        Suspended = () => suspended,
+                        SetSuspended = v => suspended = v,
+                        PrivacyOn = () => cam.Privacy,
+                    },
+                };
+                var store = new Notifications.EmergencyStore(dir);
+                var mode = new Notifications.EmergencyMode(store, () => cams);
+                var armed = store.Snapshot();
+                armed.Enabled = true;
+                armed.Siren = true;
+                mode.ApplyAsync(armed, default).GetAwaiter().GetResult();
+                Assert(!suspended && cam.SirenState == true, "armed: resumed and sounding");
+
+                // It drops off the network exactly as the user disarms. Re-suspending
+                // now would cut the only route back to a siren that is still going.
+                cam.Offline = true;
+                mode.SetEnabledAsync(false, default).GetAwaiter().GetResult();
+                Assert(cam.SirenState == true, "still sounding — it could not be reached");
+                Assert(!suspended, "so it is deliberately left connected for the retry");
+
+                cam.Offline = false;
+                mode.RetryPendingAsync(default).GetAwaiter().GetResult();
+                AssertEq(cam.SirenState, false);
+                Assert(suspended, "and only once it is silent does the suspension come back");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        });
+
+        Test("emergency mode overrides the per-camera opt-ins and suspends the cooldown", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var protector = new Notifications.SecretProtector(dir);
+                var store = new Notifications.NotificationStore(dir, protector);
+                var notifier = new Notifications.Notifier(store, "selftest");
+                var recSettings = new Recording.RecordingSettings(dir);
+                var events = new Recording.EventStore(Path.Combine(dir, "rec"));
+                var emailer = new Notifications.EventEmailer(store, notifier, recSettings, events);
+                var s = new Notifications.NotificationSettings
+                {
+                    Enabled = true,
+                    Recipient = "someone@example.com",
+                    SmtpHost = "mail.example.com",
+                    EventCooldownMinutes = 60,
+                };
+                var rec = events.Create("Cam", DateTime.UtcNow, new[] { "person" });
+
+                Assert(!emailer.Claim(rec, s, out _, out _, out _),
+                    "a camera that never opted in sends nothing");
+
+                var em = new Notifications.EmergencySettings { Enabled = true };
+                emailer.Emergency = () => em;
+                Assert(emailer.Claim(rec, s, out _, out _, out var ch),
+                    "armed sends even though the camera never opted in");
+                Assert(ch.HasFlag(Notifications.AlertChannels.Email), "the configured channel is forced on");
+                Assert(!ch.HasFlag(Notifications.AlertChannels.Webhook),
+                    "an unconfigured channel stays off — armed cannot invent a destination");
+                Assert(emailer.Claim(rec, s, out _, out _, out _),
+                    "the cooldown does not apply while armed: every detection sends");
+
+                em.Cameras["Cam"] = new Notifications.EmergencyCameraOptions { Email = false };
+                Assert(!emailer.Claim(rec, s, out _, out _, out _),
+                    "a per-camera override can opt a camera out of the emergency");
+
+                em.Enabled = false;
+                recSettings.Update("Cam", events: null, continuous: null, eventTypes: null,
+                    setEventTypes: false, emailEvents: true);
+                var noCooldown = new Notifications.NotificationSettings
+                {
+                    Enabled = true,
+                    Recipient = "someone@example.com",
+                    SmtpHost = "mail.example.com",
+                    EventCooldownMinutes = 0,
+                };
+                Assert(emailer.Claim(rec, noCooldown, out _, out _, out _),
+                    "disarmed, the camera's own opt-in sends");
+                Assert(!emailer.Claim(rec, s, out _, out _, out _),
+                    "and its cooldown applies again");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        });
+
+        Test("offline alert images stay off by default and respect the lookback", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var protector = new Notifications.SecretProtector(dir);
+                var store = new Notifications.NotificationStore(dir, protector);
+                var notifier = new Notifications.Notifier(store, "selftest");
+                var recSettings = new Recording.RecordingSettings(dir);
+                var events = new Recording.EventStore(Path.Combine(dir, "rec"));
+                var emailer = new Notifications.EventEmailer(store, notifier, recSettings, events);
+                var offline = DateTime.UtcNow;
+                events.Create("Cam", offline.AddMinutes(-5), new[] { "person" });
+
+                // The decision itself, both ways — a test that only ever expects
+                // "no images" would still pass with the whole feature deleted.
+                var off = new Notifications.NotificationSettings();
+                var on = new Notifications.NotificationSettings
+                {
+                    OfflineAttachSnapshots = true,
+                    OfflineSnapshotLookbackMinutes = 60,
+                };
+                Assert(!Notifications.EventEmailer.ShouldAttach(off, offline.AddMinutes(-5), offline),
+                    "off by default: an existing install keeps the plain text alert");
+                Assert(Notifications.EventEmailer.ShouldAttach(on, offline.AddMinutes(-5), offline),
+                    "a detection inside the window is attached");
+                Assert(!Notifications.EventEmailer.ShouldAttach(on, offline.AddMinutes(-90), offline),
+                    "a detection older than the window is not");
+                // Measured from when the camera went offline, not from now: an
+                // offline threshold longer than the lookback would otherwise make
+                // the feature silently do nothing.
+                Assert(Notifications.EventEmailer.ShouldAttach(on,
+                        DateTime.UtcNow.AddMinutes(-95), DateTime.UtcNow.AddMinutes(-90)),
+                    "the window is anchored to the outage, not to alert time");
+                Assert(Notifications.EventEmailer.ShouldAttach(
+                        new Notifications.NotificationSettings
+                        {
+                            OfflineAttachSnapshots = true,
+                            OfflineSnapshotLookbackMinutes = 0,
+                        }, offline.AddYears(-1), offline),
+                    "0 = no time limit");
+
+                AssertEq(emailer.LastDetectionImagesAsync("Cam", offline).GetAwaiter().GetResult().Count, 0);
+                store.Save(on, null);
+                AssertEq(emailer.LastDetectionImagesAsync("NoSuchCam", offline).GetAwaiter().GetResult().Count, 0);
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        });
+
         Console.WriteLine($"\n{_passed} passed, {_failed} failed");
         return _failed == 0;
     }
@@ -7067,7 +7722,7 @@ public static class SelfTest
         public Task<System.Xml.Linq.XElement?> GetBatteryInfoAsync(CancellationToken ct) =>
             Task.FromResult<System.Xml.Linq.XElement?>(null);
         public virtual Task<byte[]?> SnapshotAsync(CancellationToken ct) => Task.FromResult<byte[]?>(null);
-        public Task<System.Xml.Linq.XElement?> GetLedStateAsync(CancellationToken ct) =>
+        public virtual Task<System.Xml.Linq.XElement?> GetLedStateAsync(CancellationToken ct) =>
             Task.FromResult<System.Xml.Linq.XElement?>(null);
         public virtual Task SetLedStateAsync(string? state, string? lightState,
             string? doorbellLightState, int? irBrightness, CancellationToken ct) => Task.CompletedTask;
@@ -7079,9 +7734,9 @@ public static class SelfTest
         public Task<System.Xml.Linq.XElement?> GetZoomFocusAsync(CancellationToken ct) =>
             Task.FromResult<System.Xml.Linq.XElement?>(null);
         public Task SetZoomFocusAsync(string command, uint movePos, CancellationToken ct) => Task.CompletedTask;
-        public Task SirenAsync(bool? on, CancellationToken ct) => Task.CompletedTask;
+        public virtual Task SirenAsync(bool? on, CancellationToken ct) => Task.CompletedTask;
         public Task<bool?> GetPrivacyModeAsync(CancellationToken ct) => Task.FromResult<bool?>(null);
-        public Task SetPrivacyModeAsync(bool on, CancellationToken ct) => Task.CompletedTask;
+        public virtual Task SetPrivacyModeAsync(bool on, CancellationToken ct) => Task.CompletedTask;
         public Task<System.Xml.Linq.XElement?> GetFloodlightTasksAsync(CancellationToken ct) =>
             Task.FromResult<System.Xml.Linq.XElement?>(null);
         public Task SetFloodlightTasksAsync(System.Xml.Linq.XElement task, CancellationToken ct) => Task.CompletedTask;
@@ -7113,6 +7768,73 @@ public static class SelfTest
             Task.FromResult<IReadOnlyList<Streaming.SdCardInfo>?>(null);
         public virtual Task TalkAsync(int sampleRate, ChannelReader<byte[]> pcm, CancellationToken ct) =>
             throw new NotSupportedException();
+    }
+
+    /// <summary>A camera with a floodlight and a siren that records what emergency
+    /// mode asked of it, and reports the light state it was last told to set.</summary>
+    private sealed class DeterrentControl(string name, bool siren = true, bool light = true)
+        : StubCameraControl(name)
+    {
+        public string LightState = "close";
+        public bool? SirenState;
+        public int LightWrites, SirenWrites;
+        /// <summary>Every call throws the offline exception, like a dozing battery camera.</summary>
+        public bool Offline;
+        /// <summary>Answers, but rejects the siren command (a model without one).</summary>
+        public bool RefusesSiren;
+        /// <summary>The next N calls fail like a dropped link (an IOException, not "offline").</summary>
+        public int Flaky;
+
+        private void Gate()
+        {
+            if (Offline) throw new Streaming.CameraOfflineException(name);
+            if (Flaky > 0) { Flaky--; throw new IOException("link dropped"); }
+        }
+
+        public override Task<Streaming.CameraCapabilities> GetCapabilitiesAsync(CancellationToken ct)
+        {
+            Gate();
+            return Task.FromResult(new Streaming.CameraCapabilities(null, null,
+                new Streaming.CameraFeatures(false, false, false, false, false,
+                    Siren: siren, Floodlight: light)));
+        }
+
+        public override Task<System.Xml.Linq.XElement?> GetLedStateAsync(CancellationToken ct)
+        {
+            Gate();
+            return Task.FromResult<System.Xml.Linq.XElement?>(
+                new System.Xml.Linq.XElement("LedState",
+                    new System.Xml.Linq.XElement("lightState", LightState)));
+        }
+
+        public override Task SetLedStateAsync(string? state, string? lightState,
+            string? doorbellLightState, int? irBrightness, CancellationToken ct)
+        {
+            Gate();
+            if (lightState != null) { LightState = lightState; LightWrites++; }
+            return Task.CompletedTask;
+        }
+
+        public override Task SirenAsync(bool? on, CancellationToken ct)
+        {
+            Gate();
+            SirenWrites++;
+            if (RefusesSiren) throw new NotSupportedException("audio alarm not supported");
+            SirenState = on;
+            return Task.CompletedTask;
+        }
+
+        /// <summary>Privacy mode ("dark" camera): the state emergency mode lifts.</summary>
+        public bool Privacy;
+        public int PrivacyWrites;
+
+        public override Task SetPrivacyModeAsync(bool on, CancellationToken ct)
+        {
+            Gate();
+            PrivacyWrites++;
+            Privacy = on;
+            return Task.CompletedTask;
+        }
     }
 
     /// <summary>A snapshot-capable camera returning a canned JPEG and counting

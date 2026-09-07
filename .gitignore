@@ -56,3 +56,6 @@ neolink-*.tar
 # Installer output (installer/build-msi.ps1)
 /artifacts/
 *.wixpdb
+
+# OpenCode tool config (local model endpoints, may hold API keys)
+opencode.json

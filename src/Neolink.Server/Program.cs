@@ -359,6 +359,17 @@ var notifier = new Neolink.Notifications.Notifier(notificationStore, Environment
 // Detection-event emails: one emailer for all cameras (its per-camera opt-in
 // and cooldown live in settings); wired to each recorder as it is built below.
 Neolink.Notifications.EventEmailer? eventEmailer = null;
+// Emergency mode (beta): a server-wide overlay that forces notifications on and
+// latches sirens/lights. Camera actions are bound after the camera list exists.
+var emergencyStore = new Neolink.Notifications.EmergencyStore(stateDir);
+var emergency = new Neolink.Notifications.EmergencyMode(emergencyStore,
+    () => webCameras.Select(c => new Neolink.Notifications.EmergencyCamera(c.Name, c.Control)
+    {
+        Suspended = c.Suspended,
+        SetSuspended = c.SetSuspended,
+        PrivacyOn = c.PrivacyOn,
+        SetHoldAwake = c.SetHoldAwake,
+    }).ToList());
 var recordingHealth = new Neolink.Recording.RecordingHealth();
 tasks.Add(Task.Run(() => notifier.RunAsync(shutdown.Token)));
 
@@ -604,7 +615,10 @@ foreach (var cam in config.Cameras)
                     onWriteError: recordingHealth.MarkWriteError,
                     ai: aiDescriber);
                 eventEmailer ??= new Neolink.Notifications.EventEmailer(
-                    notificationStore, notifier, recordingSettings, eventStore);
+                    notificationStore, notifier, recordingSettings, eventStore)
+                {
+                    Emergency = emergencyStore.Snapshot,
+                };
                 eventEmailer.RegisterHub(cam.Name, recordStream.Hub);
                 // The delay setting decides at event time which hook sends.
                 recorder.EventStarted += eventEmailer.OnEventStarted;
@@ -750,6 +764,11 @@ foreach (var cam in config.Cameras)
                 foreach (var s in camServices)
                     if (s.WakeProbeOwner) s.NotifyWakeHint(detail);
             },
+            // Emergency mode holds a dozing battery camera awake for the duration.
+            SetHoldAwake = camServices.Count == 0 ? null : hold =>
+            {
+                foreach (var s in camServices) s.HoldAwake = hold;
+            },
             // Any stream service saying it may doze makes the camera sleep-friendly:
             // the policy is per camera (battery + no always_on), so the streams agree.
             SleepFriendly = readers.Count == 0 ? null : () => readers.Any(s => s.SleepFriendly),
@@ -868,7 +887,27 @@ var alertMonitor = new Neolink.Notifications.AlertMonitor(
         // suspended — must not raise a camera-offline alert.
         (c.Asleep?.Invoke() ?? false) || (c.Suspended?.Invoke() ?? false))),
     recording: recordingHealth);
+if (eventEmailer != null)
+    alertMonitor.LastDetectionImages = eventEmailer.LastDetectionImagesAsync;
 tasks.Add(Task.Run(() => alertMonitor.RunAsync(shutdown.Token)));
+// A restart that came back armed re-latches the sirens and lights once the
+// cameras have had a chance to connect, then keeps retrying the ones it could
+// not reach — a camera that was asleep when the alarm was raised still gets its
+// siren when it wakes.
+tasks.Add(Task.Run(async () =>
+{
+    try
+    {
+        await Task.Delay(TimeSpan.FromSeconds(30), shutdown.Token);
+        await emergency.ResumeAsync(shutdown.Token);
+        while (!shutdown.Token.IsCancellationRequested)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(60), shutdown.Token);
+            await emergency.RetryPendingAsync(shutdown.Token);
+        }
+    }
+    catch (OperationCanceledException) { }
+}));
 
 // MQTT / Home Assistant bridge (single connection for all cameras), then wire
 // motion: the camera's alarm push goes to the recorder and/or the bridge. The
@@ -876,7 +915,14 @@ tasks.Add(Task.Run(() => alertMonitor.RunAsync(shutdown.Token)));
 // motion for MQTT-only setups (recording off).
 if (config.Mqtt is { } mqttCfg)
 {
-    mqtt = new HomeAssistantMqtt(mqttCfg, webCameras, Version) { Monitor = monitor, Storage = storage };
+    mqtt = new HomeAssistantMqtt(mqttCfg, webCameras, Version)
+    {
+        Monitor = monitor,
+        Storage = storage,
+        Emergency = emergency,
+    };
+    var bridge = mqtt;
+    emergency.Changed += bridge.RepublishEmergencyAsync;
 }
 foreach (var (services, name, recorderSink) in motionTargets)
 {
@@ -972,6 +1018,7 @@ if (config.WebPort > 0)
         RecordingHealth = recordingHealth,
         Notifier = notifier,
         Ai = aiStore,
+        Emergency = emergency,
         AiPending = aiDescriber != null ? aiDescriber.IsPending : null,
         Logs = logBuffer,
         // Graceful shutdown; docker's restart policy (systemd, or the HA

@@ -48,6 +48,17 @@ public sealed class NotificationSettings
     /// <summary>Default minutes a camera must stay unreachable before it alerts.</summary>
     public int OfflineThresholdMinutes { get; set; } = 10;
 
+    /// <summary>Attach snapshots from the camera's last detection to its offline
+    /// alert. Off by default: existing installs keep the plain text alert.</summary>
+    public bool OfflineAttachSnapshots { get; set; }
+
+    /// <summary>How many images that attachment carries (1-10).</summary>
+    public int OfflineSnapshotCount { get; set; } = 3;
+
+    /// <summary>Only attach when the last detection is this recent (minutes);
+    /// 0 = no limit. Stops a week-old detection riding along as evidence.</summary>
+    public int OfflineSnapshotLookbackMinutes { get; set; } = 60;
+
     // Detection-event emails (per-camera opt-in lives in RecordingSettings; the
     // knobs that shape every event email live here with the rest of the mail
     // config).
@@ -129,6 +140,9 @@ public sealed class NotificationSettings
         AlertCameraOffline = AlertCameraOffline,
         AlertWriteFailure = AlertWriteFailure,
         OfflineThresholdMinutes = OfflineThresholdMinutes,
+        OfflineAttachSnapshots = OfflineAttachSnapshots,
+        OfflineSnapshotCount = OfflineSnapshotCount,
+        OfflineSnapshotLookbackMinutes = OfflineSnapshotLookbackMinutes,
         CameraOfflineOverrides = new(CameraOfflineOverrides, StringComparer.OrdinalIgnoreCase),
         EventSnapshots = EventSnapshots,
         EventCooldownMinutes = EventCooldownMinutes,

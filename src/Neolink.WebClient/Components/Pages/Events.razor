@@ -147,7 +147,6 @@
         <div class="ev-search-row">
         <div class="ev-search-head">
             <span class="ev-search-title">@T["AI Search"]</span>
-            <span class="beta-tag">@T["BETA"]</span>
         </div>
         <div class="ev-search">
             <span class="ev-search-icon @(_searchAi ? "ai" : "")"
@@ -156,13 +155,12 @@
             </span>
             <span class="ev-search-box">
                 <input class="ev-search-input" placeholder="@T["Search events — try: person in FrontDoor yesterday"]"
-                       @bind="_searchQ" @bind:event="oninput" @onkeydown="OnSearchKeyAsync" />
+                       value="@_searchQ" @oninput="OnSearchInputAsync" @onkeydown="OnSearchKeyAsync" />
                 @if (!_searchBusy && (_searchQ.Length > 0 || _searchResults != null))
                 {
                     <button class="ev-search-clear" title="@T["Clear"]" @onclick="ClearSearch">@UiIcon.Render("x", 13)</button>
                 }
             </span>
-            <button class="chip chip-active" disabled="@_searchBusy" @onclick="RunSearchAsync">@T["Search"]</button>
             @if (_searchBusy)
             {
                 <span class="btn-spinner"></span>
@@ -468,7 +466,6 @@
                             <span class="event-ai-text event-ai-pending">🧠 @T["AI is describing this event — refresh in a moment to see the text…"]</span>
                         </div>
                     }
-
                     @if (sel.HasClip)
                     {
                         @* zoom-on: the recorded clip gets the same digital zoom as live
@@ -477,20 +474,26 @@
                             <video id="ev-video" controls autoplay="@_autoplay" playsinline></video>
                             @ZoomHud
                         </div>
+                        @* One row, always: the chips carry their own meaning, so the
+                           SPEED/QUALITY headings only cost the width that pushed the
+                           two groups onto separate lines on a phone. *@
                         <div class="player-speed">
-                            <span class="tool-label">@T["SPEED"]</span>
-                            @foreach (var s in Speeds)
-                            {
-                                <button class="chip @(_speed == s ? "chip-active" : "")" @onclick="() => SetSpeedAsync(s)">@FormatSpeed(s)</button>
-                            }
+                            <span class="player-group" title="@T["Playback speed"]">
+                                @foreach (var s in Speeds)
+                                {
+                                    <button class="chip @(_speed == s ? "chip-active" : "")" @onclick="() => SetSpeedAsync(s)">@FormatSpeed(s)</button>
+                                }
+                            </span>
                             @if (sel.HasPreview)
                             {
-                                <span class="tool-label player-quality-label">@T["QUALITY"]</span>
-                                <button class="chip @(_sd ? "" : "chip-active")" title="@T["Full-quality main-stream recording"]"
-                                        @onclick="() => SetStreamAsync(sd: false)">HD</button>
-                                <button class="chip @(_sd ? "chip-active" : "")"
-                                        title="@T["Low-res sub-stream recording — smoother fast-forward on slow storage"]"
-                                        @onclick="() => SetStreamAsync(sd: true)">SD</button>
+                                <span class="player-div" aria-hidden="true">|</span>
+                                <span class="player-group" title="@T["Recording quality"]">
+                                    <button class="chip @(_sd ? "" : "chip-active")" title="@T["Full-quality main-stream recording"]"
+                                            @onclick="() => SetStreamAsync(sd: false)">HD</button>
+                                    <button class="chip @(_sd ? "chip-active" : "")"
+                                            title="@T["Low-res sub-stream recording — smoother fast-forward on slow storage"]"
+                                            @onclick="() => SetStreamAsync(sd: true)">SD</button>
+                                </span>
                             }
                         </div>
                     }
@@ -853,9 +856,36 @@
         catch { }
     }
 
+    /// <summary>How long the typing has to stop before the search goes by itself.
+    /// Long enough that an ordinary phrase is typed straight through without firing
+    /// a search per word, short enough not to feel like waiting.</summary>
+    private static readonly TimeSpan SearchPause = TimeSpan.FromSeconds(1);
+    /// <summary>One letter is never a question worth asking a language model.</summary>
+    private const int SearchMinChars = 2;
+    private CancellationTokenSource? _typedCts;
+
+    /// <summary>Every keystroke restarts the wait; whichever one is still standing
+    /// when the wait runs out does the search. Emptying the box puts the ordinary
+    /// list back at once rather than after a pause.</summary>
+    private async Task OnSearchInputAsync(ChangeEventArgs e)
+    {
+        _searchQ = (string?)e.Value ?? "";
+        _typedCts?.Cancel();
+        if (_searchQ.Trim().Length < SearchMinChars)
+        {
+            if (_searchResults != null || _searchError) ClearSearch();
+            return;
+        }
+        var mine = new CancellationTokenSource();
+        _typedCts = mine;
+        try { await Task.Delay(SearchPause, mine.Token); }
+        catch (OperationCanceledException) { return; }
+        if (!mine.IsCancellationRequested) await RunSearchAsync();
+    }
+
     private async Task OnSearchKeyAsync(KeyboardEventArgs e)
     {
-        if (e.Key == "Enter") await RunSearchAsync();
+        if (e.Key == "Enter") { _typedCts?.Cancel(); await RunSearchAsync(); }
         else if (e.Key == "Escape") ClearSearch();
     }
 
@@ -915,6 +945,7 @@
     private void ClearSearch()
     {
         _searchGen++;
+        _typedCts?.Cancel();
         _searchCts?.Cancel();
         _searchBusy = false;
         _searchError = false;
@@ -964,6 +995,9 @@
             while (await timer.WaitForNextTickAsync(_pollCts.Token))
             {
                 if (_sdMode || _showDelete || _delBusy || !_supported) continue;
+                bool hidden = false;
+                try { hidden = await JS.InvokeAsync<bool>("neolink.pageHidden"); } catch { }
+                if (hidden) continue; // nobody is looking; the first visible tick catches up
                 List<ApiEvent>? list;
                 List<ApiEvent>? day = null;
                 try
@@ -1314,8 +1348,9 @@
             // Search results are explicit intent — hidden-camera prefs never trim them.
             .Where(e => _searchResults != null || CamVisible(e.Camera))
             .Where(e => !_unreviewedOnly || !e.Reviewed)
-            .Where(e => _searchResults != null || _hiddenLevels.Count == 0
-                || (e.AiLevel != null && !_hiddenLevels.Contains(e.AiLevel)))
+            // Only rated events are subject to the threat filter: one with no AI
+            // level yet (or ever) is not "at" a hidden level.
+            .Where(e => _searchResults != null || e.AiLevel == null || !_hiddenLevels.Contains(e.AiLevel))
             .OrderByDescending(e => e.Start);
 
     /// <summary>True once any loaded event carries an AI threat level — the gate
@@ -1753,6 +1788,7 @@
     public async ValueTask DisposeAsync()
     {
         try { await JS.InvokeVoidAsync("neolink.evMoreDetach"); } catch { }
+        _typedCts?.Cancel();
         _searchCts?.Cancel();
         _ongoingCts?.Cancel();
         _pollCts.Cancel();

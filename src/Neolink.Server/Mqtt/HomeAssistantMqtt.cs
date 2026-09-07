@@ -163,6 +163,10 @@ public sealed class HomeAssistantMqtt
     /// gets none of the clips/archive sensors).</summary>
     public Recording.StorageLocations? Storage { get; init; }
 
+    /// <summary>Emergency mode (beta), published as a switch on the server device.
+    /// Null when the feature is not wired.</summary>
+    public Notifications.EmergencyMode? Emergency { get; init; }
+
     private bool ServerStatsEnabled => Monitor != null && _cfg.StatsIntervalSeconds > 0;
 
     public async Task RunAsync(CancellationToken ct)
@@ -271,6 +275,7 @@ public sealed class HomeAssistantMqtt
             .ConfigureAwait(false);
         // One wildcard per camera captures every ".../{entity}/set" command.
         var subs = _cameras.Values.Select(c => $"{_cfg.BaseTopic}/{c.Id}/+/set").ToList();
+        if (Emergency != null && !ServerTopicTaken) subs.Add($"{_cfg.BaseTopic}/server/+/set");
         await _client.SubscribeAsync(subs, CancellationToken.None).ConfigureAwait(false);
         foreach (var cam in _cameras.Values)
             await cam.AnnounceAsync(CancellationToken.None).ConfigureAwait(false);
@@ -278,6 +283,81 @@ public sealed class HomeAssistantMqtt
         {
             await AnnounceServerAsync(CancellationToken.None).ConfigureAwait(false);
             await PublishServerStatsAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        // Announced outside the stats gate: emergency mode must reach HA even on
+        // a server with resource statistics switched off.
+        await AnnounceEmergencyAsync(CancellationToken.None).ConfigureAwait(false);
+    }
+
+    // ------------------------------------------------------------------ emergency mode
+
+    /// <summary>A camera sanitizing to "server" owns that topic space already, so
+    /// the switch would be published but never receive a command.</summary>
+    private bool ServerTopicTaken => _cameras.ContainsKey("server");
+
+    private async Task AnnounceEmergencyAsync(CancellationToken ct)
+    {
+        if (Emergency == null || !_cfg.Discovery) return;
+        if (ServerTopicTaken)
+        {
+            Log.Warn("MQTT: a camera is named 'server', which owns that topic space — " +
+                     "the Emergency mode switch is not published (rename the camera to get it)");
+            return;
+        }
+        var config = new
+        {
+            name = "Emergency mode",
+            unique_id = "neolink_server_emergency_mode",
+            state_topic = ServerTopic("emergency_mode"),
+            command_topic = $"{ServerTopic("emergency_mode")}/set",
+            payload_on = "ON",
+            payload_off = "OFF",
+            icon = "mdi:alarm-light",
+            device = ServerDevice(),
+            availability = new object[] { new { topic = _availabilityTopic } },
+            availability_mode = "all",
+        };
+        await PublishAsync($"{_cfg.DiscoveryPrefix}/switch/neolink_server/emergency_mode/config",
+            JsonSerializer.Serialize(config, DiscoveryJson), ct).ConfigureAwait(false);
+        await PublishEmergencyStateAsync(ct).ConfigureAwait(false);
+    }
+
+    private Task PublishEmergencyStateAsync(CancellationToken ct) =>
+        Emergency == null || ServerTopicTaken
+            ? Task.CompletedTask
+            : PublishAsync(ServerTopic("emergency_mode"),
+                Emergency.Snapshot().Enabled ? "ON" : "OFF", ct);
+
+    /// <summary>Re-publishes the emergency switch after a web-UI/API change.</summary>
+    public async Task RepublishEmergencyAsync()
+    {
+        try { await PublishEmergencyStateAsync(CancellationToken.None).ConfigureAwait(false); }
+        catch (Exception ex) { Log.Debug($"MQTT: emergency state publish failed: {Log.Flatten(ex)}"); }
+    }
+
+    private async Task HandleServerCommandAsync(string entity, string payload)
+    {
+        if (entity != "emergency_mode" || Emergency == null) return;
+        // Echo first: latching sirens on every camera takes seconds, and HA's
+        // optimistic toggle snaps back if the state does not land promptly. Its
+        // own try: a dropped publish must never cost the arm/disarm itself.
+        try
+        {
+            await PublishAsync(ServerTopic("emergency_mode"), payload == "ON" ? "ON" : "OFF",
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"MQTT: emergency echo failed: {Log.Flatten(ex)}");
+        }
+        try
+        {
+            await Emergency.SetEnabledAsync(payload == "ON", CancellationToken.None).ConfigureAwait(false);
+            await PublishEmergencyStateAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"MQTT: emergency mode command failed: {Log.Flatten(ex)}");
         }
     }
 
@@ -288,7 +368,14 @@ public sealed class HomeAssistantMqtt
         if (!topic.StartsWith(prefix, StringComparison.Ordinal)) return;
         var rest = topic[prefix.Length..].Split('/');
         if (rest.Length != 3 || rest[2] != "set") return;
-        if (!_cameras.TryGetValue(rest[0], out var cam)) return;
+        if (!_cameras.TryGetValue(rest[0], out var cam))
+        {
+            // Server-level entities live under "server"; a camera of that name
+            // was matched above and keeps the topic space it already owned.
+            if (rest[0] == "server")
+                _ = HandleServerCommandAsync(rest[1], System.Text.Encoding.UTF8.GetString(payload));
+            return;
+        }
         _ = cam.HandleCommandAsync(rest[1], System.Text.Encoding.UTF8.GetString(payload));
     }
 
@@ -498,6 +585,8 @@ public sealed class HomeAssistantMqtt
             try { await Task.Delay(RefreshInterval, ct).ConfigureAwait(false); }
             catch (OperationCanceledException) { return; }
             if (!_client.IsConnected) continue;
+            // Cheap: PublishAsync drops an unchanged retained payload.
+            await RepublishEmergencyAsync().ConfigureAwait(false);
             foreach (var cam in _cameras.Values)
             {
                 try { await cam.RefreshAsync(ct).ConfigureAwait(false); }

@@ -62,6 +62,10 @@ public sealed record WebCameraInfo(string Name, List<WebStreamInfo> Streams, ICa
     /// parked wake-capture battery camera; see CameraService.NotifyWakeHint.</summary>
     public Action<string>? WakeHint { get; init; }
 
+    /// <summary>Holds a dozing battery camera awake (emergency mode), or lets it
+    /// doze again. Null when the camera has no sleep policy to override.</summary>
+    public Action<bool>? SetHoldAwake { get; init; }
+
     /// <summary>True for a battery camera Neolink lets doze (no always_on). The web
     /// UI treats these tiles differently: watching one costs the camera charge, so
     /// it marks them, bounds how long a tile streams, and offers a keep-awake
@@ -118,6 +122,8 @@ public sealed class WebApiOptions
     /// <summary>AI event descriptions: the global settings store (admin only).
     /// Its Enabled switch also gates the per-camera opt-in.</summary>
     public Neolink.Ai.AiStore? Ai { get; init; }
+    /// <summary>Emergency mode (beta); null when the feature is not wired.</summary>
+    public Neolink.Notifications.EmergencyMode? Emergency { get; init; }
     /// <summary>Is this event's AI description queued or in flight right now?
     /// (AiDescriber.IsPending — lets the UI say "describing…" instead of nothing.)</summary>
     public Func<string, bool>? AiPending { get; init; }
@@ -228,7 +234,15 @@ public static class WebApi
         string? WebhookBodyMode = null, string? WebhookBodyTemplate = null,
         List<string>? WebhookHeaders = null, string? WebhookPreset = null,
         bool? WebhookServerAlerts = null, string? PublicUrl = null,
-        string? EventSnapshotMode = null);
+        string? EventSnapshotMode = null,
+        bool? OfflineAttachSnapshots = null, int? OfflineSnapshotCount = null,
+        int? OfflineSnapshotLookbackMinutes = null);
+    private sealed record EmergencyCameraRequest(bool? Email, bool? Webhook, bool? Siren, bool? Lights);
+    /// <summary>Emergency mode: null = unchanged. A camera entry with every field
+    /// null still counts as an entry, so clearing an override sends the camera key
+    /// with nulls or omits the whole map.</summary>
+    private sealed record EmergencyRequest(bool? Enabled, bool? Email, bool? Webhook,
+        bool? Siren, bool? Lights, Dictionary<string, EmergencyCameraRequest>? Cameras);
     /// <summary>Retention fields: null = unchanged, negative = back to the server default, 0 = keep forever.
     /// RecordStream: null = unchanged, "" = back to the server default, else a served stream kind.
     /// Capture schedule: applied only while ScheduleEnabled; ScheduleDays null = unchanged,
@@ -1289,6 +1303,9 @@ public static class WebApi
                     alertCameraOffline = s.AlertCameraOffline,
                     alertWriteFailure = s.AlertWriteFailure,
                     offlineThresholdMinutes = s.OfflineThresholdMinutes,
+                    offlineAttachSnapshots = s.OfflineAttachSnapshots,
+                    offlineSnapshotCount = s.OfflineSnapshotCount,
+                    offlineSnapshotLookbackMinutes = s.OfflineSnapshotLookbackMinutes,
                     cameraOfflineOverrides = s.CameraOfflineOverrides,
                     eventSnapshots = s.EventSnapshots,
                     eventCooldownMinutes = s.EventCooldownMinutes,
@@ -1340,6 +1357,10 @@ public static class WebApi
                     AlertCameraOffline = req.AlertCameraOffline ?? cur.AlertCameraOffline,
                     AlertWriteFailure = req.AlertWriteFailure ?? cur.AlertWriteFailure,
                     OfflineThresholdMinutes = Math.Clamp(req.OfflineThresholdMinutes ?? cur.OfflineThresholdMinutes, 0, 1440),
+                    OfflineAttachSnapshots = req.OfflineAttachSnapshots ?? cur.OfflineAttachSnapshots,
+                    OfflineSnapshotCount = Math.Clamp(req.OfflineSnapshotCount ?? cur.OfflineSnapshotCount, 1, 10),
+                    OfflineSnapshotLookbackMinutes =
+                        Math.Clamp(req.OfflineSnapshotLookbackMinutes ?? cur.OfflineSnapshotLookbackMinutes, 0, 10080),
                     CameraOfflineOverrides = req.CameraOfflineOverrides != null
                         ? new(req.CameraOfflineOverrides, StringComparer.OrdinalIgnoreCase)
                         : cur.CameraOfflineOverrides,
@@ -1504,6 +1525,87 @@ public static class WebApi
                 return error == null
                     ? Results.Json(new { ok = true, detail })
                     : Results.Json(new { error }, statusCode: 502);
+            });
+        }
+
+        // ------------------------------------------------------------ emergency mode (beta)
+
+        if (o.Emergency is { } emergency)
+        {
+            object ShapeEmergency()
+            {
+                var e = emergency.Snapshot();
+                var ns = o.Notifier?.Store.Snapshot();
+                return new
+                {
+                    enabled = e.Enabled,
+                    email = e.Email,
+                    webhook = e.Webhook,
+                    siren = e.Siren,
+                    lights = e.Lights,
+                    armedUtc = e.ArmedUtc,
+                    cameras = cameras.Select(c => c.Name).ToList(),
+                    // Which channels can actually fire, so the UI can send the user
+                    // to set one up instead of offering a switch that does nothing.
+                    emailAvailable = ns != null && Neolink.Notifications.Notifier.EmailReady(ns),
+                    webhookAvailable = ns != null && Neolink.Notifications.Notifier.WebhookReady(ns),
+                    // Detections come from the event recorder; without one there is
+                    // nothing for emergency mode to forward.
+                    detectionsAvailable = events != null,
+                    // Cameras whose siren/light could not be set — an armed siren
+                    // that never sounded must not read as success.
+                    issues = emergency.Issues.Select(i => new { camera = i.Camera, reason = i.Reason }).ToList(),
+                    overrides = e.Cameras.ToDictionary(kv => kv.Key, kv => new
+                    {
+                        email = kv.Value.Email,
+                        webhook = kv.Value.Webhook,
+                        siren = kv.Value.Siren,
+                        lights = kv.Value.Lights,
+                    }),
+                };
+            }
+
+            app.MapGet("/api/admin/emergency", (HttpContext ctx) =>
+                AdminOnly(ctx) ?? Results.Json(ShapeEmergency()));
+
+            app.MapPut("/api/admin/emergency", async (EmergencyRequest req, HttpContext ctx) =>
+            {
+                if (AdminOnly(ctx) is { } denied) return denied;
+                // Merged under the service's own lock, so a concurrent HA toggle
+                // cannot overwrite these options with its older snapshot. Arming
+                // reaches out to every camera (siren, light): never on the request
+                // thread's cancellation, or a closed tab could half-arm it.
+                await emergency.ApplyAsync(next =>
+                {
+                    next.Enabled = req.Enabled ?? next.Enabled;
+                    next.Email = req.Email ?? next.Email;
+                    next.Webhook = req.Webhook ?? next.Webhook;
+                    next.Siren = req.Siren ?? next.Siren;
+                    next.Lights = req.Lights ?? next.Lights;
+                    if (req.Cameras == null) return next;
+                    // Only known cameras, and an all-null entry is a cleared
+                    // override. Keyed case-insensitively like the store, so two
+                    // spellings of one camera must not throw a duplicate key.
+                    var map = new Dictionary<string, Neolink.Notifications.EmergencyCameraOptions>(
+                        StringComparer.OrdinalIgnoreCase);
+                    foreach (var (key, v) in req.Cameras)
+                    {
+                        if (v == null || (v.Email ?? v.Webhook ?? v.Siren ?? v.Lights) == null) continue;
+                        if (cameras.FirstOrDefault(c =>
+                                string.Equals(c.Name, key, StringComparison.OrdinalIgnoreCase)) is not { } cam)
+                            continue;
+                        map[cam.Name] = new Neolink.Notifications.EmergencyCameraOptions
+                        {
+                            Email = v.Email,
+                            Webhook = v.Webhook,
+                            Siren = v.Siren,
+                            Lights = v.Lights,
+                        };
+                    }
+                    next.Cameras = map;
+                    return next;
+                }, CancellationToken.None);
+                return Results.Json(ShapeEmergency());
             });
         }
 

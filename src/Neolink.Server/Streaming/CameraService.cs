@@ -309,7 +309,27 @@ public sealed class CameraService : ILiveCameraSource
     // Sleep policy: explicit always_on wins; unset = battery cameras doze,
     // everything else streams around the clock (the pre-battery behavior). A live
     // keep-alive window suspends dozing entirely (see KeepAliveActive).
-    private bool AllowSleep => _demandHub != null && !(_config.AlwaysOn ?? !_batteryPowered) && !KeepAliveActive;
+    private bool AllowSleep => _demandHub != null && !(_config.AlwaysOn ?? !_batteryPowered)
+                               && !KeepAliveActive && !HoldAwake;
+
+    /// <summary>Held awake at runtime (emergency mode): the camera stops dozing for
+    /// as long as this is set, exactly like an open keep-alive window and with the
+    /// same battery cost. Cleared when emergency mode is switched off, after which
+    /// the standing sleep policy applies again. Volatile: it is set from the web
+    /// request / MQTT thread and read by the park loops.</summary>
+    public bool HoldAwake
+    {
+        get => Volatile.Read(ref _holdAwake);
+        set => Volatile.Write(ref _holdAwake, value);
+    }
+
+    private bool _holdAwake;
+
+    /// <summary>Does the park still hold? Leaving it because the sleep policy
+    /// changed under us (emergency mode) is as valid as leaving it for a viewer —
+    /// without this the camera stays parked and unreachable however loudly the
+    /// rest of the system says it is being held awake.</summary>
+    private bool ParkHolds => !DemandNow && AllowSleep;
 
     private readonly DateTime _serviceStartUtc = DateTime.UtcNow;
 
@@ -546,9 +566,20 @@ public sealed class CameraService : ILiveCameraSource
                         var diag = new WakeDiag { ParkedAt = DateTime.UtcNow, NonWakingScan = true };
                         bool sawAnyReply = false;
                         var lastLegacyProbe = DateTime.MinValue;
-                        while (!DemandNow)
+                        while (ParkHolds)
                         {
                             await Task.Delay(TimeSpan.FromSeconds(1), ct).ConfigureAwait(false);
+                            if (!AllowSleep && !DemandNow)
+                            {
+                                // Emergency mode (or a keep-alive window) turned the
+                                // sleep policy off under us. Deliberately NOT counted
+                                // as a fruitless wake: this is our own doing, and
+                                // charging it to the wake scan would leave the camera
+                                // harder to wake long after the emergency is over.
+                                Log.Info($"{Tag}: held awake — reconnecting after " +
+                                         $"{(DateTime.UtcNow - diag.ParkedAt).TotalSeconds:0}s parked");
+                                break;
+                            }
                             if (DemandNow)
                             {
                                 // Left the park because OUR side wants the stream, not
@@ -687,16 +718,16 @@ public sealed class CameraService : ILiveCameraSource
                         // and the awake time. This one connects only for a viewer.
                         Log.Info($"{Tag}: parked — the recording stream watches for self-wakes; " +
                                  "this stream connects when a viewer opens it");
-                        while (!DemandNow)
+                        while (ParkHolds)
                             await Task.Delay(500, ct).ConfigureAwait(false);
-                        Log.Info($"{Tag}: viewer waiting — reconnecting");
+                        Log.Info($"{Tag}: {(DemandNow ? "viewer waiting" : "held awake")} — reconnecting");
                     }
                     else
                     {
                         Log.Info($"{Tag}: parked — letting the battery camera sleep (open the stream to reconnect)");
-                        while (!DemandNow)
+                        while (ParkHolds)
                             await Task.Delay(500, ct).ConfigureAwait(false);
-                        Log.Info($"{Tag}: viewer waiting — reconnecting");
+                        Log.Info($"{Tag}: {(DemandNow ? "viewer waiting" : "held awake")} — reconnecting");
                     }
                 }
                 catch (OperationCanceledException)

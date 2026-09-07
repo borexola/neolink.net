@@ -224,9 +224,14 @@ public sealed class Notifier
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex)
             {
-                Log.Warn($"Notification webhook failed ({alert.Subject}) via {s.WebhookUrl}: " +
+                // Scheme and host only: a Discord or Slack webhook URL carries its
+                // own token in the path, and logs get pasted into bug reports.
+                Log.Warn($"Notification webhook failed ({alert.Subject}) via {WebhookHost(s.WebhookUrl)}: " +
                          $"{Log.Flatten(ex)} — check Server settings → Notifications; nothing else is affected");
             }
         }
     }
+
+    internal static string WebhookHost(string? url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var u) ? $"{u.Scheme}://{u.Host}" : "(webhook)";
 }

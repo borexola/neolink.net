@@ -725,9 +725,9 @@ public static class EventSearch
         keywordsMatched = q.Keywords.Count == 0;
         keywordsPartial = false;
         string? cam = q.Cameras.Count == 1 ? q.Cameras[0] : null;
-        // One-sided ranges get a synthesized bound so narrow windows walk the
-        // per-day index instead of scanning the whole store.
-        DateTime? df0 = q.FromLocal ?? (q.ToLocal != null ? q.ToLocal.Value.AddDays(-31) : null);
+        // A from-only range gets a synthesized ceiling so narrow windows walk the
+        // per-day index; a to-only range has no floor and scans the whole store.
+        DateTime? df0 = q.FromLocal;
         DateTime? dt0 = q.ToLocal ?? (q.FromLocal != null ? DateTime.Now.AddMinutes(1) : null);
         IEnumerable<EventRecord> hits;
         if (df0 is { } df && dt0 is { } dt && (dt.Date - df.Date).Days <= 31)
@@ -799,13 +799,7 @@ public static class EventSearch
         {
             bool found = false;
             var k = Spelling(k0);
-            if (words != null && (words.Contains(k)
-                || words.Contains(k + "s")
-                || words.Contains(k + "es")
-                || (k.EndsWith("y") && words.Contains(k[..^1] + "ies"))
-                || (k.EndsWith("ies") && words.Contains(k[..^3] + "y"))
-                || (k.EndsWith("es") && words.Contains(k[..^2]))
-                || (k.EndsWith("s") && words.Contains(k[..^1]))))
+            if (words != null && (WordIn(words, k) || JoinedIn(words, k)))
             {
                 s += 2;
                 found = true;
@@ -819,6 +813,25 @@ public static class EventSearch
             if (found) hit++;
         }
         return s;
+    }
+
+    private static bool WordIn(HashSet<string> words, string k) =>
+        words.Contains(k)
+        || words.Contains(k + "s")
+        || words.Contains(k + "es")
+        || (k.EndsWith("y") && words.Contains(k[..^1] + "ies"))
+        || (k.EndsWith("ies") && words.Contains(k[..^3] + "y"))
+        || (k.EndsWith("es") && words.Contains(k[..^2]))
+        || (k.EndsWith("s") && words.Contains(k[..^1]));
+
+    /// <summary>A hyphenated or apostrophised keyword ("high-vis", "o'clock")
+    /// against a description split on punctuation: every part present, or the
+    /// parts run together.</summary>
+    private static bool JoinedIn(HashSet<string> words, string k)
+    {
+        if (k.IndexOfAny(['-', '\'']) < 0) return false;
+        var parts = k.Split(['-', '\''], StringSplitOptions.RemoveEmptyEntries).Select(Spelling).ToList();
+        return parts.Count > 0 && (parts.All(p => WordIn(words, p)) || WordIn(words, string.Concat(parts)));
     }
 
     /// <summary>British query, American description (the models write "gray").</summary>
