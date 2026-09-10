@@ -7787,7 +7787,7 @@ public static class SelfTest
 
         private void Gate()
         {
-            if (Offline) throw new Streaming.CameraOfflineException(name);
+            if (Offline) throw new Streaming.CameraOfflineException(CameraName);
             if (Flaky > 0) { Flaky--; throw new IOException("link dropped"); }
         }
 
