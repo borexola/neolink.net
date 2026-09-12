@@ -1437,6 +1437,10 @@
     [Parameter] public bool IsAdmin { get; set; }
     [Parameter] public EventCallback OnClose { get; set; }
 
+    /// <summary>Raised with the camera name after a zone reaches the camera: anything
+    /// drawing against that zone (the live object boxes) is now holding a stale one.</summary>
+    [Parameter] public EventCallback<string> OnZoneSaved { get; set; }
+
     private ApiCapabilities? _caps;
     private ApiRecordingSettings? _recording;
     private List<ApiEncodeProfile>? _profiles;
@@ -1988,6 +1992,7 @@
         {
             _zone = _zone with { Table = table };
             ShowToast(T["Zone saved to the camera."]);
+            await OnZoneSaved.InvokeAsync(CameraName);
         }
         _zoneSaving = false;
     }

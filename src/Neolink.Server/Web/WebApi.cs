@@ -248,7 +248,8 @@ public static class WebApi
         bool? Siren, bool? Lights, Dictionary<string, EmergencyCameraRequest>? Cameras);
     /// <summary>Live object boxes: null = unchanged. Groups is set whenever present,
     /// so an empty list means "back to the default set".</summary>
-    private sealed record DetectRequest(bool? Enabled, int? MinConfidence, int? Fps, List<string>? Groups);
+    private sealed record DetectRequest(bool? Enabled, int? MinConfidence, int? Fps, List<string>? Groups,
+        bool? Detailed = null);
     /// <summary>Retention fields: null = unchanged, negative = back to the server default, 0 = keep forever.
     /// RecordStream: null = unchanged, "" = back to the server default, else a served stream kind.
     /// Capture schedule: applied only while ScheduleEnabled; ScheduleDays null = unchanged,
@@ -410,6 +411,9 @@ public static class WebApi
             // signed-in user.
             builder.Services.AddSingleton(serverLanguage);
             builder.Services.AddScoped<Neolink.WebClient.Localization.Translator>();
+            // The detection zones the object boxes obey: per circuit, because that
+            // is exactly how long the browser's own copy of them lives.
+            builder.Services.AddScoped<Neolink.WebClient.DetectZones>();
         }
         var app = builder.Build();
 
@@ -1623,6 +1627,7 @@ public static class WebApi
             {
                 var s = detect.Store.Snapshot();
                 var status = detect.Assets.Current();
+                var extra = detect.Assets.DetailedStatus();
                 return new
                 {
                     enabled = s.Enabled,
@@ -1630,10 +1635,16 @@ public static class WebApi
                     fps = s.Fps,
                     groups = s.EffectiveGroups,
                     knownGroups = Neolink.Detect.DetectSettings.KnownGroups,
+                    detailed = s.Detailed,
                     assets = new
                     {
                         state = status.State, percent = status.Percent, error = status.Error,
                         bytes = Neolink.Detect.DetectAssets.TotalBytes,
+                    },
+                    detailedAssets = new
+                    {
+                        state = extra.State, percent = extra.Percent, error = extra.Error,
+                        bytes = Neolink.Detect.DetectAssets.Detailed.Bytes,
                     },
                 };
             }
@@ -1649,11 +1660,13 @@ public static class WebApi
                 next.Enabled = req.Enabled ?? next.Enabled;
                 next.MinConfidence = req.MinConfidence ?? next.MinConfidence;
                 next.Fps = req.Fps ?? next.Fps;
+                next.Detailed = req.Detailed ?? next.Detailed;
                 if (req.Groups != null) next.Groups = req.Groups;
                 detect.Store.Save(next);
                 // Switching it on is what pays for the download: 35 MB fetched once,
-                // in the background, so the first camera view already has it.
-                if (next.Enabled) _ = detect.Assets.EnsureAsync();
+                // in the background, so the first camera view already has it. The
+                // detailed model is another 29 MB, and only when it is asked for.
+                if (next.Enabled) _ = detect.Assets.EnsureAsync(next.Detailed);
                 return Results.Json(ShapeDetect());
             });
 
@@ -1680,7 +1693,7 @@ public static class WebApi
 
             // An install that was already using it gets its files back after a state
             // dir is moved or cleared, without waiting for someone to open Settings.
-            if (detect.Store.Snapshot().Enabled) _ = detect.Assets.EnsureAsync();
+            if (detect.Store.Snapshot() is { Enabled: true } boot) _ = detect.Assets.EnsureAsync(boot.Detailed);
         }
 
         // Per-user UI settings: an opaque JSON blob the client owns.
@@ -2965,22 +2978,27 @@ public static class WebApi
                 aiPending = r.AiDescription == null && o.AiPending?.Invoke(r.Id) == true,
             };
 
-            app.MapGet("/api/events", (string? camera, bool? reviewed, int? limit, string? date) =>
+            // date alone is one day; date+to is an inclusive range; to alone is
+            // everything up to that day.
+            app.MapGet("/api/events", (string? camera, bool? reviewed, int? limit, string? date, string? to) =>
             {
-                DateTime? day = null;
-                if (date != null)
+                DateTime? day = null, until = null;
+                foreach (var (raw, name) in new[] { (date, "date"), (to, "to") })
                 {
-                    if (!DateTime.TryParseExact(date, "yyyy-MM-dd", null,
+                    if (raw == null) continue;
+                    if (!DateTime.TryParseExact(raw, "yyyy-MM-dd", null,
                             System.Globalization.DateTimeStyles.None, out var d))
-                        return Results.Json(new { error = "date must be yyyy-MM-dd" }, statusCode: 400);
-                    day = d;
+                        return Results.Json(new { error = $"{name} must be yyyy-MM-dd" }, statusCode: 400);
+                    if (name == "date") day = d; else until = d;
                 }
+                if (day is { } a && until is { } b && b < a)
+                    return Results.Json(new { error = "to must not be before date" }, statusCode: 400);
                 // Wake-only records never belong on the events list: tentative
                 // self-wake recordings (still unconfirmed) and wake events stored
                 // by older versions. Excluded inside the store, before the limit,
                 // so they cannot eat list slots on a busy day.
                 return Results.Json(events
-                    .List(camera, reviewed, limit ?? 200, day, excludeWakeOnly: true)
+                    .List(camera, reviewed, limit ?? 200, day, excludeWakeOnly: true, localTo: until)
                     .Select(Shape));
             });
 

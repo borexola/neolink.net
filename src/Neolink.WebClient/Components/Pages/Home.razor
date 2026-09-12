@@ -8,6 +8,7 @@
 @inject LocalApiInfo Local
 @inject NavigationManager Nav
 @inject Translator T
+@inject DetectZones DetectZones
 @implements IAsyncDisposable
 
 <div class="shell">
@@ -934,6 +935,10 @@
                                         <button class="cam-rail-btn @TalkClass(railCam)" title="@TalkTitle(railCam)"
                                                 @onclick="() => ToggleTalkAsync(railCam)">@UiIcon.Render("mic", 14)</button>
                                     }
+                                    @if (DetectSurface()?.VideoId == $"vid-{index}")
+                                    {
+                                        @BoxesButton
+                                    }
                                     <button class="cam-rail-btn" title="@T["Camera settings & controls"]"
                                             @onclick="() => _panelCamera = railCam">@UiIcon.Render("gear", 14)</button>
                                 </div>
@@ -958,6 +963,7 @@
                      User="@_user" Pass="@_pass" Token="@_authToken"
                      CanEditRecording="@(!_authEnabled || _authAdmin)"
                      IsAdmin="@(!_authEnabled || _authAdmin)"
+                     OnZoneSaved="DetectZones.Forget"
                      OnClose="() => _panelCamera = null" />
     }
 
@@ -2603,6 +2609,41 @@
                                         }
                                     </select>
                                 </div>
+                                @* The bigger model is a server-wide offer, not an order:
+                                   each browser takes it only if it has a GPU that can
+                                   keep up, and falls back on its own if it cannot. *@
+                                <div class="control-row">
+                                    <span>@T["Recognise more, using a bigger model"]</span>
+                                    <button class="chip @(_detect.Detailed ? "" : "chip-off")" disabled="@_detectBusy"
+                                            title="@T["Better with awkward angles and half-hidden things, at about three times the work. Only browsers with a working GPU use it."]"
+                                            @onclick="() => SaveDetectAsync(d => d.Detailed = !d.Detailed)">
+                                        @(_detect.Detailed ? T["on"] : T["off"])</button>
+                                </div>
+                                @if (_detect.Detailed)
+                                {
+                                    switch (_detect.DetailedAssets.State)
+                                    {
+                                        case "ready":
+                                            break;
+                                        case "downloading":
+                                            <div class="notice small">
+                                                @T.F("Fetching the bigger model — {0}% of {1} MB.", _detect.DetailedAssets.Percent,
+                                                     $"{_detect.DetailedAssets.Bytes / 1_000_000.0:0}")
+                                            </div>
+                                            break;
+                                        case "failed":
+                                            <div class="notice small error">
+                                                @T.F("The bigger model could not be downloaded: {0}", _detect.DetailedAssets.Error ?? "")
+                                            </div>
+                                            break;
+                                        default:
+                                            <div class="notice small">
+                                                @T.F("The bigger model is a further {0} MB, downloaded once to this server. Until it arrives the boxes keep using the small one.",
+                                                     $"{_detect.DetailedAssets.Bytes / 1_000_000.0:0}")
+                                            </div>
+                                            break;
+                                    }
+                                }
                             }
                         </div>
                     }
@@ -2837,9 +2878,25 @@
                    tiles (wheel at the cursor, drag to pan, HUD, dbl-click 1:1).
                    Keyed per event so zoom resets when navigating between events
                    but survives the HD↔SD swap. *@
-                <div class="event-player-media zoom-on" @key="_playEvent.Id">
-                    <video id="event-player-video" controls autoplay playsinline></video>
+                @* controlsList: the player's own fullscreen button hands fullscreen to
+                   the bare <video>, which shows its pixels and NOTHING else — no
+                   boxes, no zoom, no rail. Ours hands it to this container, which
+                   carries them all (the wall's button already works that way). *@
+                <div class="event-player-media zoom-on" id="event-player-media" @key="_playEvent.Id">
+                    <video id="event-player-video" controls controlsList="nofullscreen" autoplay playsinline></video>
                     @ZoomHud
+                    <div class="cam-rail" @onclick:stopPropagation="true" @ondblclick:stopPropagation="true">
+                        <div class="cam-rail-pill">
+                            @if (DetectSurface()?.VideoId == "event-player-video")
+                            {
+                                @BoxesButton
+                            }
+                            <button class="cam-rail-btn" title="@T["Browser fullscreen (click again to exit)"]"
+                                    @onclick='() => JS.InvokeVoidAsync("neolink.fullscreen", "event-player-media")'>
+                                <span class="fs-enter">@UiIcon.Render("fs-enter", 14)</span><span class="fs-exit">@UiIcon.Render("fs-exit", 14)</span>
+                            </button>
+                        </div>
+                    </div>
                 </div>
                 <div class="player-speed">
                     <span class="player-group" title="@T["Playback speed"]">
@@ -2898,6 +2955,9 @@
     };
 
     private const string StorageKey = "neolink.view";
+    /// <summary>Shared with the events page: the switch is on the picture in both
+    /// places, and flipping it there must mean the same thing here.</summary>
+    private const string BoxesKey = "neolink.boxes";
 
     private readonly List<ApiCamera> _cameras = new();
     private List<ViewSlot> _slots = new();
@@ -3443,26 +3503,68 @@
     private bool _detectBusy;
 
     /// <summary>
-    /// What the browser's detector should be drawing on, or null for "nothing".
-    /// Null is the answer almost everywhere: the boxes are for ONE camera watched
-    /// on its own (/cameras/{name}, which is what a maximized tile is), because a
-    /// wall would mean a detector per tile and the phone-sized devices this also
-    /// runs on cannot afford one. Waiting until the files are ready keeps the page
-    /// from starting a detector that can only fail.
+    /// What the browser's detector should be looking at: the video element and the
+    /// camera whose footage it shows, or null for "nothing". One detector at a time,
+    /// and the recorded clip wins — a pop-up over the wall is what the user is
+    /// actually watching, and a second session would cost another model and another
+    /// decoder on a phone that has few of either. Otherwise it is ONE camera watched
+    /// on its own (/cameras/{name}, which is what a maximized tile is); a wall of
+    /// tiles would mean a detector per tile.
     /// </summary>
+    private (string VideoId, string Camera)? DetectSurface()
+    {
+        if (_detect is not { Enabled: true, Assets.State: "ready" }) return null;
+        if (Locked || string.IsNullOrWhiteSpace(_server)) return null;
+        if (_playEvent is { HasClip: true, Camera: { Length: > 0 } evCam })
+            return ("event-player-video", evCam);
+        if (Camera == null || _maxIndex is not { } max || max >= _slots.Count) return null;
+        return _slots[max].Camera is { } live ? ($"vid-{max}", live) : null;
+    }
+
+    /// <summary>The surface the detector should actually be running on: the one
+    /// that can draw boxes, unless the viewer has switched them off on the picture.
+    /// Off means no detector at all — not a hidden canvas — so it costs nothing.</summary>
+    private (string VideoId, string Camera)? DetectTarget() => _boxes ? DetectSurface() : null;
+
+    /// <summary>Whether the boxes are wanted. A per-device preference, like a
+    /// subtitle track: it follows the browser, not the account.</summary>
+    private bool _boxes = true;
+
+    private async Task ToggleBoxesAsync()
+    {
+        _boxes = !_boxes;
+        try { await JS.InvokeVoidAsync("neolink.lsSet", BoxesKey, _boxes ? "1" : "0"); } catch { }
+    }
+
+    /// <summary>What the detector should be drawing, or null. Withheld until the
+    /// camera's detection zones have been answered for: a box drawn in a part of
+    /// the view the user has told the camera to ignore is a box they did not
+    /// ask for, and one frame of it is one too many.</summary>
     private object? DetectWire()
     {
-        if (_detect is not { Enabled: true, Assets.State: "ready" } d) return null;
-        if (Locked || Camera == null || string.IsNullOrWhiteSpace(_server)) return null;
-        if (_maxIndex is not { } max || max >= _slots.Count || _slots[max].Camera == null) return null;
+        if (_detect is not { } d || DetectTarget() is not { } target) return null;
+        if (!DetectZones.Known(target.Camera)) return null;
         return new
         {
-            videoId = $"vid-{max}",
+            videoId = target.VideoId,
+            camera = target.Camera,
             @base = $"{_server.TrimEnd('/')}/detect/asset/",
             minConfidence = d.MinConfidence / 100.0,
             fps = d.Fps,
             groups = d.Groups,
+            model = d.ModelFile,
         };
+    }
+
+    private void KickDetectZones()
+    {
+        if (DetectTarget() is not { } target || DetectZones.Known(target.Camera)) return;
+        _ = InvokeAsync(async () =>
+        {
+            if (await DetectZones.EnsureAsync(target.Camera, Http, ApiBase, _authToken,
+                    _detect?.Groups ?? new List<string>()))
+                StateHasChanged();
+        });
     }
 
     private async Task RefreshDetectAsync()
@@ -3503,6 +3605,7 @@
                 minConfidence = next.MinConfidence,
                 fps = next.Fps,
                 groups = next.Groups,
+                detailed = next.Detailed,
             });
             using var res = await Http.SendAsync(req);
             if (res.IsSuccessStatusCode)
@@ -3518,6 +3621,9 @@
         {
             _detectBusy = false;
         }
+        // Which zones are worth reading depends on which groups are outlined, so a
+        // changed group list means the answers on hand were for a different question.
+        DetectZones.ForgetAll();
         // The server answers with the sanitized truth (and the download state that
         // switching it on just started), so re-read it rather than trusting the edit.
         await RefreshDetectAsync();
@@ -3956,6 +4062,7 @@
     private async Task WireJsAsync()
     {
         _selfRef ??= DotNetObjectReference.Create(this);
+        KickDetectZones();
         bool strip = _eventsSupported && _events.Any(e => !e.Reviewed);
         // The strip's looping previews hand their decoders back while the
         // event player holds the screen.
@@ -3967,6 +4074,9 @@
                 fallback = PlayerFallback, autoplay = true, ongoing = ev.Ongoing,
             }
             : null;
+        // The grids ride along only the first time: they are thousands of characters,
+        // and this payload crosses the circuit on every render.
+        var zones = DetectZones.TakePush(DetectTarget()?.Camera);
         if (!_legacyWire)
         {
             try
@@ -3978,6 +4088,7 @@
                     trickleSpeed = _trickleSpeed,
                     trickleSuspend,
                     player,
+                    detectZones = zones,
                     detect = DetectWire(),
                 });
                 return;
@@ -4065,6 +4176,8 @@
             _server = "http://" + _server["https://".Length..];
             await SaveAsync();
         }
+
+        try { _boxes = await JS.InvokeAsync<string?>("neolink.lsGet", BoxesKey) != "0"; } catch { }
 
         try { _origin = await JS.InvokeAsync<string>("neolink.defaultServer"); } catch { }
         if (string.IsNullOrWhiteSpace(_server))
@@ -5671,6 +5784,7 @@
             var cams = await res.Content.ReadFromJsonAsync<List<ApiCamera>>(cancellationToken: fetchCts.Token);
             _cameras.Clear();
             if (cams != null) _cameras.AddRange(cams);
+            PruneMissingCameras();
             SyncClipStates();
             await MaybeNotifyCamerasAsync();
             _error = null;
@@ -6505,6 +6619,30 @@
         if (_slots.Count > _count) _slots = _slots.Take(_count).ToList();
     }
 
+    /// <summary>Empties tiles naming a camera this server does not have: a saved
+    /// layout outlives the config that built it, and such a tile keeps asking for a
+    /// snapshot that 404s forever. Never runs on an empty camera list — that is a
+    /// server that has not answered properly, not a config with nothing in it. The
+    /// tile and its span stay, so the grid keeps its shape.</summary>
+    private void PruneMissingCameras()
+    {
+        if (_cameras.Count == 0) return;
+        for (int i = 0; i < _slots.Count; i++)
+        {
+            var slot = _slots[i];
+            if (slot.Camera == null
+                || _cameras.Any(c => string.Equals(c.Name, slot.Camera, StringComparison.OrdinalIgnoreCase)))
+                continue;
+            slot.Camera = slot.Kind = slot.Path = null;
+            if (_maxIndex == i)
+            {
+                _maxIndex = null;
+                _maxPrevKind = _maxPrevPath = _maxPrevCamera = _maxSetKind = null;
+                if (Camera != null) Nav.NavigateTo("");
+            }
+        }
+    }
+
     private void SetMode(string mode)
     {
         ExitMaximize();
@@ -6794,6 +6932,12 @@
         <button type="button" class="icon-btn zoom-btn zoom-reset" data-zoom="reset" title="@T["Restore 1:1 (or double-click the video)"]">1:1</button>
     </div>;
 
+    /// <summary>The object-boxes switch, as the camera rail's own button. Rendered
+    /// only on the surface that can actually draw them.</summary>
+    private RenderFragment BoxesButton => @<button class="cam-rail-btn @(_boxes ? "rail-active" : "")"
+            title="@(_boxes ? T["Hide the object boxes"] : T["Outline people, vehicles and animals"])"
+            @onclick="ToggleBoxesAsync">@UiIcon.Render("boxes", 14)</button>;
+
     private void OnTileClick(int index, MouseEventArgs e)
     {
         // An empty tile invites a click: open the camera picker right there
@@ -6875,6 +7019,7 @@
         _count = ClampCount(_mode, l.Count);
         _slots = l.Slots.Select(s => s.Clone()).ToList();
         EnsureSlots();
+        PruneMissingCameras(); // the saved layout keeps its cameras; this view can't show the gone ones
         ForgetBorrowedSlot(); // these are different tiles; the old index means nothing
         _backup = null; // loading a layout replaces any maximize detour
         _activeLayout = l.Name;

@@ -292,26 +292,29 @@ public sealed class EventStore
     /// Date-scoped queries allow a far higher cap: the day itself bounds the
     /// reply, and the day views must show a busy day whole.</summary>
     public List<EventRecord> List(string? camera = null, bool? reviewed = null, int limit = 200,
-        DateTime? localDate = null, bool excludeWakeOnly = false)
+        DateTime? localDate = null, bool excludeWakeOnly = false, DateTime? localTo = null)
     {
         limit = Math.Clamp(limit, 1, 100_000);
-        var day = localDate?.Date;
+        // A lone date is a one-day range, which is what every existing caller asks
+        // for; a lone end is everything up to it.
+        var from = localDate?.Date;
+        var to = localTo?.Date ?? localDate?.Date;
         var matched = new List<EventRecord>(Math.Min(limit, 512));
         lock (_gate)
         {
             // Newest first off the sorted index, stopping at the limit — and, for
-            // a day query, at the first event older than that day.
+            // a dated query, at the first event older than the range.
             for (int i = _byStart.Count - 1; i >= 0 && matched.Count < limit; i--)
             {
                 var r = _byStart[i];
                 if (camera != null && !string.Equals(r.Camera, camera, StringComparison.OrdinalIgnoreCase)) continue;
                 if (reviewed != null && r.Reviewed != reviewed) continue;
                 if (excludeWakeOnly && r.Labels is ["wake"]) continue;
-                if (day is { } d)
+                if (from != null || to != null)
                 {
                     var rd = r.StartUtc.ToLocalTime().Date;
-                    if (rd > d) continue;
-                    if (rd < d) break;
+                    if (to is { } hi && rd > hi) continue;
+                    if (from is { } lo && rd < lo) break;
                 }
                 matched.Add(r);
             }

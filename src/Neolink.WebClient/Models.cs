@@ -289,6 +289,11 @@ public sealed class ApiDetectAssets
     public long Bytes { get; set; }
 }
 
+/// <summary>One detection-zone grid on its way to the browser's box overlay: the
+/// camera's watched/ignored cells, plus the box groups it governs. A camera with
+/// one shared zone sends a single grid naming every group.</summary>
+public sealed record DetectZoneGrid(List<string> Groups, int Cols, int Rows, string Table);
+
 /// <summary>GET /api/detect, PUT /api/admin/detect — live object boxes (preview).</summary>
 public sealed class ApiDetect
 {
@@ -297,7 +302,15 @@ public sealed class ApiDetect
     public int Fps { get; set; } = 5;
     public List<string> Groups { get; set; } = new();
     public List<string> KnownGroups { get; set; } = new();
+    /// <summary>The larger model is wanted; <see cref="DetailedAssets"/> says whether
+    /// it is actually here yet, and the browser decides whether it can run it.</summary>
+    public bool Detailed { get; set; }
     public ApiDetectAssets Assets { get; set; } = new();
+    public ApiDetectAssets DetailedAssets { get; set; } = new();
+
+    /// <summary>The model file the page should ask for.</summary>
+    public string ModelFile =>
+        Detailed && DetailedAssets.State == "ready" ? "yolov10s.onnx" : "yolov10n.onnx";
 }
 
 /// <summary>GET /api/auth/status — whether/how the UI must authenticate.
@@ -516,6 +529,10 @@ public static class UiIcon
             "collapse" => "<polyline points=\"4 14 10 14 10 20\"/><polyline points=\"20 10 14 10 14 4\"/><line x1=\"14\" y1=\"10\" x2=\"21\" y2=\"3\"/><line x1=\"3\" y1=\"21\" x2=\"10\" y2=\"14\"/>",
             "fs-enter" => "<path d=\"M8 3H5a2 2 0 0 0-2 2v3\"/><path d=\"M21 8V5a2 2 0 0 0-2-2h-3\"/><path d=\"M3 16v3a2 2 0 0 0 2 2h3\"/><path d=\"M16 21h3a2 2 0 0 0 2-2v-3\"/>",
             "fs-exit" => "<path d=\"M8 3v3a2 2 0 0 1-2 2H3\"/><path d=\"M21 8h-3a2 2 0 0 1-2-2V3\"/><path d=\"M3 16h3a2 2 0 0 1 2 2v3\"/><path d=\"M16 21v-3a2 2 0 0 1 2-2h3\"/>",
+            // Object boxes: a viewfinder's corners around something being watched.
+            "boxes" => "<path d=\"M3 8V5a2 2 0 0 1 2-2h3\"/><path d=\"M16 3h3a2 2 0 0 1 2 2v3\"/>"
+                + "<path d=\"M21 16v3a2 2 0 0 1-2 2h-3\"/><path d=\"M8 21H5a2 2 0 0 1-2-2v-3\"/>"
+                + "<rect x=\"8\" y=\"8\" width=\"8\" height=\"8\" rx=\"1.5\"/>",
             "shield" => "<path d=\"M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z\"/>",
             "lock" => "<rect x=\"3\" y=\"11\" width=\"18\" height=\"11\" rx=\"2\"/><path d=\"M7 11V7a5 5 0 0 1 10 0v4\"/>",
             "user" => "<path d=\"M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2\"/><circle cx=\"12\" cy=\"7\" r=\"4\"/>",

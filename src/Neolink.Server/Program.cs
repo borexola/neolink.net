@@ -374,6 +374,20 @@ var emergency = new Neolink.Notifications.EmergencyMode(emergencyStore,
 // server only stores the switch and keeps the files the page loads.
 var detectStore = new Neolink.Detect.DetectStore(stateDir);
 var detectAssets = new Neolink.Detect.DetectAssets(stateDir);
+// Housekeeping, on the hour like the recordings' own: a feature switched off
+// should not go on holding 35 MB of state dir. Not done the moment it is switched
+// off — turning it off and straight back on is a normal thing to do, and that
+// would cost the download twice.
+tasks.Add(Task.Run(async () =>
+{
+    while (!shutdown.IsCancellationRequested)
+    {
+        try { await Task.Delay(TimeSpan.FromHours(1), shutdown.Token).ConfigureAwait(false); }
+        catch (OperationCanceledException) { return; }
+        try { detectAssets.Tidy(detectStore.Snapshot()); }
+        catch (Exception ex) { Log.Warn($"Live object boxes: tidy pass failed: {Log.Flatten(ex)}"); }
+    }
+}));
 var recordingHealth = new Neolink.Recording.RecordingHealth();
 tasks.Add(Task.Run(() => notifier.RunAsync(shutdown.Token)));
 

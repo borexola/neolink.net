@@ -48,14 +48,39 @@ public sealed class DetectAssets
             + "57657320425ee34056408a57ad9d29c4d4815bd8/onnx/model.onnx",
         "a77dd863933f184a19e84361c64b788228a7c7dacc2c78939239a96ad3efca3b", 9_386_116);
 
-    public static readonly DetectAsset[] All = { Runtime, RuntimeLoader, RuntimeWasm, Model };
+    /// <summary>YOLOv10-small: the same graph shape (one 640 square in, 300 finished
+    /// boxes out), three times the work and a large step up in what it recognises —
+    /// awkward angles and half-hidden things above all. Optional, because it is
+    /// another 29 MB here and only a machine with a working GPU can run it at any
+    /// useful rate; the browser falls back to the nano model when it cannot.</summary>
+    public static readonly DetectAsset Detailed = new(
+        "yolov10s.onnx",
+        "https://huggingface.co/onnx-community/yolov10s/resolve/"
+            + "7485ebdc9f6c8ffe6396a5b1ae02c09ac173be0c/onnx/model.onnx",
+        "e2df1b4f5190e1ab4b7305181b2a80eb84ed7cc36d11aee0318781e91b0ad0b8", 29_187_904);
 
-    public static long TotalBytes => All.Sum(a => a.Bytes);
+    /// <summary>What the feature cannot work without.</summary>
+    public static readonly DetectAsset[] Core = { Runtime, RuntimeLoader, RuntimeWasm, Model };
+
+    /// <summary>Everything this server will ever serve under /detect/asset/.</summary>
+    public static readonly DetectAsset[] All = { Runtime, RuntimeLoader, RuntimeWasm, Model, Detailed };
+
+    public static long TotalBytes => Core.Sum(a => a.Bytes);
 
     /// <summary>"ready" | "missing" | "downloading" | "failed".</summary>
     public sealed record Status(string State, int Percent, string? Error);
 
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(30) };
+
+    /// <summary>One download in flight and what became of the last one. The optional
+    /// model gets its own, so fetching it cannot make a working feature report
+    /// itself as still downloading.</summary>
+    private sealed class Job
+    {
+        public Task? Task;
+        public int Percent;
+        public string? Error;
+    }
 
     private readonly string _bundledDir;
     private readonly string _stateDir;
@@ -63,9 +88,8 @@ public sealed class DetectAssets
     private readonly object _gate = new();
     private readonly Dictionary<string, string> _verified = new(StringComparer.Ordinal);
     private readonly Dictionary<string, DateTime> _lastMiss = new(StringComparer.Ordinal);
-    private Task? _download;
-    private int _percent;
-    private string? _error;
+    private readonly Job _core = new();
+    private readonly Job _extra = new();
 
     /// <param name="allowDownload">False makes every fetch a no-op, so missing files
     /// stay "missing" instead of becoming "downloading" — the self-tests pass false,
@@ -113,40 +137,55 @@ public sealed class DetectAssets
 
     public bool Ready
     {
-        get { lock (_gate) return All.All(a => LocateLocked(a) != null); }
+        get { lock (_gate) return Core.All(a => LocateLocked(a) != null); }
     }
 
-    public Status Current()
+    /// <summary>Whether the optional detailed model is on hand.</summary>
+    public bool DetailedReady => Locate(Detailed) != null;
+
+    public Status Current() => StatusOf(Ready, _core);
+
+    public Status DetailedStatus() => StatusOf(DetailedReady, _extra);
+
+    private Status StatusOf(bool have, Job job)
     {
-        if (Ready) return new Status("ready", 100, null);
+        if (have) return new Status("ready", 100, null);
         lock (_gate)
         {
-            if (_download is { IsCompleted: false }) return new Status("downloading", _percent, null);
-            return _error != null ? new Status("failed", 0, _error) : new Status("missing", 0, null);
+            if (job.Task is { IsCompleted: false }) return new Status("downloading", job.Percent, null);
+            return job.Error != null ? new Status("failed", 0, job.Error) : new Status("missing", 0, null);
         }
     }
 
-    /// <summary>Starts the download unless one is running or the files are already
-    /// there. Returns the running task; never throws.</summary>
-    public Task EnsureAsync(CancellationToken ct = default)
+    /// <summary>Starts whichever downloads are wanted and not already there or
+    /// running. Never throws.</summary>
+    public Task EnsureAsync(bool detailed = false, CancellationToken ct = default)
     {
-        if (Ready || !_allowDownload) return Task.CompletedTask;
+        if (!_allowDownload) return Task.CompletedTask;
+        var core = Ready ? Task.CompletedTask : Start(_core, Core, TotalBytes, ct);
+        if (detailed && !DetailedReady)
+            Start(_extra, new[] { Detailed }, Detailed.Bytes, ct);
+        return core;
+    }
+
+    private Task Start(Job job, DetectAsset[] assets, long total, CancellationToken ct)
+    {
         lock (_gate)
         {
-            if (_download is { IsCompleted: false }) return _download;
-            _error = null;
-            _percent = 0;
-            return _download = Task.Run(() => DownloadAsync(ct), CancellationToken.None);
+            if (job.Task is { IsCompleted: false }) return job.Task;
+            job.Error = null;
+            job.Percent = 0;
+            return job.Task = Task.Run(() => DownloadAsync(job, assets, total, ct), CancellationToken.None);
         }
     }
 
-    private async Task DownloadAsync(CancellationToken ct)
+    private async Task DownloadAsync(Job job, DetectAsset[] assets, long total, CancellationToken ct)
     {
         try
         {
             Directory.CreateDirectory(_stateDir);
             long done = 0;
-            foreach (var asset in All)
+            foreach (var asset in assets)
             {
                 bool have;
                 lock (_gate) have = LocateLocked(asset) != null;
@@ -154,18 +193,18 @@ public sealed class DetectAssets
                 {
                     long offset = done;
                     await FetchAsync(asset,
-                        got => { lock (_gate) _percent = (int)Math.Clamp((offset + got) * 100 / TotalBytes, 0, 99); },
+                        got => { lock (_gate) job.Percent = (int)Math.Clamp((offset + got) * 100 / total, 0, 99); },
                         ct).ConfigureAwait(false);
                     lock (_gate) _verified[asset.FileName] = Path.Combine(_stateDir, asset.FileName);
                 }
                 done += asset.Bytes;
             }
-            lock (_gate) _percent = 100;
+            lock (_gate) job.Percent = 100;
             Log.Info("Live object boxes: browser detector files ready");
         }
         catch (Exception ex)
         {
-            lock (_gate) _error = Log.Flatten(ex);
+            lock (_gate) job.Error = Log.Flatten(ex);
             Log.Warn($"Live object boxes: download failed — {Log.Flatten(ex)}");
         }
     }
@@ -196,6 +235,47 @@ public sealed class DetectAssets
             throw new InvalidOperationException($"{asset.FileName} did not match its published checksum");
         }
         File.Move(tmp, path, overwrite: true);
+    }
+
+    /// <summary>
+    /// Gives back the disk the feature is no longer using: switched off, the whole
+    /// 35 MB goes; the detailed model alone goes when only it was turned off.
+    /// Only ever the copies this server downloaded — files an operator placed next
+    /// to the executable are theirs, and an install with no internet depends on
+    /// them surviving. Switching the feature back on downloads again.
+    /// </summary>
+    public int Tidy(DetectSettings settings)
+    {
+        var doomed = !settings.Enabled ? All
+            : settings.Detailed ? Array.Empty<DetectAsset>()
+            : new[] { Detailed };
+        int gone = 0;
+        long freed = 0;
+        foreach (var asset in doomed)
+        {
+            var path = Path.Combine(_stateDir, asset.FileName);
+            try
+            {
+                if (!File.Exists(path)) continue;
+                var size = new FileInfo(path).Length;
+                File.Delete(path);
+                freed += size;
+                gone++;
+                lock (_gate)
+                {
+                    _verified.Remove(asset.FileName);
+                    _lastMiss.Remove(asset.FileName);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Debug($"Live object boxes: could not remove {asset.FileName} ({ex.GetType().Name})");
+            }
+        }
+        if (gone > 0)
+            Log.Info($"Live object boxes: removed {gone} unused detector file(s), " +
+                     $"{freed / 1_000_000.0:0.#} MB freed");
+        return gone;
     }
 
     private static bool Verified(string path, DetectAsset asset)

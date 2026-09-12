@@ -31,6 +31,11 @@ public sealed class DetectSettings
     /// recomputed, and it is the whole cost of the feature.</summary>
     public int Fps { get; set; } = 5;
 
+    /// <summary>Keep the larger model available (another 29 MB here). Not a promise
+    /// that it is used: it needs a working GPU in the browser, and a device without
+    /// one quietly stays on the small model.</summary>
+    public bool Detailed { get; set; }
+
     public static readonly string[] KnownGroups = { "people", "vehicles", "animals", "other" };
 
     public static readonly string[] DefaultGroups = { "people", "vehicles", "animals" };
@@ -44,6 +49,7 @@ public sealed class DetectSettings
         MinConfidence = MinConfidence,
         Groups = Groups?.ToList(),
         Fps = Fps,
+        Detailed = Detailed,
     };
 
     /// <summary>Clamps whatever arrived from the API into the ranges the page can

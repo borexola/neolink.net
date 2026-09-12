@@ -2327,6 +2327,15 @@ public static class SelfTest
                 Assert(store2.SetReviewed(rec.Id, true), "review known id");
                 Assert(store2.List(reviewed: false).Count == 0, "reviewed filter");
 
+                // Dates: one day, a range that holds it, and ranges either side.
+                var today = DateTime.Now.Date;
+                AssertEq(store2.List(localDate: today).Count, 1);
+                AssertEq(store2.List(localDate: today.AddDays(-1)).Count, 0);
+                AssertEq(store2.List(localDate: today.AddDays(-6), localTo: today).Count, 1);
+                AssertEq(store2.List(localTo: today).Count, 1);
+                AssertEq(store2.List(localTo: today.AddDays(-1)).Count, 0);
+                AssertEq(store2.List(localDate: today.AddDays(1), localTo: today.AddDays(2)).Count, 0);
+
                 // Layout: everything for a camera-day under one date folder.
                 var recDir = store2.EventDir(store2.List()[0]);
                 Assert(recDir.Contains(Path.Combine("cam1", rec.Id.Split('~')[1], "detections")),
@@ -7024,6 +7033,10 @@ public static class SelfTest
                 Assert(reloaded.Enabled, "the switch survives a restart");
                 AssertEq(reloaded.MinConfidence, 90);
                 AssertEq(string.Join(",", reloaded.Groups!), "people");
+                Assert(!reloaded.Detailed, "the bigger model is not fetched unless it is asked for");
+                reloaded.Detailed = true;
+                store.Save(reloaded);
+                Assert(new Detect.DetectStore(dir).Snapshot().Detailed, "and that choice survives a restart too");
 
                 // Every group unticked would silently mean "the default three" on the
                 // way back in, which is the opposite of what the user asked for.
@@ -7063,6 +7076,32 @@ public static class SelfTest
                 Assert(fresh.Locate(Detect.DetectAssets.Runtime.FileName) == null,
                     "a file that does not match its published checksum is never served");
                 Assert(!fresh.Ready, "and never counts towards being ready");
+
+                // The optional model is its own question: missing, it must not make a
+                // working feature read as unready, and it is still name-checked.
+                Assert(!fresh.DetailedReady, "the bigger model is absent until fetched");
+                AssertEq(fresh.DetailedStatus().State, "missing");
+
+                // Switched off, the files go back to the disk they came from — but
+                // only the ones this server downloaded.
+                var state = Path.Combine(dir, "detect-assets");
+                Directory.CreateDirectory(state);
+                foreach (var a in Detect.DetectAssets.All)
+                    File.WriteAllBytes(Path.Combine(state, a.FileName), new byte[8]);
+                var housekeeper = new Detect.DetectAssets(dir, allowDownload: false);
+                AssertEq(housekeeper.Tidy(new Detect.DetectSettings { Enabled = true, Detailed = true }), 0);
+                AssertEq(housekeeper.Tidy(new Detect.DetectSettings { Enabled = true, Detailed = false }), 1);
+                Assert(!File.Exists(Path.Combine(state, Detect.DetectAssets.Detailed.FileName)),
+                    "turning the bigger model off gives its 29 MB back");
+                Assert(File.Exists(Path.Combine(state, Detect.DetectAssets.Model.FileName)),
+                    "and leaves the one still in use alone");
+                AssertEq(housekeeper.Tidy(new Detect.DetectSettings { Enabled = false }),
+                    Detect.DetectAssets.Core.Length);
+                Assert(Directory.GetFiles(state).Length == 0, "switched off, none of it is kept");
+                Assert(Detect.DetectAssets.All.Contains(Detect.DetectAssets.Detailed),
+                    "but the server can serve it once it is there");
+                Assert(!Detect.DetectAssets.Core.Contains(Detect.DetectAssets.Detailed),
+                    "and readiness never waits on it");
             }
             finally { try { Directory.Delete(dir, true); } catch { } }
         });
