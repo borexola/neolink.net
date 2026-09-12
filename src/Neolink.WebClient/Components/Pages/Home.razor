@@ -2524,6 +2524,89 @@
                         </div>
                     }
 
+                    @if (_settingsTab == "experimental" && _detect != null)
+                    {
+                        <div class="campanel-section">
+                            <div class="campanel-section-title">
+                                @UiIcon.Render("eye", 13) @T["LIVE OBJECT BOXES"] <span class="preview-tag">@T["PREVIEW"]</span>
+                            </div>
+                            <div class="notice small">
+                                @T["Outlines the people, vehicles and animals in view while you watch one camera. Your cameras report WHAT they detected but never where it was, so the picture is read here in your browser — the server never looks at your video for this, and no frame leaves the device you are watching on."]
+                                <text> </text>@T["Boxes are drawn on a single camera on its own — click a camera to open it full-size. The wall of tiles never draws them: that would mean one detector running per tile."]
+                                <text> </text>@T["It works on every camera, whether or not the camera itself does any detecting, and it is only ever a second opinion: recording, notifications and Home Assistant still follow what the CAMERA reports."]
+                            </div>
+                            <div class="control-row">
+                                <span>@T["Draw boxes"]</span>
+                                <button class="chip @(_detect.Enabled ? "" : "chip-off")" disabled="@_detectBusy"
+                                        title="@T["Turn live object boxes on for this server"]"
+                                        @onclick="() => SaveDetectAsync(d => d.Enabled = !d.Enabled)">
+                                    @(_detect.Enabled ? T["on"] : T["off"])</button>
+                            </div>
+                            @if (_detect.Enabled)
+                            {
+                                @switch (_detect.Assets.State)
+                                {
+                                    case "ready":
+                                        <div class="notice small ok">@T["Ready — open a camera full-size to see the boxes."]</div>
+                                        break;
+                                    case "downloading":
+                                        <div class="notice small">
+                                            @T.F("Fetching the detector — {0}% of {1} MB.", _detect.Assets.Percent,
+                                                 $"{_detect.Assets.Bytes / 1_000_000.0:0}")
+                                        </div>
+                                        break;
+                                    case "failed":
+                                        <div class="notice small error">
+                                            @T.F("The detector could not be downloaded: {0}", _detect.Assets.Error ?? "")
+                                            <button class="chip" disabled="@_detectBusy"
+                                                    @onclick="() => SaveDetectAsync(_ => { })">@T["Try again"]</button>
+                                        </div>
+                                        break;
+                                    default:
+                                        <div class="notice small">
+                                            @T.F("The detector is about {0} MB — the model and the runtime that runs it. It downloads once, to this server, and is then served to your browsers from here, so this keeps working with no internet.",
+                                                 $"{_detect.Assets.Bytes / 1_000_000.0:0}")
+                                        </div>
+                                        break;
+                                }
+                                <div class="campanel-subtitle">@T["WHAT TO OUTLINE"]</div>
+                                @foreach (var group in _detect.KnownGroups)
+                                {
+                                    var key = group;
+                                    bool on = _detect.Groups.Contains(key);
+                                    <div class="control-row">
+                                        <span>@GroupLabel(key)</span>
+                                        <button class="chip @(on ? "" : "chip-off")" disabled="@_detectBusy"
+                                                @onclick="() => SaveDetectAsync(d => ToggleGroup(d, key))">
+                                            @(on ? T["on"] : T["off"])</button>
+                                    </div>
+                                }
+                                <div class="control-row">
+                                    <span>@T["Draw a box when the match is at least"]</span>
+                                    <select class="notif-input" value="@_detect.MinConfidence" disabled="@_detectBusy"
+                                            title="@T["Lower finds more, and is wrong more often; higher only outlines what it is sure of."]"
+                                            @onchange="e => SaveDetectAsync(d => d.MinConfidence = int.TryParse((string?)e.Value, out var v) ? v : d.MinConfidence)">
+                                        @foreach (var pct in new[] { 20, 30, 45, 60, 75 })
+                                        {
+                                            <option value="@pct">@pct%</option>
+                                        }
+                                    </select>
+                                </div>
+                                <div class="control-row">
+                                    <span>@T["Look at the picture"]</span>
+                                    <select class="notif-input" value="@_detect.Fps" disabled="@_detectBusy"
+                                            title="@T["The video always plays at its own frame rate — this is only how often the boxes are worked out, and it is the whole cost of the feature."]"
+                                            @onchange="e => SaveDetectAsync(d => d.Fps = int.TryParse((string?)e.Value, out var v) ? v : d.Fps)">
+                                        @foreach (var fps in new[] { 1, 2, 5, 10 })
+                                        {
+                                            <option value="@fps">@T.F("{0} times a second", fps)</option>
+                                        }
+                                    </select>
+                                </div>
+                            }
+                        </div>
+                    }
+
                     @if (_adminConfig != null && _settingsTab is not ("notifications" or "ai" or "experimental" or "connection" or "users" or "alerts" or "language")
                          && !(_settingsTab == "cameras" && _camEdit != null))
                     {
@@ -2582,6 +2665,10 @@
                         @if (_emgStatus != null && _emg != null)
                         {
                             <div class="notice small @(_emgError ? "error" : "ok")">@_emgStatus</div>
+                        }
+                        @if (_detectStatus != null)
+                        {
+                            <div class="notice small error">@_detectStatus</div>
                         }
                     }
                     else if (_settingsTab is "connection" or "users" or "alerts" or "language")
@@ -3349,6 +3436,109 @@
         catch { /* emergency mode simply stays unreported this tick */ }
     }
 
+    // ---- live object boxes (preview) ----
+
+    private ApiDetect? _detect;
+    private string? _detectStatus;
+    private bool _detectBusy;
+
+    /// <summary>
+    /// What the browser's detector should be drawing on, or null for "nothing".
+    /// Null is the answer almost everywhere: the boxes are for ONE camera watched
+    /// on its own (/cameras/{name}, which is what a maximized tile is), because a
+    /// wall would mean a detector per tile and the phone-sized devices this also
+    /// runs on cannot afford one. Waiting until the files are ready keeps the page
+    /// from starting a detector that can only fail.
+    /// </summary>
+    private object? DetectWire()
+    {
+        if (_detect is not { Enabled: true, Assets.State: "ready" } d) return null;
+        if (Locked || Camera == null || string.IsNullOrWhiteSpace(_server)) return null;
+        if (_maxIndex is not { } max || max >= _slots.Count || _slots[max].Camera == null) return null;
+        return new
+        {
+            videoId = $"vid-{max}",
+            @base = $"{_server.TrimEnd('/')}/detect/asset/",
+            minConfidence = d.MinConfidence / 100.0,
+            fps = d.Fps,
+            groups = d.Groups,
+        };
+    }
+
+    private async Task RefreshDetectAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_server)) return;
+        try
+        {
+            using var res = await Http.SendAsync(ApiRequest(HttpMethod.Get, "/api/detect"));
+            if (res.IsSuccessStatusCode)
+                _detect = await res.Content.ReadFromJsonAsync<ApiDetect>();
+        }
+        catch { /* the boxes simply stay off */ }
+    }
+
+    /// <summary>Polled only when the answer can still change: while an admin is
+    /// looking at the tab, and while a download the wall is waiting on is running.</summary>
+    private async Task RefreshDetectIfNeededAsync()
+    {
+        bool watching = _authAdmin && _showServerSettings && _settingsTab == "experimental";
+        bool waiting = _detect is { Enabled: true } d && d.Assets.State != "ready";
+        if (_detect != null && !watching && !waiting) return;
+        await RefreshDetectAsync();
+    }
+
+    private async Task SaveDetectAsync(Action<ApiDetect> change)
+    {
+        if (_detect == null || _detectBusy) return;
+        _detectBusy = true;
+        _detectStatus = null;
+        var next = _detect;
+        change(next);
+        try
+        {
+            var req = ApiRequest(HttpMethod.Put, "/api/admin/detect");
+            req.Content = JsonContent.Create(new
+            {
+                enabled = next.Enabled,
+                minConfidence = next.MinConfidence,
+                fps = next.Fps,
+                groups = next.Groups,
+            });
+            using var res = await Http.SendAsync(req);
+            if (res.IsSuccessStatusCode)
+                _detect = await res.Content.ReadFromJsonAsync<ApiDetect>() ?? _detect;
+            else
+                _detectStatus = T.F("Could not save: HTTP {0}", (int)res.StatusCode);
+        }
+        catch (Exception ex)
+        {
+            _detectStatus = T.F("Could not save: {0}", ex.Message);
+        }
+        finally
+        {
+            _detectBusy = false;
+        }
+        // The server answers with the sanitized truth (and the download state that
+        // switching it on just started), so re-read it rather than trusting the edit.
+        await RefreshDetectAsync();
+    }
+
+    private static void ToggleGroup(ApiDetect d, string group)
+    {
+        if (!d.Groups.Remove(group)) d.Groups.Add(group);
+        // Every group off would silently mean "the default set" on the way back in:
+        // keep at least one, so an empty tick list cannot read as three of them.
+        if (d.Groups.Count == 0) d.Groups.Add(group);
+    }
+
+    private string GroupLabel(string group) => group switch
+    {
+        "people" => T["People"],
+        "vehicles" => T["Vehicles (cars, bikes, lorries)"],
+        "animals" => T["Animals"],
+        _ => T["Anything else it knows (bags, bins, furniture)"],
+    };
+
     private ApiEmergency? _emg;
     // The last state the SERVER confirmed, kept as JSON so a failed save can put
     // it back even when the follow-up read fails too: the tab must never show an
@@ -3732,6 +3922,7 @@
             try { _notifPerm = await JS.InvokeAsync<string>("neolink.notifState"); } catch { }
             try { _isShell = await JS.InvokeAsync<bool>("neolink.isShell"); } catch { }
             await LoadAlertPrefsAsync();
+            await RefreshDetectAsync();
             await RefreshCamerasAsync();
             await RefreshEventsAsync();
             ApplyRoute(); // deep links (/cameras/{name}) need the camera list first
@@ -3787,6 +3978,7 @@
                     trickleSpeed = _trickleSpeed,
                     trickleSuspend,
                     player,
+                    detect = DetectWire(),
                 });
                 return;
             }
@@ -3815,6 +4007,8 @@
         if (player != null)
             await JS.InvokeVoidAsync("neolink.eventPlayer", player.id, player.url, player.rate,
                 player.fallback, player.autoplay, player.ongoing);
+        // No detect() here: this path exists for a tab still running the PREVIOUS
+        // script, which has no such function. It gets boxes when it reloads.
     }
 
     private bool _legacyWire;
@@ -4570,6 +4764,7 @@
         // Cleared with the rest: the tab must not survive into a session that is
         // no longer an admin, and a stale arm prompt must never reopen primed.
         _emg = null; _emgStatus = null; _emgArmConfirm = false; _emgConfig = false; _emgAdvanced = false;
+        _detectStatus = null;
         // Non-admins (and open installs) get the Connection tab; the admin-only
         // tabs and their loads are skipped entirely.
         if (!_authAdmin)
@@ -4607,6 +4802,7 @@
                     ConfirmEmergency(loaded);
         }
         catch { /* emergency tab just stays hidden */ }
+        await RefreshDetectAsync();
         try
         {
             using var sres = await Http.SendAsync(ApiRequest(HttpMethod.Get, "/api/admin/security"));
@@ -5503,6 +5699,7 @@
                 await RefreshEventsAsync();
                 await EvaluateBatteryTilesAsync();
                 await RefreshEmergencyArmedAsync();
+                await RefreshDetectIfNeededAsync();
                 // A hidden page renders to nobody, and this is the monolith — a
                 // full render-tree diff per tick per circuit. The first visible
                 // tick repaints everything the quiet ones skipped.

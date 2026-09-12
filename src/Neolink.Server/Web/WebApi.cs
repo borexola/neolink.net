@@ -124,6 +124,9 @@ public sealed class WebApiOptions
     public Neolink.Ai.AiStore? Ai { get; init; }
     /// <summary>Emergency mode (beta); null when the feature is not wired.</summary>
     public Neolink.Notifications.EmergencyMode? Emergency { get; init; }
+    /// <summary>Live object boxes (preview): the settings store and the files the
+    /// browser's detector loads. Null when the feature is not wired.</summary>
+    public (Neolink.Detect.DetectStore Store, Neolink.Detect.DetectAssets Assets)? Detect { get; init; }
     /// <summary>Is this event's AI description queued or in flight right now?
     /// (AiDescriber.IsPending — lets the UI say "describing…" instead of nothing.)</summary>
     public Func<string, bool>? AiPending { get; init; }
@@ -243,6 +246,9 @@ public static class WebApi
     /// with nulls or omits the whole map.</summary>
     private sealed record EmergencyRequest(bool? Enabled, bool? Email, bool? Webhook,
         bool? Siren, bool? Lights, Dictionary<string, EmergencyCameraRequest>? Cameras);
+    /// <summary>Live object boxes: null = unchanged. Groups is set whenever present,
+    /// so an empty list means "back to the default set".</summary>
+    private sealed record DetectRequest(bool? Enabled, int? MinConfidence, int? Fps, List<string>? Groups);
     /// <summary>Retention fields: null = unchanged, negative = back to the server default, 0 = keep forever.
     /// RecordStream: null = unchanged, "" = back to the server default, else a served stream kind.
     /// Capture schedule: applied only while ScheduleEnabled; ScheduleDays null = unchanged,
@@ -1607,6 +1613,74 @@ public static class WebApi
                 }, CancellationToken.None);
                 return Results.Json(ShapeEmergency());
             });
+        }
+
+        // ------------------------------------------------------- live object boxes (preview)
+
+        if (o.Detect is { } detect)
+        {
+            object ShapeDetect()
+            {
+                var s = detect.Store.Snapshot();
+                var status = detect.Assets.Current();
+                return new
+                {
+                    enabled = s.Enabled,
+                    minConfidence = s.MinConfidence,
+                    fps = s.Fps,
+                    groups = s.EffectiveGroups,
+                    knownGroups = Neolink.Detect.DetectSettings.KnownGroups,
+                    assets = new
+                    {
+                        state = status.State, percent = status.Percent, error = status.Error,
+                        bytes = Neolink.Detect.DetectAssets.TotalBytes,
+                    },
+                };
+            }
+
+            // Readable by any signed-in user: the wall has to know whether to load a
+            // detector at all. Only admins can change it.
+            app.MapGet("/api/detect", () => Results.Json(ShapeDetect()));
+
+            app.MapPut("/api/admin/detect", (DetectRequest req, HttpContext ctx) =>
+            {
+                if (AdminOnly(ctx) is { } denied) return denied;
+                var next = detect.Store.Snapshot();
+                next.Enabled = req.Enabled ?? next.Enabled;
+                next.MinConfidence = req.MinConfidence ?? next.MinConfidence;
+                next.Fps = req.Fps ?? next.Fps;
+                if (req.Groups != null) next.Groups = req.Groups;
+                detect.Store.Save(next);
+                // Switching it on is what pays for the download: 35 MB fetched once,
+                // in the background, so the first camera view already has it.
+                if (next.Enabled) _ = detect.Assets.EnsureAsync();
+                return Results.Json(ShapeDetect());
+            });
+
+            // Deliberately NOT under /api: the page loads these with <script> and the
+            // runtime fetches its own .wasm, neither of which can carry a session
+            // token. They are fixed public files — the pinned ONNX Runtime build and
+            // the published model — so they hold nothing a session would protect.
+            app.MapGet("/detect/asset/{file}", (string file, HttpContext ctx) =>
+            {
+                if (detect.Assets.Locate(file) is not { } path)
+                    return Results.NotFound();
+                var type = Path.GetExtension(file) switch
+                {
+                    ".js" or ".mjs" => "text/javascript",
+                    ".wasm" => "application/wasm",
+                    _ => "application/octet-stream",
+                };
+                // Pinned by checksum, so these bytes can never change under this
+                // name: without this the 35 MB would be re-validated on every page
+                // load, over whatever link the phone is on.
+                ctx.Response.Headers.CacheControl = "public, max-age=31536000, immutable";
+                return Results.File(path, type, enableRangeProcessing: true);
+            });
+
+            // An install that was already using it gets its files back after a state
+            // dir is moved or cleared, without waiting for someone to open Settings.
+            if (detect.Store.Snapshot().Enabled) _ = detect.Assets.EnsureAsync();
         }
 
         // Per-user UI settings: an opaque JSON blob the client owns.

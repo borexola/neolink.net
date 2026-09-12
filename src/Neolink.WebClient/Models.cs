@@ -279,6 +279,27 @@ public sealed class ApiEmergency
     public Dictionary<string, ApiEmergencyCamera> Overrides { get; set; } = new();
 }
 
+/// <summary>The state of the files the browser's detector needs: "ready",
+/// "missing", "downloading" (with a percentage) or "failed" (with the reason).</summary>
+public sealed class ApiDetectAssets
+{
+    public string State { get; set; } = "missing";
+    public int Percent { get; set; }
+    public string? Error { get; set; }
+    public long Bytes { get; set; }
+}
+
+/// <summary>GET /api/detect, PUT /api/admin/detect — live object boxes (preview).</summary>
+public sealed class ApiDetect
+{
+    public bool Enabled { get; set; }
+    public int MinConfidence { get; set; } = 45;
+    public int Fps { get; set; } = 5;
+    public List<string> Groups { get; set; } = new();
+    public List<string> KnownGroups { get; set; } = new();
+    public ApiDetectAssets Assets { get; set; } = new();
+}
+
 /// <summary>GET /api/auth/status — whether/how the UI must authenticate.
 /// Language is the signed-in account's own choice (null = follows the server's);
 /// DefaultLanguage is what everyone else gets, including the sign-in screen.</summary>

@@ -797,6 +797,32 @@ html, body {
     user-select: none;
 }
 
+/* Live object boxes: a canvas laid exactly over the <video>, so the detector can
+   draw in the element's own pixels and let digital zoom (a transform on the
+   video, mirrored onto this) carry the boxes along with the picture. */
+.tile-detect {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+}
+
+.tile-detect-badge {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.55);
+    border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+    color: var(--muted);
+    font-size: 10px;
+    letter-spacing: 0.4px;
+    pointer-events: none;
+    user-select: none;
+}
+
 .tile-status {
     position: absolute;
     inset: 0;

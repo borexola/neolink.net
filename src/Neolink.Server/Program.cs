@@ -370,6 +370,10 @@ var emergency = new Neolink.Notifications.EmergencyMode(emergencyStore,
         PrivacyOn = c.PrivacyOn,
         SetHoldAwake = c.SetHoldAwake,
     }).ToList());
+// Live object boxes (preview): the detector itself runs in the browser, so the
+// server only stores the switch and keeps the files the page loads.
+var detectStore = new Neolink.Detect.DetectStore(stateDir);
+var detectAssets = new Neolink.Detect.DetectAssets(stateDir);
 var recordingHealth = new Neolink.Recording.RecordingHealth();
 tasks.Add(Task.Run(() => notifier.RunAsync(shutdown.Token)));
 
@@ -1019,6 +1023,7 @@ if (config.WebPort > 0)
         Notifier = notifier,
         Ai = aiStore,
         Emergency = emergency,
+        Detect = (detectStore, detectAssets),
         AiPending = aiDescriber != null ? aiDescriber.IsPending : null,
         Logs = logBuffer,
         // Graceful shutdown; docker's restart policy (systemd, or the HA

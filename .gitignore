@@ -31,6 +31,8 @@ src/Neolink/
 #   camera-state.json  per-camera suspend flags
 #   storage-trend.json disk-usage history
 #   bookmarks.json     timeline bookmarks — names of personal moments
+#   detect.json        live object boxes: the switch and its thresholds
+#   detect-assets/     35 MB of downloaded ONNX Runtime + model files
 secret.key
 users.json
 notifications.json
@@ -39,6 +41,8 @@ settings.json
 camera-state.json
 storage-trend.json
 bookmarks.json
+detect.json
+detect-assets/
 #   desktop.json       the Windows shell's server URL + DPAPI-protected password
 desktop.json
 # ...but the editor's own settings are not ours to hide.

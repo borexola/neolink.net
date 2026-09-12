@@ -190,6 +190,14 @@ The trade-off is that detection quality and available classes are whatever your
 camera model provides (rather than a tunable server-side model like Frigate's);
 in exchange you get an integration light enough to leave running forever.
 
+One preview feature adds boxes to that picture without changing any of it: **live
+object boxes** (Server settings → Experimental) outlines people, vehicles and
+animals while you watch a single camera. The camera tells you *what* it saw but
+never *where*, so the outlining is done by your BROWSER, on the frames it is
+already decoding to show you — the server still never looks at a video frame, and
+nothing is sent anywhere. It is a second opinion for the person watching:
+recording, notifications and Home Assistant continue to follow the camera.
+
 ## Features
 
 **RTSP bridge**
@@ -224,6 +232,11 @@ in exchange you get an integration light enough to leave running forever.
 - **AI Search (BETA)**: search events in plain language ("people wearing
   something red last week"). Structured filters parse instantly, the LLM
   matches descriptions; see [AI Search](docs/ai-descriptions.md#ai-search-beta)
+- **Live object boxes (PREVIEW)**: while you watch one camera full-size, the
+  people, vehicles and animals in frame are outlined as you look at them.
+  The outlining runs in your browser, on frames it has already decoded — the
+  server adds nothing and no frame leaves the device. Switch it on under
+  Server settings → Experimental
 - **Battery cameras** (BETA) auto-detected and sleep-friendly — see
   [Battery cameras](#battery-cameras-argus-etc--beta)
 - **Tiered storage** (SSD clips tier + cold archive, capacity watching and

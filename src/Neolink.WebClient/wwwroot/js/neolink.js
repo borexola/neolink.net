@@ -7,6 +7,9 @@
     // asked for audio, and unmuted autoplay is usually blocked anyway. Any real
     // interaction before playback (clicking an event row) keeps sound on.
     let userGestureSeen = false;
+    // This file's own URL, so a sibling script can be loaded on demand with the
+    // same cache-busting version and behind the same path prefix (HA ingress).
+    const ownSrc = (document.currentScript && document.currentScript.src) || '';
     for (const evt of ['pointerdown', 'keydown', 'touchstart'])
         window.addEventListener(evt, () => { userGestureSeen = true; },
             { once: true, capture: true, passive: true });
@@ -713,6 +716,30 @@
             }
             const p = o.player;
             if (p) this.eventPlayer(p.id, p.url, p.rate, p.fallback, p.autoplay, p.ongoing);
+            this.detect(o.detect || null);
+        },
+
+        // Live object boxes (preview). The detector is a separate script that is
+        // fetched the first time it is actually wanted, so a server with the
+        // feature off never downloads a byte of it. `cfg` is null whenever boxes
+        // should not be drawn — which is every view except one camera on its own.
+        detect(cfg) {
+            this._detectWant = cfg;
+            if (window.neolinkDetect) { window.neolinkDetect.sync(cfg); return; }
+            if (!cfg || this._detectLoading || !ownSrc) return;
+            this._detectLoading = true;
+            const el = document.createElement('script');
+            el.src = ownSrc.replace(/neolink\.js/, 'detect.js');
+            el.onload = () => {
+                this._detectLoading = false;
+                // The view may have moved on while it loaded.
+                if (window.neolinkDetect) window.neolinkDetect.sync(this._detectWant || null);
+            };
+            el.onerror = () => {
+                this._detectLoading = false;
+                console.warn('neolink: the object detector script could not be loaded');
+            };
+            document.head.appendChild(el);
         },
 
         // Ambient event previews (review strip): ensure real muting, fast-forward

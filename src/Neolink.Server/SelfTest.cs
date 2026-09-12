@@ -6996,6 +6996,77 @@ public static class SelfTest
             finally { try { Directory.Delete(dir, true); } catch { } }
         });
 
+        Test("live object boxes: settings are clamped, persist, and always leave something to outline", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var store = new Detect.DetectStore(dir);
+                var fresh = store.Snapshot();
+                Assert(!fresh.Enabled, "a fresh install draws no boxes");
+                AssertEq(string.Join(",", fresh.EffectiveGroups),
+                    string.Join(",", Detect.DetectSettings.DefaultGroups));
+
+                fresh.Enabled = true;
+                fresh.MinConfidence = 500;   // a client that ignores the range
+                fresh.Fps = 0;               // …in both directions
+                fresh.Groups = new List<string> { "people", "unicorns" };
+                store.Save(fresh);
+
+                var saved = store.Snapshot();
+                AssertEq(saved.MinConfidence, 90);
+                AssertEq(saved.Fps, 1);
+                AssertEq(string.Join(",", saved.Groups!), "people"); // the invented group is gone
+                AssertEq(string.Join(",", saved.EffectiveGroups), "people");
+
+                var reloaded = new Detect.DetectStore(dir).Snapshot();
+                Assert(reloaded.Enabled, "the switch survives a restart");
+                AssertEq(reloaded.MinConfidence, 90);
+                AssertEq(string.Join(",", reloaded.Groups!), "people");
+
+                // Every group unticked would silently mean "the default three" on the
+                // way back in, which is the opposite of what the user asked for.
+                reloaded.Groups = new List<string>();
+                store.Save(reloaded);
+                AssertEq(string.Join(",", store.Snapshot().EffectiveGroups),
+                    string.Join(",", Detect.DetectSettings.DefaultGroups));
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        });
+
+        Test("live object boxes: only a checksum-matching file is ever served, and offline never fetches", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                // allowDownload: false — a test suite must never reach the network,
+                // and without it this would pull 35 MB.
+                var assets = new Detect.DetectAssets(dir, allowDownload: false);
+                AssertEq(assets.Current().State, "missing");
+                assets.EnsureAsync().GetAwaiter().GetResult();
+                AssertEq(assets.Current().State, "missing");
+                Assert(!assets.Ready, "nothing is ready before anything is downloaded");
+
+                Assert(assets.Locate("../../secret.key") == null, "the URL cannot name a file off the list");
+                Assert(assets.Locate("ort.webgpu.min.js") == null, "an absent file resolves to nothing");
+
+                // The right name and the right LENGTH, wrong bytes: this is the case
+                // the checksum exists for, so it must not become servable.
+                var planted = Path.Combine(dir, "detect-assets");
+                Directory.CreateDirectory(planted);
+                File.WriteAllBytes(Path.Combine(planted, Detect.DetectAssets.Runtime.FileName),
+                    new byte[Detect.DetectAssets.Runtime.Bytes]);
+                // Past the few-second miss cache the lookup really re-reads the file.
+                var fresh = new Detect.DetectAssets(dir, allowDownload: false);
+                Assert(fresh.Locate(Detect.DetectAssets.Runtime.FileName) == null,
+                    "a file that does not match its published checksum is never served");
+                Assert(!fresh.Ready, "and never counts towards being ready");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        });
+
         Test("emergency mode latches sirens and lights, and gives every light back on disarm", () =>
         {
             var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
