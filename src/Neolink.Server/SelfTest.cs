@@ -1,6 +1,7 @@
 ﻿// Copyright (c) 2026 Oluwabori Olaleye
 // Licensed under the GNU Affero General Public License v3.0; see the LICENSE file
 // in the repository root.
+using System.Buffers.Binary;
 using System.Text;
 using System.Threading.Channels;
 using Neolink.Bc;
@@ -837,6 +838,45 @@ public static class SelfTest
             {
                 File.Delete(tmp);
             }
+        });
+
+        Test("bc codec: a reply whose payload offset outruns its body stays framed", () =>
+        {
+            // Reolink IPC_36S8M: the battery query comes back as the request header
+            // echoed verbatim with body_len=0. Nothing follows it on the wire, so the
+            // next message has to parse off the same connection.
+            var enc = new EncryptionState();
+            var request = BcCodec.Serialize(new BcMessage
+            {
+                Meta = new BcMeta
+                {
+                    MsgId = BcConstants.MsgIdBatteryInfo,
+                    MsgNum = 2,
+                    Class = BcConstants.ClassModern,
+                },
+                Extension = new Bc.Xml.ExtensionXml { ChannelId = 0 },
+            }, enc);
+            AssertEq(request.Length, 123); // 24-byte header + 99-byte <Extension>
+
+            var echo = request[..24];
+            BinaryPrimitives.WriteUInt32LittleEndian(echo.AsSpan(8), 0);
+            BinaryPrimitives.WriteUInt16LittleEndian(echo.AsSpan(16), 200);
+            AssertEq(BinaryPrimitives.ReadUInt32LittleEndian(echo.AsSpan(20)), 99u);
+
+            var ping = BcCodec.Serialize(BcMessage.HeaderOnly(new BcMeta
+            {
+                MsgId = BcConstants.MsgIdPing,
+                Class = BcConstants.ClassModern,
+            }), enc);
+            byte[] wireBytes = [.. echo, .. ping];
+
+            using var wire = new MemoryStream(wireBytes);
+            var ctx = NewContext();
+            var reply = BcCodec.ReadMessageAsync(wire, ctx, CancellationToken.None).GetAwaiter().GetResult();
+            AssertEq(reply.Meta.MsgId, BcConstants.MsgIdBatteryInfo);
+            Assert(reply.IsEmptyModern, "an echoed header carries no BatteryInfo to parse");
+            var next = BcCodec.ReadMessageAsync(wire, ctx, CancellationToken.None).GetAwaiter().GetResult();
+            AssertEq(next.Meta.MsgId, BcConstants.MsgIdPing);
         });
 
         Test("bcudp discovery wire format (battery-camera probe)", () =>

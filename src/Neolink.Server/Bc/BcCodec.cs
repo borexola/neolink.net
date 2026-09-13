@@ -113,9 +113,14 @@ public static class BcCodec
                 : EncryptionKind.BcEncrypt);
         }
 
-        uint extLen = payloadOffset ?? 0;
-        if (extLen > bodyLen)
-            throw new BcProtocolException($"payload offset {extLen} exceeds body length {bodyLen}");
+        // Old OEM firmware (Reolink IPC_36S8M) refuses a command by echoing the
+        // request header back, payload_offset included, with body_len=0. body_len
+        // framed the bytes on the wire, so it wins.
+        uint claimedExt = payloadOffset ?? 0;
+        uint extLen = Math.Min(claimedExt, bodyLen);
+        if (extLen != claimedExt)
+            Log.Debug($"BC msg {msgId}/{msgNum}: payload offset {claimedExt} past body length {bodyLen}; " +
+                      "reading the reply as empty");
 
         // Extension XML (always encrypted with the negotiated protocol)
         if (extLen > 0)
