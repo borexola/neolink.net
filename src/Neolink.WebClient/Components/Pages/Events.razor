@@ -302,7 +302,7 @@
                     </div>
                     @* zoom-on: SD-card playback gets the same digital zoom as live views. *@
                     <div class="event-player-media zoom-on" id="ev-player-media" @key="sr.File">
-                        <video id="ev-video" controls controlsList="nofullscreen" autoplay="@_autoplay" playsinline></video>
+                        <video id="ev-video" controls autoplay="@_autoplay" playsinline></video>
                         @ZoomHud
                         <div class="cam-rail" @onclick:stopPropagation="true" @ondblclick:stopPropagation="true">
                             <div class="cam-rail-pill">
@@ -492,7 +492,7 @@
                         @* zoom-on: the recorded clip gets the same digital zoom as live
                            views — wheel/pinch to zoom, drag to pan, HUD buttons at the side. *@
                         <div class="event-player-media zoom-on" id="ev-player-media" @key="sel.Id">
-                            <video id="ev-video" controls controlsList="nofullscreen" autoplay="@_autoplay" playsinline></video>
+                            <video id="ev-video" controls autoplay="@_autoplay" playsinline></video>
                             @ZoomHud
                             <div class="cam-rail" @onclick:stopPropagation="true" @ondblclick:stopPropagation="true">
                                 <div class="cam-rail-pill">

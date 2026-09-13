@@ -567,14 +567,19 @@
                         @UiIcon.Render("camera", 14)
                     </button>
                     @* One monitor at a time carries the boxes: a detector per tile
-                       would mean a model per tile. The button names which one. *@
+                       would mean a model per tile. The pill names which one, and is
+                       the same on-video pill the live view puts its controls in. *@
                     @if (DetectAvailable)
                     {
-                        <button class="tl-snap tl-boxes @(_boxesCam == cam.Name ? "on" : "")"
-                                title="@(_boxesCam == cam.Name ? T["Hide the object boxes"] : T["Outline people, vehicles and animals"])"
-                                @onclick="() => ToggleBoxesAsync(cam.Name)" @onclick:stopPropagation="true">
-                            @UiIcon.Render("boxes", 14)
-                        </button>
+                        <div class="cam-rail" @onclick:stopPropagation="true" @ondblclick:stopPropagation="true">
+                            <div class="cam-rail-pill">
+                                <button class="cam-rail-btn @(_boxesCam == cam.Name ? "rail-active" : "")"
+                                        title="@(_boxesCam == cam.Name ? T["Hide the object boxes"] : T["Outline people, vehicles and animals"])"
+                                        @onclick="() => ToggleBoxesAsync(cam.Name)">
+                                    @UiIcon.Render("boxes", 14)
+                                </button>
+                            </div>
+                        </div>
                     }
                     @ZoomHud
                 </div>

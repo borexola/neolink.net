@@ -2878,12 +2878,13 @@
                    tiles (wheel at the cursor, drag to pan, HUD, dbl-click 1:1).
                    Keyed per event so zoom resets when navigating between events
                    but survives the HD↔SD swap. *@
-                @* controlsList: the player's own fullscreen button hands fullscreen to
-                   the bare <video>, which shows its pixels and NOTHING else — no
-                   boxes, no zoom, no rail. Ours hands it to this container, which
-                   carries them all (the wall's button already works that way). *@
+                @* The player's own fullscreen button hands fullscreen to the bare
+                   <video>, which shows its pixels and nothing else — no boxes, no
+                   zoom, no rail. detect.js catches that and hands it to this
+                   container instead, which carries them all; the rail's own button
+                   goes straight there, for browsers that refuse the hand-off. *@
                 <div class="event-player-media zoom-on" id="event-player-media" @key="_playEvent.Id">
-                    <video id="event-player-video" controls controlsList="nofullscreen" autoplay playsinline></video>
+                    <video id="event-player-video" controls autoplay playsinline></video>
                     @ZoomHud
                     <div class="cam-rail" @onclick:stopPropagation="true" @ondblclick:stopPropagation="true">
                         <div class="cam-rail-pill">
