@@ -5,6 +5,7 @@
 @inject IJSRuntime JS
 @inject LocalApiInfo Local
 @inject Translator T
+@inject DetectZones DetectZones
 @implements IAsyncDisposable
 
 @* NVR-style timeline: pick a day, scrub the lanes, and every included camera
@@ -565,6 +566,16 @@
                             @onclick="() => SnapshotAsync(cam.Name)" @onclick:stopPropagation="true">
                         @UiIcon.Render("camera", 14)
                     </button>
+                    @* One monitor at a time carries the boxes: a detector per tile
+                       would mean a model per tile. The button names which one. *@
+                    @if (DetectAvailable)
+                    {
+                        <button class="tl-snap tl-boxes @(_boxesCam == cam.Name ? "on" : "")"
+                                title="@(_boxesCam == cam.Name ? T["Hide the object boxes"] : T["Outline people, vehicles and animals"])"
+                                @onclick="() => ToggleBoxesAsync(cam.Name)" @onclick:stopPropagation="true">
+                            @UiIcon.Render("boxes", 14)
+                        </button>
+                    }
                     @ZoomHud
                 </div>
             }
@@ -877,6 +888,7 @@
             await LoadServerPrefsAsync(); // signed in: the account's copy wins
 
             await LoadCamerasAsync();
+            _detect = await GetJsonAsync<ApiDetect>("/api/detect");
             _included.RemoveWhere(name => _cameras.All(c => !string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase)));
             await LoadDayAsync();
             await LoadBookmarksAsync();
@@ -890,6 +902,8 @@
         }
 
         if (!_booted || _selfRef == null) return;
+
+        await SyncDetectAsync();
 
         if (_focusClock)
         {
@@ -930,6 +944,72 @@
     }
 
     // ------------------------------------------------------------ data
+
+    // --------------------------------------------------- live object boxes (preview)
+
+    private ApiDetect? _detect;
+    /// <summary>The monitor being outlined, or null. A name rather than a flag: the
+    /// board shows several cameras and only one of them can carry a detector.</summary>
+    private string? _boxesCam;
+    /// <summary>What the browser was last told. The board renders on a clock tick,
+    /// and the detector only needs telling when the answer changes.</summary>
+    private string? _detectWire;
+
+    private bool DetectAvailable => _detect is { Enabled: true, Assets.State: "ready" };
+
+    private (string VideoId, string Camera)? DetectSurface() =>
+        DetectAvailable && _boxesCam is { Length: > 0 } cam
+            && Included.Any(c => string.Equals(c.Name, cam, StringComparison.OrdinalIgnoreCase))
+            ? (VideoId(cam), cam) : null;
+
+    private async Task ToggleBoxesAsync(string camera)
+    {
+        _boxesCam = _boxesCam == camera ? null : camera;
+        await SyncDetectAsync();
+    }
+
+    /// <summary>Points the browser's detector at the chosen monitor (or at nothing).
+    /// The zones go first — no box may be drawn in a part of the view the camera was
+    /// told to ignore, not even for the frame before they arrive.</summary>
+    private async Task SyncDetectAsync()
+    {
+        var target = DetectSurface();
+        // The zones come off the camera, which can take a moment: awaiting that here
+        // would hold up every later render. The answer arriving is itself a render.
+        if (target is { } t && !DetectZones.Known(t.Camera))
+        {
+            _ = InvokeAsync(async () =>
+            {
+                if (await DetectZones.EnsureAsync(t.Camera, Http, ApiBase, _token,
+                        _detect?.Groups ?? new List<string>()))
+                    StateHasChanged();
+            });
+        }
+        var wire = target is { } d && _detect is { } cfg && DetectZones.Known(d.Camera)
+            ? new
+            {
+                videoId = d.VideoId,
+                camera = d.Camera,
+                @base = $"{Base}/detect/asset/",
+                minConfidence = cfg.MinConfidence / 100.0,
+                fps = cfg.Fps,
+                groups = cfg.Groups,
+                model = cfg.ModelFile,
+            }
+            : null;
+        var signature = wire == null ? "" : JsonSerializer.Serialize(wire);
+        var push = DetectZones.TakePush(target?.Camera);
+        if (push == null && signature == _detectWire) return;
+        try
+        {
+            if (push != null) await JS.InvokeVoidAsync("neolink.detectZones", push);
+            await JS.InvokeVoidAsync("neolink.detect", wire);
+            _detectWire = signature;
+        }
+        catch (Exception ex) when (ex is JSDisconnectedException or TaskCanceledException)
+        {
+        }
+    }
 
     /// <summary>Base for BROWSER-side URLs (the segment videos) — goes through any reverse proxy.</summary>
     private string Base => _server.TrimEnd('/');
@@ -2137,6 +2217,9 @@
             await JS.InvokeVoidAsync("neolink.tlResizeDispose", "tl-resizer");
             await JS.InvokeVoidAsync("neolink.tlColResizeDispose", "tl-vresizer");
             await JS.InvokeVoidAsync("neolink.tlKeysDispose");
+            // The detector outlives this page's elements otherwise, looping on a
+            // monitor that is no longer in the document.
+            await JS.InvokeVoidAsync("neolink.detect", (object?)null);
         }
         catch { /* circuit already gone */ }
         _selfRef?.Dispose();

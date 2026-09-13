@@ -4749,6 +4749,11 @@ body.tl-colresizing, body.tl-colresizing * { cursor: col-resize !important; user
 .tl-audio { right: 40px; }
 .tl-audio.on { opacity: 1; color: var(--accent); background: rgba(0, 0, 0, 0.78); }
 
+/* Object boxes: third in the row, and lit on the one monitor carrying them —
+   only one can, so the button doubles as the answer to "which". */
+.tl-boxes { right: 74px; }
+.tl-boxes.on { opacity: 1; color: var(--accent); background: rgba(0, 0, 0, 0.78); }
+
 /* ---------------------------------------------------------------- bookmarks
    Gold ribbons in the ruler's empty top band (ticks start at 8px, so the
    0–8px strip is theirs): a saved moment reads at a glance and clicks to
