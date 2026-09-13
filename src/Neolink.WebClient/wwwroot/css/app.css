@@ -2985,6 +2985,26 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 
 /* The description banner in the event players (Events page + quick view):
    a quiet card with the verdict chip leading the sentence. */
+/* What the model listed as visible, above its prose: a row of small words, each
+   one a search for itself. Deliberately quieter than the description — an
+   inventory is for scanning and for clicking, not for reading. */
+.event-objects {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin: 6px 0 0;
+}
+
+.event-object {
+    padding: 1px 8px;
+    font-size: 11px;
+    letter-spacing: 0.2px;
+    color: var(--muted);
+    text-transform: lowercase;
+}
+
+.event-object:hover { color: var(--accent); border-color: var(--accent); }
+
 .event-ai {
     display: flex;
     align-items: flex-start;
@@ -4752,13 +4772,10 @@ body.tl-colresizing, body.tl-colresizing * { cursor: col-resize !important; user
 /* Object boxes get the live view's on-video pill rather than a fourth flat
    button: it is the same control in the same clothes, and it is lit on the one
    monitor carrying them — only one can, so it doubles as the answer to "which".
-   Sat above the snapshot row instead of the pill's usual mid-height, because a
-   monitor is a fraction of a tile's height and the row is already at the foot. */
-.tl-tile .cam-rail {
-    top: auto;
-    bottom: 40px;
-    right: 6px;
-}
+   It hangs just under the zoom pill exactly as it does on a camera's own view —
+   until the monitor is too short for that, when it stops at the foot instead of
+   sliding off the bottom (a board can show eight cameras at once). */
+.tl-tile .cam-rail { top: min(calc(50% + 88px), calc(100% - 54px)); }
 
 .tl-tile-rail .cam-rail { display: none; } /* thumbnails: too small, focus first */
 

@@ -25,6 +25,12 @@ public sealed class EventRecord
     /// <summary>What an LLM said it saw (AI event descriptions, opt-in) — written
     /// after the event closes, once the model answers; null until/unless it does.</summary>
     public string? AiDescription { get; set; }
+    /// <summary>What the model says is IN the frames — "person", "white van",
+    /// "package" — most important first. The camera's own labels say which of four
+    /// kinds of thing tripped the detector; this says what was actually there, in
+    /// words a person would search for. Empty until a description arrives, and on
+    /// every event described before this existed.</summary>
+    public List<string> AiObjects { get; set; } = new();
     /// <summary>The model's threat classification: "green" (routine), "yellow"
     /// (suspicious) or "red" (danger — weapon, fighting, break-in, fire).</summary>
     public string? AiLevel { get; set; }

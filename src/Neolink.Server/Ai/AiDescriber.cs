@@ -630,6 +630,7 @@ public sealed class AiDescriber
         long usageSum = 0;
         string? level = null;
         var parts = new List<string>();
+        var objects = new List<string>();
         // Fetched per event (not per part, not at wiring): settings edits apply
         // to the next event, and every part of one event sees the same notes.
         var sceneNotes = _cameraContext?.Invoke(rec.Camera);
@@ -679,9 +680,15 @@ public sealed class AiDescriber
             var (raw, replyModel, chunkUsage) = reply;
             model ??= replyModel;
             usageSum += chunkUsage ?? 0;
-            var (chunkLevel, chunkText) = SplitLevel(raw);
+            var (chunkLevel, afterLevel) = SplitLevel(raw);
+            var (chunkObjects, chunkText) = SplitObjects(afterLevel);
             if (!string.IsNullOrWhiteSpace(chunkText)) parts.Add(chunkText!);
             level = MoreSevere(level, chunkLevel);
+            // A long event is described in parts; each part inventories what IT saw,
+            // and the event carries the union — the dog in minute one belongs to the
+            // event as much as the van in minute four.
+            foreach (var o in chunkObjects)
+                if (!objects.Contains(o) && objects.Count < 12) objects.Add(o);
         }
         sw.Stop();
         string? text = parts.Count switch
@@ -706,6 +713,7 @@ public sealed class AiDescriber
             return;
         }
         rec.AiDescription = text;
+        rec.AiObjects = objects;
         rec.AiLevel = level;
         rec.AiModel = model;
         rec.AiDescribedUtc = DateTime.UtcNow;
@@ -764,6 +772,48 @@ public sealed class AiDescriber
         if (!m.Success) return (null, text.Trim());
         var rest = text[m.Length..].Trim();
         return (m.Groups[1].Value.ToLowerInvariant(), rest.Length == 0 ? null : rest);
+    }
+
+    /// <summary>Words that are never an object: a model that has nothing to list
+    /// says so in a sentence as often as it says "none".</summary>
+    private static readonly HashSet<string> NotObjects = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "none", "nothing", "n/a", "na", "empty", "no objects", "not visible",
+        "nothing visible", "no object", "unknown", "unclear",
+    };
+
+    /// <summary>
+    /// Peels the object inventory off the answer per <see cref="AiSettings.ObjectProtocol"/>,
+    /// returning the entries and the description without that line. Written for what
+    /// models actually send rather than what they were told to: the label may be
+    /// bold, bulleted, "Objects detected -", or missing entirely, and the list may be
+    /// commas, semicolons or bullet points. Only ever peels a line the model marked
+    /// as the inventory — a description that happens to open with a noun is left
+    /// whole, because a missing list costs a search term while a stolen first
+    /// sentence costs the description itself.
+    /// </summary>
+    internal static (List<string> Objects, string? Text) SplitObjects(string? text)
+    {
+        var found = new List<string>();
+        if (string.IsNullOrWhiteSpace(text)) return (found, null);
+        var m = Regex.Match(text,
+            @"^[\s*#>_`\-]*objects?(?:\s+(?:detected|seen|visible|present|in\s+\w+))?[*_`]*\s*[:\-–—=]\s*(?<list>[^\r\n]*)\r?\n?",
+            RegexOptions.IgnoreCase | RegexOptions.Multiline);
+        if (!m.Success) return (found, text.Trim());
+        foreach (var raw in m.Groups["list"].Value.Split(',', ';', '|', '·', '•'))
+        {
+            var word = Regex.Replace(raw, @"[*_`""'\[\]().]", " ");
+            word = Regex.Replace(word, @"^\s*(?:a|an|the|some|several|two|three|\d+)\s+", "",
+                RegexOptions.IgnoreCase);
+            word = Regex.Replace(word, @"\s+", " ").Trim().ToLowerInvariant();
+            if (word.Length is 0 or > 24 || NotObjects.Contains(word)) continue;
+            // Three words is a sentence fragment, not an inventory entry.
+            if (word.Split(' ').Length > 3) continue;
+            if (!found.Contains(word)) found.Add(word);
+            if (found.Count == 10) break;
+        }
+        var rest = (text[..m.Index] + text[(m.Index + m.Length)..]).Trim();
+        return (found, rest.Length == 0 ? null : rest);
     }
 
     /// <summary>The inline label sent immediately before each image, binding the
@@ -925,7 +975,8 @@ public sealed class AiDescriber
         var system = (systemOverride
                      ?? cfg.EffectivePrompt
                      + (classify ? "\n\n" + AiSettings.GroundingProtocol
-                                 + "\n\n" + AiSettings.LevelProtocol : ""))
+                                 + "\n\n" + AiSettings.LevelProtocol
+                                 + "\n\n" + AiSettings.ObjectProtocol : ""))
                      + (cfg.NoThink && !cfg.UsesAnthropic ? "\n/no_think" : "");
         object payload;
         if (cfg.UsesAnthropic)

@@ -6067,6 +6067,32 @@ public static class SelfTest
             AssertEq(TextOf("Threat level: YELLOW\nSomeone is loitering."), "Someone is loitering.");
             AssertEq(LevelOf("A man in a red jacket walks by."), "-"); // mid-sentence color ≠ verdict
 
+            // Object inventory: the line the model was asked for, peeled off however
+            // it chose to dress it, leaving the description whole.
+            static string ObjOf(string s) =>
+                string.Join("|", Neolink.Ai.AiDescriber.SplitObjects(s).Objects);
+            static string ObjTextOf(string s) => Neolink.Ai.AiDescriber.SplitObjects(s).Text ?? "-";
+            AssertEq(ObjOf("OBJECTS: person, package, white van\nA courier leaves a box."),
+                "person|package|white van");
+            AssertEq(ObjTextOf("OBJECTS: person, package\nA courier leaves a box."),
+                "A courier leaves a box.");
+            AssertEq(ObjOf("**Objects detected:** dog; ball\nThe dog plays."), "dog|ball");
+            AssertEq(ObjOf("OBJECTS: a person, the dog, 2 cars"), "person|dog|cars");
+            AssertEq(ObjOf("OBJECTS: none\nAn empty driveway."), "");
+            AssertEq(ObjTextOf("OBJECTS: none\nAn empty driveway."), "An empty driveway.");
+            AssertEq(ObjOf("OBJECTS: person, person, PERSON"), "person"); // one thing, named thrice
+            // A description that opens with a noun is NOT an inventory: a stolen
+            // first sentence costs more than a missing list.
+            AssertEq(ObjOf("A person walks past the gate."), "");
+            AssertEq(ObjTextOf("A person walks past the gate."), "A person walks past the gate.");
+            // Entries stay short and few: a sentence that wandered into the list is
+            // not a searchable thing, and ten is the contract.
+            AssertEq(ObjOf("OBJECTS: person, a man carrying a large cardboard box up the steps"), "person");
+            AssertEq(Neolink.Ai.AiDescriber.SplitObjects(
+                "OBJECTS: a, b, c, d, e, f, g, h, i, j, k, l").Objects.Count, 10);
+            // The line is found even when the model leads with prose before it.
+            AssertEq(ObjOf("Here is what I see.\nOBJECTS: bicycle\nA bike leans on the wall."), "bicycle");
+
             // Ollama endpoint normalization (native /api/chat).
             static string? OUrl(string e) =>
                 new Neolink.Ai.AiSettings { OllamaEndpoint = e }.OllamaUrl()?.ToString();

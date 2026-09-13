@@ -451,7 +451,7 @@ public sealed record ApiEventSearch(bool AiAvailable, bool Ai = false,
 public sealed record ApiEvent(string Id, string Camera, DateTime Start, DateTime End,
     List<string> Labels, bool Reviewed, bool Ongoing, bool HasClip, bool HasThumb,
     bool HasPreview = false, string? AiDescription = null, string? AiLevel = null,
-    bool AiPending = false)
+    bool AiPending = false, List<string>? AiObjects = null)
 {
     private static readonly (string Label, string Icon, string Name)[] Known =
     {

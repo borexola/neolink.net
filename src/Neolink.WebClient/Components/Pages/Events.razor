@@ -460,6 +460,19 @@
                         </a>
                     </div>
 
+                    @if (sel.AiObjects is { Count: > 0 } seen)
+                    {
+                        @* What the model says was IN the frames. Each one searches for
+                           itself: reading "ladder" and wanting every other time a
+                           ladder turned up is the same thought. *@
+                        <div class="event-objects">
+                            @foreach (var thing in seen)
+                            {
+                                <button class="chip event-object" title="@T.F("Find other events with {0}", thing)"
+                                        @onclick="() => SearchForAsync(thing)">@thing</button>
+                            }
+                        </div>
+                    }
                     @if (sel.AiDescription != null || sel.AiLevel != null)
                     {
                         @* What the LLM saw (AI event descriptions) — only rendered for
@@ -1003,6 +1016,16 @@
     {
         if (e.Key == "Enter") { _typedCts?.Cancel(); await RunSearchAsync(); }
         else if (e.Key == "Escape") ClearSearch();
+    }
+
+    /// <summary>Runs one of the model's object words as a search, from the chip
+    /// that shows it. The word goes into the box as well, so the result reads as a
+    /// search the user could have typed — and can be edited into a better one.</summary>
+    private async Task SearchForAsync(string thing)
+    {
+        _typedCts?.Cancel();
+        _searchQ = thing;
+        await RunSearchAsync();
     }
 
     private async Task RunSearchAsync()

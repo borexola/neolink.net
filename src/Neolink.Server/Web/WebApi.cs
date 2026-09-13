@@ -2974,6 +2974,7 @@ public static class WebApi
                 hasThumb = r.HasThumb,
                 hasPreview = r.HasPreview,
                 aiDescription = r.AiDescription,
+                aiObjects = r.AiObjects,
                 aiLevel = r.AiLevel,
                 aiPending = r.AiDescription == null && o.AiPending?.Invoke(r.Id) == true,
             };

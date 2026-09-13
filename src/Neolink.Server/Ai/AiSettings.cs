@@ -71,6 +71,33 @@ public sealed class AiSettings
         "property). RED = immediate danger (a visible weapon, fighting or violence, a " +
         "break-in attempt, fire or smoke). The description follows from the second line.";
 
+    /// <summary>
+    /// The object-inventory contract, appended after <see cref="LevelProtocol"/> so
+    /// the two structured lines are committed before the prose starts wandering —
+    /// a small local model that is asked for a list at the END often never gets
+    /// there. Kept out of the user-editable prompt for the same reason the level
+    /// is: a custom prompt must not be able to break the parsing.
+    ///
+    /// The seed words exist to make the answers COMPARABLE. Left to itself a model
+    /// writes "parcel" today and "cardboard box" tomorrow, and neither is findable
+    /// by someone searching for a package. Anything genuinely outside the list is
+    /// still welcome in the model's own words — an unnameable object is worth more
+    /// than a wrong one from a fixed menu.
+    /// </summary>
+    public const string ObjectProtocol =
+        "On the SECOND line, write \"OBJECTS:\" followed by a comma-separated inventory of the " +
+        "things actually visible in the frames, most important first, at most ten. Each entry " +
+        "is one or two lowercase words, no articles, no counts, no punctuation — a plain noun, " +
+        "or an adjective and a noun where the detail is worth finding later (\"white van\", " +
+        "\"hi-vis jacket\"). Prefer these words whenever one fits, so that the same thing is " +
+        "always called the same name: person, child, face, dog, cat, bird, wildlife, car, van, " +
+        "truck, motorcycle, bicycle, scooter, stroller, package, mail, bag, backpack, suitcase, " +
+        "phone, camera, tool, ladder, bin, bottle, umbrella, door, gate, garage door, window, " +
+        "light, flashlight, fire, smoke, water, snow, rain, weapon, mask, hood, gloves, " +
+        "uniform, leash, ball, toy, chair, plant. Anything that does not fit the list gets your " +
+        "own short everyday word for it. Name only what you can actually see: an empty scene " +
+        "gets \"OBJECTS: none\". The description follows from the third line.";
+
     /// <summary>Master opt-in. Off = no frames are captured and nothing is ever sent.</summary>
     public bool Enabled { get; set; }
 
