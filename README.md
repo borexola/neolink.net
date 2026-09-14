@@ -449,6 +449,8 @@ warnings with fill-date forecasts, and AES-256-GCM footage encryption.
 | `channel_id` | `0` | Channel when connecting through a Reolink NVR (0-based) |
 | `permitted_users` | all users | Restrict this camera's mounts to specific `users` |
 | `record` | `true` | Initial default for this camera's "Detection events" switch (changeable in the web UI) |
+| `max_encryption` | `fullaes` | **Diagnostic.** Caps the encryption the login advertises: `none`, `bcencrypt`, `aes`, `fullaes`. Only for firmware that will not answer the default — see [troubleshooting](docs/troubleshooting.md) |
+| `legacy_login` | `false` | **Diagnostic.** Opens the login with the older credential framing instead of the header-only one. Pairs with `max_encryption` — see [troubleshooting](docs/troubleshooting.md) |
 
 > **Keep camera passwords alphanumeric.** Reolink's HTTP API — the one behind
 > `http_address`, picture settings, volume, PTZ presets and scaled snapshots —

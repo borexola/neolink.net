@@ -1013,7 +1013,8 @@ public sealed class CameraService : ILiveCameraSource
         if (camera.RemoteIp is { } ip) _lastCameraIp = ip;
 
         Note($"{Tag}: logging in as '{_config.Username}'");
-        await camera.LoginAsync(_config.Username, _config.Password, ct).ConfigureAwait(false);
+        await camera.LoginAsync(_config.Username, _config.Password, ct,
+            BcLoginMode.From(_config.MaxEncryption, _config.LegacyLogin)).ConfigureAwait(false);
         var res = camera.DeviceInfo;
         Note($"{Tag}: logged in{(res != null && res.Width > 0 ? $", camera reports {res.Width}x{res.Height}" : "")}");
 

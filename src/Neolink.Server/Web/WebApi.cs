@@ -1248,7 +1248,10 @@ public static class WebApi
                 await using var camera = udp
                     ? await Protocol.BcCamera.ConnectUdpAsync(host, uid!, channel, cts.Token, tag: "test")
                     : await Protocol.BcCamera.ConnectAsync(host, port, channel, cts.Token, tag: "test");
-                await camera.LoginAsync(username!, password, cts.Token);
+                // The stored camera's login override applies here too, or "Test"
+                // would report a failure the running bridge does not actually have.
+                await camera.LoginAsync(username!, password, cts.Token,
+                    Protocol.BcLoginMode.From(stored?.MaxEncryption, stored?.LegacyLogin ?? false));
                 var di = camera.DeviceInfo;
                 return Results.Json(new
                 {

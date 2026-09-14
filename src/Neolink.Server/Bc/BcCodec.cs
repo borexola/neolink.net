@@ -21,7 +21,7 @@ public sealed class BcProtocolException : Exception
 /// Wire codec for BC messages.
 ///
 /// Header layout (little endian):
-///   u32 magic (0x0abcdef0)
+///   u32 magic (0x0abcdef0, or 0x0fedcba0 from older firmware)
 ///   u32 msg_id
 ///   u32 body_len
 ///   u8  channel_id
@@ -39,7 +39,7 @@ public static class BcCodec
         await stream.ReadExactlyAsync(head, ct).ConfigureAwait(false);
 
         uint magic = BinaryPrimitives.ReadUInt32LittleEndian(head.AsSpan(0));
-        if (magic != BcConstants.MagicHeader)
+        if (magic != BcConstants.MagicHeader && magic != BcConstants.MagicHeaderRev)
             // The whole mis-read header goes into the message: when this fires the
             // bytes themselves are the only evidence of WHERE the stream slipped.
             throw new BcProtocolException($"Invalid magic header 0x{magic:x8} (stream desynchronized; " +

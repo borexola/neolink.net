@@ -879,6 +879,28 @@ public static class SelfTest
             AssertEq(next.Meta.MsgId, BcConstants.MsgIdPing);
         });
 
+        Test("bc codec: the reversed magic heads a snapshot reply, not a desync", () =>
+        {
+            // The reporter's own 20 header bytes (Reolink IPC_36S8M): msg 109 under
+            // MAGIC_HEADER_REV, carrying a 1080p JPEG. Every field after the magic
+            // is laid out as usual, so the whole message has to be consumed.
+            var head = Convert.FromHexString("A0CBED0F6D000000DE94000000000300C8000000");
+            AssertEq(BinaryPrimitives.ReadUInt32LittleEndian(head.AsSpan(0)), BcConstants.MagicHeaderRev);
+            uint bodyLen = BinaryPrimitives.ReadUInt32LittleEndian(head.AsSpan(8));
+            AssertEq(bodyLen, 38110u);
+
+            var body = new byte[4 + (int)bodyLen]; // payload offset 0, then the JPEG
+            body[4] = 0xFF;
+            body[5] = 0xD8;
+            using var wire = new MemoryStream([.. head, .. body]);
+            var snap = BcCodec.ReadMessageAsync(wire, new BcContext(new EncryptionState()),
+                CancellationToken.None).GetAwaiter().GetResult();
+            AssertEq(snap.Meta.MsgId, BcConstants.MsgIdSnap);
+            AssertEq(snap.Meta.ResponseCode, (ushort)200);
+            AssertEq(snap.Binary?.Length ?? -1, (int)bodyLen);
+            AssertEq(wire.Position, wire.Length);
+        });
+
         Test("bcudp discovery wire format (battery-camera probe)", () =>
         {
             // Keystream anchor: crypting zeros with tid 0 must expose the first
@@ -1005,6 +1027,181 @@ public static class SelfTest
             {
                 File.Delete(tmp);
             }
+        });
+
+        Test("one unusable camera entry is dropped, never fatal to the rest", () =>
+        {
+            // The Home Assistant add-on merges its options INTO config.json and only
+            // ever adds, so it can write an entry its own Options page cannot take
+            // back ("udp": true with no uid). That used to fail the whole load and
+            // stop every camera, recoverable only by hand-editing config.json.
+            var tmp = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}.json");
+            var toml = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}.toml");
+            try
+            {
+                File.WriteAllText(tmp, """
+                    { "users": [ { "name": "u", "pass": "p" } ],
+                      "cameras": [
+                        { "name": "good",    "username": "u", "password": "p", "address": "1.2.3.4" },
+                        { "name": "nouid",   "username": "u", "password": "p", "address": "1.2.3.5", "udp": true },
+                        { "name": "nowhere", "username": "u", "password": "p" },
+                        { "name": "noname_missing_username", "address": "1.2.3.6" },
+                        { "name": "badstream", "username": "u", "password": "p", "address": "1.2.3.7", "stream": "nope" },
+                        { "name": "GOOD",    "username": "u", "password": "p", "address": "1.2.3.8" },
+                        { "name": "ghost",   "username": "u", "password": "p", "address": "1.2.3.9",
+                          "permitted_users": [ "deleted-user" ] },
+                        { "name": "last",    "username": "u", "password": "p", "address": "1.2.3.10" }
+                      ] }
+                    """);
+                var cfg = NeolinkConfig.Load(tmp);
+                AssertEq(string.Join(",", cfg.Cameras.Select(c => c.Name)), "good,last");
+
+                // A camera whose permitted_users is unusable is dropped WHOLE: an
+                // empty permitted_users means "anyone", so pruning the list would
+                // widen access instead of removing it.
+                Assert(cfg.Cameras.All(c => c.Name != "ghost"), "undefined permitted_users drops the camera");
+
+                // TOML takes the same path.
+                File.WriteAllText(toml, """
+                    [[cameras]]
+                    name = "nouid"
+                    username = "u"
+                    password = "p"
+                    address = "1.2.3.5"
+                    udp = true
+
+                    [[cameras]]
+                    name = "good"
+                    username = "u"
+                    password = "p"
+                    address = "1.2.3.4"
+                    """);
+                AssertEq(string.Join(",", NeolinkConfig.Load(toml).Cameras.Select(c => c.Name)), "good");
+
+                // Saving is the other half of the contract: the editor must refuse
+                // what boot would skip, or the user's camera saves and then vanishes.
+                File.WriteAllText(tmp, """
+                    { "cameras": [ { "name": "nouid", "username": "u", "password": "p",
+                                     "address": "1.2.3.5", "udp": true } ] }
+                    """);
+                bool rejected = false;
+                try { NeolinkConfig.Load(tmp, strict: true); } catch (FormatException) { rejected = true; }
+                Assert(rejected, "strict mode still refuses the entry the boot loader skips");
+
+                // ...but a file that ALREADY holds an unusable entry must not freeze
+                // the editor: every save would fail, including the one that removes it.
+                File.WriteAllText(tmp, """
+                    { "web_port": 8655, "cameras": [
+                        { "name": "nouid", "username": "u", "password": "p", "address": "1.2.3.5", "udp": true },
+                        { "name": "good",  "username": "u", "password": "p", "address": "1.2.3.4" } ] }
+                    """);
+                Config.ConfigEditor.Apply(tmp, r => r["web_port"] = 8656);
+                AssertEq(NeolinkConfig.Load(tmp).WebPort, 8656);
+                Config.ConfigEditor.Apply(tmp, r =>
+                {
+                    var cams = Config.ConfigEditor.Cameras(r);
+                    cams.Remove(Config.ConfigEditor.FindCamera(cams, "nouid")!);
+                });
+                AssertEq(string.Join(",", NeolinkConfig.Load(tmp).Cameras.Select(c => c.Name)), "good");
+
+                // Server-wide settings stay fatal: nothing can run on a bad port.
+                File.WriteAllText(tmp, """{ "web_port": 70000, "cameras": [] }""");
+                rejected = false;
+                try { NeolinkConfig.Load(tmp); } catch (FormatException) { rejected = true; }
+                Assert(rejected, "a bad server-wide setting is still fatal");
+            }
+            finally { File.Delete(tmp); File.Delete(toml); }
+        });
+
+        Test("login upgrade framing: the default is unchanged, the overrides are reachable", () =>
+        {
+            var enc = new EncryptionState();
+            byte[] Wire(BcLoginMode m) =>
+                BcCodec.Serialize(BcCamera.BuildLoginUpgrade(0, 0, "admin", null, m), enc);
+
+            // THE regression guard for this whole option: every camera that works
+            // today logs in with this message, so it must stay byte-for-byte what it
+            // was before the override existed — 20-byte header, class 0x6514,
+            // response 0xdc12, no body.
+            var def = Wire(BcLoginMode.Default);
+            AssertEq(def.Length, 20);
+            AssertEq(Convert.ToHexString(def),
+                "F0DEBC0A" + "01000000" + "00000000" + "00" + "00" + "0000" + "12DC" + "1465");
+            Assert(BcLoginMode.Default.IsDefault, "the default mode reports itself as default");
+            Assert(BcLoginMode.From(null, false).IsDefault, "an unset config is the default mode");
+
+            // Each override changes exactly the two bytes it should.
+            AssertEq(Convert.ToHexString(Wire(BcLoginMode.From("none", false)).AsSpan(16, 2).ToArray()), "00DC");
+            AssertEq(Convert.ToHexString(Wire(BcLoginMode.From("bcencrypt", false)).AsSpan(16, 2).ToArray()), "01DC");
+            AssertEq(Convert.ToHexString(Wire(BcLoginMode.From("aes", false)).AsSpan(16, 2).ToArray()), "02DC");
+            AssertEq(Convert.ToHexString(Wire(BcLoginMode.From("fullaes", false)).AsSpan(16, 2).ToArray()), "12DC");
+
+            // The legacy framing carries the 1836-byte MD5 credential body that the
+            // original Rust neolink sends, and a null password is 32 NULs.
+            var legacy = Wire(BcLoginMode.From("aes", true));
+            AssertEq(legacy.Length, 20 + 1836);
+            AssertEq(Encoding.ASCII.GetString(legacy, 20, 32), Md5Utils.Md5String31("admin", zeroLast: true));
+            AssertEq(Encoding.ASCII.GetString(legacy, 52, 32), BcConstants.EmptyLegacyPassword);
+            var withPass = BcCodec.Serialize(
+                BcCamera.BuildLoginUpgrade(0, 0, "admin", "hunter2", BcLoginMode.From("bcencrypt", true)), enc);
+            AssertEq(Encoding.ASCII.GetString(withPass, 52, 32), Md5Utils.Md5String31("hunter2", zeroLast: true));
+
+            // Names in, codes out; anything else is null so the loader can name it.
+            AssertEq(BcConstants.ParseMaxEncryption("  AES  ")!.Value, (ushort)0xdc02);
+            Assert(BcConstants.ParseMaxEncryption("bogus") == null, "an unknown name does not resolve");
+            foreach (var n in BcConstants.MaxEncryptionNames)
+                Assert(BcConstants.ParseMaxEncryption(n) != null, $"advertised name \"{n}\" resolves");
+
+            // Config round-trip, both dialects, plus rejection of a typo.
+            var tmp = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}.json");
+            var toml = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}.toml");
+            try
+            {
+                File.WriteAllText(tmp, """
+                    { "cameras": [ { "name": "d5k", "username": "u", "password": "p", "address": "1.2.3.4",
+                                     "max_encryption": "bcencrypt", "legacy_login": true } ] }
+                    """);
+                var cam = NeolinkConfig.Load(tmp).Cameras[0];
+                AssertEq(cam.MaxEncryption!, "bcencrypt");
+                Assert(cam.LegacyLogin, "legacy_login parses from JSON");
+                AssertEq(BcLoginMode.From(cam.MaxEncryption, cam.LegacyLogin).UpgradeCode, (ushort)0xdc01);
+
+                File.WriteAllText(toml, """
+                    [[cameras]]
+                    name = "d5k"
+                    username = "u"
+                    password = "p"
+                    address = "1.2.3.4"
+                    max_encryption = "none"
+                    legacy_login = true
+                    """);
+                var tcam = NeolinkConfig.Load(toml).Cameras[0];
+                AssertEq(tcam.MaxEncryption!, "none");
+                Assert(tcam.LegacyLogin, "legacy_login parses from TOML");
+
+                // A camera with neither option set keeps null/false, so From() gives the default.
+                File.WriteAllText(tmp, """
+                    { "cameras": [ { "name": "plain", "username": "u", "password": "p", "address": "1.2.3.4" } ] }
+                    """);
+                var plain = NeolinkConfig.Load(tmp).Cameras[0];
+                Assert(plain.MaxEncryption == null && !plain.LegacyLogin, "unset options stay unset");
+                Assert(BcLoginMode.From(plain.MaxEncryption, plain.LegacyLogin).IsDefault,
+                    "a camera with no override logs in exactly as before");
+
+                // A typo is refused when saved and skipped at boot, like any other
+                // unusable entry — never silently ignored, which would leave the
+                // camera on the framing the user is trying to move it off.
+                File.WriteAllText(tmp, """
+                    { "cameras": [ { "name": "typo", "username": "u", "password": "p", "address": "1.2.3.4",
+                                     "max_encryption": "aes256" } ] }
+                    """);
+                bool rejected = false;
+                try { NeolinkConfig.Load(tmp, strict: true); }
+                catch (FormatException ex) { rejected = ex.Message.Contains("max_encryption"); }
+                Assert(rejected, "an unknown max_encryption is refused by name when saved");
+                AssertEq(NeolinkConfig.Load(tmp).Cameras.Count, 0);
+            }
+            finally { File.Delete(tmp); File.Delete(toml); }
         });
 
         Test("h264 annex-b NAL splitting", () =>
@@ -3900,17 +4097,19 @@ public static class SelfTest
                 AssertEq(cfg.Cameras[0].Host, "");
                 Assert(cfg.Cameras[0].Udp && cfg.Cameras[0].Uid == "95270000ABCDEFGH", "uid-only udp camera loads");
 
-                // UID without udp and without address: must be refused with guidance.
+                // UID without udp and without address: refused with guidance when
+                // the user is saving it; at boot it is skipped so the rest still run.
                 File.WriteAllText(tmp, Cfg("\"uid\": \"95270000ABCDEFGH\""));
                 bool rejected = false;
-                try { NeolinkConfig.Load(tmp); }
+                try { NeolinkConfig.Load(tmp, strict: true); }
                 catch (FormatException ex) { rejected = ex.Message.Contains("udp"); }
                 Assert(rejected, "uid without udp and address is refused, pointing at udp");
+                AssertEq(NeolinkConfig.Load(tmp).Cameras.Count, 0);
 
                 // Neither address nor uid: still an error.
                 File.WriteAllText(tmp, Cfg("\"channel_id\": 0"));
                 rejected = false;
-                try { NeolinkConfig.Load(tmp); } catch (FormatException) { rejected = true; }
+                try { NeolinkConfig.Load(tmp, strict: true); } catch (FormatException) { rejected = true; }
                 Assert(rejected, "no address and no uid is refused");
             }
             finally
@@ -3941,11 +4140,12 @@ public static class SelfTest
                     var cfg = NeolinkConfig.Load(tmp);
                     AssertEq(cfg.Cameras[0].Stream, stream);
                 }
-                // A value the dropdown never offers must still be refused by the loader.
+                // A value the dropdown never offers must still be refused when saved.
                 File.WriteAllText(tmp, Cfg("bogusStream"));
                 bool rejected = false;
-                try { NeolinkConfig.Load(tmp); } catch { rejected = true; }
-                Assert(rejected, "an unlisted stream value must be rejected by the loader");
+                try { NeolinkConfig.Load(tmp, strict: true); } catch { rejected = true; }
+                Assert(rejected, "an unlisted stream value must be rejected when saved");
+                AssertEq(NeolinkConfig.Load(tmp).Cameras.Count, 0);
             }
             finally
             {

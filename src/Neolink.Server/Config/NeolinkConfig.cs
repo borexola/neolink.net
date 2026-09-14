@@ -45,20 +45,26 @@ public sealed class NeolinkConfig
     /// Loads a config file. JSON (recommended) and TOML (compatible with the
     /// original Rust neolink) are both supported; the format is detected from
     /// the file extension or content.
+    ///
+    /// A camera entry the loader cannot use is dropped with an error, so the
+    /// rest still start. Pass <paramref name="strict"/> when validating a config
+    /// the user is in the middle of SAVING (see <see cref="ConfigEditor.Apply"/>):
+    /// there the same entry must be refused to their face, not accepted and then
+    /// silently discarded at the next boot.
     /// </summary>
-    public static NeolinkConfig Load(string path)
+    public static NeolinkConfig Load(string path, bool strict = false)
     {
         var text = File.ReadAllText(path);
         bool isJson = path.EndsWith(".json", StringComparison.OrdinalIgnoreCase)
                       || text.TrimStart().StartsWith('{');
-        var config = isJson ? LoadJson(text) : LoadToml(text);
-        config.Validate();
+        var config = isJson ? LoadJson(text, strict) : LoadToml(text, strict);
+        config.Validate(strict);
         return config;
     }
 
     // ------------------------------------------------------------------ JSON
 
-    private static NeolinkConfig LoadJson(string text)
+    private static NeolinkConfig LoadJson(string text, bool strict)
     {
         var options = new JsonDocumentOptions
         {
@@ -119,7 +125,10 @@ public sealed class NeolinkConfig
                     break;
                 case "cameras":
                     foreach (var c in prop.Value.EnumerateArray())
-                        config.Cameras.Add(ParseJsonCamera(c));
+                    {
+                        try { config.Cameras.Add(ParseJsonCamera(c)); }
+                        catch (Exception ex) when (!strict && IsBadEntry(ex)) { DropCamera(JsonCameraLabel(c), ex.Message); }
+                    }
                     break;
                 default:
                     Log.Warn($"Config: ignoring unknown option '{prop.Name}'");
@@ -153,6 +162,8 @@ public sealed class NeolinkConfig
         string? onvifAddress = null;
         string? rtspMain = null, rtspSub = null;
         string? audioTranscode = null;
+        string? maxEncryption = null;
+        bool legacyLogin = false;
         string stream = "both";
         byte channelId = 0;
         bool record = true;
@@ -191,6 +202,8 @@ public sealed class NeolinkConfig
                 case "wakecapture": wakeCapture = prop.Value.GetBoolean(); break;
                 case "keepalivehours": keepAliveHours = Math.Clamp(prop.Value.GetDouble(), 0, 24); break;
                 case "audiotranscode": audioTranscode = prop.Value.GetString(); break;
+                case "maxencryption": maxEncryption = prop.Value.GetString(); break;
+                case "legacylogin": legacyLogin = prop.Value.GetBoolean(); break;
                 // Generic (non-Reolink) camera: pull these RTSP URLs directly.
                 case "rtsp" or "rtspmain": rtspMain = prop.Value.GetString(); break;
                 case "rtspsub": rtspSub = prop.Value.GetString(); break;
@@ -208,7 +221,7 @@ public sealed class NeolinkConfig
 
         return BuildCamera(name, username, password, address, uid, stream, channelId, permitted, httpAddress,
             record, rtspMain, rtspSub, alwaysOn, udpProbe, udp, wakeCapture, onvifAddress,
-            keepAliveHours, audioTranscode);
+            keepAliveHours, audioTranscode, maxEncryption, legacyLogin);
     }
 
     private static RecordingConfig ParseJsonRecording(JsonElement el)
@@ -324,7 +337,7 @@ public sealed class NeolinkConfig
 
     // ------------------------------------------------------------------ TOML (legacy)
 
-    private static NeolinkConfig LoadToml(string text)
+    private static NeolinkConfig LoadToml(string text, bool strict)
     {
         var root = MiniToml.Parse(text);
         var config = new NeolinkConfig
@@ -419,31 +432,66 @@ public sealed class NeolinkConfig
         {
             if (MiniToml.GetString(c, "format") != null)
                 Log.Warn("The 'format' option was removed in favour of auto detection.");
-            config.Cameras.Add(BuildCamera(
-                MiniToml.GetString(c, "name"),
-                MiniToml.GetString(c, "username"),
-                MiniToml.GetString(c, "password"),
-                MiniToml.GetString(c, "address"),
-                MiniToml.GetString(c, "uid"),
-                MiniToml.GetString(c, "stream") ?? "both",
-                (byte)(MiniToml.GetInt(c, "channel_id") ?? 0),
-                MiniToml.GetStringList(c, "permitted_users"),
-                MiniToml.GetString(c, "http_address"),
-                MiniToml.GetBool(c, "record") ?? true,
-                MiniToml.GetString(c, "rtsp_main") ?? MiniToml.GetString(c, "rtsp"),
-                MiniToml.GetString(c, "rtsp_sub"),
-                MiniToml.GetBool(c, "always_on"),
-                MiniToml.GetBool(c, "udp_probe") ?? false,
-                MiniToml.GetBool(c, "udp") ?? false,
-                MiniToml.GetBool(c, "wake_capture") ?? false,
-                MiniToml.GetString(c, "onvif_address"),
-                Math.Clamp(MiniToml.GetDouble(c, "keep_alive_hours") ?? 0, 0, 24),
-                MiniToml.GetString(c, "audio_transcode")));
+            try
+            {
+                config.Cameras.Add(BuildCamera(
+                    MiniToml.GetString(c, "name"),
+                    MiniToml.GetString(c, "username"),
+                    MiniToml.GetString(c, "password"),
+                    MiniToml.GetString(c, "address"),
+                    MiniToml.GetString(c, "uid"),
+                    MiniToml.GetString(c, "stream") ?? "both",
+                    (byte)(MiniToml.GetInt(c, "channel_id") ?? 0),
+                    MiniToml.GetStringList(c, "permitted_users"),
+                    MiniToml.GetString(c, "http_address"),
+                    MiniToml.GetBool(c, "record") ?? true,
+                    MiniToml.GetString(c, "rtsp_main") ?? MiniToml.GetString(c, "rtsp"),
+                    MiniToml.GetString(c, "rtsp_sub"),
+                    MiniToml.GetBool(c, "always_on"),
+                    MiniToml.GetBool(c, "udp_probe") ?? false,
+                    MiniToml.GetBool(c, "udp") ?? false,
+                    MiniToml.GetBool(c, "wake_capture") ?? false,
+                    MiniToml.GetString(c, "onvif_address"),
+                    Math.Clamp(MiniToml.GetDouble(c, "keep_alive_hours") ?? 0, 0, 24),
+                    MiniToml.GetString(c, "audio_transcode"),
+                    MiniToml.GetString(c, "max_encryption"),
+                    MiniToml.GetBool(c, "legacy_login") ?? false));
+            }
+            catch (Exception ex) when (!strict && IsBadEntry(ex))
+            {
+                var name = MiniToml.GetString(c, "name");
+                DropCamera(string.IsNullOrWhiteSpace(name) ? "(unnamed)" : $"\"{name}\"", ex.Message);
+            }
         }
         return config;
     }
 
     // ------------------------------------------------------------------ shared
+
+    /// <summary>
+    /// A camera entry the loader cannot use is dropped, never fatal. The Home
+    /// Assistant add-on merges its options INTO config.json and only ever adds
+    /// (see neolink-addon/run.sh), so it can write an entry its own Options page
+    /// is then unable to un-write — one of those used to take every other camera
+    /// down with it, recoverable only by hand-editing config.json.
+    /// </summary>
+    private static void DropCamera(string label, string why) =>
+        Log.Error($"Config: skipping camera {label} — {why}. Every other camera still starts. " +
+                  "A skipped camera is not listed in the web UI, so fix or remove this entry in the " +
+                  "config file itself (under the Home Assistant add-on, check its Options too).");
+
+    private static bool IsBadEntry(Exception ex) =>
+        ex is FormatException or InvalidOperationException or JsonException or OverflowException;
+
+    /// <summary>Best-effort name for an entry that failed before it became a camera.</summary>
+    private static string JsonCameraLabel(JsonElement el)
+    {
+        if (el.ValueKind == JsonValueKind.Object)
+            foreach (var p in el.EnumerateObject())
+                if (Key(p.Name) == "name" && p.Value.ValueKind == JsonValueKind.String)
+                    return $"\"{p.Value.GetString()}\"";
+        return "(unnamed)";
+    }
 
     private static void WarnTls() =>
         Log.Warn("TLS (certificate) is not supported by Neolink.NET yet; serving plain RTSP. " +
@@ -454,10 +502,17 @@ public sealed class NeolinkConfig
         string? httpAddress = null, bool record = true, string? rtspMain = null, string? rtspSub = null,
         bool? alwaysOn = null, bool udpProbe = false, bool udp = false, bool wakeCapture = false,
         string? onvifAddress = null, double keepAliveHours = 0,
-        string? audioTranscode = null)
+        string? audioTranscode = null, string? maxEncryption = null, bool legacyLogin = false)
     {
         if (name == null) throw new FormatException("camera entry missing \"name\"");
         audioTranscode = NormalizeAudioTranscode(name, audioTranscode);
+        // Rejected by name rather than defaulted: a typo here would leave the camera
+        // on the framing the user is trying to move it off, with nothing to show why.
+        if (Bc.BcConstants.ParseMaxEncryption(maxEncryption) == null)
+            throw new FormatException(
+                $"Camera \"{name}\": invalid max_encryption \"{maxEncryption}\" " +
+                $"(expected one of: {string.Join(", ", Bc.BcConstants.MaxEncryptionNames)})");
+        maxEncryption = string.IsNullOrWhiteSpace(maxEncryption) ? null : maxEncryption.Trim().ToLowerInvariant();
 
         // Generic (non-Reolink) camera: RTSP URLs stand in for address/credentials
         // (put the login inside the URL: rtsp://user:pass@host/path).
@@ -519,6 +574,8 @@ public sealed class NeolinkConfig
             WakeCapture = wakeCapture,
             KeepAliveHours = keepAliveHours,
             AudioTranscode = audioTranscode,
+            MaxEncryption = maxEncryption,
+            LegacyLogin = legacyLogin,
         };
     }
 
@@ -534,8 +591,15 @@ public sealed class NeolinkConfig
         return null;
     }
 
-    private void Validate()
+    private void Validate(bool strict)
     {
+        void Drop(CameraConfig cam, string why)
+        {
+            if (strict) throw new FormatException($"Camera \"{cam.Name}\": {why}");
+            Cameras.Remove(cam);
+            DropCamera($"\"{cam.Name}\"", why);
+        }
+
         if (BindPort is < 0 or > 65535)
             throw new FormatException($"Invalid bind_port {BindPort}");
         if (WebPort is < 0 or > 65535)
@@ -547,6 +611,32 @@ public sealed class NeolinkConfig
                 throw new FormatException($"Invalid or reserved username \"{u.Name}\"");
         }
 
+        foreach (var cam in Cameras.ToList())
+        {
+            if (!ValidStreams.Contains(cam.Stream))
+                Drop(cam, $"invalid stream \"{cam.Stream}\" (expected one of: {string.Join(", ", ValidStreams)})");
+        }
+
+        // A second entry under the same name is unreachable anyway — the app matches
+        // cameras by name, case-insensitively — so the first one wins.
+        foreach (var g in Cameras.GroupBy(c => c.Name, StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1).ToList())
+        {
+            foreach (var dupe in g.Skip(1).ToList())
+                Drop(dupe, "a camera of that name is already configured");
+        }
+
+        // An unknown permitted_users entry drops the CAMERA, never just the entry:
+        // a camera with no permitted_users is open to everyone, so pruning the list
+        // would quietly widen access instead of removing it.
+        foreach (var cam in Cameras.ToList())
+        {
+            var unknown = (cam.PermittedUsers ?? new List<string>())
+                .Where(p => p is not ("anyone" or "anonymous") && Users.All(u => u.Name != p))
+                .Distinct().ToList();
+            if (unknown.Count > 0)
+                Drop(cam, $"permitted_users references undefined user(s): {string.Join(", ", unknown)}");
+        }
+
         // Zero cameras is allowed, not fatal: a fresh install boots to the web UI
         // (empty wall) so the user can set up and add cameras to the config,
         // rather than the process crash-looping on a first-run config.
@@ -554,19 +644,6 @@ public sealed class NeolinkConfig
             Log.Warn("No cameras configured yet — the web UI will run but show no cameras. " +
                      "Add your first under Server settings (the gear icon) in the web UI " +
                      "and restart when it prompts you — or edit the config file directly.");
-
-        foreach (var cam in Cameras)
-        {
-            if (!ValidStreams.Contains(cam.Stream))
-                throw new FormatException(
-                    $"Camera \"{cam.Name}\": invalid stream \"{cam.Stream}\" " +
-                    $"(expected one of: {string.Join(", ", ValidStreams)})");
-        }
-
-        var dupes = Cameras.GroupBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
-            .Where(g => g.Count() > 1).ToList();
-        if (dupes.Count > 0)
-            throw new FormatException($"Duplicate camera names: {string.Join(", ", dupes.Select(g => g.Key))}");
 
         // A camera name also becomes a Home Assistant object id and a recordings
         // folder name — by DIFFERENT reductions (HA lowercases and collapses
@@ -587,13 +664,6 @@ public sealed class NeolinkConfig
                      .Where(g => g.Count() > 1))
             Log.Warn($"Camera names {string.Join(" and ", g.Select(c => $"\"{c.Name}\""))} map to the same " +
                      $"recordings folder \"{g.Key}\": their footage will interleave. Rename one.");
-
-        var missing = Cameras
-            .SelectMany(c => c.PermittedUsers ?? new List<string>())
-            .Where(p => p is not ("anyone" or "anonymous") && Users.All(u => u.Name != p))
-            .Distinct().ToList();
-        if (missing.Count > 0)
-            throw new FormatException($"permitted_users reference undefined users: {string.Join(", ", missing)}");
 
         if (Recording != null)
         {
@@ -886,6 +956,14 @@ public sealed class CameraConfig
     /// forever. Only meaningful when the camera is sleep-friendly (battery, no
     /// always_on); ignored otherwise.</summary>
     public double KeepAliveHours { get; init; }
+    /// <summary>Diagnostic (opt-in): cap the encryption this camera's login
+    /// advertises — "none", "bcencrypt", "aes" or "fullaes" (the default). Only for
+    /// firmware that will not answer the default; see docs/troubleshooting.md.</summary>
+    public string? MaxEncryption { get; init; }
+    /// <summary>Diagnostic (opt-in): open the login with the older framing — the
+    /// 32-byte MD5 credential fields — instead of the header-only upgrade. Pairs
+    /// with <see cref="MaxEncryption"/>; see docs/troubleshooting.md.</summary>
+    public bool LegacyLogin { get; init; }
     /// <summary>Transcode this camera's audio for RTSP clients: "opus" (needs
     /// ffmpeg with libopus; WebRTC ecosystems take Opus natively) or null =
     /// serve the camera's original audio. Recordings, the web player and

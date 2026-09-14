@@ -119,7 +119,8 @@ cat > "$work/config.json" <<'JSON'
   "bind": "0.0.0.0",
   "cameras": [
     {"name": "TestCam", "address": "10.1.0.13", "username": "admin", "password": "stored",
-     "uid": "95270000ABCDEFGH", "wake_capture": true, "udp": true, "streams": "main"},
+     "uid": "95270000ABCDEFGH", "wake_capture": true, "udp": true, "streams": "main",
+     "max_encryption": "bcencrypt", "legacy_login": true},
     {"name": "webonly", "address": "10.0.0.4", "username": "admin", "password": "w"}
   ]
 }
@@ -127,10 +128,11 @@ JSON
 launch "$work/options.json"
 assert_cameras '[
   {"name": "TestCam", "address": "10.1.0.99", "username": "admin", "password": "stored",
-   "uid": "95270000ABCDEFGH", "wake_capture": true, "udp": true, "streams": "main"},
+   "uid": "95270000ABCDEFGH", "wake_capture": true, "udp": true, "streams": "main",
+   "max_encryption": "bcencrypt", "legacy_login": true},
   {"name": "webonly", "address": "10.0.0.4", "username": "admin", "password": "w"},
   {"name": "newcam", "address": "10.0.0.8", "username": "admin", "password": "n"}
-]' "per-camera merge: web-UI fields, stored password and web-only cameras survive; options address wins; new camera appended"
+]' "per-camera merge: web-UI fields, hand-edited login overrides, stored password and web-only cameras survive; options address wins; new camera appended"
 
 # --- 6. Camera renamed by case in the web UI: updated, never duplicated ------
 # The app compares camera names case-insensitively, so appending a second
@@ -210,6 +212,37 @@ assert_cameras '[
   {"name": "Driveway", "address": "10.0.0.1", "username": "admin", "password": "a", "uid": "95270000KEEPMEXX"},
   {"name": "Drive", "address": "10.0.0.9", "username": "admin", "password": "b"}
 ]' "a name that is a substring of an existing camera is appended, not swallowed"
+
+# --- 9. "udp": true with no uid is repaired, not handed to the app ----------
+# The app refuses to load such an entry and used to fail the WHOLE config with
+# it, taking every other camera down. The merge cannot unset a boolean, so an
+# Options toggle could write a state only a hand edit could undo.
+cat > "$work/options.json" <<'JSON'
+{
+  "cameras": [
+    {"name": "nouid", "address": "10.0.0.11", "username": "admin", "password": "p", "udp": true}
+  ],
+  "auto_mqtt": false,
+  "log_verbose": false
+}
+JSON
+cat > "$work/config.json" <<'JSON'
+{
+  "bind": "0.0.0.0",
+  "cameras": [
+    {"name": "stale", "address": "10.0.0.12", "username": "admin", "password": "p", "udp": true},
+    {"name": "real",  "address": "10.0.0.13", "username": "admin", "password": "p",
+     "udp": true, "uid": "95270000ABCDEFGH"}
+  ]
+}
+JSON
+launch "$work/options.json"
+assert_cameras '[
+  {"name": "stale", "address": "10.0.0.12", "username": "admin", "password": "p"},
+  {"name": "real",  "address": "10.0.0.13", "username": "admin", "password": "p",
+   "udp": true, "uid": "95270000ABCDEFGH"},
+  {"name": "nouid", "address": "10.0.0.11", "username": "admin", "password": "p"}
+]' "udp without a uid is stripped (new and already-stored); udp with a uid is untouched"
 
 # --- Changelog: Home Assistant reads CHANGELOG.md from THIS folder (not the
 # repo root) and slices the notes it shows by an exact "## <version>" heading.

@@ -28,6 +28,27 @@ public sealed class AuthFailedException : Exception
     public AuthFailedException(string msg) : base(msg) { }
 }
 
+/// <summary>
+/// How to frame the opening "login upgrade" message. Two things vary independently:
+/// the encryption tier advertised in the response code, and whether the message
+/// carries the older 32-byte MD5 credential fields or no body at all. The default
+/// (FullAes, header only) is what every camera Neolink supports today expects, and
+/// is the only combination used unless a camera overrides it — some firmware resets
+/// the connection on it instead of answering (see docs/troubleshooting.md).
+/// </summary>
+public readonly record struct BcLoginMode(ushort UpgradeCode, bool LegacyCredentials)
+{
+    public static BcLoginMode Default => new(BcConstants.LegacyUpgradeFullAes, false);
+
+    public bool IsDefault => UpgradeCode == BcConstants.LegacyUpgradeFullAes && !LegacyCredentials;
+
+    /// <summary>Builds the mode from a camera's config values. An unrecognised
+    /// encryption name cannot reach here — the loader rejects it — so it falls back
+    /// to the default rather than inventing a code.</summary>
+    public static BcLoginMode From(string? maxEncryption, bool legacyCredentials) =>
+        new(BcConstants.ParseMaxEncryption(maxEncryption) ?? BcConstants.LegacyUpgradeFullAes, legacyCredentials);
+}
+
 /// <summary>High-level camera operations: login, video streaming, ping, control commands.</summary>
 public sealed class BcCamera : IBcCamera
 {
@@ -80,24 +101,18 @@ public sealed class BcCamera : IBcCamera
     /// receive the negotiated encryption scheme + nonce, then send a modern XML login
     /// with nonce-salted MD5 credentials. On AES cameras, derive the session key.
     /// </summary>
-    public async Task LoginAsync(string username, string? password, CancellationToken ct)
+    public async Task LoginAsync(string username, string? password, CancellationToken ct,
+        BcLoginMode? mode = null)
     {
+        var login = mode ?? BcLoginMode.Default;
         using var sub = _conn.Subscribe(BcConstants.MsgIdLogin);
 
-        // Header-only "login upgrade": no legacy username/password body. The camera
-        // replies with the encryption scheme it will use and a login nonce.
-        var legacy = new BcMessage
-        {
-            Meta = new BcMeta
-            {
-                MsgId = BcConstants.MsgIdLogin,
-                ChannelId = _channelId,
-                MsgNum = NewMessageNum(),
-                StreamType = 0,
-                ResponseCode = BcConstants.LegacyUpgradeAes,
-                Class = BcConstants.ClassLegacy,
-            },
-        };
+        var legacy = BuildLoginUpgrade(_channelId, NewMessageNum(), username, password, login);
+        // An overridden login is a diagnostic the user set deliberately: say so once
+        // per connection tag, or their log gives no sign which framing was tried.
+        if (!login.IsDefault && LoggedLoginMode.TryAdd($"{_logTag}|{login}", 0))
+            Log.Info($"BC {_logTag}: login upgrade overridden — advertising 0x{login.UpgradeCode:x4}, " +
+                     (login.LegacyCredentials ? "legacy credential body" : "header only"));
         await _conn.SendAsync(legacy, ct).ConfigureAwait(false);
 
         var reply = await sub.ReceiveAsync(RxTimeout, ct).ConfigureAwait(false);
@@ -172,8 +187,45 @@ public sealed class BcCamera : IBcCamera
             Log.Debug($"BC {_logTag}: encryption negotiated: {encDesc}");
     }
 
+    /// <summary>
+    /// The opening message of the login handshake. Public so the self-test can assert
+    /// the exact bytes each mode puts on the wire — the default has to stay
+    /// byte-identical, since every working camera is logging in with it today.
+    /// </summary>
+    public static BcMessage BuildLoginUpgrade(byte channelId, ushort msgNum, string username,
+        string? password, BcLoginMode mode)
+    {
+        // Header-only "login upgrade": no legacy username/password body. The camera
+        // replies with the encryption scheme it will use and a login nonce.
+        var msg = new BcMessage
+        {
+            Meta = new BcMeta
+            {
+                MsgId = BcConstants.MsgIdLogin,
+                ChannelId = channelId,
+                MsgNum = msgNum,
+                StreamType = 0,
+                ResponseCode = mode.UpgradeCode,
+                Class = BcConstants.ClassLegacy,
+            },
+        };
+        // The older framing carries the MD5 credentials in the body instead. Both
+        // are in the wild, and firmware that resets on one can accept the other.
+        if (mode.LegacyCredentials)
+        {
+            msg.LegacyUsername = Md5Utils.Md5String31(username, zeroLast: true);
+            msg.LegacyPassword = password == null
+                ? BcConstants.EmptyLegacyPassword
+                : Md5Utils.Md5String31(password, zeroLast: true);
+        }
+        return msg;
+    }
+
     /// <summary>Connection tags whose negotiated encryption level was already announced at Info.</summary>
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> LoggedEncryption = new();
+
+    /// <summary>Connection tags whose overridden login framing was already announced.</summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> LoggedLoginMode = new();
 
     /// <summary>
     /// Requests the video stream and pumps the raw binary sub-stream chunks into

@@ -151,15 +151,24 @@ public static class ConfigEditor
                 AllowTrailingCommas = true,
             }) as JsonObject ?? throw new FormatException("config root must be a JSON object");
 
+            // strict: a camera the loader would merely SKIP at boot has to be refused
+            // here, or the editor accepts it and it vanishes next start. But only ever
+            // as strict as the file being REPLACED — a config that already holds an
+            // unusable entry (the add-on can write one) would otherwise fail every
+            // save, including the ones that would have removed it.
+            bool strict = true;
+            try { NeolinkConfig.Load(path, strict: true); }
+            catch (FormatException) { strict = false; }
+            catch { /* unreadable for another reason: the mutation below decides */ }
+
             mutate(root);
 
-            // Validate the candidate exactly the way startup would.
             var candidate = root.ToJsonString(WriteOpts);
             var tmp = path + ".tmp";
             File.WriteAllText(tmp, candidate);
             try
             {
-                NeolinkConfig.Load(tmp); // throws FormatException on anything invalid
+                NeolinkConfig.Load(tmp, strict);
             }
             catch
             {
