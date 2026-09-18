@@ -29,6 +29,12 @@ internal sealed class MainForm : Form
 
     private bool _reallyClosing;
     private bool _webReady;
+    private CoreWebView2Environment? _env;
+    private long _navCompletions;
+    private bool _recovering;
+    private bool _probing;
+    private readonly List<DateTime> _recoveries = new();
+    private readonly System.Windows.Forms.Timer _heartbeat = new() { Interval = 30_000 };
 
     /// <summary>scheme://host:port of the configured server — the only origin the
     /// window may show, and the only one the bootstrap script hands the token to.</summary>
@@ -254,6 +260,7 @@ internal sealed class MainForm : Form
                 AdditionalBrowserArguments = "--autoplay-policy=no-user-gesture-required",
             };
             var env = await CoreWebView2Environment.CreateAsync(null, dataDir, options);
+            _env = env;
             await _web.EnsureCoreWebView2Async(env);
         }
         catch (Exception ex)
@@ -273,6 +280,7 @@ internal sealed class MainForm : Form
 
         core.NavigationCompleted += (_, args) =>
         {
+            _navCompletions++;
             if (args.IsSuccess) HideError();
             // EVERY failed top-level load gets the error screen, not just the
             // first: a reload that races a server restart used to fail silently
@@ -311,16 +319,25 @@ internal sealed class MainForm : Form
         // A WebView2 process death with no handler is a permanently black window
         // that still looks alive. Render/GPU deaths recover with a reload; a dead
         // BROWSER process cannot run anything ever again, so the only honest
-        // recovery is the same clean restart a changed server address gets.
+        // recovery is the same clean restart a changed server address gets. A
+        // renderer that is alive but hung gets neither: see RecoverHungPageAsync.
         core.ProcessFailed += (_, args) =>
         {
             DesktopLog.Write($"webview process failed: {args.ProcessFailedKind} ({args.Reason})");
             try
             {
-                if (args.ProcessFailedKind == CoreWebView2ProcessFailedKind.BrowserProcessExited)
-                    BeginInvoke(() => Program.RestartSelf());
-                else
-                    BeginInvoke(() => Reload());
+                switch (args.ProcessFailedKind)
+                {
+                    case CoreWebView2ProcessFailedKind.BrowserProcessExited:
+                        BeginInvoke(() => Program.RestartSelf());
+                        break;
+                    case CoreWebView2ProcessFailedKind.RenderProcessUnresponsive:
+                        BeginInvoke(() => _ = RecoverHungPageAsync("WebView2 reported the page unresponsive"));
+                        break;
+                    default:
+                        BeginInvoke(() => { if (!_error.Visible) Reload(); });
+                        break;
+                }
             }
             catch { /* shutting down */ }
         };
@@ -452,6 +469,8 @@ internal sealed class MainForm : Form
             catch { /* shutting down */ }
         };
 
+        _heartbeat.Tick += (_, _) => _ = HeartbeatAsync();
+        _heartbeat.Start();
         Navigate(_initialLink ?? "/");
     }
 
@@ -528,8 +547,150 @@ internal sealed class MainForm : Form
     {
         HideError();
         if (_web.CoreWebView2 == null) return;
-        if (_webReady) _web.CoreWebView2.Reload();
-        else Navigate("/");
+        if (!_webReady)
+        {
+            Navigate("/");
+            return;
+        }
+        _web.CoreWebView2.Reload();
+        _ = ConfirmReloadAsync(_navCompletions);
+    }
+
+    /// <summary>A reload of a hung page looks exactly like a slow one — the
+    /// navigation simply never completes — so the page is asked directly.</summary>
+    private async Task ConfirmReloadAsync(long completionsBefore)
+    {
+        await Task.Delay(TimeSpan.FromSeconds(8));
+        if (IsDisposed || _navCompletions != completionsBefore || _recovering) return;
+        await RecoverHungPageAsync("a reload never completed", auto: false);
+    }
+
+    /// <summary>Catches a page that hung while nobody was touching it: WebView2
+    /// only notices a hang when input goes unanswered, and a tray app spends most
+    /// of its life with no input at all.</summary>
+    private async Task HeartbeatAsync()
+    {
+        var core = _web.CoreWebView2;
+        if (core == null || IsDisposed || !_webReady || _error.Visible || _recovering || _probing) return;
+        _probing = true;
+        try
+        {
+            if (!await PageAnswersAsync(core, TimeSpan.FromSeconds(20)))
+                await RecoverHungPageAsync("the page stopped answering", probe: false);
+        }
+        finally { _probing = false; }
+    }
+
+    private static async Task<bool> PageAnswersAsync(CoreWebView2 core, TimeSpan timeout)
+    {
+        try { return await Answers(core.ExecuteScriptAsync("1"), timeout); }
+        catch { return true; }
+    }
+
+    /// <summary>False only on a timeout: a call that threw was at least answered.</summary>
+    private static async Task<bool> Answers(Task work, TimeSpan timeout)
+    {
+        if (await Task.WhenAny(work, Task.Delay(timeout)) != work) return false;
+        try { await work; } catch { }
+        return true;
+    }
+
+    /// <summary>
+    /// A renderer that has stopped running script is a window that looks alive
+    /// and does nothing: clicks, F5 and Reload all wait on it forever, because a
+    /// reload needs the old page to let go first. WebView2 reports the state
+    /// (RenderProcessUnresponsive) and otherwise leaves it — Edge would put up
+    /// its "page unresponsive" dialog here, and nothing does that for a tray app.
+    /// The page gets one more chance to answer; then its renderer process is
+    /// killed, the browser process stays up, and the page reloads into a fresh
+    /// one. A fourth automatic kill in ten minutes stops the cycle behind the
+    /// error screen, whose Retry is a manual recovery.
+    /// </summary>
+    private async Task RecoverHungPageAsync(string reason, bool probe = true, bool auto = true)
+    {
+        if (_recovering || IsDisposed) return;
+        _recovering = true;
+        try
+        {
+            var core = _web.CoreWebView2;
+            if (core == null) return;
+            if (probe && await PageAnswersAsync(core, TimeSpan.FromSeconds(10)))
+            {
+                DesktopLog.Write($"page recovery ({reason}): the page answered again, left alone");
+                return;
+            }
+            bool halt = false;
+            if (auto)
+            {
+                var now = DateTime.UtcNow;
+                _recoveries.RemoveAll(t => now - t > TimeSpan.FromMinutes(10));
+                _recoveries.Add(now);
+                halt = _recoveries.Count > 3;
+            }
+            if (halt)
+            {
+                DesktopLog.Write($"page recovery ({reason}): fourth hang in ten minutes, automatic recovery stops here");
+                ShowError("The page stopped responding four times in ten minutes." + Environment.NewLine + Environment.NewLine +
+                          "Retry loads it again. If it keeps happening, open the web UI in a browser and compare, and check the server's log.");
+            }
+            var before = _navCompletions;
+            int killed = await KillRenderersAsync();
+            DesktopLog.Write($"page recovery ({reason}): killed {killed} renderer process(es)");
+            if (halt) return;
+            if (killed == 0)
+            {
+                Program.RestartSelf();
+                return;
+            }
+            // RenderProcessExited reloads the page; a kill that never gets
+            // reported is reloaded from here.
+            for (int i = 0; i < 20 && _navCompletions == before && !IsDisposed; i++)
+                await Task.Delay(500);
+            if (_navCompletions == before && !IsDisposed) Reload();
+        }
+        finally { _recovering = false; }
+    }
+
+    /// <summary>The user-data folder is this app's alone, so every renderer in the
+    /// environment belongs to this window: the one hosting the main frame is
+    /// preferred, all of them are the fallback.</summary>
+    private async Task<int> KillRenderersAsync()
+    {
+        var env = _env;
+        if (env == null) return 0;
+        var pids = new List<int>();
+        try
+        {
+            var infos = env.GetProcessExtendedInfosAsync();
+            if (await Answers(infos, TimeSpan.FromSeconds(5)))
+                foreach (var p in infos.Result)
+                    if (p.ProcessInfo.Kind == CoreWebView2ProcessKind.Renderer
+                        && p.AssociatedFrameInfos.Any(f => f.FrameKind == CoreWebView2FrameKind.MainFrame))
+                        pids.Add((int)p.ProcessInfo.ProcessId);
+        }
+        catch (Exception ex) { DesktopLog.Write("renderer lookup failed: " + ex.Message); }
+        if (pids.Count == 0)
+        {
+            try
+            {
+                pids.AddRange(env.GetProcessInfos()
+                    .Where(p => p.Kind == CoreWebView2ProcessKind.Renderer)
+                    .Select(p => (int)p.ProcessId));
+            }
+            catch (Exception ex) { DesktopLog.Write("renderer lookup failed: " + ex.Message); }
+        }
+        int killed = 0;
+        foreach (var pid in pids)
+        {
+            try
+            {
+                using var proc = System.Diagnostics.Process.GetProcessById(pid);
+                proc.Kill();
+                killed++;
+            }
+            catch (Exception ex) { DesktopLog.Write($"renderer {pid} not killed: {ex.Message}"); }
+        }
+        return killed;
     }
 
     private bool _recoveringCircuit;
@@ -594,8 +755,14 @@ internal sealed class MainForm : Form
                     """,
                 awaitPromise = true,
             });
-            await core.CallDevToolsProtocolMethodAsync("Runtime.evaluate", cleanup);
+            var before = _navCompletions;
+            if (!await Answers(core.CallDevToolsProtocolMethodAsync("Runtime.evaluate", cleanup), TimeSpan.FromSeconds(10)))
+            {
+                await RecoverHungPageAsync("a full reload got no answer from the page", probe: false, auto: false);
+                return;
+            }
             await core.CallDevToolsProtocolMethodAsync("Page.reload", """{"ignoreCache":true}""");
+            _ = ConfirmReloadAsync(before);
         }
         catch
         {
@@ -943,6 +1110,7 @@ internal sealed class MainForm : Form
             _toaster.Dispose();
             _tray.Dispose();
             _web.Dispose();
+            _heartbeat.Dispose();
         }
         base.Dispose(disposing);
     }

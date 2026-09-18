@@ -3230,6 +3230,7 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     width: min(1440px, calc(100vw - 32px));
     height: fit-content;
     max-height: calc(100vh - 32px);
+    max-height: calc(100dvh - 32px);
     background: var(--panel);
     border: 1px solid var(--line);
     border-radius: 12px;
@@ -3289,7 +3290,9 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 .event-player-media {
     position: relative;
     width: 100%;
-    max-height: calc(100vh - 180px);
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0;
     background: #000;
     border-radius: 8px;
     overflow: hidden;
@@ -3319,7 +3322,9 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     display: block;
     width: 100%;
     aspect-ratio: 16 / 9; /* stable modal size while media loads */
-    max-height: calc(100vh - 180px);
+    min-height: 0;
+    max-height: 100%;
+    object-fit: contain;
     background: #000;
     outline: none;
 }
