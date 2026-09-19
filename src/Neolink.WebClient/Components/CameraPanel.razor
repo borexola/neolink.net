@@ -2624,20 +2624,7 @@
     private bool IsActiveProfile(ApiEncodeProfile p) =>
         Camera?.Streams.Any(s => s.Kind == p.Type && s.Width == p.Width && s.Height == p.Height) == true;
 
-    private static string TypeIcon(string label) => label switch
-    {
-        "person" => "🧍",
-        "vehicle" => "🚗",
-        "animal" => "🐾",
-        "package" => "📦",
-        "doorbell" => "🔔",
-        "crying" => "😢",
-        "line-crossing" => "🚧",
-        "intrusion" => "🚷",
-        "loitering" => "🕒",
-        "motion" => "👁",
-        _ => "•",
-    };
+    private static MarkupString TypeIcon(string label) => UiIcon.Render(UiIcon.ForLabel(label), 12);
 
     // Live probe results win; the server's cached signals (in the phase-1
     // /recording payload) fill in until then — so the chip list renders already

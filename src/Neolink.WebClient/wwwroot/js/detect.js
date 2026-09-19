@@ -51,12 +51,24 @@
 
     // Familiar things get a glyph instead of a word: a wall of tiles is read at a
     // glance, and "person" spelt out on every box is noise where a figure is not.
-    const ICONS = {
-        person: '👤', bicycle: '🚲', car: '🚗', motorcycle: '🏍',
-        bus: '🚌', train: '🚆', truck: '🚚', boat: '⛵', airplane: '✈',
-        bird: '🐦', cat: '🐈', dog: '🐕', horse: '🐎', sheep: '🐑',
-        cow: '🐄', elephant: '🐘', bear: '🐻', zebra: '🦓', giraffe: '🦒',
+    // Drawn from stroke paths in the UI's own icon style, not the platform's
+    // emoji: the same figure on every device, and no colour of its own on a
+    // coloured pill. Animals of every kind share the paw.
+    const GLYPHS = {
+        person: 'M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2 M16 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0',
+        car: 'M5 17H3v-4l2-5a2 2 0 0 1 1.9-1.3h10.2A2 2 0 0 1 19 8l2 5v4h-2 M3 13h18 M9 17a2 2 0 1 1-4 0 2 2 0 0 1 4 0 M19 17a2 2 0 1 1-4 0 2 2 0 0 1 4 0',
+        truck: 'M1 3h15v13H1z M16 8h4l3 3v5h-7z M8 18.5a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0 M21 18.5a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0',
+        bus: 'M6 3h12a2 2 0 0 1 2 2v12H4V5a2 2 0 0 1 2-2z M4 11h16 M7 20v-3 M17 20v-3 M8 14.5h.01 M16 14.5h.01',
+        bicycle: 'M9 17.5a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0 M22 17.5a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0 M5.5 17.5L9 9h5l4.5 8.5 M9 9l3 8.5H5.5 M12 17.5L15 9 M13 5h3',
+        paw: 'M12 20c-3 0-5.5-1.8-5.5-4 0-1.5 1-2.5 2-3.5s1.5-2.5 3.5-2.5 2.5 1.5 3.5 2.5 2 2 2 3.5c0 2.2-2.5 4-5.5 4z M7.6 9a1.6 1.6 0 1 1-3.2 0 1.6 1.6 0 0 1 3.2 0 M11.1 5.5a1.6 1.6 0 1 1-3.2 0 1.6 1.6 0 0 1 3.2 0 M16.1 5.5a1.6 1.6 0 1 1-3.2 0 1.6 1.6 0 0 1 3.2 0 M19.6 9a1.6 1.6 0 1 1-3.2 0 1.6 1.6 0 0 1 3.2 0',
     };
+    const GLYPH_FOR = { person: 'person', car: 'car', truck: 'truck', bus: 'bus', bicycle: 'bicycle', motorcycle: 'bicycle' };
+    const PATHS = {};
+    function glyphFor(label) {
+        const g = GLYPH_FOR[label] || (GROUPS[label] === 'animals' ? 'paw' : null);
+        if (g && !PATHS[g]) PATHS[g] = new Path2D(GLYPHS[g]);
+        return g;
+    }
 
     // Nothing is drawn INSIDE a box: no tint, no glow, no blur over the picture.
     // What is in the box is a face or a number plate, and the outline's whole job
@@ -603,11 +615,11 @@
 
             // The label sits above the box, or tucks inside when the box is against
             // the top edge, and never hangs off the side of the picture.
-            const fs = px(11);
-            const name = ICONS[b.label] || b.label;
+            const fs = px(11), gs = px(13);
+            const glyph = glyphFor(b.label);
             const pct = Math.round(b.score * 100) + '%';
             ctx.font = '600 ' + fs + 'px ' + FONT;
-            const nameW = ctx.measureText(name).width;
+            const nameW = glyph ? gs : ctx.measureText(b.label).width;
             ctx.font = '500 ' + fs * 0.85 + 'px ' + FONT;
             const pctW = ctx.measureText(pct).width;
             const padX = px(7), gap = px(5), ph = px(17);
@@ -618,8 +630,20 @@
             ctx.fillStyle = color;
             ctx.fill();
             ctx.fillStyle = '#0b0d12';
-            ctx.font = '600 ' + fs + 'px ' + FONT;
-            ctx.fillText(name, lx + padX, ly + ph / 2);
+            if (glyph) {
+                ctx.save();
+                ctx.translate(lx + padX, ly + (ph - gs) / 2);
+                ctx.scale(gs / 24, gs / 24);
+                ctx.strokeStyle = '#0b0d12';
+                ctx.lineWidth = 2.4;
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                ctx.stroke(PATHS[glyph]);
+                ctx.restore();
+            } else {
+                ctx.font = '600 ' + fs + 'px ' + FONT;
+                ctx.fillText(b.label, lx + padX, ly + ph / 2);
+            }
             // The score is a footnote to the label, not a second heading.
             ctx.globalAlpha *= 0.65;
             ctx.font = '500 ' + fs * 0.85 + 'px ' + FONT;

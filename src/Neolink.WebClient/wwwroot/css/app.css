@@ -2911,7 +2911,7 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     pointer-events: none; /* clicks land on the card (open player) */
 }
 
-.event-thumb-icon { font-size: 30px; opacity: 0.8; }
+.event-thumb-icon { display: inline-flex; opacity: 0.8; }
 
 .event-live {
     position: absolute;

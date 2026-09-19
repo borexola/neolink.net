@@ -14,7 +14,7 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Changed
 
-- **Live object boxes name familiar things with a glyph.** A person, a car, a truck, a dog, a cat, a bird and the other vehicles and animals get a small symbol on their box instead of the word, so a wall of tiles reads at a glance; anything less familiar keeps its word, and the confidence stays beside it.
+- **Flat icons for events and object boxes.** The coloured emoji on event rows, titles, thumbnails and type filters — the little standing figure, the red car, the paw — are replaced by plain line icons in the same style as the rest of the toolbar, so they look the same on every device and sit quietly beside the text. The live object boxes use the same icons: a figure for a person, a car, a truck, a bus, a bicycle, and a paw for any animal; anything less familiar keeps its word, and the confidence stays beside it.
 - **The event player fits a phone.** Playback speed and recording quality now share one row at every screen width, separated by a thin divider instead of the SPEED and QUALITY headings that pushed them onto two lines; the chips say what they are, and a tooltip names the group.
 - **Search as you type.** The Search button under AI Search is gone: the box searches by itself a second after you stop typing, or the moment you press Enter, and Escape clears it. A single letter never fires a search. The BETA badge has come off, and on a phone the heading steps aside so the field gets the whole row.
 - **Small tidy-ups.** The NEW badges on Detection zone, Notifications and Webhook settings have come off. The Events page stops polling while its browser tab is hidden and catches up the moment you look again.

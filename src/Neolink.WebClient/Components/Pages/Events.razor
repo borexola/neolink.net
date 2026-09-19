@@ -389,7 +389,7 @@
                                     }
                                     else
                                     {
-                                        <span class="event-thumb-icon">@ev.Icon</span>
+                                        <span class="event-thumb-icon">@UiIcon.Render(ev.IconName, 28)</span>
                                     }
                                     <span class="event-row-dur">@DurationText(ev)</span>
                                     @if (ev.Ongoing)
@@ -399,7 +399,7 @@
                                 </div>
                                 <div class="event-row-main">
                                     <span class="event-title">
-                                        @ev.Icon @EventTitle(ev)
+                                        @UiIcon.Render(ev.IconName, 14) @EventTitle(ev)
                                         @if (ev.AiLevel != null)
                                         {
                                             @* The AI threat verdict at a glance; cameras without AI
@@ -436,7 +436,7 @@
                     <div class="event-player-head">
                         <button class="icon-btn ev-back" title="@T["Back to the list"]" @onclick="CloseAsync">@UiIcon.Render("chev-left", 16)</button>
                         <div class="event-player-title">
-                            <span class="event-title">@sel.Icon @EventTitle(sel)</span>
+                            <span class="event-title">@UiIcon.Render(sel.IconName, 16) @EventTitle(sel)</span>
                             <span class="event-sub">@sel.Camera · @T.DateShort(sel.Start.ToLocalTime()) @sel.Start.ToLocalTime().ToString("HH:mm:ss") ·
                                 @if (sel.Ongoing)
                                 {

@@ -453,27 +453,28 @@ public sealed record ApiEvent(string Id, string Camera, DateTime Start, DateTime
     bool HasPreview = false, string? AiDescription = null, string? AiLevel = null,
     bool AiPending = false, List<string>? AiObjects = null)
 {
-    private static readonly (string Label, string Icon, string Name)[] Known =
+    private static readonly (string Label, string Name)[] Known =
     {
-        ("person", "🧍", "Human"),
-        ("vehicle", "🚗", "Vehicle"),
-        ("animal", "🐾", "Animal"),
-        ("package", "📦", "Package"),
-        ("doorbell", "🔔", "Doorbell"),
+        ("person", "Human"),
+        ("vehicle", "Vehicle"),
+        ("animal", "Animal"),
+        ("package", "Package"),
+        ("doorbell", "Doorbell"),
         // Crying-sound detection (indoor cams listen through the mic)
-        ("crying", "😢", "Crying"),
+        ("crying", "Crying"),
         // Perimeter protection (line/zone crossing configured in the Reolink app)
-        ("line-crossing", "🚧", "Line crossing"),
-        ("intrusion", "🚷", "Intrusion"),
-        ("loitering", "🕒", "Loitering"),
+        ("line-crossing", "Line crossing"),
+        ("intrusion", "Intrusion"),
+        ("loitering", "Loitering"),
         // Recording held open from outside (the Home Assistant "Record" switch).
-        ("external", "⏺", "External"),
-        ("motion", "👁", "Motion"),
+        ("external", "External"),
+        ("motion", "Motion"),
     };
 
     /// <summary>Leading icon: the most specific detection wins over plain motion.</summary>
-    public string Icon =>
-        Known.FirstOrDefault(k => Labels.Contains(k.Label)).Icon ?? "👁";
+    public string IconName =>
+        UiIcon.ForLabel(Known.FirstOrDefault(k => Labels.Contains(k.Label)).Label ?? "motion");
+
 
     /// <summary>Cache-key version for artifact URLs. Closed-event responses are
     /// cached immutable, so a fetch made before the event settled must live under
@@ -512,6 +513,22 @@ public sealed record ApiEvent(string Id, string Camera, DateTime Start, DateTime
 /// </summary>
 public static class UiIcon
 {
+    /// <summary>The icon an event label is drawn with, everywhere a label shows.</summary>
+    public static string ForLabel(string label) => label switch
+    {
+        "person" => "user",
+        "vehicle" => "car",
+        "animal" => "paw",
+        "package" => "package",
+        "doorbell" => "bell",
+        "crying" => "frown",
+        "line-crossing" => "line-cross",
+        "intrusion" => "shield",
+        "loitering" => "clock",
+        "external" => "rec",
+        _ => "activity",
+    };
+
     public static MarkupString Render(string name, int size = 15)
     {
         var body = name switch
@@ -535,6 +552,11 @@ public static class UiIcon
                 + "<rect x=\"8\" y=\"8\" width=\"8\" height=\"8\" rx=\"1.5\"/>",
             "shield" => "<path d=\"M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z\"/>",
             "lock" => "<rect x=\"3\" y=\"11\" width=\"18\" height=\"11\" rx=\"2\"/><path d=\"M7 11V7a5 5 0 0 1 10 0v4\"/>",
+            "car" => "<path d=\"M5 17H3v-4l2-5a2 2 0 0 1 1.9-1.3h10.2A2 2 0 0 1 19 8l2 5v4h-2\"/><line x1=\"3\" y1=\"13\" x2=\"21\" y2=\"13\"/><circle cx=\"7\" cy=\"17\" r=\"2\"/><circle cx=\"17\" cy=\"17\" r=\"2\"/>",
+            "paw" => "<path d=\"M12 20c-3 0-5.5-1.8-5.5-4 0-1.5 1-2.5 2-3.5s1.5-2.5 3.5-2.5 2.5 1.5 3.5 2.5 2 2 2 3.5c0 2.2-2.5 4-5.5 4z\"/><circle cx=\"6\" cy=\"9\" r=\"1.6\"/><circle cx=\"9.5\" cy=\"5.5\" r=\"1.6\"/><circle cx=\"14.5\" cy=\"5.5\" r=\"1.6\"/><circle cx=\"18\" cy=\"9\" r=\"1.6\"/>",
+            "package" => "<path d=\"M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z\"/><polyline points=\"3.27 6.96 12 12.01 20.73 6.96\"/><line x1=\"12\" y1=\"22.08\" x2=\"12\" y2=\"12\"/>",
+            "frown" => "<circle cx=\"12\" cy=\"12\" r=\"10\"/><path d=\"M16 16s-1.5-2-4-2-4 2-4 2\"/><line x1=\"9\" y1=\"9\" x2=\"9.01\" y2=\"9\"/><line x1=\"15\" y1=\"9\" x2=\"15.01\" y2=\"9\"/>",
+            "line-cross" => "<line x1=\"12\" y1=\"2\" x2=\"12\" y2=\"22\" stroke-dasharray=\"3 3\"/><line x1=\"4\" y1=\"12\" x2=\"16\" y2=\"12\"/><polyline points=\"12 8 16 12 12 16\"/>",
             "user" => "<path d=\"M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2\"/><circle cx=\"12\" cy=\"7\" r=\"4\"/>",
             "x" => "<line x1=\"18\" y1=\"6\" x2=\"6\" y2=\"18\"/><line x1=\"6\" y1=\"6\" x2=\"18\" y2=\"18\"/>",
             "mic" => "<path d=\"M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z\"/><path d=\"M19 10v2a7 7 0 0 1-14 0v-2\"/><line x1=\"12\" y1=\"19\" x2=\"12\" y2=\"23\"/><line x1=\"8\" y1=\"23\" x2=\"16\" y2=\"23\"/>",

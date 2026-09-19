@@ -396,7 +396,7 @@
                                 }
                                 else
                                 {
-                                    <span class="event-thumb-icon">@ev.Icon</span>
+                                    <span class="event-thumb-icon">@UiIcon.Render(ev.IconName, 28)</span>
                                 }
                                 @if (ev.Ongoing)
                                 {
@@ -407,7 +407,7 @@
                             </div>
                             <div class="event-meta">
                                 <span class="event-title">
-                                    @ev.Icon @EventTitle(ev)
+                                    @UiIcon.Render(ev.IconName, 14) @EventTitle(ev)
                                     @if (ev.AiLevel != null)
                                     {
                                         <span class="ai-dot ai-@ev.AiLevel"
@@ -2823,7 +2823,7 @@
         <div class="event-player" role="dialog" aria-label="@T["Event playback"]">
             <div class="event-player-head">
                 <div class="event-player-title">
-                    <span class="event-title">@_playEvent.Icon @EventTitle(_playEvent)</span>
+                    <span class="event-title">@UiIcon.Render(_playEvent.IconName, 16) @EventTitle(_playEvent)</span>
                     <span class="event-sub">
                         @_playEvent.Camera · @T.DateShort(_playEvent.Start.ToLocalTime()) @_playEvent.Start.ToLocalTime().ToString("HH:mm:ss") ·
                         @if (_playEvent.Ongoing)
@@ -5717,20 +5717,7 @@
         return SaveAsync();
     }
 
-    private static string StripTypeIcon(string label) => label switch
-    {
-        "person" => "🧍",
-        "vehicle" => "🚗",
-        "animal" => "🐾",
-        "package" => "📦",
-        "doorbell" => "🔔",
-        "crying" => "😢",
-        "line-crossing" => "🚧",
-        "intrusion" => "🚷",
-        "loitering" => "🕒",
-        "motion" => "👁",
-        _ => "•",
-    };
+    private static MarkupString StripTypeIcon(string label) => UiIcon.Render(UiIcon.ForLabel(label), 12);
 
     // ------------------------------------------------------------ data
 
