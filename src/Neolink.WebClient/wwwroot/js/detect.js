@@ -49,6 +49,15 @@
 
     const FONT = 'ui-sans-serif, system-ui, -apple-system, sans-serif';
 
+    // Familiar things get a glyph instead of a word: a wall of tiles is read at a
+    // glance, and "person" spelt out on every box is noise where a figure is not.
+    const ICONS = {
+        person: '👤', bicycle: '🚲', car: '🚗', motorcycle: '🏍',
+        bus: '🚌', train: '🚆', truck: '🚚', boat: '⛵', airplane: '✈',
+        bird: '🐦', cat: '🐈', dog: '🐕', horse: '🐎', sheep: '🐑',
+        cow: '🐄', elephant: '🐘', bear: '🐻', zebra: '🦓', giraffe: '🦒',
+    };
+
     // Nothing is drawn INSIDE a box: no tint, no glow, no blur over the picture.
     // What is in the box is a face or a number plate, and the outline's whole job
     // is to point at it. Legibility over snow or headlights comes from a crisp
@@ -595,7 +604,7 @@
             // The label sits above the box, or tucks inside when the box is against
             // the top edge, and never hangs off the side of the picture.
             const fs = px(11);
-            const name = b.label;
+            const name = ICONS[b.label] || b.label;
             const pct = Math.round(b.score * 100) + '%';
             ctx.font = '600 ' + fs + 'px ' + FONT;
             const nameW = ctx.measureText(name).width;
