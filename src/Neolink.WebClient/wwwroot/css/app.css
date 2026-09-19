@@ -5211,12 +5211,18 @@ body.tl-colresizing, body.tl-colresizing * { cursor: col-resize !important; user
     padding: 10px 12px 8px;
 }
 
+/* Items move to the next line whole, never break inside, and a value keeps the
+   width of its widest reading: a legend that re-wrapped as the numbers ticked
+   over made the whole page jump several times a second. */
 .mon-chart-head {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 10px;
+    gap: 2px 10px;
     margin-bottom: 6px;
 }
+
+.mon-chart-title, .mon-leg, .mon-chart-max { white-space: nowrap; }
 
 .mon-chart-title {
     font-size: 12px;
@@ -5241,6 +5247,7 @@ body.tl-colresizing, body.tl-colresizing * { cursor: col-resize !important; user
     color: var(--text);
     font-weight: 600;
     font-variant-numeric: tabular-nums;
+    min-width: 7ch;
 }
 
 /* Y-axis ceiling, right-aligned over the plot */
