@@ -546,7 +546,8 @@ foreach (var cam in config.Cameras)
             if (alsoRoot)
                 camMounts.Add(Mount($"/{cam.Name}", hub));
             webStreams.Add(new WebStreamInfo(suffix, $"/{cam.Name}/{suffix}", hub));
-            var service = new CameraService(cam, kind, hub, TimeSpan.FromSeconds(2 * streamIndex++));
+            var service = new CameraService(cam, kind, hub, TimeSpan.FromSeconds(2 * streamIndex++),
+                TimeSpan.FromHours(config.WakeHints?.TrustHours ?? WakeHintConfig.DefaultTrustHours));
             service.SetSuspended(cameraState.Suspended(cam.Name)); // restore persisted suspend
             primaryService ??= service;
             camServices.Add(service);
