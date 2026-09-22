@@ -278,14 +278,53 @@ public static class ConfigEditor
     /// <summary>An RTSP URL safe to show in the UI: the userinfo password (if any)
     /// is replaced with ****. Round-trip contract: a client that sends the masked
     /// value back means "keep the stored one".</summary>
+    /// <summary>Hides the password inside a "scheme://user:pass@host" URL before it
+    /// goes to a browser. Named for the stream URLs it was written for; the ONVIF
+    /// address takes the same shape and the same masking.</summary>
     public static string? MaskRtspPassword(string? url)
     {
-        if (string.IsNullOrEmpty(url)) return url;
-        int at = url.IndexOf('@');
+        if (LoginSpan(url) is not { } s || s.PassStart < 0) return url;
+        return url![..s.PassStart] + Mask + url[s.At..];
+    }
+
+    /// <summary>What a stored password is shown as.</summary>
+    public const string Mask = "****";
+
+    /// <summary>
+    /// Undoes <see cref="MaskRtspPassword"/> on a value an admin has EDITED: wherever
+    /// the edited value still carries the mask, the stored password goes back in its
+    /// place. Without this, changing the host or path of a URL whose password is
+    /// shown masked either stored the literal mask (destroying the password) or was
+    /// quietly thrown away. Returns null when there is nothing to restore it from,
+    /// so the caller keeps the stored value rather than writing a mask.
+    /// </summary>
+    public static string? UnmaskPassword(string edited, string? stored)
+    {
+        if (!edited.Contains(Mask, StringComparison.Ordinal)) return edited;
+        if (LoginSpan(edited) is not { PassStart: >= 0 } e
+            || edited[e.PassStart..e.At] != Mask
+            || LoginSpan(stored) is not { PassStart: >= 0 } s)
+            return null;
+        return edited[..e.PassStart] + stored![s.PassStart..s.At] + edited[e.At..];
+    }
+
+    /// <summary>Where the password sits inside a "scheme://user:pass@host/path" or a
+    /// bare "user:pass@host:port": PassStart is its first character (-1 when there
+    /// is a user but no password), At is the '@' that ends the login. The login ends
+    /// at the LAST '@' inside the authority — which is how a URL parser reads it, and
+    /// so how the camera sees it — because an '@' in a password is common and people
+    /// do not percent-escape it. Null when the value carries no login at all.</summary>
+    private static (int PassStart, int At)? LoginSpan(string? url)
+    {
+        if (string.IsNullOrEmpty(url)) return null;
         int scheme = url.IndexOf("://", StringComparison.Ordinal);
-        if (at < 0 || scheme < 0 || at < scheme) return url;
-        int colon = url.IndexOf(':', scheme + 3);
-        if (colon < 0 || colon > at) return url; // no password part
-        return url[..(colon + 1)] + "****" + url[at..];
+        int start = scheme < 0 ? 0 : scheme + 3;
+        int end = url.IndexOf('/', start);
+        if (end < 0) end = url.Length;
+        if (end <= start) return null; // no authority to hold a login
+        int at = url.LastIndexOf('@', end - 1, end - start);
+        if (at < start) return null;
+        int colon = url.IndexOf(':', start, at - start);
+        return (colon < 0 ? -1 : colon + 1, at);
     }
 }

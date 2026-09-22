@@ -370,18 +370,26 @@ public sealed class ReolinkHttpApi : IDisposable
     /// Doorbell line) answer GetMdAlarm for sensitivity but keep the ZONE grid —
     /// one grid, shared by every detection type — only in this object, so the
     /// zone reader needs the legacy shape even when the new dialect exists.</summary>
-    public async Task<JsonObject?> TryGetLegacyMdConfigAsync(CancellationToken ct)
+    public async Task<JsonObject?> TryGetLegacyMdConfigAsync(CancellationToken ct) =>
+        (await ReadLegacyMdConfigAsync(ct).ConfigureAwait(false)).Alarm;
+
+    /// <summary>The legacy Alarm object, and whether the firmware REFUSED the command
+    /// outright. The two nulls mean different things to anyone deciding something
+    /// lasting: a refusal is this firmware's permanent answer ("no such command"),
+    /// while a transport failure is not an answer at all. Transport errors propagate,
+    /// exactly as they do from <see cref="TryGetLegacyMdConfigAsync"/>.</summary>
+    public async Task<(JsonObject? Alarm, bool Rejected)> ReadLegacyMdConfigAsync(CancellationToken ct)
     {
         try
         {
             var alarm = await ExecAsync("GetAlarm",
                 new JsonObject { ["Alarm"] = new JsonObject { ["channel"] = _channelId, ["type"] = "md" } },
                 ct).ConfigureAwait(false);
-            return alarm?["Alarm"] as JsonObject;
+            return (alarm?["Alarm"] as JsonObject, false);
         }
         catch (ReolinkApiException)
         {
-            return null;
+            return (null, true);
         }
     }
 

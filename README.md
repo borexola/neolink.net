@@ -218,7 +218,12 @@ recording, notifications and Home Assistant continue to follow the camera.
   infrared brightness — plus, over the HTTP API (beta), picture settings, HDR,
   volume, OSD, PTZ presets, quick replies and a firmware-update badge. Changes stage and are
   sent only on "Apply to camera"; a **PORTS tab** can enable the camera's own
-  HTTP/ONVIF services right from Neolink
+  HTTP/ONVIF services right from Neolink. [Non-Reolink
+  cameras](#non-reolink-cameras-generic-rtsp) get the same panel over **ONVIF**:
+  identity, stream profiles, picture, pan/tilt with presets, overlay placement
+  and reboot
+- A **detection zone** on every camera — kept on the camera where it can hold
+  one, kept on Neolink where it cannot, and the editor says which
 - **Events** review strip and deep-linkable events page, a synced
   multi-camera **Timeline** with footage export, and **camera SD-card
   playback** (preview)
@@ -493,6 +498,116 @@ camera's own IP automatically.
 
 Neither interface weakens LAN security beyond what the Reolink app already
 uses (same camera login), and neither is required for core video or recording.
+
+### Non-Reolink cameras (generic RTSP)
+
+Any camera that serves RTSP can be added alongside the Reolink ones. Instead of
+`address`/`username`, give it the stream URLs — credentials go inside the URL:
+
+```json
+{
+  "name": "front_gate",
+  "rtsp_main": "rtsp://admin:pass@192.168.1.50:554/Streaming/Channels/101",
+  "rtsp_sub":  "rtsp://admin:pass@192.168.1.50:554/Streaming/Channels/102"
+}
+```
+
+Neolink pulls those streams and re-serves them on its own RTSP port, records
+them, and shows them in the web UI.
+
+**Detections come over ONVIF's event service.** Neolink subscribes to the
+camera's own analytics — motion, and person/vehicle/animal where the camera
+classifies what it saw — so a non-Reolink camera gets the same treatment as a
+Reolink one: event clips with thumbnails, the events page and timeline,
+e-mail/webhook notifications, AI descriptions, and motion sensors in Home
+Assistant. A camera whose ONVIF has no event service (or none reachable) still
+streams and records around the clock; it simply produces no events, and the
+switches that depend on them stay out of the way.
+
+**Settings come over ONVIF**, the standard nearly every IP camera speaks. Turn
+it on in the camera's own web page and the ⚙ panel fills in with whatever its
+ONVIF services actually answer for:
+
+| Section | ONVIF service |
+|---|---|
+| Model / firmware / serial on the identity strip | Device |
+| **Streams** — resolution, framerate, bitrate per profile, editable | Media or Media2 (video encoder configuration) |
+| **Picture** — brightness, contrast, saturation, sharpness, day/night | Imaging |
+| **Pan / tilt** and saved **presets** | PTZ (only when the head actually pans and tilts) |
+| **Zoom** — the lens's optical zoom, as a slider | PTZ (`GetStatus` / `AbsoluteMove`) |
+| **On-screen display** — where the name and timestamp sit | Media or Media2 (OSD) |
+| **Detections** — motion and, where the camera classifies, person/vehicle/animal | Events (pull-point) |
+| **Reboot** | Device |
+| Stills, for thumbnails and posters | Media (`GetSnapshotUri`) |
+| **Detection zone** — the camera's own motion grid | Analytics (cell motion detector); Neolink keeps it otherwise, see below |
+
+A camera that answers none of this still streams and records exactly as
+before; the panel simply shows less. What ONVIF cannot do is left out rather
+than offered and refused: there is no way to switch an overlay off (only to
+move it), and hue, anti-flicker, flip/mirror and HDR have no ONVIF equivalent.
+Focus is not offered either: ONVIF moves it through the imaging service in ways
+too different from one camera to the next to present as a single slider.
+
+Newer cameras speak **Media2**, the successor to ONVIF's media service, and some
+speak only that. Neolink asks the older one first — every Reolink answers it —
+and moves to Media2 only when it gets nothing, so the streams, stills and
+overlays come through either way.
+
+Two interoperability details are handled for you, because between them they
+account for most "ONVIF is enabled but Neolink shows nothing" reports: requests
+are stamped in **the camera's own clock** (read from it first, unauthenticated
+— a camera drifting from your server by more than a few seconds rejects every
+request otherwise, which looks exactly like a wrong password), and the camera's
+login is offered over **HTTP authentication as well as WS-Security**, since
+which of the two a given firmware insists on is not something you can tell from
+the outside.
+
+ONVIF is looked for on the stream URL's own host — port 80 first, then 8000 and
+8899 — and signs in with the login that URL carries. `onvif_address` overrides both:
+give it `host`, `host:port`, or a full URL, and a full URL may carry its own
+`user:pass@` when the camera keeps separate accounts for streaming and
+management. **Test connection** in the Cameras editor says whether ONVIF
+answered, before you save the entry.
+
+| Option | Default | Description |
+|---|---|---|
+| `rtsp_main` | *one of these is required* | Main-stream RTSP URL (`rtsp://user:pass@host:554/path`) |
+| `rtsp_sub` | *optional* | Sub-stream RTSP URL |
+| `onvif_address` | *the stream URL's host* | Where the camera's ONVIF device service lives; may be a full URL with its own login |
+| `name`, `permitted_users`, `audio_transcode` | | As for a Reolink camera |
+| `record` | `true` | Seeds this camera's "Detection events" switch, as for a Reolink camera. Only meaningful when its ONVIF event service answers |
+
+### Detection zones
+
+Every camera has one, under camera ⚙ → **Camera settings** → **Detection zone**.
+Drag boxes over the camera's own picture to mark what is worth watching.
+
+Where the zone is KEPT depends on the camera, and the editor says which:
+
+- **On the camera**, for a Reolink with its HTTP API. It is the same grid the
+  Reolink app edits, at whatever dimensions that model reports, and it governs
+  the camera's own motion and AI alarms — so it changes its app notifications
+  and this server's event recording alike.
+- **On the camera**, for a non-Reolink camera whose ONVIF analytics runs a
+  **cell motion detector** — Hikvision, Dahua, Axis and many others do. The grid
+  has the camera's own dimensions, and it decides where the camera's *motion*
+  alarms fire; any other analytics rules it runs (line crossing, intrusion…)
+  keep their own areas, and the rule's other settings (how many cells must
+  move, the alarm delays) are left exactly as they were.
+- **On Neolink**, for every camera that keeps no zone of its own: a generic
+  RTSP camera with no such detector (or no reachable ONVIF), and Reolink models
+  whose firmware carries no grid. Nothing is
+  written to the camera and its own alerts are unchanged; the zone governs what
+  *Neolink* watches, which today is the live object boxes. It is stored in
+  `camera-state.json` alongside the other per-camera settings and survives
+  restarts.
+
+The editor draws the grid over the camera's latest still. Cameras with no
+snapshot command of their own (every generic RTSP one) get that still from the
+stream Neolink is already carrying, decoded with ffmpeg — without ffmpeg the
+grid is drawn over an empty frame instead. A camera that *has* a snapshot
+command is untouched by this: when its snapshot fails, the answer is the same
+as it always was (the last frame, honestly labelled, or nothing).
 
 ## Behind a reverse proxy (HAProxy / nginx / Caddy)
 

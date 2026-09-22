@@ -545,6 +545,9 @@ public sealed class NeolinkConfig
                 PermittedUsers = permitted,
                 Record = record,
                 AudioTranscode = audioTranscode,
+                // A non-Reolink camera's settings all come over ONVIF, which is
+                // found on the stream URL's own host unless this says otherwise.
+                OnvifAddress = string.IsNullOrWhiteSpace(onvifAddress) ? null : onvifAddress.Trim(),
             };
         }
 
@@ -936,9 +939,11 @@ public sealed class CameraConfig
     public string? HttpAddress { get; init; }
 
     /// <summary>Optional override for the camera's ONVIF device-service endpoint
-    /// (host, host:port, or a full URL). Defaults to the Baichuan host on the
-    /// standard /onvif/device_service path. Only used as a picture-settings fallback
-    /// for models with no Reolink HTTP CGI API.</summary>
+    /// (host, host:port, or a full URL — a full URL may carry "user:pass@" when the
+    /// ONVIF account differs from the streaming one). Defaults to the Baichuan host,
+    /// or a generic camera's stream-URL host, on the standard /onvif/device_service
+    /// path. On a Reolink it is the picture-settings fallback for models with no
+    /// HTTP CGI API; on a non-Reolink camera it is where ALL its settings come from.</summary>
     public string? OnvifAddress { get; init; }
     /// <summary>Record detection events for this camera (when recording is configured).</summary>
     public bool Record { get; init; } = true;

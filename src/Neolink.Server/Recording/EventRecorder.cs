@@ -996,9 +996,16 @@ public sealed class EventRecorder
         try
         {
             var jpeg = await _control.SnapshotAsync(ct).ConfigureAwait(false);
-            if (jpeg is not { Length: > 100 } || jpeg[0] != 0xFF || jpeg[1] != 0xD8)
+            // A non-Reolink camera may have no snapshot command at all, or one that
+            // came back empty; its only other picture is the stream this very event
+            // is being cut from. A Reolink camera keeps its own snap, full stop —
+            // decoding video here is not something its event path has ever paid.
+            if (!IsJpeg(jpeg) && _control.OnvifOnly)
+                jpeg = await Neolink.Media.FrameGrab.FromHubAsync(_previewHub ?? _hub, 720, ct)
+                    .ConfigureAwait(false);
+            if (!IsJpeg(jpeg))
                 return; // not a JPEG (or camera doesn't support snapshots)
-            await FootageVault.WriteAllBytesAsync(Path.Combine(_store.EventDir(rec), "thumb.jpg"), jpeg, ct)
+            await FootageVault.WriteAllBytesAsync(Path.Combine(_store.EventDir(rec), "thumb.jpg"), jpeg!, ct)
                 .ConfigureAwait(false);
             rec.HasThumb = true;
             _store.Save(rec);
@@ -1008,6 +1015,8 @@ public sealed class EventRecorder
             Log.Debug($"{_camera}: event snapshot failed: {Log.Flatten(ex)}");
         }
     }
+
+    private static bool IsJpeg(byte[]? b) => b is { Length: > 100 } && b[0] == 0xFF && b[1] == 0xD8;
 
     /// <summary>Camera AI classifications → normalized event labels.</summary>
     internal static List<string> LabelsOf(MotionPush push)

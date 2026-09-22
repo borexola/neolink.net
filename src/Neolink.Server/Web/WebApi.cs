@@ -22,7 +22,9 @@ namespace Neolink.Web;
 /// <summary>One camera stream as exposed over the web API.</summary>
 public sealed record WebStreamInfo(string Kind, string Path, IStreamHub Hub);
 /// <param name="ContinuousActive">Probe: is 24/7 footage being written right now? Null when the camera has no continuous recorder.</param>
-/// <param name="SupportsEvents">False for generic RTSP cameras: no detection pushes, so event recording can't trigger.</param>
+/// <param name="SupportsEvents">Whether this camera can produce detections at all. A
+/// Baichuan camera always can; a non-Reolink one can when its ONVIF event service
+/// answers, which is only known once it has — see <see cref="WebCameraInfo.EventsProbe"/>.</param>
 /// <param name="Battery">Latest battery reading, or null (mains-powered / generic RTSP / unknown yet).</param>
 /// <param name="WifiSignal">Latest Wi-Fi RSSI pushed over Baichuan (dBm), or null — the only Wi-Fi source on cameras without the HTTP API.</param>
 /// <param name="NetType">Link type the camera last announced over Baichuan ("wifi", "ethernet"), or null.</param>
@@ -46,6 +48,17 @@ public sealed record WebCameraInfo(string Name, List<WebStreamInfo> Streams, ICa
     /// <summary>The camera's event recorder when server-side event recording runs —
     /// the shared entry point for on-demand clips (web UI button and HA switch).</summary>
     public EventRecorder? EventRecorder { get; set; }
+
+    /// <summary>Live answer to "can this camera produce detections?", for cameras
+    /// where it is not knowable up front: a non-Reolink camera's ONVIF event service
+    /// has to be asked, and the answer arrives a few seconds after start-up. Null =
+    /// <see cref="SupportsEvents"/> is the whole truth.</summary>
+    public Func<bool>? EventsProbe { get; init; }
+
+    /// <summary>Whether detections are possible here, asking the probe when there is
+    /// one. Everything that decides which entities or controls a camera gets should
+    /// use this rather than the constructor flag.</summary>
+    public bool EventsAvailableNow => EventsProbe?.Invoke() ?? SupportsEvents;
 
     /// <summary>The configured network address (host, or host:port when non-default) —
     /// shown on the camera-settings identity strip. Null for generic RTSP cameras
@@ -203,14 +216,20 @@ public static class WebApi
         string? Uid, string? AlwaysOn, string? Stream, string? OnvifAddress,
         bool? Record, bool? Udp, bool? UdpProbe, bool? WakeCapture, double? KeepAliveHours);
     /// <summary>Uid/Udp matter here as much as they do on save: a UDP-only battery
-    /// camera never listens on TCP, so testing it the TCP way always times out.</summary>
+    /// camera never listens on TCP, so testing it the TCP way always times out.
+    /// OnvifAddress rides along so a generic camera's test can also say whether its
+    /// settings will be reachable, before the entry is saved.</summary>
     private sealed record AdminCameraTestRequest(string? Name, string? Type, string? Address,
         string? Username, string? Password, int? ChannelId, string? RtspMain, string? RtspSub,
-        string? Uid, bool? Udp);
+        string? Uid, bool? Udp, string? OnvifAddress = null);
     private sealed record AutoTrackRequest(bool? On);
     private sealed record MdSensitivityRequest(int? Sensitivity);
     private sealed record AiSensitivityRequest(string? Type, int? Sensitivity);
-    private sealed record DetectionZoneRequest(string? Type, string? Table);
+    /// <summary>Cols/Rows are only read for a zone Neolink keeps itself, where the
+    /// editor that drew the grid is the authority on its shape. A zone on the camera
+    /// takes its dimensions from the camera and ignores them.</summary>
+    private sealed record DetectionZoneRequest(string? Type, string? Table, int? Cols = null, int? Rows = null,
+        string? Storage = null);
     private sealed record HdrRequest(int? Value);
     private sealed record OsdRequest(bool? ShowName, string? NamePos, bool? ShowTime, string? TimePos, bool? Watermark);
     private sealed record SirenRequest(bool? On);
@@ -959,7 +978,9 @@ public static class WebApi
                         uid = c.Uid,
                         alwaysOn = c.AlwaysOn == null ? "auto" : c.AlwaysOn.Value ? "true" : "false",
                         stream = c.Stream,
-                        onvifAddress = c.OnvifAddress,
+                        // May carry its own "user:pass@" now, so it is masked like
+                        // the stream URLs: the browser never sees a stored password.
+                        onvifAddress = ConfigEditor.MaskRtspPassword(c.OnvifAddress),
                         record = c.Record,
                         udp = c.Udp,
                         udpProbe = c.UdpProbe,
@@ -1055,6 +1076,21 @@ public static class WebApi
                         cams.Add(cam);
                     }
                     ConfigEditor.Set(cam, "name", name);
+                    // A URL-shaped value is READ BACK MASKED (its password replaced
+                    // with ****), so writing it verbatim would store the mask and
+                    // destroy the real credential. Masked = the admin did not touch
+                    // it = keep the file's value; null = keep; "" = remove.
+                    void SetUrl(string key, string? url)
+                    {
+                        if (url == null) return;
+                        // Edited around its masked password (a new host or path): put
+                        // the stored password back in place of the mask. Nothing to
+                        // restore it from = leave the stored value exactly as it was.
+                        var stored = cam[key] is System.Text.Json.Nodes.JsonValue v
+                                     && v.TryGetValue<string>(out var s) ? s : null;
+                        if (ConfigEditor.UnmaskPassword(url, stored) is not { } real) return;
+                        ConfigEditor.Set(cam, key, real.Length == 0 ? null : real.Trim());
+                    }
                     if (!isRtsp)
                     {
                         // Blank address only survives validation for a UID-only UDP
@@ -1070,9 +1106,9 @@ public static class WebApi
                         if (req.HttpAddress != null)
                             ConfigEditor.Set(cam, "http_address",
                                 req.HttpAddress.Length == 0 ? null : req.HttpAddress.Trim());
-                        if (req.OnvifAddress != null)
-                            ConfigEditor.Set(cam, "onvif_address",
-                                req.OnvifAddress.Length == 0 ? null : req.OnvifAddress.Trim());
+                        // Through SetUrl: onvif_address may carry a password, so the
+                        // admin API masks it on read and the mask must never be saved.
+                        SetUrl("onvif_address", req.OnvifAddress);
                         if (req.Uid != null)
                             ConfigEditor.Set(cam, "uid", req.Uid.Length == 0 ? null : req.Uid.Trim());
                         // Defaults are written as ABSENT keys, so config.json keeps only
@@ -1098,12 +1134,6 @@ public static class WebApi
                     }
                     else
                     {
-                        // Masked value = unchanged; null = keep; "" = remove.
-                        void SetUrl(string key, string? url)
-                        {
-                            if (url == null || url.Contains("****")) return;
-                            ConfigEditor.Set(cam, key, url.Length == 0 ? null : url.Trim());
-                        }
                         SetUrl("rtsp_main", req.RtspMain);
                         SetUrl("rtsp_sub", req.RtspSub);
                         ConfigEditor.Set(cam, "rtsp", null); // retire the legacy spelling
@@ -1112,8 +1142,11 @@ public static class WebApi
                         ConfigEditor.Set(cam, "password", null);
                         ConfigEditor.Set(cam, "channel_id", null);
                         ConfigEditor.Set(cam, "http_address", null);
+                        // ONVIF is where a generic camera's settings come from, so
+                        // this one key survives the type switch (masked = unchanged,
+                        // since it may carry a password of its own).
+                        SetUrl("onvif_address", req.OnvifAddress);
                         // Baichuan-only settings must not linger after a type switch.
-                        ConfigEditor.Set(cam, "onvif_address", null);
                         ConfigEditor.Set(cam, "uid", null);
                         ConfigEditor.Set(cam, "always_on", null);
                         ConfigEditor.Set(cam, "stream", null);
@@ -1127,6 +1160,11 @@ public static class WebApi
                     if (req.Record is { } record)
                         ConfigEditor.Set(cam, "record", record ? null : false);
                 });
+                // Per-camera state is keyed by name, so a rename has to take it
+                // along — otherwise the camera comes back un-suspended, with its
+                // cached capabilities gone and its detection zone forgotten.
+                if (req.OriginalName is { Length: > 0 } was)
+                    o.CameraState?.Rename(was, name);
                 Log.Warn($"config.json cameras updated via the web UI by '{SessionName(ctx)}' " +
                          $"({(req.OriginalName == null ? "added" : "edited")} \"{name}\") — restart to apply");
                 return Results.Json(new { ok = true, requiresRestart = true });
@@ -1153,6 +1191,10 @@ public static class WebApi
                         ?? throw new FormatException($"unknown camera \"{name}\"");
                     cams.Remove(cam);
                 });
+                // Its per-camera state goes with it. Kept, it would lie in wait: add a
+                // camera under the same name later and it would come back suspended,
+                // or with a detection zone drawn for a different view entirely.
+                o.CameraState?.Forget(name);
                 Log.Warn($"config.json camera \"{name}\" deleted via the web UI by '{SessionName(ctx)}' — restart to apply");
                 return Results.Json(new { ok = true, requiresRestart = true });
             }
@@ -1174,6 +1216,26 @@ public static class WebApi
             if (AdminOnly(ctx) is { } denied) return denied;
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted);
             cts.CancelAfter(TimeSpan.FromSeconds(12));
+
+            // What a generic camera's settings panel will be able to show, said at
+            // the moment the camera is being added rather than discovered later as
+            // an empty tab. Never fails the test: ONVIF is optional, video is not.
+            static async Task<string> TestOnvifAsync(string? onvifAddress, string rtspUrl,
+                CancellationToken ct)
+            {
+                var (host, _, user, pass) = NetUtil.SplitRtspUrl(rtspUrl);
+                var address = onvifAddress is { Length: > 0 } a ? a.Trim() : host;
+                if (address == null) return "";
+                using var probe = new OnvifClient(address, user ?? "", pass, "camera test",
+                    probePorts: new[] { 80, 8000, 8899 }, generic: true); // as the camera will be probed
+                var info = await probe.TryGetDeviceInfoAsync(ct).ConfigureAwait(false);
+                if (info == null)
+                    return "ONVIF did not answer, so this camera will stream and record but show no settings — " +
+                           "enable ONVIF on the camera, or set its ONVIF address above.";
+                var name = string.Join(" ", new[] { info.Manufacturer, info.Model }
+                    .Where(s => !string.IsNullOrWhiteSpace(s)));
+                return $"ONVIF answered{(name.Length > 0 ? $" — {name}" : "")}, so its settings will be editable here.";
+            }
 
             CameraConfig? stored = null;
             if (req.Name is { Length: > 0 } storedName)
@@ -1211,9 +1273,35 @@ public static class WebApi
                     var buf = new byte[256];
                     int n = await stream.ReadAsync(buf, cts.Token);
                     var reply = System.Text.Encoding.ASCII.GetString(buf, 0, n);
-                    return reply.StartsWith("RTSP/", StringComparison.Ordinal)
-                        ? Results.Json(new { ok = true, message = "RTSP endpoint answered (credentials are verified when streaming starts)" })
-                        : Results.Json(new { ok = false, message = "the host answered, but not with RTSP — check the URL and port" });
+                    if (!reply.StartsWith("RTSP/", StringComparison.Ordinal))
+                        return Results.Json(new { ok = false, message = "the host answered, but not with RTSP — check the URL and port" });
+                    // The stream is what matters, so this never fails the test — but
+                    // ONVIF is where every setting for this camera comes from, and
+                    // saying so here is far cheaper than hunting an empty panel later.
+                    // On its OWN budget. The outer 12s belongs to the RTSP check,
+                    // which has already passed by now: letting the ONVIF probe spend
+                    // what is left of it turned a perfectly good camera into "timed
+                    // out — is the address reachable?".
+                    using var onvifCts = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted);
+                    onvifCts.CancelAfter(TimeSpan.FromSeconds(8));
+                    string onvifNote;
+                    try
+                    {
+                        onvifNote = await TestOnvifAsync(
+                            req.OnvifAddress is { Length: > 0 } oa && !oa.Contains("****") ? oa
+                                : stored?.OnvifAddress,
+                            url, onvifCts.Token);
+                    }
+                    catch (OperationCanceledException) when (!ctx.RequestAborted.IsCancellationRequested)
+                    {
+                        onvifNote = "ONVIF did not answer in time, so this camera may show no settings — " +
+                                    "enable ONVIF on the camera, or set its ONVIF address above.";
+                    }
+                    return Results.Json(new
+                    {
+                        ok = true,
+                        message = "RTSP endpoint answered (credentials are verified when streaming starts). " + onvifNote,
+                    });
                 }
 
                 var address = req.Address is { Length: > 0 } a ? a
@@ -2071,8 +2159,11 @@ public static class WebApi
                         // Reolink HTTP CGI API — lets the panel fetch httpfeatures even
                         // without http_address, so the sliders show for a Lumus.
                         imaging = control.HasImagingFallback,
-                        // Baichuan-only: a generic RTSP camera can't be told to reboot
-                        reboot = control is not GenericCameraControl,
+                        // A non-Reolink camera reboots over ONVIF, or not at all.
+                        reboot = control.CanReboot,
+                        // Every setting on this camera came from ONVIF: the panel
+                        // leaves out what the standard cannot do, and says so.
+                        onvif = control.OnvifOnly,
                     },
                     support = caps.Support == null ? null : XmlToJson(caps.Support),
                 });
@@ -2154,6 +2245,14 @@ public static class WebApi
             string, (byte[] Jpeg, DateTime AtUtc)>(StringComparer.OrdinalIgnoreCase);
         var snapGates = new System.Collections.Concurrent.ConcurrentDictionary<
             string, SemaphoreSlim>(StringComparer.OrdinalIgnoreCase);
+        // When the still came out of the STREAM rather than off the camera, it cost
+        // an ffmpeg decode, so it is not re-taken more often than this however small
+        // a maxAge the caller asks for. A camera poll is a cheap round trip; a
+        // process spawn per tile per poll is not. The frame is still served with its
+        // real age, so nobody is told it is fresher than it is.
+        var grabFloor = TimeSpan.FromSeconds(15);
+        var lastGrab = new System.Collections.Concurrent.ConcurrentDictionary<
+            string, DateTime>(StringComparer.OrdinalIgnoreCase);
         // Snapshot auth: a web-UI session qualifies (the middleware validated it),
         // and so do the RTSP user credentials over HTTP Basic — the snapshot is
         // the still-image twin of the rtsp:// stream URLs: same users, same
@@ -2175,6 +2274,23 @@ public static class WebApi
             ChallengeBasic(ctx);
             return Results.Json(new { error = "authentication required" }, statusCode: 401);
         }
+
+        // A still taken from the stream is bounded in height: it backs dashboard
+        // tiles and the detection-zone canvas, neither of which gains anything
+        // from a 4K frame, and the decode is paid for per grab.
+        const int StillHeight = 720;
+
+        static bool IsJpeg(byte[]? b) => b is { Length: > 100 } && b[0] == 0xFF && b[1] == 0xD8;
+
+        // The stream to take a still from when the camera has no snapshot command:
+        // the sub-stream first (a small frame decodes in a fraction of the time),
+        // then whatever else is carrying video. A hub is only usable if it is
+        // holding a group of pictures RIGHT NOW — VideoReady stays true after a
+        // source stops, and picking such a hub would mean waiting out the timeout
+        // for a keyframe that is never coming.
+        static IStreamHub? StillHub(WebCameraInfo cam) =>
+            cam.Streams.FirstOrDefault(s => s.Kind == "subStream" && s.Hub.HasBufferedGop)?.Hub
+            ?? cam.Streams.FirstOrDefault(s => s.Hub.HasBufferedGop)?.Hub;
 
         async Task<IResult> SnapshotAsync(string name, HttpContext ctx)
         {
@@ -2243,15 +2359,60 @@ public static class WebApi
                 }
                 catch (TimeoutException) { unavailable = "camera did not reply"; }
                 catch (CameraCommandException ex) { unavailable = ex.Message; }
-                if (jpeg is { Length: > 100 } && jpeg[0] == 0xFF && jpeg[1] == 0xD8)
+                if (jpeg != null && !IsJpeg(jpeg))
+                    unavailable ??= "camera returned an invalid snapshot";
+                // A camera with NO snapshot command of its own — every generic RTSP
+                // one — gets its still out of the stream Neolink is already
+                // carrying. That is the only picture it can ever have, and what the
+                // detection-zone editor draws its grid over.
+                //
+                // A camera that HAS a snapshot command and simply failed is left
+                // exactly as it always was: offline, asleep or busy is not something
+                // an ffmpeg decode per poll would fix, and a Reolink camera must not
+                // start paying one.
+                // A non-Reolink camera falls back to the stream even when it DOES have
+                // an ONVIF snapshot, if that snapshot came back empty: the stream is
+                // the only other picture it has, and without it a camera whose
+                // snapshot URI hiccups would have no still at all.
+                if (!IsJpeg(jpeg) && (!cam.Control.HasSnapshot || cam.Control.OnvifOnly)
+                    && StillHub(cam) is { } hub)
                 {
-                    snapCache[cam.Name] = (jpeg, DateTime.UtcNow);
+                    // The floor is checked BEFORE the attempt and applies whether or
+                    // not a frame came of it — a grab that yields nothing is the
+                    // expensive case, so throttling only the successes would throttle
+                    // exactly the wrong half.
+                    if (lastGrab.TryGetValue(cam.Name, out var at) && DateTime.UtcNow - at < grabFloor)
+                        return Cached(allowStale: true)
+                               ?? Results.Json(new { error = "no frame could be taken from the camera's stream" },
+                                   statusCode: 503);
+                    lastGrab[cam.Name] = DateTime.UtcNow;
+                    try
+                    {
+                        jpeg = await Neolink.Media.FrameGrab.FromHubAsync(hub, StillHeight, ctx.RequestAborted)
+                            .ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (ctx.RequestAborted.IsCancellationRequested)
+                    {
+                        // The CLIENT gave up, not the camera: this attempt told us
+                        // nothing, so it must not hold off the next one for 15s.
+                        lastGrab.TryRemove(cam.Name, out _);
+                        return Results.StatusCode(499);
+                    }
+                    if (IsJpeg(jpeg)) unavailable = null;
+                    else unavailable ??= "no frame could be taken from the camera's stream";
+                }
+                if (IsJpeg(jpeg))
+                {
+                    snapCache[cam.Name] = (jpeg!, DateTime.UtcNow);
                     ctx.Response.Headers["X-Snapshot-Age"] = "0";
                     ctx.Response.Headers.CacheControl = "no-store";
-                    return Results.Bytes(jpeg, "image/jpeg");
+                    return Results.Bytes(jpeg!, "image/jpeg");
                 }
-                if (jpeg != null)
-                    unavailable ??= "camera returned an invalid snapshot";
+                // A non-Reolink camera that HAS a snapshot but returned nothing this
+                // time is a camera that failed, not one without the feature: say so,
+                // which also lets the last good frame stand in below.
+                if (unavailable == null && cam.Control.OnvifOnly && cam.Control.HasSnapshot)
+                    unavailable = "the camera did not return a snapshot";
                 if (unavailable == null)
                     return Results.Json(new { error = "this camera does not support snapshots" }, statusCode: 404);
                 // An old frame beats no frame for a dashboard tile — serve the last
@@ -2770,9 +2931,49 @@ public static class WebApi
                 return Results.Json(new { ok = true, type = req.Type, sensitivity = sens });
             }));
 
-        // Detection zone: the camera's own grid of watched ('1') vs ignored ('0')
-        // cells, row by row from the top-left. ?type= is "md" (default) or an AI
-        // type; dimensions are whatever the camera reports and vary per model.
+        // Detection zone: the grid of watched ('1') vs ignored ('0') cells, row by
+        // row from the top-left. ?type= is "md" (default) or an AI type.
+        //
+        // EVERY camera has a zone. A camera that keeps one itself — a Reolink with
+        // its HTTP API — owns it, at whatever dimensions its firmware reports, and
+        // the grid is read from and written to the camera exactly as before. A
+        // camera that keeps none (generic RTSP, or a Baichuan model whose firmware
+        // carries no grid) gets one stored HERE instead: it cannot shape what the
+        // camera itself alerts on, but it does shape what Neolink watches, which is
+        // what the live object boxes obey. "storage" says which of the two it is,
+        // so the editor can tell the user plainly.
+        //
+        // The distinction is only ever drawn when the camera has actually ANSWERED.
+        // A camera that could not be asked (asleep, or its HTTP API backing off)
+        // still gets 503 — quietly storing a zone on Neolink because the camera was
+        // briefly unreachable would silently detach it from the camera it belongs to.
+
+        // The grid to offer a camera that has none of its own, sized from whatever
+        // stream is carrying video. Only ever used until something is stored — a
+        // stored grid keeps its own dimensions for life, so a stream that changes
+        // shape cannot scramble a zone already drawn.
+        static (int Cols, int Rows) DefaultZoneGrid(WebCameraInfo? cam)
+        {
+            var hub = cam?.Streams.FirstOrDefault(s => s.Hub.VideoReady && s.Hub.Height > 0)?.Hub;
+            return CameraStateStore.DefaultZoneGrid(hub?.Width ?? 0, hub?.Height ?? 0);
+        }
+
+        // Whether a zone this camera did not answer for belongs to Neolink rather
+        // than being absent. Two things must BOTH hold. The camera must provably
+        // hold no zone of its own — a lasting fact (CameraHoldsZone), never "this
+        // read came back empty", because a Reolink whose HTTP API hiccups must not
+        // have its zone quietly moved onto the server. And only the shared "md"
+        // grid is ever kept here: a camera with per-type grids is answering about
+        // each type itself, and a local zone offered beside those would claim to
+        // govern what it cannot.
+        // The largest grid side Neolink will keep for a camera. Far past anything a
+        // person draws by hand (the default is 32x18, and a Reolink's own grid tops
+        // out around 120 across), and small enough that no product overflows.
+        const int MaxZoneSide = 256;
+
+        static bool LocalZoneFits(ICameraControl control, string type) =>
+            CameraStateStore.ZoneIsLocal(control.CameraHoldsZone, type, control.ZoneTypes().Count);
+
         app.MapGet("/api/cameras/{name}/detectionzone", (string name, string? type, HttpContext ctx) =>
             ExecAsync(name, ctx, mutating: false, async (control, reqCt) =>
             {
@@ -2780,7 +2981,16 @@ public static class WebApi
                 if (t != "md" && !CameraControl.AiAlarmTypes.Contains(t))
                     return Results.Json(new { error = $"provide type: md, {string.Join(", ", CameraControl.AiAlarmTypes)}" },
                         statusCode: 400);
-                var zone = await control.GetDetectionZoneAsync(t, reqCt);
+                // A camera that holds its own zone is asked for it, exactly as before.
+                // One that provably holds none is not asked at all — there is nothing
+                // to ask, and the round trip only costs it.
+                // A Reolink is asked on every read, exactly as it always was: whether
+                // its zone is Neolink's is only ever what its latest read said. An
+                // ONVIF camera that settled on a Neolink zone is not asked again here
+                // (its surface re-checks in the background).
+                var zone = LocalZoneFits(control, t) && control.OnvifOnly
+                    ? null
+                    : await control.GetDetectionZoneAsync(t, reqCt);
                 if (zone != null)
                     return Results.Json(new
                     {
@@ -2791,14 +3001,41 @@ public static class WebApi
                         // The types with a grid of their own. One entry ("md") means
                         // this camera keeps a single zone governing every type.
                         zoneTypes = control.ZoneTypes(),
+                        storage = "camera",
                     });
-                // "Has no zone" is a lasting answer; "couldn't ask" is not, and
-                // reporting the second as the first is how a grid that was on
-                // screen a moment ago reads back as a camera without zones.
-                return control.HttpPaused
-                    ? Results.Json(new { error = "the camera could not be asked just now (it is asleep, or its HTTP API is backing off after a failure) — try again shortly" },
-                        statusCode: 503)
-                    : Results.Json(new { error = $"this camera reports no {t} detection zone" }, statusCode: 404);
+                if (!LocalZoneFits(control, t))
+                    // "Has no zone" is a lasting answer; "couldn't ask" is not, and
+                    // reporting the second as the first is how a grid that was on
+                    // screen a moment ago reads back as a camera without zones.
+                    // An AI type with no grid of its own is a lasting "no" exactly as
+                    // it always was. Only the shared md grid on a camera whose
+                    // ownership is still UNKNOWN is held back as "ask again": that is
+                    // the one case where answering 404 would be claiming something
+                    // the camera has not said.
+                    // A Reolink answers exactly as before: 503 only while its API
+                    // cannot be asked, 404 otherwise.
+                    return control.HttpPaused || (t == "md" && control.OnvifOnly && control.CameraHoldsZone == null)
+                        ? Results.Json(new { error = "the camera could not be asked just now (it is asleep, or its HTTP API is backing off after a failure) — try again shortly" },
+                            statusCode: 503)
+                        : Results.Json(new { error = $"this camera reports no {t} detection zone" }, statusCode: 404);
+                if (o.CameraState == null)
+                    return Results.Json(new { error = $"this camera reports no {t} detection zone" }, statusCode: 404);
+                // Nothing stored yet: hand back an everywhere-watched grid rather
+                // than nothing, so the editor opens on the zone as it stands.
+                var cam = cameras.FirstOrDefault(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase));
+                var stored = o.CameraState.Zone(name, t);
+                var (cols, rows) = stored == null
+                    ? DefaultZoneGrid(cam)
+                    : (stored.Cols, stored.Rows);
+                return Results.Json(new
+                {
+                    type = t,
+                    cols,
+                    rows,
+                    table = stored?.Table ?? new string('1', cols * rows),
+                    zoneTypes = new[] { "md" },
+                    storage = "neolink",
+                });
             }));
 
         app.MapPost("/api/cameras/{name}/detectionzone", (string name, DetectionZoneRequest req, HttpContext ctx) =>
@@ -2814,9 +3051,59 @@ public static class WebApi
                     || table.Any(ch => ch is not ('0' or '1')))
                     return Results.Json(new { error = "provide table: the zone's cols*rows cells as '0'/'1'" },
                         statusCode: 400);
-                await control.SetDetectionZoneAsync(t, table, reqCt);
+                // Which side owns this zone is a property of the camera, not of this
+                // request: anything but a provable "it holds none" goes to the camera,
+                // through exactly the call it always used. No extra read, so a write
+                // that worked before still works — including on the types whose grid
+                // only SetDetectionZoneAsync knows how to find.
+                var store = o.CameraState;
+                // A camera surface that has never been asked cannot be routed yet.
+                // ONVIF cameras are asked here (the editor always reads before it
+                // saves, but an API caller need not); a Reolink is not — its write
+                // has always gone straight to the camera, and an extra read before
+                // it is what used to arm the backoff.
+                if (control.OnvifOnly && t == "md" && control.CameraHoldsZone == null)
+                    await control.GetDetectionZoneAsync(t, reqCt);
+                var local = LocalZoneFits(control, t) && store != null;
+                // The editor says where it believed the zone lived. If that changed
+                // while it was open — a camera answering for the first time — the grid
+                // it drew is the wrong one for where the save would now go, so it is
+                // saved nowhere; the editor reloads. A caller that does not say
+                // (anything but the editor) is routed as always.
+                if (req.Storage is "camera" or "neolink" && (req.Storage == "neolink") != local)
+                    return Results.Json(new
+                    {
+                        error = "where this zone is kept changed while the editor was open — reopen it",
+                        storage = local ? "neolink" : "camera",
+                    }, statusCode: 409);
+                if (!local || store == null)
+                {
+                    await control.SetDetectionZoneAsync(t, table, reqCt);
+                    NudgeHa(name);
+                    return Results.Json(new { ok = true, type = t, storage = "camera" });
+                }
+                var cam = cameras.FirstOrDefault(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase));
+                var stored = store.Zone(name, t);
+                // The grid's shape comes from the editor that drew it. Neolink is the
+                // only authority on a zone it keeps itself, so there is no camera-side
+                // grid for a stale editor to scramble — and deriving the shape here
+                // instead would reject the very first save whenever the stream became
+                // ready between opening the editor and pressing save.
+                // Bounded before it is multiplied: cols*rows in 32 bits wraps, and a
+                // wrapped product can equal the table length — 65536 x 65537 does —
+                // which would persist a grid no browser could draw.
+                var (cols, rows) = req.Cols is { } rc && req.Rows is { } rr
+                                   && rc is > 0 and <= MaxZoneSide && rr is > 0 and <= MaxZoneSide
+                    ? (rc, rr)
+                    : stored != null ? (stored.Cols, stored.Rows) : DefaultZoneGrid(cam);
+                if ((long)table.Length != (long)cols * rows)
+                    return Results.Json(new { error = $"table must be {cols}x{rows} = {cols * rows} cells of '0'/'1'" },
+                        statusCode: 400);
+                store.SetZone(name, t, cols, rows, table);
+                Log.Info($"{name}: {t} detection zone stored on Neolink " +
+                         $"({table.Count(ch => ch == '0')} of {table.Length} cells ignored)");
                 NudgeHa(name);
-                return Results.Json(new { ok = true, type = t });
+                return Results.Json(new { ok = true, type = t, storage = "neolink" });
             }));
 
         // ISP HDR: 0 = off; the top value comes from httpfeatures.image.hdrMax
@@ -3347,7 +3634,7 @@ public static class WebApi
                 return new
                 {
                     events = s.Events,
-                    eventsAvailable = cam.SupportsEvents,
+                    eventsAvailable = cam.EventsAvailableNow,
                     // A battery camera Neolink lets doze (no always_on) never tapes
                     // 24/7 — taping would hold it awake until the battery dies. The
                     // panel shows the toggle disabled with this reason.

@@ -72,7 +72,8 @@ build_config() {
               + (if $c.keep_alive_hours != null then {keep_alive_hours: $c.keep_alive_hours} else {} end)
               + (if ($c.stream // "") != "" then {stream: $c.stream} else {} end)
               + (if ($c.uid // "") != "" then {uid: $c.uid} else {} end)
-              + (if ($c.http_address // "") != "" then {http_address: $c.http_address} else {} end)]' "$OPTIONS")
+              + (if ($c.http_address // "") != "" then {http_address: $c.http_address} else {} end)
+              + (if ($c.onvif_address // "") != "" then {onvif_address: $c.onvif_address} else {} end)]' "$OPTIONS")
   count=$(jq 'length' <<<"$cams")
   # Names match case-INSENSITIVELY, as the app compares them: renaming a camera's
   # case in the web UI must update that camera, not append a second one under a

@@ -47,10 +47,14 @@ public sealed record ApiBattery(int Percent, bool Charging);
 public sealed record ApiVersion(string? Name, string? Model, string? Serial, string? Firmware,
     string? Hardware, string? Build);
 
+/// <summary>Onvif = every setting this camera offers came over ONVIF (a non-Reolink
+/// camera). The standard covers less than Reolink's own API, so the panel leaves out
+/// what it cannot honour and says where a change is going.</summary>
 public sealed record ApiFeatures(bool Ptz, bool Led, bool Pir, bool Battery,
     bool StreamSettings = false, bool Reboot = true,
     bool Zoom = false, bool Siren = false, bool Floodlight = false, bool Privacy = false,
-    bool WhiteLed = false, bool Spotlight = false, bool Doorbell = false, bool Imaging = false);
+    bool WhiteLed = false, bool Spotlight = false, bool Doorbell = false, bool Imaging = false,
+    bool Onvif = false);
 
 /// <summary>GET/POST /api/cameras/{name}/whiteled — spotlight brightness (0-100),
 /// on/off and auto mode, over the camera's HTTP API.</summary>
@@ -84,14 +88,19 @@ public sealed record ApiAiSensitivity(string Type, int Sensitivity, int? StayTim
     };
 }
 
-/// <summary>GET/POST /api/cameras/{name}/detectionzone — the camera's own grid of
-/// watched ('1') vs ignored ('0') cells, row by row from the top-left. ZoneTypes
-/// lists the types with a grid of their own; a single entry means this camera keeps
-/// ONE zone that governs every detection type.</summary>
+/// <summary>GET/POST /api/cameras/{name}/detectionzone — the grid of watched ('1')
+/// vs ignored ('0') cells, row by row from the top-left. ZoneTypes lists the types
+/// with a grid of their own; a single entry means one zone governs every detection
+/// type. Storage is "camera" when the grid lives on the camera, "neolink" when the
+/// camera keeps none and the server holds it instead.</summary>
 public sealed record ApiDetectionZone(string Type, int Cols, int Rows, string Table,
-    List<string>? ZoneTypes = null)
+    List<string>? ZoneTypes = null, string? Storage = null)
 {
     public bool IsGlobal => ZoneTypes is not { Count: > 1 };
+
+    /// <summary>True when this grid is kept by Neolink because the camera cannot
+    /// keep one — it governs what Neolink watches, not what the camera alerts on.</summary>
+    public bool StoredOnServer => Storage == "neolink";
 }
 
 /// <summary>The camera's on-screen-display overlay (name/timestamp/watermark).</summary>

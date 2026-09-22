@@ -56,5 +56,6 @@ schema:
       wake_capture: bool?
       keep_alive_hours: float?
       http_address: str?
+      onvif_address: str?
   auto_mqtt: bool
   log_verbose: bool

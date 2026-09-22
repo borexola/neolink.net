@@ -5763,6 +5763,13 @@ select.input-pending {
 }
 
 /* ---------- detection-zone editor ---------- */
+/* Where a zone is KEPT changes what editing it means, so the note that says so is
+   set apart from the ordinary help text below it rather than reading as more of it. */
+.zone-local {
+    border-left: 2px solid #5b9dff;
+    padding-left: 8px;
+}
+
 .zone-editor {
     position: fixed;
     inset: 0;

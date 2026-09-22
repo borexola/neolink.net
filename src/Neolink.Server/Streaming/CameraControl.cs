@@ -177,6 +177,16 @@ public interface ICameraControl
     /// that have no ONVIF path (generic RTSP cameras, test doubles).</summary>
     bool HasImagingFallback => false;
 
+    /// <summary>Whether EVERY setting this camera offers comes from ONVIF — a
+    /// non-Reolink camera. The standard covers less than Reolink's own API does, so
+    /// the panel uses this to leave out controls ONVIF cannot honour (switching an
+    /// overlay off rather than moving it) and to say where a setting is going.</summary>
+    bool OnvifOnly => false;
+
+    /// <summary>Whether the camera can be told to restart. A Baichuan camera always
+    /// can; a non-Reolink one only through ONVIF.</summary>
+    bool CanReboot => true;
+
     /// <summary>
     /// The CURRENT encode selection of each stream (what the Reolink app shows),
     /// read via the camera's HTTP API — null when no http_address is configured.
@@ -194,6 +204,13 @@ public interface ICameraControl
 
     /// <summary>A JPEG snapshot from the camera, or null if unsupported.</summary>
     Task<byte[]?> SnapshotAsync(CancellationToken ct);
+
+    /// <summary>Whether the camera has a snapshot command of its own. False means
+    /// the ONLY still it can have is one decoded from the stream it is sending —
+    /// which is worth the decode. True means a failed snapshot is a camera that is
+    /// offline, asleep or busy, and the answer to that is the same as it always was
+    /// (serve the last frame, or say so), NOT an ffmpeg process per poll.</summary>
+    bool HasSnapshot => true;
 
     /// <summary>A SMALL JPEG snapshot for size-limited consumers (the MQTT camera
     /// entity — brokers cap packet size and disconnect over it). Cameras with an
@@ -369,6 +386,17 @@ public interface ICameraControl
     /// govern every type with ONE zone and answer just "md"; a camera with per-type
     /// grids lists those too.</summary>
     IReadOnlyList<string> ZoneTypes() => new[] { "md" };
+
+    /// <summary>Whether the CAMERA holds its own detection zone — the question that
+    /// decides whether a zone is written to the camera or kept by Neolink on its
+    /// behalf. True = it has answered with a grid; false = it provably has none;
+    /// null = not yet known, so nobody may assume either way.
+    ///
+    /// It is a LASTING property, never a per-request read: deciding it from whether
+    /// a read happened to succeed would quietly move a Reolink camera's zone onto
+    /// the server the first time its HTTP API hiccuped. Control surfaces with no
+    /// camera-side zone at all answer false, which is the default here.</summary>
+    bool? CameraHoldsZone => false;
 
     /// <summary>The zone grid for "md" or an AI type, or null when the camera has none.</summary>
     Task<DetectionZone?> GetDetectionZoneAsync(string type, CancellationToken ct) =>
@@ -2005,6 +2033,7 @@ public sealed class CameraControl : ICameraControl
         // Opening the editor is the user asking NOW, so an armed transport backoff
         // must not silently answer "nothing" — but a battery camera parked asleep
         // still gets radio silence: forcing packets at it would fake a wake edge.
+        var answeredWithoutGrid = false;
         var fresh = await HttpTryAsync<DetectionZone?>(async c =>
         {
             if (type != "md")
@@ -2022,18 +2051,35 @@ public sealed class CameraControl : ICameraControl
                 _mdZoneIsLegacy = false;
                 return zone;
             }
-            var legacy = isMdAlarm ? await ProbeLegacyMdAsync(c).ConfigureAwait(false) : null;
+            var (legacy, legacyRejected) = isMdAlarm
+                ? await ProbeLegacyMdAsync(c).ConfigureAwait(false)
+                : (null, false);
             if (legacy != null && ParseZone(type, legacy) is { } shared)
             {
                 _mdZoneIsLegacy = true;
                 return shared;
             }
+            // The camera ANSWERED, and no dialect it speaks carries a grid: when the
+            // read already fell back to the legacy object (it is `cfg`, and it
+            // answered), when both dialects answered, and when the firmware refused
+            // the legacy command outright. A legacy probe that got NO answer settles
+            // nothing. This is THIS read's answer only — see CameraHoldsZone.
+            if (!isMdAlarm || legacy != null || legacyRejected) answeredWithoutGrid = true;
             LogZoneShapeOnce(cfg, legacy);
             return null;
         }, ct, force: !SleepingOnPurpose).ConfigureAwait(false);
 
+        // Whether the zone is Neolink's is decided by the LATEST read, never
+        // remembered: an HTTP error can look exactly like "no grid" (a refused
+        // legacy command, a fallback taken after a failed GetMdAlarm), and a verdict
+        // kept for the run would then hide the camera's real zone until a restart.
+        // The camera is asked on every read, as it always was, so one bad answer
+        // costs one read.
+        if (type == "md") _zoneAbsent = fresh == null && answeredWithoutGrid;
+
         if (fresh != null)
         {
+            if (type == "md") _zoneSeen = true;
             lock (_zoneCache) _zoneCache[type] = fresh;
             return fresh;
         }
@@ -2049,18 +2095,18 @@ public sealed class CameraControl : ICameraControl
     /// only after GetMdAlarm already answered, so the API is known reachable — and a
     /// firmware that stalls on this ONE command must not arm the transport backoff
     /// that would then blank every other HTTP-backed panel section for a minute.</summary>
-    private async Task<JsonObject?> ProbeLegacyMdAsync(CancellationToken ct)
+    private async Task<(JsonObject? Alarm, bool Rejected)> ProbeLegacyMdAsync(CancellationToken ct)
     {
         try
         {
-            return await _httpApi!.TryGetLegacyMdConfigAsync(ct).ConfigureAwait(false);
+            return await _httpApi!.ReadLegacyMdConfigAsync(ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (!ct.IsCancellationRequested
             && ex is IOException or TimeoutException or OperationCanceledException
                   or System.Net.Http.HttpRequestException or System.Net.Sockets.SocketException)
         {
             Log.Debug($"{CameraName}: legacy motion-config probe did not answer ({ex.GetType().Name})");
-            return null;
+            return (null, false);
         }
     }
 
@@ -2068,6 +2114,24 @@ public sealed class CameraControl : ICameraControl
     /// firmware whose zone hides under yet another shape can be reported and added
     /// instead of dead-ending at "no zone".</summary>
     private bool _zoneShapeLogged;
+
+    /// <summary>_zoneSeen: the camera has produced a grid this run — kept, because
+    /// a camera that showed its zone has one, whatever a later read says.
+    /// _zoneAbsent: the LATEST md read reached the camera and it answered with no
+    /// grid — re-decided on every read, never kept.</summary>
+    private volatile bool _zoneSeen, _zoneAbsent;
+
+    /// <inheritdoc/>
+    /// <remarks>On this surface only "holds" is lasting. "Holds none" is what the
+    /// most recent read said, and the web API asks this camera on every zone read
+    /// (exactly as it did before zones could be kept on Neolink), so a read that
+    /// went wrong is corrected by the next one.</remarks>
+    public bool? CameraHoldsZone =>
+        // No HTTP API is no zone path at all — that is knowable without asking.
+        _httpApi == null ? false
+        : _zoneSeen ? true
+        : _zoneAbsent ? false
+        : null;
 
     private void LogZoneShapeOnce(JsonObject cfg, JsonObject? legacy)
     {

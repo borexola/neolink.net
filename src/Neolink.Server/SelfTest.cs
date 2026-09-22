@@ -3798,6 +3798,14 @@ public static class SelfTest
             var bare = Protocol.OnvifClient.BuildCandidates("10.1.1.29");
             Assert(bare.Length == 2 && bare[0] == "http://10.1.1.29:8000/onvif/device_service"
                    && bare[1] == "http://10.1.1.29/onvif/device_service", "bare host → :8000 then :80");
+            // A non-Reolink camera passes its own order — 80 first, and 8899 too.
+            var generic = Protocol.OnvifClient.BuildCandidates("10.1.1.29", new[] { 80, 8000, 8899 });
+            Assert(generic.Length == 3 && generic[0] == "http://10.1.1.29/onvif/device_service"
+                   && generic[1] == "http://10.1.1.29:8000/onvif/device_service"
+                   && generic[2] == "http://10.1.1.29:8899/onvif/device_service",
+                   "a caller's port order is honoured, and :80 stays implicit");
+            Assert(Protocol.OnvifClient.BuildCandidates("10.1.1.29:8899", new[] { 80, 8000 }).Length == 1,
+                "an explicit port still wins over any list");
             var withPort = Protocol.OnvifClient.BuildCandidates("10.1.1.29:8899");
             Assert(withPort.Length == 1 && withPort[0] == "http://10.1.1.29:8899/onvif/device_service",
                 "explicit port honoured");
@@ -3811,6 +3819,992 @@ public static class SelfTest
             Assert(Protocol.OnvifClient.NormalizeXAddr("http://10.1.1.29:8000/onvif/media", "http://10.1.1.29:8000/onvif/device_service")
                    == "http://10.1.1.29:8000/onvif/media", "matching host untouched");
             Assert(Protocol.OnvifClient.NormalizeXAddr(null, "http://10.1.1.29/onvif/device_service") == null, "null passes through");
+        });
+
+        Test("ONVIF services: device info, profiles, encoder options, presets, OSDs", () =>
+        {
+            static System.Xml.Linq.XElement Xml(string s) => System.Xml.Linq.XDocument.Parse(s).Root!;
+
+            var info = Protocol.OnvifClient.ParseDeviceInfo(Xml("""
+                <tds:GetDeviceInformationResponse xmlns:tds="http://www.onvif.org/ver10/device/wsdl">
+                  <tds:Manufacturer>Hikvision</tds:Manufacturer>
+                  <tds:Model>DS-2CD2143G2</tds:Model>
+                  <tds:FirmwareVersion>V5.7.3</tds:FirmwareVersion>
+                  <tds:SerialNumber>DS0123456789</tds:SerialNumber>
+                  <tds:HardwareId>88</tds:HardwareId>
+                </tds:GetDeviceInformationResponse>
+                """));
+            Assert(info is { Manufacturer: "Hikvision", Model: "DS-2CD2143G2", Firmware: "V5.7.3",
+                Serial: "DS0123456789", HardwareId: "88" }, "device information parsed");
+            // The identity strip shows one model line, so the make is folded in.
+            var version = Streaming.GenericCameraControl.ToVersion(info);
+            AssertEq(version?.Model, "Hikvision DS-2CD2143G2");
+            AssertEq(version?.FirmwareVersion, "V5.7.3");
+            Assert(Streaming.GenericCameraControl.ToVersion(null) == null, "no device info -> no version");
+            Assert(Streaming.GenericCameraControl.ToVersion(
+                new Protocol.OnvifDeviceInfo(null, null, null, null, null)) == null,
+                "an empty device info is not an identity");
+
+            // GetServices is the ver10 alternative to GetCapabilities; a camera that
+            // answers only that one must still yield its service endpoints.
+            var services = Xml("""
+                <tds:GetServicesResponse xmlns:tds="http://www.onvif.org/ver10/device/wsdl">
+                  <tds:Service>
+                    <tds:Namespace>http://www.onvif.org/ver10/media/wsdl</tds:Namespace>
+                    <tds:XAddr>http://cam/onvif/Media</tds:XAddr>
+                  </tds:Service>
+                  <tds:Service>
+                    <tds:Namespace>http://www.onvif.org/ver20/ptz/wsdl</tds:Namespace>
+                    <tds:XAddr>http://cam/onvif/PTZ</tds:XAddr>
+                  </tds:Service>
+                </tds:GetServicesResponse>
+                """);
+            AssertEq(Protocol.OnvifClient.ServiceXAddrByNs(services, "http://www.onvif.org/ver10/media/wsdl"),
+                "http://cam/onvif/Media");
+            AssertEq(Protocol.OnvifClient.ServiceXAddrByNs(services, "http://www.onvif.org/ver20/ptz/wsdl"),
+                "http://cam/onvif/PTZ");
+            Assert(Protocol.OnvifClient.ServiceXAddrByNs(services, "http://www.onvif.org/ver20/imaging/wsdl") == null,
+                "a service the camera did not list is absent");
+
+            // GetProfiles: the encoder configuration is kept verbatim because a
+            // write echoes the camera's own object back with the changed fields.
+            var profiles = Protocol.OnvifClient.ParseProfiles(Xml("""
+                <trt:GetProfilesResponse xmlns:trt="http://www.onvif.org/ver10/media/wsdl"
+                                         xmlns:tt="http://www.onvif.org/ver10/schema">
+                  <trt:Profiles token="Profile_1" fixed="true">
+                    <tt:Name>mainstream</tt:Name>
+                    <tt:VideoSourceConfiguration token="VSC_1"/>
+                    <tt:VideoEncoderConfiguration token="VEC_1">
+                      <tt:Encoding>H264</tt:Encoding>
+                      <tt:Resolution><tt:Width>2560</tt:Width><tt:Height>1440</tt:Height></tt:Resolution>
+                      <tt:Quality>4</tt:Quality>
+                      <tt:RateControl>
+                        <tt:FrameRateLimit>20</tt:FrameRateLimit>
+                        <tt:BitrateLimit>4096</tt:BitrateLimit>
+                      </tt:RateControl>
+                      <tt:H264><tt:GovLength>40</tt:GovLength></tt:H264>
+                    </tt:VideoEncoderConfiguration>
+                    <tt:PTZConfiguration token="PTZ_1"/>
+                  </trt:Profiles>
+                  <trt:Profiles token="Profile_2">
+                    <tt:Name>substream</tt:Name>
+                    <tt:VideoEncoderConfiguration token="VEC_2">
+                      <tt:Encoding>H265</tt:Encoding>
+                      <tt:Resolution><tt:Width>640</tt:Width><tt:Height>360</tt:Height></tt:Resolution>
+                      <tt:RateControl>
+                        <tt:FrameRateLimit>15</tt:FrameRateLimit>
+                        <tt:BitrateLimit>512</tt:BitrateLimit>
+                      </tt:RateControl>
+                      <tt:H265><tt:GovLength>30</tt:GovLength></tt:H265>
+                    </tt:VideoEncoderConfiguration>
+                  </trt:Profiles>
+                </trt:GetProfilesResponse>
+                """));
+            AssertEq(profiles.Count, 2);
+            Assert(profiles[0] is { Token: "Profile_1", Name: "mainstream", HasPtz: true,
+                VideoSourceToken: "VSC_1" }, "first profile parsed with its PTZ configuration");
+            Assert(profiles[0].EncoderToken == "VEC_1" && profiles[0].Encoding == "H264"
+                   && profiles[0].Width == 2560 && profiles[0].Height == 1440
+                   && profiles[0].FrameRate == 20 && profiles[0].Bitrate == 4096
+                   && profiles[0].GovLength == 40, "encoder fields read off the configuration");
+            Assert(!profiles[1].HasPtz, "a profile without a PTZ configuration is not a moving head");
+            // The codec block is H265 here: GovLength must not be looked for in H264 only.
+            Assert(profiles[1].GovLength == 30, "H265 profiles report their GOV length too");
+
+            var encOptions = Protocol.OnvifClient.ParseEncoderOptions(Xml("""
+                <trt:GetVideoEncoderConfigurationOptionsResponse xmlns:trt="http://www.onvif.org/ver10/media/wsdl"
+                                                                xmlns:tt="http://www.onvif.org/ver10/schema">
+                  <trt:Options>
+                    <tt:QualityRange><tt:Min>1</tt:Min><tt:Max>6</tt:Max></tt:QualityRange>
+                    <tt:H264>
+                      <tt:ResolutionsAvailable><tt:Width>640</tt:Width><tt:Height>360</tt:Height></tt:ResolutionsAvailable>
+                      <tt:ResolutionsAvailable><tt:Width>2560</tt:Width><tt:Height>1440</tt:Height></tt:ResolutionsAvailable>
+                      <tt:FrameRateRange><tt:Min>1</tt:Min><tt:Max>25</tt:Max></tt:FrameRateRange>
+                    </tt:H264>
+                    <tt:Extension><tt:H264>
+                      <tt:BitrateRange><tt:Min>256</tt:Min><tt:Max>8192</tt:Max></tt:BitrateRange>
+                    </tt:H264></tt:Extension>
+                  </trt:Options>
+                </trt:GetVideoEncoderConfigurationOptionsResponse>
+                """));
+            // Biggest first: the panel lists resolutions the way a person reads them.
+            Assert(encOptions.Resolutions.Count == 2 && encOptions.Resolutions[0] == (2560, 1440)
+                   && encOptions.Resolutions[1] == (640, 360), "resolutions parsed, largest first");
+            Assert(encOptions.FrameRate == (1, 25), "frame-rate range parsed");
+            // The bitrate range hides under Extension on most firmwares.
+            Assert(encOptions.Bitrate == (256, 8192), "bitrate range found under Extension");
+
+            // Options are scoped to the codec the profile actually uses. A reply
+            // carries a block per codec and they do not agree, so offering an H264
+            // profile its H265 sibling's resolutions means the camera refuses the
+            // write the user just made.
+            var twoCodecs = Xml("""
+                <trt:GetVideoEncoderConfigurationOptionsResponse xmlns:trt="http://www.onvif.org/ver10/media/wsdl"
+                                                                xmlns:tt="http://www.onvif.org/ver10/schema">
+                  <trt:Options>
+                    <tt:H264>
+                      <tt:ResolutionsAvailable><tt:Width>1920</tt:Width><tt:Height>1080</tt:Height></tt:ResolutionsAvailable>
+                      <tt:FrameRateRange><tt:Min>1</tt:Min><tt:Max>25</tt:Max></tt:FrameRateRange>
+                    </tt:H264>
+                    <tt:H265>
+                      <tt:ResolutionsAvailable><tt:Width>3840</tt:Width><tt:Height>2160</tt:Height></tt:ResolutionsAvailable>
+                      <tt:FrameRateRange><tt:Min>1</tt:Min><tt:Max>15</tt:Max></tt:FrameRateRange>
+                    </tt:H265>
+                    <tt:Extension><tt:H264>
+                      <tt:BitrateRange><tt:Min>128</tt:Min><tt:Max>4096</tt:Max></tt:BitrateRange>
+                    </tt:H264></tt:Extension>
+                  </trt:Options>
+                </trt:GetVideoEncoderConfigurationOptionsResponse>
+                """);
+            var h264 = Protocol.OnvifClient.ParseEncoderOptions(twoCodecs, "H264");
+            Assert(h264.Resolutions.Count == 1 && h264.Resolutions[0] == (1920, 1080),
+                "an H264 profile is offered only H264 resolutions");
+            Assert(h264.FrameRate == (1, 25), "and its own frame-rate range");
+            var h265 = Protocol.OnvifClient.ParseEncoderOptions(twoCodecs, "H265");
+            Assert(h265.Resolutions.Count == 1 && h265.Resolutions[0] == (3840, 2160)
+                   && h265.FrameRate == (1, 15), "and H265 gets H265's");
+            // The bitrate range lives outside the codec block, so it is still found.
+            Assert(h265.Bitrate == (128, 4096), "a range outside the codec block still applies");
+            // An unknown codec falls back to the whole document rather than nothing.
+            Assert(Protocol.OnvifClient.ParseEncoderOptions(twoCodecs, "MJPEG").Resolutions.Count == 2,
+                "an unrecognised encoding sees everything, as before");
+
+            var presets = Protocol.OnvifClient.ParsePresets(Xml("""
+                <tptz:GetPresetsResponse xmlns:tptz="http://www.onvif.org/ver20/ptz/wsdl"
+                                         xmlns:tt="http://www.onvif.org/ver10/schema">
+                  <tptz:Preset token="1"><tt:Name>Driveway</tt:Name></tptz:Preset>
+                  <tptz:Preset token="2"><tt:Name>Gate</tt:Name></tptz:Preset>
+                  <tptz:Preset><tt:Name>no token</tt:Name></tptz:Preset>
+                </tptz:GetPresetsResponse>
+                """));
+            Assert(presets.Count == 2 && presets[0].Token == "1" && presets[0].Name == "Driveway"
+                   && presets[1].Name == "Gate", "presets parsed; a token-less one is unusable and dropped");
+
+            var osds = Protocol.OnvifClient.ParseOsds(Xml("""
+                <trt:GetOSDsResponse xmlns:trt="http://www.onvif.org/ver10/media/wsdl"
+                                     xmlns:tt="http://www.onvif.org/ver10/schema">
+                  <trt:OSDs token="OSD_1">
+                    <tt:Type>Text</tt:Type>
+                    <tt:Position><tt:Type>UpperLeft</tt:Type></tt:Position>
+                    <tt:TextString><tt:Type>Plain</tt:Type><tt:PlainText>Front Gate</tt:PlainText></tt:TextString>
+                  </trt:OSDs>
+                  <trt:OSDs token="OSD_2">
+                    <tt:Type>Text</tt:Type>
+                    <tt:Position><tt:Type>LowerRight</tt:Type></tt:Position>
+                    <tt:TextString><tt:Type>DateAndTime</tt:Type></tt:TextString>
+                  </trt:OSDs>
+                  <trt:OSDs token="OSD_3"><tt:Type>Image</tt:Type></trt:OSDs>
+                </trt:GetOSDsResponse>
+                """));
+            Assert(osds.Count == 2, "image overlays have nothing to edit and are left out");
+            var (osdName, osdTime) = Streaming.GenericCameraControl.SplitOsds(osds);
+            Assert(osdName is { Token: "OSD_1", Position: "UpperLeft", PlainText: "Front Gate" },
+                "the plain-text overlay is the camera name");
+            Assert(osdTime is { Token: "OSD_2", Position: "LowerRight" },
+                "the date/time overlay is the timestamp");
+
+            // A login inside the ONVIF address wins over the streaming one — the only
+            // way to reach a camera that keeps separate accounts. Escapes are decoded,
+            // so a password with an @ in it survives the URL it had to be written into.
+            var (addr, user, pass) = Protocol.OnvifClient.SplitCredentials(
+                "http://admin:p%40ss%2Fword@10.1.1.7:8000/onvif/device_service");
+            AssertEq(addr, "http://10.1.1.7:8000/onvif/device_service");
+            AssertEq(user, "admin");
+            AssertEq(pass, "p@ss/word");
+            var plain = Protocol.OnvifClient.SplitCredentials("10.1.1.7:8000");
+            Assert(plain is { Address: "10.1.1.7:8000", User: null, Pass: null },
+                "a bare host:port carries no login");
+            // A bare AUTHORITY can carry one too. It used to fall through whole, so
+            // the password ended up treated as part of the hostname and printed into
+            // the log; both halves have to be split off here.
+            var bare = Protocol.OnvifClient.SplitCredentials("admin:s3cret@10.1.1.7:8000");
+            Assert(bare is { Address: "10.1.1.7:8000", User: "admin", Pass: "s3cret" },
+                "a login in a bare authority is split off, not left in the host");
+            Assert(Protocol.OnvifClient.SplitCredentials("admin@cam.lan")
+                is { Address: "cam.lan", User: "admin", Pass: null }, "a username with no password");
+            // ...and the admin API must not hand that password to the browser.
+            AssertEq(Config.ConfigEditor.MaskRtspPassword("admin:s3cret@10.1.1.7:8000"),
+                "admin:****@10.1.1.7:8000");
+            AssertEq(Config.ConfigEditor.MaskRtspPassword("http://admin:s3cret@cam/onvif/device_service"),
+                "http://admin:****@cam/onvif/device_service");
+            AssertEq(Config.ConfigEditor.MaskRtspPassword("10.1.1.7:8000"), "10.1.1.7:8000");
+            AssertEq(Config.ConfigEditor.MaskRtspPassword("http://cam:8000/onvif"), "http://cam:8000/onvif");
+
+            // The stream URL is where a generic camera keeps its host and login.
+            var split = NetUtil.SplitRtspUrl("rtsp://bob:s%3Acret@cam.lan:554/Streaming/Channels/101");
+            Assert(split is { Host: "cam.lan", Display: "cam.lan", User: "bob", Pass: "s:cret" },
+                "RTSP URL split; the standard 554 is not worth showing");
+            // The host is where ONVIF is looked for, so it never carries the stream's
+            // port; the DISPLAY string does, or two cameras on one box look identical.
+            var odd = NetUtil.SplitRtspUrl("rtsp://cam.lan:8554/live");
+            Assert(odd is { Host: "cam.lan", Display: "cam.lan:8554" }, "a non-standard port shows, but only in Display");
+            Assert(NetUtil.SplitRtspUrl("rtsp://[2001:db8::1]:8554/live") is { Display: "[2001:db8::1]:8554" },
+                "an IPv6 literal keeps its brackets");
+            Assert(NetUtil.SplitRtspUrl("rtsp://cam.lan/live").User == null, "no login in the URL -> none");
+            Assert(NetUtil.SplitRtspUrl(null).Host == null, "no URL -> nothing");
+        });
+
+        Test("ONVIF camera: profiles bind to the streams Neolink pulls", () =>
+        {
+            static Protocol.OnvifProfile P(string token, int w, int h) =>
+                new(token, token, false, null, System.Xml.Linq.XElement.Parse(
+                    $"""
+                     <VideoEncoderConfiguration xmlns="http://www.onvif.org/ver10/schema" token="{token}">
+                       <Resolution><Width>{w}</Width><Height>{h}</Height></Resolution>
+                       <RateControl><FrameRateLimit>15</FrameRateLimit><BitrateLimit>1024</BitrateLimit></RateControl>
+                     </VideoEncoderConfiguration>
+                     """));
+
+            var streams = new[]
+            {
+                ("mainStream", "rtsp://user:pw@10.1.1.7:554/Streaming/Channels/101"),
+                ("subStream", "rtsp://user:pw@10.1.1.7:554/Streaming/Channels/102"),
+            };
+            var profiles = new[] { P("small", 640, 360), P("big", 2560, 1440) };
+
+            // The camera reports its own URIs on its own hostname; only the path is
+            // comparable, and the ORDER of the profiles means nothing.
+            var uris = new Dictionary<string, string>
+            {
+                ["big"] = "rtsp://cam.lan:554/Streaming/Channels/101",
+                ["small"] = "rtsp://cam.lan:554/Streaming/Channels/102",
+            };
+            var bound = Streaming.GenericCameraControl.Bind(streams, profiles, uris);
+            AssertEq(bound.Count, 2);
+            Assert(bound[0].Kind == "mainStream" && bound[0].Profile.Token == "big",
+                "the profile whose URI matches rtsp_main is mainStream, whatever its position");
+            Assert(bound[1].Kind == "subStream" && bound[1].Profile.Token == "small", "and likewise the sub");
+
+            // No URIs to match on (a camera that will not answer GetStreamUri, or a
+            // hand-written URL): biggest first, which is how the config was written.
+            var guessed = Streaming.GenericCameraControl.Bind(streams, profiles, null);
+            Assert(guessed[0].Profile.Token == "big" && guessed[1].Profile.Token == "small",
+                "unmatched profiles fall back to biggest-first in the streams' own order");
+
+            Assert(Streaming.GenericCameraControl.SameStream(
+                "rtsp://cam.lan:554/live/main/", "rtsp://u:p@10.0.0.9/live/main"), "host and login ignored");
+            // Cameras append their own query to the URI they report (session ids,
+            // transport hints) that nobody would have typed into a config. Comparing
+            // those would mean no profile ever matched and every camera fell back to
+            // guessing by frame size.
+            Assert(Streaming.GenericCameraControl.SameStream(
+                "rtsp://cam.lan/live/main?tcp&session=42", "rtsp://cam.lan/live/main"),
+                "a query the camera added does not break the match");
+            Assert(!Streaming.GenericCameraControl.SameStream(
+                "rtsp://cam.lan/live/main", "rtsp://cam.lan/live/sub"), "different paths are different streams");
+            Assert(!Streaming.GenericCameraControl.SameStream(null, "rtsp://cam/live"), "nothing matches nothing");
+
+            // ONVIF reports a RANGE where the panel wants a menu.
+            var fps = Streaming.GenericCameraControl.StepsWithin(
+                Streaming.GenericCameraControl.FramerateSteps, (1, 25), current: 20);
+            Assert(fps.Contains(20) && fps.Contains(25) && !fps.Contains(30), "menu stays inside the range");
+            // A camera set to something off the everyday list still shows its own value.
+            var odd = Streaming.GenericCameraControl.StepsWithin(
+                Streaming.GenericCameraControl.FramerateSteps, (1, 25), current: 7);
+            Assert(odd.Contains(7) && odd.SequenceEqual(odd.OrderBy(v => v)), "the live value is always offered, in order");
+            // A range so narrow nothing everyday fits must still offer something.
+            var narrow = Streaming.GenericCameraControl.StepsWithin(
+                Streaming.GenericCameraControl.FramerateSteps, (97, 99), current: 0);
+            Assert(narrow.Count > 0, "a narrow range falls back to its own bounds");
+        });
+
+        Test("ONVIF events: subscription address, notifications, topic mapping", () =>
+        {
+            static System.Xml.Linq.XElement Xml(string s) => System.Xml.Linq.XDocument.Parse(s).Root!;
+
+            // The subscription manager's address is NOT the event service's own URL:
+            // cameras hand back a different path, and some a different host and port.
+            var created = Xml("""
+                <tev:CreatePullPointSubscriptionResponse xmlns:tev="http://www.onvif.org/ver10/events/wsdl"
+                                                         xmlns:wsa="http://www.w3.org/2005/08/addressing">
+                  <tev:SubscriptionReference>
+                    <wsa:Address>http://cam:8000/onvif/Subscription?Idx=7</wsa:Address>
+                  </tev:SubscriptionReference>
+                  <wsa:Address>http://wrong/should-not-be-picked</wsa:Address>
+                </tev:CreatePullPointSubscriptionResponse>
+                """);
+            AssertEq(Protocol.OnvifClient.SubscriptionAddress(created), "http://cam:8000/onvif/Subscription?Idx=7");
+            Assert(Protocol.OnvifClient.SubscriptionAddress(
+                Xml("""<tev:X xmlns:tev="http://www.onvif.org/ver10/events/wsdl"/>""")) == null,
+                "no reference -> no subscription");
+
+            // Timings go on the wire as xs:duration and nothing else.
+            AssertEq(Protocol.OnvifClient.Duration(TimeSpan.FromSeconds(60)), "PT60S");
+            AssertEq(Protocol.OnvifClient.Duration(TimeSpan.FromMilliseconds(200)), "PT1S");
+
+            var pulled = Xml("""
+                <tev:PullMessagesResponse xmlns:tev="http://www.onvif.org/ver10/events/wsdl"
+                                          xmlns:wsnt="http://docs.oasis-open.org/wsn/b-2"
+                                          xmlns:tt="http://www.onvif.org/ver10/schema">
+                  <wsnt:NotificationMessage>
+                    <wsnt:Topic>tns1:RuleEngine/CellMotionDetector/Motion</wsnt:Topic>
+                    <wsnt:Message><tt:Message UtcTime="2026-01-02T03:04:05Z">
+                      <tt:Source><tt:SimpleItem Name="VideoSourceConfigurationToken" Value="VSC_1"/></tt:Source>
+                      <tt:Data><tt:SimpleItem Name="IsMotion" Value="true"/></tt:Data>
+                    </tt:Message></wsnt:Message>
+                  </wsnt:NotificationMessage>
+                  <wsnt:NotificationMessage>
+                    <wsnt:Topic>tns1:RuleEngine/FieldDetector/ObjectsInside</wsnt:Topic>
+                    <wsnt:Message><tt:Message UtcTime="2026-01-02T03:04:06Z">
+                      <tt:Data>
+                        <tt:SimpleItem Name="IsInside" Value="true"/>
+                        <tt:SimpleItem Name="ObjectType" Value="Human"/>
+                      </tt:Data>
+                    </tt:Message></wsnt:Message>
+                  </wsnt:NotificationMessage>
+                  <wsnt:NotificationMessage>
+                    <wsnt:Topic>tns1:Device/HardwareFailure/StorageFailure</wsnt:Topic>
+                    <wsnt:Message><tt:Message UtcTime="2026-01-02T03:04:07Z">
+                      <tt:Data><tt:SimpleItem Name="Failed" Value="false"/></tt:Data>
+                    </tt:Message></wsnt:Message>
+                  </wsnt:NotificationMessage>
+                </tev:PullMessagesResponse>
+                """);
+            var notes = Protocol.OnvifClient.ParseNotifications(pulled);
+            AssertEq(notes.Count, 3);
+            Assert(notes[0] is { Active: true } && notes[0].Label == "motion",
+                "the ONVIF motion rule is motion");
+            // Classification beats the rule that carried it: a field-intrusion rule
+            // that says what walked in is worth more than "something moved".
+            Assert(notes[1] is { Active: true } && notes[1].Label == "person",
+                "an ObjectType of Human makes it a person");
+            // A subscription carries no topic filter, so the great majority of what
+            // arrives is housekeeping and must not become an event.
+            Assert(!notes[2].IsDetection, "a storage-failure notification is not a detection");
+
+            // The end of an event, however the camera names its state item.
+            var ended = Protocol.OnvifClient.ParseNotifications(Xml("""
+                <tev:PullMessagesResponse xmlns:tev="http://www.onvif.org/ver10/events/wsdl"
+                                          xmlns:wsnt="http://docs.oasis-open.org/wsn/b-2"
+                                          xmlns:tt="http://www.onvif.org/ver10/schema">
+                  <wsnt:NotificationMessage>
+                    <wsnt:Topic>tns1:VideoSource/MotionAlarm</wsnt:Topic>
+                    <wsnt:Message><tt:Message UtcTime="2026-01-02T03:04:08Z">
+                      <tt:Data><tt:SimpleItem Name="State" Value="false"/></tt:Data>
+                    </tt:Message></wsnt:Message>
+                  </wsnt:NotificationMessage>
+                </tev:PullMessagesResponse>
+                """));
+            Assert(ended.Count == 1 && ended[0] is { Active: false, Label: "motion" }, "the all-clear parses");
+
+            // A notification with no state at all is a one-shot ("this happened"),
+            // which the service treats as a start rather than discarding.
+            Assert(Protocol.OnvifClient.ActiveFrom(new Dictionary<string, string>()) == null,
+                "no state item -> the camera said neither");
+
+            // Vehicles and animals, and a vendor topic with no classification.
+            static Protocol.OnvifNotification N(string topic, params string[] kv)
+            {
+                var d = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                for (int i = 0; i + 1 < kv.Length; i += 2) d[kv[i]] = kv[i + 1];
+                return new Protocol.OnvifNotification(topic, Protocol.OnvifClient.ActiveFrom(d), d);
+            }
+            AssertEq(N("tns1:RuleEngine/MyRuleDetector/Detect", "ObjectType", "Vehicle").Label, "vehicle");
+            AssertEq(N("tns1:RuleEngine/MyRuleDetector/Detect", "ObjectType", "Dog").Label, "animal");
+            AssertEq(N("tns1:RuleEngine/LineDetector/Crossed", "State", "true").Label, "motion");
+            AssertEq(N("tns1:RuleEngine/TamperDetector/Tamper", "State", "true").Label, null);
+            AssertEq(N("tns1:Monitoring/ProcessorUsage", "Value", "42").Label, null);
+
+            // The camera's clock, which every request after discovery is stamped in.
+            var clock = Protocol.OnvifClient.ParseUtcTime(Xml("""
+                <tds:GetSystemDateAndTimeResponse xmlns:tds="http://www.onvif.org/ver10/device/wsdl"
+                                                  xmlns:tt="http://www.onvif.org/ver10/schema">
+                  <tds:SystemDateAndTime>
+                    <tt:UTCDateTime>
+                      <tt:Time><tt:Hour>3</tt:Hour><tt:Minute>4</tt:Minute><tt:Second>5</tt:Second></tt:Time>
+                      <tt:Date><tt:Year>2026</tt:Year><tt:Month>1</tt:Month><tt:Day>2</tt:Day></tt:Date>
+                    </tt:UTCDateTime>
+                  </tds:SystemDateAndTime>
+                </tds:GetSystemDateAndTimeResponse>
+                """));
+            AssertEq(clock, new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc));
+            // A camera that reports only local time, or nonsense, must not throw.
+            Assert(Protocol.OnvifClient.ParseUtcTime(
+                Xml("""<tds:R xmlns:tds="http://www.onvif.org/ver10/device/wsdl"/>""")) == null,
+                "no UTC block -> no correction");
+        });
+
+        Test("a zone only moves to Neolink when the camera provably has none", () =>
+        {
+            // THE safety property of the whole feature. A Reolink camera holds its
+            // zone on the camera; if a failed read could be mistaken for "this
+            // camera has no zone", the next save would quietly write the grid to
+            // the server instead of the camera and the camera would go on alarming
+            // on its old one. So only a definite false migrates a zone.
+            Assert(!Web.CameraStateStore.ZoneIsLocal(true, "md", 1), "a camera that holds a zone keeps it");
+            Assert(!Web.CameraStateStore.ZoneIsLocal(null, "md", 1), "'not asked yet' is NOT 'has none'");
+            Assert(Web.CameraStateStore.ZoneIsLocal(false, "md", 1), "a camera that provably has none gets a local zone");
+            // Per-type grids are the camera's own business: a local zone offered
+            // beside them would claim to govern what it cannot.
+            Assert(!Web.CameraStateStore.ZoneIsLocal(false, "md", 3), "a camera with per-type grids is never local");
+            foreach (var t in new[] { "people", "vehicle", "dog_cat", "face", "package" })
+                Assert(!Web.CameraStateStore.ZoneIsLocal(false, t, 1), $"only the shared md grid is kept locally, not {t}");
+
+            // The default grid follows the picture's shape so cells stay square.
+            AssertEq(Web.CameraStateStore.DefaultZoneGrid(1920, 1080), (32, 18));
+            AssertEq(Web.CameraStateStore.DefaultZoneGrid(1280, 960), (24, 18));
+            AssertEq(Web.CameraStateStore.DefaultZoneGrid(0, 0), (32, 18));
+            Assert(Web.CameraStateStore.DefaultZoneGrid(5120, 1552).Cols == 48, "very wide is clamped");
+        });
+
+        Test("a stored zone follows a camera that is renamed; nothing else changes", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), "neolink-selftest-rename-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var store = new Web.CameraStateStore(dir);
+                store.SetZone("Gate", "md", 4, 2, "11001111");
+                store.SetSuspended("Gate", true);
+                store.SetDetectionCaps("Gate", aiTypes: new[] { "people" });
+
+                store.Rename("Gate", "Front Gate");
+                Assert(store.Zone("Gate", "md") == null, "the zone left the old name");
+                Assert(store.Zone("Front Gate", "md")?.Table == "11001111", "the zone came along");
+                // Everything that existed before stored zones behaves exactly as it
+                // always did on a rename: it stays where it was.
+                Assert(store.Suspended("Gate") && !store.Suspended("Front Gate"), "the suspend flag did not move");
+                Assert(store.DetectionCaps("Gate").AiTypes is { Count: 1 }
+                       && store.DetectionCaps("Front Gate").AiTypes == null, "nor the cached capabilities");
+
+                // A camera with no stored zone (every Reolink that keeps its own) is
+                // untouched by a rename.
+                store.SetSuspended("Porch", true);
+                store.Rename("Porch", "Back Porch");
+                Assert(store.Suspended("Porch") && !store.Suspended("Back Porch"), "no zone, no change");
+
+                // Deleting clears only the zone.
+                store.SetZone("Shed", "md", 2, 1, "10");
+                store.SetSuspended("Shed", true);
+                store.Forget("Shed");
+                Assert(store.Zone("Shed", "md") == null && store.Suspended("Shed"),
+                    "a delete drops the zone and leaves the rest as it always was");
+
+                // Renaming to the same name (or only changing its case, which the
+                // app treats as the same camera) must not throw the state away.
+                store.Rename("Front Gate", "front gate");
+                Assert(store.Zone("Front Gate", "md") != null, "a case-only rename keeps the state");
+                // A camera with no state to move is a no-op, not a crash.
+                store.Rename("Never-seen", "Also-never-seen");
+
+                Assert(new Web.CameraStateStore(dir).Zone("Front Gate", "md")?.Table == "11001111",
+                    "and it survives a restart under the new name");
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+        });
+
+        Test("frame grab: a decodable run always starts on a keyframe", () =>
+        {
+            static Streaming.HubVideo V(long i, bool key) => new(i, new byte[] { 0, 0, 0, 1, (byte)i }, key, (uint)i);
+            var run = new List<Streaming.HubVideo>();
+
+            // Frames before the first keyframe are undecodable and are dropped.
+            Media.FrameGrab.Take(run, V(1, false));
+            Media.FrameGrab.Take(run, V(2, false));
+            AssertEq(run.Count, 0);
+
+            Media.FrameGrab.Take(run, V(3, true));
+            Media.FrameGrab.Take(run, V(4, false));
+            Assert(run.Count == 2 && run[0].Keyframe, "the run starts at the keyframe");
+
+            // A newer keyframe is a fresher picture than the one in hand.
+            Media.FrameGrab.Take(run, V(5, true));
+            Assert(run.Count == 1 && run[0].Index == 5, "a later keyframe restarts the run");
+
+            // Audio is not video.
+            Media.FrameGrab.Take(run, new Streaming.HubAudioAac(6, new byte[] { 1 }, 6));
+            AssertEq(run.Count, 1);
+
+            // The follow limit bounds what is fed to the decoder — one picture is
+            // all that comes out of it, so an unbounded run would be memory spent
+            // on frames that are discarded.
+            for (long i = 7; i < 60; i++) Media.FrameGrab.Take(run, V(i, false));
+            Assert(run.Count <= 10, $"the run is bounded (was {run.Count})");
+            Assert(run[0].Keyframe, "and still starts on the keyframe");
+        });
+        Test("ONVIF detections: stateful ones last until the camera ends them", () =>
+        {
+            // ONVIF reports a detection's state only when it CHANGES. A camera watching
+            // a long event sends "true" once and then nothing until "false" — so any
+            // timer on silence tears one real event into two. Only a one-shot (a
+            // notification with no state at all) may lapse on its own.
+            static Protocol.OnvifNotification N(string topic, bool? active, params string[] kv)
+            {
+                var d = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                for (int i = 0; i + 1 < kv.Length; i += 2) d[kv[i]] = kv[i + 1];
+                return new Protocol.OnvifNotification(topic, active, d);
+            }
+            var pushes = new List<Protocol.MotionPush>();
+            var svc = new Streaming.OnvifEventService("cam",
+                new Protocol.OnvifClient("127.0.0.1:1", "u", "p", "test"))
+            { MotionSink = pushes.Add };
+
+            svc.Handle(N("tns1:RuleEngine/CellMotionDetector/Motion", true));
+            svc.AgeForTest(TimeSpan.FromMinutes(10)); // a long, quiet, ongoing event
+            svc.ExpireOneShots();
+            Assert(svc.ActiveLabels.Contains("motion"),
+                "a stateful detection survives ten quiet minutes — silence is not an end");
+            AssertEq(pushes.Count, 1); // and nothing claimed it had ended
+
+            // A person reported alongside: BOTH labels go out. Dropping "motion" here
+            // left a camera set to record motion-but-not-people recording nothing.
+            svc.Handle(N("tns1:RuleEngine/FieldDetector/ObjectsInside", true, "ObjectType", "Human"));
+            var both = pushes[^1];
+            Assert(both.Active && both.AiTypes.Contains("motion") && both.AiTypes.Contains("person"),
+                "every active label is emitted, motion included");
+
+            svc.Handle(N("tns1:RuleEngine/CellMotionDetector/Motion", false));
+            Assert(pushes[^1].Active && pushes[^1].AiTypes.SequenceEqual(new[] { "person" }),
+                "ending motion leaves the person");
+            svc.Handle(N("tns1:RuleEngine/FieldDetector/ObjectsInside", false, "ObjectType", "Human"));
+            Assert(!pushes[^1].Active && pushes[^1].Status == "none", "the last end is an all-clear");
+
+            // A one-shot never gets an end, so it lapses — on ITS OWN clock, not the
+            // camera's: a stateful label kept busy alongside must not hold it open.
+            pushes.Clear();
+            svc.Handle(N("tns1:RuleEngine/CellMotionDetector/Motion", true));
+            svc.Handle(N("tns1:RuleEngine/MyRuleDetector/Detect", null, "ObjectType", "Vehicle"));
+            svc.AgeForTest(TimeSpan.FromSeconds(30));
+            svc.Handle(N("tns1:RuleEngine/CellMotionDetector/Motion", true)); // motion re-reported
+            svc.ExpireOneShots();
+            Assert(!svc.ActiveLabels.Contains("vehicle"), "the one-shot lapsed although motion kept reporting");
+            Assert(svc.ActiveLabels.Contains("motion"), "and the stateful one is untouched");
+
+            // Once a label has been reported WITH state it stays stateful: a camera
+            // that also fires one-shots for the same thing must not turn an event it
+            // promised to end into one that lapses by itself.
+            svc.Handle(N("tns1:RuleEngine/CellMotionDetector/Motion", null));
+            svc.AgeForTest(TimeSpan.FromMinutes(5));
+            svc.ExpireOneShots();
+            Assert(svc.ActiveLabels.Contains("motion"), "a one-shot re-report does not demote a stateful label");
+        });
+
+        Test("credentials: the mask and the parser agree on where a password ends", () =>
+        {
+            // An '@' inside a password is common and people do not escape it. Both
+            // the mask and the ONVIF parser must end the login at the LAST '@' of the
+            // authority, or the mask shows the tail of the password to the browser.
+            AssertEq(Config.ConfigEditor.MaskRtspPassword("admin:p@ss@cam.lan:8000"), "admin:****@cam.lan:8000");
+            AssertEq(Config.ConfigEditor.MaskRtspPassword("rtsp://admin:p@ss@cam/live/main"),
+                "rtsp://admin:****@cam/live/main");
+            // An '@' in the PATH is not a login.
+            AssertEq(Config.ConfigEditor.MaskRtspPassword("rtsp://cam/live@main"), "rtsp://cam/live@main");
+            var split = Protocol.OnvifClient.SplitCredentials("admin:p@ss@cam.lan:8000");
+            Assert(split is { Address: "cam.lan:8000", User: "admin", Pass: "p@ss" }, "the parser splits the same way");
+
+            // An edit made around a masked password keeps the real one. Before, it was
+            // either written as the literal mask (destroying the credential) or
+            // silently discarded along with the edit.
+            const string stored = "rtsp://admin:s3cret@10.0.0.5:554/live/main";
+            var shown = Config.ConfigEditor.MaskRtspPassword(stored)!;
+            AssertEq(Config.ConfigEditor.UnmaskPassword(shown, stored), stored);
+            AssertEq(Config.ConfigEditor.UnmaskPassword(shown.Replace("10.0.0.5", "10.0.0.9"), stored),
+                "rtsp://admin:s3cret@10.0.0.9:554/live/main");
+            AssertEq(Config.ConfigEditor.UnmaskPassword("rtsp://admin:newpass@10.0.0.5/live", stored),
+                "rtsp://admin:newpass@10.0.0.5/live"); // a typed password is taken as-is
+            Assert(Config.ConfigEditor.UnmaskPassword(shown, null) == null,
+                "nothing to restore from -> keep what is stored, never write the mask");
+            AssertEq(Config.ConfigEditor.UnmaskPassword("", stored), ""); // cleared = removed
+        });
+
+        Test("a stored zone's shape cannot overflow into a valid-looking grid", () =>
+        {
+            // 65536 x 65537 wraps to 65536 in 32 bits — exactly a legal table length.
+            var z = new Web.CameraStateStore.StoredZone { Cols = 65536, Rows = 65537, Table = new string('1', 65536) };
+            Assert(!z.IsWellFormed, "a wrapped product must not pass as a real grid");
+            var ok = new Web.CameraStateStore.StoredZone { Cols = 32, Rows = 18, Table = new string('0', 576) };
+            Assert(ok.IsWellFormed, "an ordinary grid still does");
+        });
+
+        Test("ONVIF Media2: profiles, encoder and options in the newer dialect", () =>
+        {
+            static System.Xml.Linq.XElement Xml(string s) => System.Xml.Linq.XDocument.Parse(s).Root!;
+            // Media2 groups a profile's parts under Configurations, drops the
+            // "Configuration" suffix, moves GovLength to an attribute and allows a
+            // fractional frame rate. One parse must read both dialects the same way.
+            var profiles = Protocol.OnvifClient.ParseProfiles(Xml("""
+                <tr2:GetProfilesResponse xmlns:tr2="http://www.onvif.org/ver20/media/wsdl"
+                                         xmlns:tt="http://www.onvif.org/ver10/schema">
+                  <tr2:Profiles token="Profile_1" fixed="true">
+                    <tr2:Name>mainStream</tr2:Name>
+                    <tr2:Configurations>
+                      <tr2:VideoSource token="VSC_1"><tt:Name>vs</tt:Name><tt:SourceToken>VS_1</tt:SourceToken></tr2:VideoSource>
+                      <tr2:VideoEncoder token="VEC_1" GovLength="50" Profile="Main">
+                        <tt:Name>enc</tt:Name>
+                        <tt:Encoding>H265</tt:Encoding>
+                        <tt:Resolution><tt:Width>3840</tt:Width><tt:Height>2160</tt:Height></tt:Resolution>
+                        <tt:RateControl ConstantBitRate="false">
+                          <tt:FrameRateLimit>12.5</tt:FrameRateLimit>
+                          <tt:BitrateLimit>6144</tt:BitrateLimit>
+                        </tt:RateControl>
+                        <tt:Quality>3</tt:Quality>
+                      </tr2:VideoEncoder>
+                      <tr2:Analytics token="VAC_1"><tt:Name>va</tt:Name></tr2:Analytics>
+                      <tr2:PTZ token="PTZ_1"><tt:Name>ptz</tt:Name></tr2:PTZ>
+                    </tr2:Configurations>
+                  </tr2:Profiles>
+                </tr2:GetProfilesResponse>
+                """));
+            Assert(profiles.Count == 1, "the Media2 profile is found");
+            var p = profiles[0];
+            Assert(p is { Token: "Profile_1", Name: "mainStream", HasPtz: true, VideoSourceToken: "VSC_1",
+                SourceToken: "VS_1", AnalyticsToken: "VAC_1" }, "every part is read from under Configurations");
+            Assert(p.EncoderToken == "VEC_1" && p.Encoding == "H265" && p.Width == 3840 && p.Height == 2160,
+                "the encoder is found by its Media2 name");
+            AssertEq(p.GovLength, 50);  // an attribute in Media2
+            AssertEq(p.FrameRate, 13);  // 12.5 rounds rather than failing to parse
+            AssertEq(p.Bitrate, 6144);
+
+            // Media2's options: one <Options> per codec, the codec named in a child
+            // element, and the frame rates as a list rather than a range.
+            var options = Xml("""
+                <tr2:GetVideoEncoderConfigurationOptionsResponse xmlns:tr2="http://www.onvif.org/ver20/media/wsdl"
+                                                                 xmlns:tt="http://www.onvif.org/ver10/schema">
+                  <tr2:Options GovLengthRange="1 400" FrameRatesSupported="25 20 15 10 5">
+                    <tt:Encoding>H264</tt:Encoding>
+                    <tt:ResolutionsAvailable><tt:Width>1920</tt:Width><tt:Height>1080</tt:Height></tt:ResolutionsAvailable>
+                    <tt:BitrateRange><tt:Min>64</tt:Min><tt:Max>8192</tt:Max></tt:BitrateRange>
+                  </tr2:Options>
+                  <tr2:Options GovLengthRange="1 400" FrameRatesSupported="12.5 6.25 1">
+                    <tt:Encoding>H265</tt:Encoding>
+                    <tt:ResolutionsAvailable><tt:Width>3840</tt:Width><tt:Height>2160</tt:Height></tt:ResolutionsAvailable>
+                    <tt:ResolutionsAvailable><tt:Width>2560</tt:Width><tt:Height>1440</tt:Height></tt:ResolutionsAvailable>
+                    <tt:BitrateRange><tt:Min>128</tt:Min><tt:Max>16384</tt:Max></tt:BitrateRange>
+                  </tr2:Options>
+                </tr2:GetVideoEncoderConfigurationOptionsResponse>
+                """);
+            var h265 = Protocol.OnvifClient.ParseEncoderOptions(options, "H265");
+            Assert(h265.Resolutions.Count == 2 && h265.Resolutions[0] == (3840, 2160),
+                "an H265 profile gets the H265 block's resolutions, largest first");
+            Assert(h265.FrameRate == (1, 13), "the frame-rate list becomes the range it spans");
+            Assert(h265.Bitrate == (128, 16384), "and its own bitrate range");
+            var h264 = Protocol.OnvifClient.ParseEncoderOptions(options, "H264");
+            Assert(h264.Resolutions.Count == 1 && h264.FrameRate == (5, 25) && h264.Bitrate == (64, 8192),
+                "the H264 block is kept apart from the H265 one");
+            // A list of rates is offered as that list, not as everything it spans:
+            // 12.5 and 6.25 cannot be written as whole numbers, so they are left out.
+            Assert(h264.FrameRatesListed is { } l264 && l264.SequenceEqual(new[] { 5, 10, 15, 20, 25 }),
+                "the listed rates are the menu");
+            Assert(h265.FrameRatesListed is { } l265 && l265.SequenceEqual(new[] { 1 }), "whole rates only");
+
+            // ver10 keeps bitrate ranges in Extension blocks named per codec, and the
+            // schema puts JPEG's first: an H264 profile must get H264's.
+            var extensions = Protocol.OnvifClient.ParseEncoderOptions(Xml("""
+                <trt:GetVideoEncoderConfigurationOptionsResponse xmlns:trt="http://www.onvif.org/ver10/media/wsdl"
+                                                                 xmlns:tt="http://www.onvif.org/ver10/schema">
+                  <trt:Options>
+                    <tt:H264>
+                      <tt:ResolutionsAvailable><tt:Width>1920</tt:Width><tt:Height>1080</tt:Height></tt:ResolutionsAvailable>
+                    </tt:H264>
+                    <tt:Extension>
+                      <tt:JPEG><tt:BitrateRange><tt:Min>1000</tt:Min><tt:Max>2000</tt:Max></tt:BitrateRange></tt:JPEG>
+                      <tt:H264><tt:BitrateRange><tt:Min>32</tt:Min><tt:Max>8192</tt:Max></tt:BitrateRange></tt:H264>
+                    </tt:Extension>
+                  </trt:Options>
+                </trt:GetVideoEncoderConfigurationOptionsResponse>
+                """), "H264");
+            Assert(extensions.Bitrate == (32, 8192), "the codec's own Extension, not JPEG's");
+        });
+
+        Test("ONVIF PTZ: which axes the head drives, and the zoom slider's scale", () =>
+        {
+            static System.Xml.Linq.XElement Xml(string s) => System.Xml.Linq.XDocument.Parse(s).Root!;
+            // A motorised varifocal lens: a PTZ node with a zoom and no pan or tilt.
+            // Offering it arrows would be offering buttons that do nothing.
+            var lens = Protocol.OnvifClient.ParsePtzNode(Xml("""
+                <tptz:GetNodesResponse xmlns:tptz="http://www.onvif.org/ver20/ptz/wsdl"
+                                       xmlns:tt="http://www.onvif.org/ver10/schema">
+                  <tptz:PTZNode token="Node_1" FixedHomePosition="false">
+                    <tt:Name>lens</tt:Name>
+                    <tt:SupportedPTZSpaces>
+                      <tt:AbsoluteZoomPositionSpace>
+                        <tt:URI>http://www.onvif.org/ver10/tptz/ZoomSpaces/PositionGenericSpace</tt:URI>
+                        <tt:XRange><tt:Min>0</tt:Min><tt:Max>1</tt:Max></tt:XRange>
+                      </tt:AbsoluteZoomPositionSpace>
+                      <tt:ContinuousZoomVelocitySpace>
+                        <tt:URI>http://www.onvif.org/ver10/tptz/ZoomSpaces/VelocityGenericSpace</tt:URI>
+                        <tt:XRange><tt:Min>-1</tt:Min><tt:Max>1</tt:Max></tt:XRange>
+                      </tt:ContinuousZoomVelocitySpace>
+                    </tt:SupportedPTZSpaces>
+                    <tt:MaximumNumberOfPresets>8</tt:MaximumNumberOfPresets>
+                    <tt:HomeSupported>false</tt:HomeSupported>
+                  </tptz:PTZNode>
+                </tptz:GetNodesResponse>
+                """));
+            Assert(lens is { PanTilt: false, Zoom: true, MaxPresets: 8 }, "a zoom-only node offers no arrows");
+            AssertEq(lens!.ZoomRange, (0.0, 1.0));
+
+            var dome = Protocol.OnvifClient.ParsePtzNode(Xml("""
+                <tptz:GetNodesResponse xmlns:tptz="http://www.onvif.org/ver20/ptz/wsdl"
+                                       xmlns:tt="http://www.onvif.org/ver10/schema">
+                  <tptz:PTZNode token="Node_1">
+                    <tt:SupportedPTZSpaces>
+                      <tt:ContinuousPanTiltVelocitySpace>
+                        <tt:URI>http://www.onvif.org/ver10/tptz/PanTiltSpaces/VelocityGenericSpace</tt:URI>
+                      </tt:ContinuousPanTiltVelocitySpace>
+                    </tt:SupportedPTZSpaces>
+                  </tptz:PTZNode>
+                </tptz:GetNodesResponse>
+                """));
+            Assert(dome is { PanTilt: true, Zoom: false, MaxPresets: null, AnyZoom: false },
+                "a head that only pans and tilts gets no zoom slider");
+
+            // A multi-sensor camera has a node per head: the profile's own node is
+            // the one that counts, and among zoom spaces the generic one is chosen.
+            var twoNodes = Xml("""
+                <tptz:GetNodesResponse xmlns:tptz="http://www.onvif.org/ver20/ptz/wsdl"
+                                       xmlns:tt="http://www.onvif.org/ver10/schema">
+                  <tptz:PTZNode token="Fixed">
+                    <tt:SupportedPTZSpaces/>
+                  </tptz:PTZNode>
+                  <tptz:PTZNode token="Dome">
+                    <tt:SupportedPTZSpaces>
+                      <tt:AbsoluteZoomPositionSpace>
+                        <tt:URI>http://vendor.example/ZoomSpaces/Millimetres</tt:URI>
+                        <tt:XRange><tt:Min>4</tt:Min><tt:Max>120</tt:Max></tt:XRange>
+                      </tt:AbsoluteZoomPositionSpace>
+                      <tt:AbsoluteZoomPositionSpace>
+                        <tt:URI>http://www.onvif.org/ver10/tptz/ZoomSpaces/PositionGenericSpace</tt:URI>
+                        <tt:XRange><tt:Min>0</tt:Min><tt:Max>1</tt:Max></tt:XRange>
+                      </tt:AbsoluteZoomPositionSpace>
+                      <tt:ContinuousPanTiltVelocitySpace><tt:URI>x</tt:URI></tt:ContinuousPanTiltVelocitySpace>
+                    </tt:SupportedPTZSpaces>
+                  </tptz:PTZNode>
+                </tptz:GetNodesResponse>
+                """);
+            var domeNode = Protocol.OnvifClient.ParsePtzNode(twoNodes, "Dome");
+            Assert(domeNode is { PanTilt: true, Zoom: true, AnyZoom: true }, "the profile's node, not the first one");
+            AssertEq(domeNode!.ZoomRange, (0.0, 1.0));
+            AssertEq(domeNode.ZoomSpace, "http://www.onvif.org/ver10/tptz/ZoomSpaces/PositionGenericSpace");
+            Assert(Protocol.OnvifClient.ParsePtzNode(twoNodes) is { PanTilt: false, Zoom: false },
+                "with no token to go by, the first node");
+
+            var moving = Xml("""
+                <tptz:GetStatusResponse xmlns:tptz="http://www.onvif.org/ver20/ptz/wsdl"
+                                        xmlns:tt="http://www.onvif.org/ver10/schema">
+                  <tptz:PTZStatus><tt:Position><tt:Zoom x="0.4"/></tt:Position>
+                    <tt:MoveStatus><tt:PanTilt>IDLE</tt:PanTilt><tt:Zoom>MOVING</tt:Zoom></tt:MoveStatus>
+                  </tptz:PTZStatus>
+                </tptz:GetStatusResponse>
+                """);
+            Assert(Protocol.OnvifClient.ParseZoomMoving(moving) == true, "a lens on its way says so");
+            Assert(Protocol.OnvifClient.ParseZoomMoving(Xml("<a><Position/></a>")) == null,
+                "a camera that does not report movement is not guessed at");
+
+            AssertEq(Protocol.OnvifClient.ParseZoomPosition(Xml("""
+                <tptz:GetStatusResponse xmlns:tptz="http://www.onvif.org/ver20/ptz/wsdl"
+                                        xmlns:tt="http://www.onvif.org/ver10/schema">
+                  <tptz:PTZStatus>
+                    <tt:Position>
+                      <tt:PanTilt x="0.1" y="-0.2"/>
+                      <tt:Zoom x="0.375"/>
+                    </tt:Position>
+                    <tt:MoveStatus><tt:Zoom>IDLE</tt:Zoom></tt:MoveStatus>
+                  </tptz:PTZStatus>
+                </tptz:GetStatusResponse>
+                """)), 0.375);
+            // Some cameras report only whether they are moving. The MoveStatus Zoom
+            // must not be mistaken for a position.
+            Assert(Protocol.OnvifClient.ParseZoomPosition(Xml("""
+                <tptz:GetStatusResponse xmlns:tptz="http://www.onvif.org/ver20/ptz/wsdl"
+                                        xmlns:tt="http://www.onvif.org/ver10/schema">
+                  <tptz:PTZStatus><tt:MoveStatus><tt:Zoom>IDLE</tt:Zoom></tt:MoveStatus></tptz:PTZStatus>
+                </tptz:GetStatusResponse>
+                """)) == null, "no position reported -> no slider, rather than one parked at zero");
+
+            // The panel's slider is whole steps 0..100 whatever the camera's range.
+            AssertEq(Streaming.GenericCameraControl.ZoomStep(0.375, (0, 1)), 38L);
+            AssertEq(Streaming.GenericCameraControl.ZoomStep(5, (0, 10)), 50L);
+            AssertEq(Streaming.GenericCameraControl.ZoomStep(2, (0, 1)), 100L); // out of range clamps
+            AssertEq(Streaming.GenericCameraControl.ZoomPosition(25, (0, 1)), 0.25);
+            AssertEq(Streaming.GenericCameraControl.ZoomPosition(500, (0, 1)), 1.0); // never past the end
+        });
+
+        Test("ONVIF cell motion: the camera's own grid is read and written exactly", () =>
+        {
+            static System.Xml.Linq.XElement Xml(string s) => System.Xml.Linq.XDocument.Parse(s).Root!;
+            // The spec's own worked example: ff ff ff f0 f0 f0 PackBits to fe ff fe f0,
+            // which is "/v/+8A==" in base64. If this drifts, every camera reads wrong.
+            var packed = Protocol.OnvifClient.PackBits(new byte[] { 0xff, 0xff, 0xff, 0xf0, 0xf0, 0xf0 });
+            AssertEq(Convert.ToHexString(packed), "FEFFFEF0");
+            AssertEq(Convert.ToBase64String(packed), "/v/+8A==");
+            var back = Protocol.OnvifClient.UnpackBits(packed);
+            AssertEq(Convert.ToHexString(back!), "FFFFFFF0F0F0");
+
+            // Literals, runs, the 128-byte limit on both, and the -128 no-op.
+            var rng = new Random(7);
+            foreach (var len in new[] { 1, 2, 3, 127, 128, 129, 300 })
+            {
+                var data = new byte[len];
+                for (int i = 0; i < len; i++) data[i] = (byte)(i % 5 == 0 ? rng.Next(256) : i < len / 2 ? 0xAA : rng.Next(3));
+                var rt = Protocol.OnvifClient.UnpackBits(Protocol.OnvifClient.PackBits(data));
+                Assert(rt != null && rt.AsSpan().SequenceEqual(data), $"PackBits round trip, {len} bytes");
+            }
+            var run = new byte[300];
+            Array.Fill(run, (byte)0x5A);
+            var rp = Protocol.OnvifClient.UnpackBits(Protocol.OnvifClient.PackBits(run));
+            Assert(rp != null && rp.All(b => b == 0x5A) && rp.Length == 300, "a run longer than 128 splits cleanly");
+            AssertEq(Convert.ToHexString(Protocol.OnvifClient.UnpackBits(new byte[] { 0x80, 0x00, 0x7F })!), "7F");
+            Assert(Protocol.OnvifClient.UnpackBits(new byte[] { 0x05, 0x01 }) == null,
+                "a header promising more than the data holds is refused, not read past");
+
+            // Cells run left to right, top to bottom, most significant bit first.
+            // A 5x3 grid with only the middle row watched:
+            // 00000 11111 00000 -> 0000 0111 | 1100 0000 -> 07 C0.
+            const string middle = "000001111100000";
+            var cells = Protocol.OnvifClient.EncodeActiveCells(middle);
+            AssertEq(Convert.ToHexString(Protocol.OnvifClient.UnpackBits(Convert.FromBase64String(cells))!), "07C0");
+            AssertEq(Protocol.OnvifClient.DecodeActiveCells(cells, 5, 3), middle);
+            // A realistic 22x18 layout survives the round trip.
+            var big = new string(Enumerable.Range(0, 22 * 18).Select(i => (i * 7 % 11) < 4 ? '0' : '1').ToArray());
+            AssertEq(Protocol.OnvifClient.DecodeActiveCells(Protocol.OnvifClient.EncodeActiveCells(big), 22, 18), big);
+            // The spec's example read as an 8x6 grid: three rows watched in full, then
+            // three watched on their left half only.
+            var spec = Protocol.OnvifClient.DecodeActiveCells("/v/+8A==", 8, 6)!;
+            Assert(spec.StartsWith(new string('1', 24)) && spec.Substring(24, 8) == "11110000",
+                "the spec's example grid decodes to the cells it describes");
+            Assert(Protocol.OnvifClient.DecodeActiveCells("not base64!", 5, 3) == null, "garbage is not a grid");
+            // Hikvision's factory default for its 22x18 grid: every cell watched.
+            AssertEq(Protocol.OnvifClient.DecodeActiveCells("0P8A8A==", 22, 18),
+                new string('1', 22 * 18).Substring(0, 396));
+            // Strict about the size: a grid read wrongly would be shown as the
+            // camera's and written back over it. Too short and too long both fail —
+            // an uncompressed bitmask sent by mistake decodes to the wrong length.
+            Assert(Protocol.OnvifClient.DecodeActiveCells("/v/+8A==", 22, 18) == null, "too short for the layout");
+            Assert(Protocol.OnvifClient.DecodeActiveCells("0P8A8A==", 5, 3) == null, "too long for the layout");
+            var raw = Convert.ToBase64String(Enumerable.Repeat((byte)0x00, 50).ToArray());
+            Assert(Protocol.OnvifClient.DecodeActiveCells(raw, 22, 18) == null,
+                "an uncompressed mask is not mistaken for a PackBits one");
+            // Which replies are the camera's lasting word, and which are asked again.
+            Assert(Protocol.OnvifClient.IsLastingRefusal(500) && Protocol.OnvifClient.IsLastingRefusal(400)
+                   && Protocol.OnvifClient.IsLastingRefusal(404), "a SOAP fault or a missing service is lasting");
+            Assert(!Protocol.OnvifClient.IsLastingRefusal(0) && !Protocol.OnvifClient.IsLastingRefusal(401)
+                   && !Protocol.OnvifClient.IsLastingRefusal(403) && !Protocol.OnvifClient.IsLastingRefusal(503)
+                   && !Protocol.OnvifClient.IsLastingRefusal(429),
+                "silence, an auth refusal (lockout, clock) or a busy reply is asked again");
+
+            // Where the grid lives: the layout on the module, the cells on the rule.
+            var modules = Xml("""
+                <tan:GetAnalyticsModulesResponse xmlns:tan="http://www.onvif.org/ver20/analytics/wsdl"
+                                                 xmlns:tt="http://www.onvif.org/ver10/schema">
+                  <tan:AnalyticsModule Name="MyTamper" Type="tt:TamperEngine"/>
+                  <tan:AnalyticsModule Name="MyCellMotionModule" Type="tt:CellMotionEngine">
+                    <tt:Parameters>
+                      <tt:SimpleItem Name="Sensitivity" Value="60"/>
+                      <tt:ElementItem Name="Layout">
+                        <tt:CellLayout Columns="22" Rows="18">
+                          <tt:Transformation>
+                            <tt:Translate x="-1.0" y="-1.0"/>
+                            <tt:Scale x="0.090909" y="0.111111"/>
+                          </tt:Transformation>
+                        </tt:CellLayout>
+                      </tt:ElementItem>
+                    </tt:Parameters>
+                  </tan:AnalyticsModule>
+                </tan:GetAnalyticsModulesResponse>
+                """);
+            AssertEq(Protocol.OnvifClient.ParseCellLayout(modules), (22, 18));
+            Assert(Protocol.OnvifClient.ParseCellLayout(Xml("""
+                <tan:GetAnalyticsModulesResponse xmlns:tan="http://www.onvif.org/ver20/analytics/wsdl"
+                                                 xmlns:tt="http://www.onvif.org/ver10/schema">
+                  <tan:AnalyticsModule Name="MyTamper" Type="tt:TamperEngine"/>
+                </tan:GetAnalyticsModulesResponse>
+                """)) == null, "no cell motion module -> no grid of its own");
+
+            // The rule is written back WHOLE: only ActiveCells changes, and its Type —
+            // a QName whose prefix was declared on the reply's envelope — still
+            // resolves once the element travels on its own.
+            var rules = Xml("""
+                <env:Envelope xmlns:env="http://www.w3.org/2003/05/soap-envelope"
+                              xmlns:tan="http://www.onvif.org/ver20/analytics/wsdl"
+                              xmlns:ns9="http://www.onvif.org/ver10/schema">
+                  <env:Body><tan:GetRulesResponse>
+                    <tan:Rule Name="MyLineRule" Type="ns9:LineDetector">
+                      <ns9:Parameters><ns9:SimpleItem Name="Direction" Value="Any"/></ns9:Parameters>
+                    </tan:Rule>
+                    <tan:Rule Name="MyMotionDetectorRule" Type="ns9:CellMotionDetector">
+                      <ns9:Parameters>
+                        <ns9:SimpleItem Name="MinCount" Value="5"/>
+                        <ns9:SimpleItem Name="AlarmOnDelay" Value="100"/>
+                        <ns9:SimpleItem Name="AlarmOffDelay" Value="1000"/>
+                        <ns9:SimpleItem Name="ActiveCells" Value="/v/+8A=="/>
+                      </ns9:Parameters>
+                    </tan:Rule>
+                  </tan:GetRulesResponse></env:Body>
+                </env:Envelope>
+                """);
+            var rule = Protocol.OnvifClient.FindCellRule(rules);
+            AssertEq((string?)rule?.Attribute("Name"), "MyMotionDetectorRule");
+            var written = Xml(Protocol.OnvifClient.RuleForWrite(rule!, "AAAA"));
+            AssertEq(written.Name.NamespaceName, "http://www.onvif.org/ver20/analytics/wsdl");
+            AssertEq(written.Name.LocalName, "Rule");
+            AssertEq((string?)written.Attribute("Name"), "MyMotionDetectorRule");
+            var type = (string)written.Attribute("Type")!;
+            AssertEq(written.GetNamespaceOfPrefix(type[..type.IndexOf(':')])?.NamespaceName,
+                "http://www.onvif.org/ver10/schema");
+            AssertEq(type[(type.IndexOf(':') + 1)..], "CellMotionDetector");
+            var items = written.Descendants().Where(e => e.Name.LocalName == "SimpleItem")
+                .ToDictionary(e => (string)e.Attribute("Name")!, e => (string)e.Attribute("Value")!);
+            Assert(items is { Count: 4 } && items["MinCount"] == "5" && items["AlarmOnDelay"] == "100"
+                   && items["AlarmOffDelay"] == "1000" && items["ActiveCells"] == "AAAA",
+                "the rule's other parameters go back exactly as the camera had them");
+            Assert(Protocol.OnvifClient.FindCellRule(Xml("""
+                <tan:GetRulesResponse xmlns:tan="http://www.onvif.org/ver20/analytics/wsdl"
+                                      xmlns:tt="http://www.onvif.org/ver10/schema">
+                  <tan:Rule Name="Line" Type="tt:LineDetector"/>
+                </tan:GetRulesResponse>
+                """)) == null, "no cell motion rule -> no grid of its own");
+        });
+
+        Test("detection zones Neolink stores for cameras that keep none", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), "neolink-selftest-zone-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                // The default grid follows the picture's shape, so cells stay square.
+                AssertEq(Web.CameraStateStore.DefaultZoneGrid(1920, 1080), (32, 18));
+                AssertEq(Web.CameraStateStore.DefaultZoneGrid(1280, 960), (24, 18));
+                AssertEq(Web.CameraStateStore.DefaultZoneGrid(0, 0), (32, 18)); // nothing streaming yet
+                // An ultra-wide panorama would otherwise produce unclickable cells.
+                Assert(Web.CameraStateStore.DefaultZoneGrid(5120, 1552).Cols == 48, "very wide is clamped");
+
+                var store = new Web.CameraStateStore(dir);
+                Assert(store.Zone("Gate", "md") == null, "no zone stored yet");
+                store.SetZone("Gate", "md", 4, 2, "11001111");
+                var read = store.Zone("Gate", "md");
+                Assert(read is { Cols: 4, Rows: 2, Table: "11001111" }, "zone stored and read back");
+                Assert(store.Zone("Gate", "people") == null, "a type with no zone stays absent");
+
+                // Dimensions are the server's to declare; a table that does not add
+                // up must never reach the file.
+                bool refused = false;
+                try { store.SetZone("Gate", "md", 4, 2, "1100"); }
+                catch (ArgumentException) { refused = true; }
+                Assert(refused, "a wrong-size table is refused");
+                Assert(store.Zone("Gate", "md")?.Table == "11001111", "and the stored zone is untouched");
+
+                // It survives a restart, and the type key is matched like a camera
+                // name is — a hand-edited file must still find its grid.
+                var reopened = new Web.CameraStateStore(dir);
+                Assert(reopened.Zone("Gate", "md")?.Table == "11001111", "zone survives a restart");
+                Assert(reopened.Zone("gate", "MD")?.Table == "11001111", "camera and type match case-insensitively");
+
+                // The suspend flag and the zone live in the same file without
+                // trampling each other, and a camera at its defaults stays out of it.
+                reopened.SetSuspended("Gate", true);
+                var third = new Web.CameraStateStore(dir);
+                Assert(third.Suspended("Gate") && third.Zone("Gate", "md") != null,
+                    "suspend and zone coexist");
+                Assert(third.Zone("Never-seen", "md") == null, "an unknown camera has no zone");
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
         });
 
         Test("HTTP extras: detection sensitivity, HDR, OSD, firmware, SD search parsing", () =>

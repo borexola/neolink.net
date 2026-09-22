@@ -37,6 +37,39 @@ internal static class NetUtil
             Encoding.UTF8.GetBytes(a), Encoding.UTF8.GetBytes(b));
 
     /// <summary>
+    /// The host (with its port when non-default) and login carried by an RTSP URL.
+    /// A generic camera keeps everything in that one string, so it is also where its
+    /// ONVIF endpoint and credentials are looked for. All three are null when the
+    /// URL is missing or unparseable; percent-escapes in the login are decoded, so a
+    /// password containing an @ or a / survives being written into a URL.
+    /// </summary>
+    /// <param name="url">An RTSP URL, or null.</param>
+    /// <returns>Host: the bare hostname, which is where OTHER services on that
+    /// camera are looked for — never carrying the stream's port, since ONVIF is not
+    /// on it. Display: the same host plus its port when that port is not RTSP's own
+    /// 554, for showing a person which camera this is (two cameras behind one
+    /// address differ only by it). User/Pass: the login the URL carries, decoded.
+    /// All null when the URL is missing or unparseable.</returns>
+    public static (string? Host, string? Display, string? User, string? Pass) SplitRtspUrl(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url) || !Uri.TryCreate(url, UriKind.Absolute, out var u)
+            || u.Host.Length == 0)
+            return (null, null, null, null);
+        string? user = null, pass = null;
+        if (u.UserInfo.Length > 0)
+        {
+            int split = u.UserInfo.IndexOf(':');
+            user = Uri.UnescapeDataString(split < 0 ? u.UserInfo : u.UserInfo[..split]);
+            if (split >= 0) pass = Uri.UnescapeDataString(u.UserInfo[(split + 1)..]);
+            if (user.Length == 0) user = null;
+        }
+        // Uri.Host already brackets an IPv6 literal, which is what an authority
+        // wants — both of these go back into URLs or into a host:port field.
+        var display = u.IsDefaultPort || u.Port == 554 ? u.Host : $"{u.Host}:{u.Port}";
+        return (u.Host, display, user, pass);
+    }
+
+    /// <summary>
     /// Turns a bind address into something a user can actually click: for wildcard
     /// binds (0.0.0.0 / ::) returns this machine's primary LAN IPv4, else localhost.
     /// </summary>

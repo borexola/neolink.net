@@ -33,7 +33,7 @@ public sealed record OnvifImagingRanges(
 /// ONVIF disabled, wrong credentials, or a firmware that omits imaging simply yields
 /// null. Service endpoints and the video-source token are discovered once and cached.
 /// </summary>
-public sealed class OnvifClient : IDisposable
+public sealed partial class OnvifClient : IDisposable
 {
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(6);
 
@@ -44,6 +44,16 @@ public sealed class OnvifClient : IDisposable
     private const string NsDevice = "http://www.onvif.org/ver10/device/wsdl";
     private const string NsMedia = "http://www.onvif.org/ver10/media/wsdl";
     private const string NsImaging = "http://www.onvif.org/ver20/imaging/wsdl";
+    private const string NsPtz = "http://www.onvif.org/ver20/ptz/wsdl";
+    // Media2: the successor to the ver10 media service. Newer firmware serves it
+    // alongside ver10, and some serves ONLY it — so it is the fallback, never the
+    // first choice, and a camera that answers ver10 (every Reolink) never sees it.
+    private const string NsMedia2 = "http://www.onvif.org/ver20/media/wsdl";
+    private const string NsEvents = "http://www.onvif.org/ver10/events/wsdl";
+    // WS-BaseNotification and WS-Addressing: ONVIF's event service is built on them
+    // rather than defining its own subscription vocabulary.
+    private const string NsWsnt = "http://docs.oasis-open.org/wsn/b-2";
+    private const string NsWsa = "http://www.w3.org/2005/08/addressing";
     private const string NsSchema = "http://www.onvif.org/ver10/schema";
     private const string PwDigestType = "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordDigest";
     private const string Base64Type = "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-message-security-1.0#Base64Binary";
@@ -55,6 +65,7 @@ public sealed class OnvifClient : IDisposable
     private readonly string _password;
     private readonly string _tag;
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly bool _generic;
 
     private bool _ready;              // discovery succeeded; endpoints + token cached
     private DateTime _retryAfter;     // after a failed discovery, don't re-probe until this time
@@ -62,8 +73,37 @@ public sealed class OnvifClient : IDisposable
     private string? _lastError;       // the most recent SOAP/transport failure reason
     private string? _imagingUrl;
     private string? _mediaUrl;
+    /// <summary>Set once ver10 media has failed and Media2 has answered instead; it
+    /// sticks for the run. Every media call reads the three members below rather
+    /// than assuming a dialect.</summary>
+    private bool _media2;
+    private string? _media2Url;
+    private string MediaUrl => _media2 ? _media2Url! : _mediaUrl!;
+    private string MediaNs => _media2 ? NsMedia2 : NsMedia;
+    /// <summary>The prefix CallAsync binds the media namespace to, for use inside
+    /// request bodies — they name their own child elements with it.</summary>
+    private string Mp => _media2 ? "tr2" : "trt";
+    private string? _ptzUrl;
     private string? _videoSourceToken;
     private OnvifImagingRanges? _ranges;
+    private bool _hasImaging;
+    /// <summary>The camera's clock minus ours, learned from GetSystemDateAndTime
+    /// (the one ONVIF call that needs no authentication, precisely so it can be
+    /// asked before the clocks are known to agree). Zero until discovery runs.</summary>
+    private TimeSpan _clockSkew;
+    private IReadOnlyList<OnvifProfile>? _profiles;
+    /// <summary>Whether the camera has EVER answered with a profile. Survives the
+    /// cache being dropped after a write; see <see cref="HasProfiles"/>.</summary>
+    private bool _hadProfiles;
+    private string? _ptzProfileToken;
+    private IReadOnlyList<string> _presetTokens = Array.Empty<string>();
+    private IReadOnlyDictionary<string, string>? _streamUris;
+    private OnvifPtzNode? _ptzNode;
+    private bool _ptzNodeRefused;
+    private string? _ptzNodeToken;
+    /// <summary>Null = not asked; "" = asked and the camera offers none; otherwise
+    /// the URI a still is fetched from.</summary>
+    private string? _snapshotUri;
 
     /// <param name="address">"host", "host:port", or a full "http(s)://host[:port]"
     /// URL. A bare host (no explicit port) is probed on Reolink's ONVIF port 8000
@@ -71,30 +111,92 @@ public sealed class OnvifClient : IDisposable
     /// (the HTTP/CGI web port) only half-proxies it on some firmwares (the device
     /// service answers but the media service 502s or times out). An explicit port
     /// or full URL is taken at its word.</param>
-    public OnvifClient(string address, string username, string? password, string tag)
+    /// <param name="probePorts">Ports to try for a bare host, in order. Reolink
+    /// serves ONVIF on 8000, so that is the default; a non-Reolink camera is far
+    /// more likely to answer on 80, and passes its own order.</param>
+    /// <param name="generic">True for a camera whose ONVIF is its whole control
+    /// surface (a non-Reolink one). That camera's discovery also reads its clock,
+    /// looks up GetServices when GetCapabilities says nothing, is ready as soon as
+    /// the device service answers, and gives each port a time budget. A Reolink uses
+    /// ONVIF only for the picture-settings fallback, and its discovery is exactly
+    /// what it always was: none of those, and not ready without a video source.</param>
+    public OnvifClient(string address, string username, string? password, string tag,
+        IReadOnlyList<int>? probePorts = null, bool generic = false)
     {
-        _candidates = BuildCandidates(address);
+        _generic = generic;
+        // A login inside the address wins: it is the one place a camera whose ONVIF
+        // account differs from its streaming one can be given the right credentials,
+        // and it is the field the settings UI already offers. Generic cameras only —
+        // a Reolink signs in with its own login, as it always has.
+        var (bare, user, pass) = generic ? SplitCredentials(address) : (address, null, null);
+        _candidates = BuildCandidates(bare, probePorts);
         _deviceUrl = _candidates[0];
-        _username = username;
-        _password = password ?? "";
+        _username = user ?? username;
+        _password = pass ?? password ?? "";
         _tag = tag;
 
         var handler = new SocketsHttpHandler
         {
             PooledConnectionIdleTimeout = TimeSpan.FromSeconds(30),
             ConnectTimeout = TimeSpan.FromSeconds(5),
+            // Some cameras want HTTP authentication INSTEAD of (or as well as) the
+            // WS-Security header every request already carries — Profile S allows
+            // either, and a camera configured for Digest answers 401 to a perfectly
+            // good SOAP request. Handing the same credentials to the transport lets
+            // it answer that challenge, so those cameras work without the user
+            // having to know which scheme theirs chose. Costs nothing on a camera
+            // that never challenges. Generic cameras only: a Reolink's picture
+            // fallback has only ever used WS-Security, and keeps doing exactly that.
+            Credentials = generic ? new System.Net.NetworkCredential(_username, _password) : null,
+            PreAuthenticate = false,
         };
         if (_candidates.Any(c => c.StartsWith("https:", StringComparison.OrdinalIgnoreCase)))
             handler.SslOptions = new System.Net.Security.SslClientAuthenticationOptions
             {
                 RemoteCertificateValidationCallback = (_, _, _, _) => true,
             };
-        _http = new HttpClient(handler) { Timeout = RequestTimeout };
+        // No client-wide timeout: each call sets its own, because they differ by an
+        // order of magnitude — a settings read must not hang, while an event long
+        // poll asks the camera to hold the request until something happens.
+        _http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+    }
+
+    /// <summary>Splits "user:pass@" off an address, returning it separately. Only a
+    /// full URL can carry one — a bare "host:port" has no room for it without being
+    /// ambiguous. Percent-escapes are decoded, so a password with an @ or a / in it
+    /// survives the URL it had to be written into.</summary>
+    internal static (string Address, string? User, string? Pass) SplitCredentials(string address)
+    {
+        var a = address.Trim();
+        if (a.Contains("://", StringComparison.Ordinal))
+        {
+            if (!Uri.TryCreate(a, UriKind.Absolute, out var u) || u.UserInfo.Length == 0)
+                return (a, null, null);
+            var (fu, fp) = SplitUserInfo(Uri.UnescapeDataString(u.UserInfo));
+            // Rebuilt without the login, and WITHOUT letting UriBuilder re-add the
+            // scheme's default port or drop a path the camera actually needs.
+            var bare = $"{u.Scheme}://{u.Authority}{u.PathAndQuery}";
+            return (a.EndsWith('/') ? bare : bare.TrimEnd('/'), fu, fp);
+        }
+        // A bare authority can carry a login too ("user:pass@host:8000"). It used to
+        // fall through as-is, which meant the whole string was treated as a hostname
+        // and then printed to the log with the password in it.
+        var at = a.LastIndexOf('@');
+        if (at <= 0) return (a, null, null);
+        var (bu, bp) = SplitUserInfo(Uri.UnescapeDataString(a[..at]));
+        return (a[(at + 1)..], bu, bp);
+
+        static (string? User, string? Pass) SplitUserInfo(string info)
+        {
+            var split = info.IndexOf(':');
+            var user = split < 0 ? info : info[..split];
+            return (user.Length == 0 ? null : user, split < 0 ? null : info[(split + 1)..]);
+        }
     }
 
     /// <summary>The device-service URL(s) to try, in order. A full URL or an
     /// explicit host:port yields exactly one; a bare host yields :8000 then :80.</summary>
-    internal static string[] BuildCandidates(string address)
+    internal static string[] BuildCandidates(string address, IReadOnlyList<int>? probePorts = null)
     {
         var a = address.Trim();
         if (a.Contains("://", StringComparison.Ordinal))
@@ -103,13 +205,17 @@ public sealed class OnvifClient : IDisposable
             return new[] { baseUrl.Contains("/onvif/", StringComparison.OrdinalIgnoreCase)
                 ? baseUrl : $"{baseUrl}/onvif/device_service" };
         }
-        // Bare authority. An explicit ":port" is honoured as-is; a bare host tries
-        // Reolink's ONVIF port 8000 first, then falls back to port 80.
+        // Bare authority. An explicit ":port" is honoured as-is; a bare host walks
+        // the caller's port list (Reolink's 8000 then 80, unless told otherwise).
         var colon = a.LastIndexOf(':');
         bool explicitPort = colon > 0 && int.TryParse(a.AsSpan(colon + 1), out _);
         if (explicitPort)
             return new[] { $"http://{a}/onvif/device_service" };
-        return new[] { $"http://{a}:8000/onvif/device_service", $"http://{a}/onvif/device_service" };
+        return (probePorts is { Count: > 0 } ports ? ports : new[] { 8000, 80 })
+            .Select(p => p == 80
+                ? $"http://{a}/onvif/device_service"
+                : $"http://{a}:{p}/onvif/device_service")
+            .ToArray();
     }
 
     public void Dispose() => _http.Dispose();
@@ -121,11 +227,16 @@ public sealed class OnvifClient : IDisposable
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
+            // Not gated on _hasImaging: that flag records only a CONFIRMED yes, and
+            // treating its absence as "no imaging" would turn one timed-out probe
+            // into a camera with no picture settings for the rest of the run.
             if (!await EnsureDiscoveredAsync(ct).ConfigureAwait(false)) return null;
+            if (!await EnsureVideoSourceAsync(ct).ConfigureAwait(false)) return null;
             var xml = await CallAsync(_imagingUrl!, NsImaging, "GetImagingSettings",
                 $"<timg:VideoSourceToken>{Esc(_videoSourceToken!)}</timg:VideoSourceToken>", ct)
                 .ConfigureAwait(false);
             if (xml == null) return null;
+            _hasImaging = true; // a real answer: now it is confirmed
             return ParseImaging(xml, _ranges);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
@@ -147,7 +258,8 @@ public sealed class OnvifClient : IDisposable
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            if (!await EnsureDiscoveredAsync(ct).ConfigureAwait(false))
+            if (!await EnsureDiscoveredAsync(ct).ConfigureAwait(false)
+                || !await EnsureVideoSourceAsync(ct).ConfigureAwait(false))
                 throw new NotSupportedException("the camera's ONVIF imaging service is not reachable");
             var body = BuildSetImaging(_videoSourceToken!, _ranges,
                 brightness, contrast, saturation, sharpness, irCutFilter, wideDynamicRange);
@@ -158,6 +270,65 @@ public sealed class OnvifClient : IDisposable
         finally { _gate.Release(); }
     }
 
+    /// <summary>Reads the camera's clock and records how far it is from ours. Asked
+    /// without authentication — ONVIF answers this one call to anyone, precisely so
+    /// a client can learn the correction before its first authenticated request.
+    /// A camera that will not say leaves the correction as it was.</summary>
+    private async Task LearnClockAsync(CancellationToken ct)
+    {
+        _clockCheckedAt = DateTime.UtcNow;
+        var clock = await CallAsync(_deviceUrl, NsDevice, "GetSystemDateAndTime", "", ct,
+            authenticate: false).ConfigureAwait(false);
+        if (clock == null || ParseUtcTime(clock) is not { } cameraNow) return;
+        var skew = cameraNow - DateTime.UtcNow;
+        var previous = _clockSkew;
+        var corrects = Math.Abs(skew.TotalSeconds) > 5;
+        _clockSkew = corrects ? skew : TimeSpan.Zero;
+        // Said once when a correction starts, and again only if it has since moved a
+        // lot — an hourly re-read of a steadily drifting clock is not news each time.
+        if (corrects && (Math.Abs(previous.TotalSeconds) <= 5
+                         || Math.Abs((skew - previous).TotalSeconds) > 30))
+            Log.Info($"{_tag}: the camera's clock is {skew.TotalSeconds:0}s from this server's — " +
+                     "ONVIF requests are stamped in the camera's time so it accepts them.");
+    }
+
+    /// <summary>A camera with no working time sync keeps drifting, and a correction
+    /// learned at start-up is wrong a few weeks later. Re-read this often — one
+    /// small unauthenticated request, far cheaper than the silent auth failures a
+    /// stale correction produces.</summary>
+    private static readonly TimeSpan ClockRecheck = TimeSpan.FromHours(1);
+    private DateTime _clockCheckedAt;
+    private bool _emptyLogged;
+
+    /// <summary>The video source the imaging service is keyed on, fetched now if
+    /// discovery did not get it. Discovery succeeds as soon as the DEVICE service
+    /// answers, so a GetVideoSources that timed out during it would otherwise leave
+    /// the token null for the rest of the run — and a Reolink Lumus, whose only
+    /// picture settings are these, with none at all until Neolink restarts. Asking
+    /// again here costs one round trip, only while it is missing. Caller holds _gate.</summary>
+    private async Task<bool> EnsureVideoSourceAsync(CancellationToken ct)
+    {
+        if (_videoSourceToken != null) return true;
+        var sources = await CallAsync(_mediaUrl!, NsMedia, "GetVideoSources", "", ct).ConfigureAwait(false);
+        _videoSourceToken = VideoSourceToken(sources);
+        // GetVideoSources is a ver10 call; a camera that speaks only Media2 names
+        // its source inside each profile's VideoSource configuration instead. Only
+        // consulted once the camera is KNOWN to be Media2 — a ver10 camera whose
+        // GetVideoSources merely timed out must not start probing for a dialect it
+        // does not speak (a Reolink never reads its profiles here at all).
+        if (_videoSourceToken == null && _media2)
+            _videoSourceToken = _profiles?.Select(p => p.SourceToken).FirstOrDefault(t => t != null);
+        if (_videoSourceToken == null) return false;
+        if (_ranges == null)
+        {
+            var options = await CallAsync(_imagingUrl!, NsImaging, "GetOptions",
+                $"<timg:VideoSourceToken>{Esc(_videoSourceToken)}</timg:VideoSourceToken>", ct)
+                .ConfigureAwait(false);
+            if (options != null) _ranges = ParseRanges(options);
+        }
+        return true;
+    }
+
     // ------------------------------------------------------------ discovery
 
     private async Task<bool> EnsureDiscoveredAsync(CancellationToken ct)
@@ -165,26 +336,79 @@ public sealed class OnvifClient : IDisposable
         // Cached success is permanent for the run; a failure only pauses re-probing
         // for a cooldown (a camera rebooting during the first probe must not be
         // written off until Neolink restarts) — but not so often it stalls callers.
-        if (_ready) return true;
+        if (_ready)
+        {
+            if (_generic && DateTime.UtcNow - _clockCheckedAt > ClockRecheck)
+                await LearnClockAsync(ct).ConfigureAwait(false);
+            return true;
+        }
         if (DateTime.UtcNow < _retryAfter) return false;
         _lastError = null;
+        // Each CANDIDATE is bounded, not the list as a whole. Callers include the
+        // Home Assistant refresh and emergency mode, which walk every camera in
+        // turn, so an unreachable host must not hold them for a connect timeout per
+        // port. Budgeting the whole loop instead would be worse than not budgeting
+        // it: a first candidate that black-holes traffic would eat the lot and the
+        // second port would never be tried at all.
         try
         {
             // Try each candidate endpoint (Reolink ONVIF port 8000, then 80) until
-            // one yields a working imaging service.
+            // one answers its device service.
             foreach (var candidate in _candidates)
             {
+                ct.ThrowIfCancellationRequested();
+                using var probe = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                if (_generic) probe.CancelAfter(CandidateBudget);
                 _deviceUrl = candidate;
-                if (await TryDiscoverAsync(ct).ConfigureAwait(false))
+                bool ok;
+                try
                 {
-                    _ready = true;
-                    _failLogged = false; // a future outage warns again
+                    ok = await TryDiscoverAsync(probe.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    _lastError = $"no answer from {new Uri(candidate).Authority} within " +
+                                 $"{CandidateBudget.TotalSeconds:0}s";
+                    continue; // this port is not listening; the next one may be
+                }
+                if (!ok) continue;
+
+                _ready = true;
+                _failLogged = false; // a future outage warns again
+                if (!_generic)
+                {
+                    // A Reolink's picture fallback logs exactly what it always has.
                     Log.Info($"{_tag}: ONVIF imaging fallback ready (video source '{_videoSourceToken}'" +
                              $"{(_candidates.Length > 1 ? $" via {new Uri(candidate).Authority}" : "")})");
                     return true;
                 }
+                // Which services answered is the first thing anyone asks when a
+                // panel section is missing, so it goes in the one Info line.
+                var have = new List<string>();
+                if (_hasImaging) have.Add("imaging");
+                if (_eventsUrl != null) have.Add("events");
+                if (_videoSourceToken != null) have.Add($"video source '{_videoSourceToken}'");
+                Log.Info($"{_tag}: ONVIF ready at {new Uri(candidate).Authority} — " +
+                         (have.Count > 0 ? string.Join(", ", have) : "device service only"));
+                // A device that answers its service table and then offers nothing
+                // behind it is the case that used to be reported as an outright
+                // failure, complete with the advice that fixes it. Discovery now
+                // succeeds there (device information is still worth having), so
+                // the advice is given here — as what it is: there is no retry
+                // coming, and "unavailable, retrying in 5 min" right after "ready"
+                // would be wrong twice over.
+                if (have.Count == 0 && !_emptyLogged)
+                {
+                    _emptyLogged = true;
+                    Log.Info($"{_tag}: ONVIF answered but exposed no video source, so picture and " +
+                             "stream settings stay unavailable. If this camera should offer them, check " +
+                             "its ONVIF user has operator rights and its media service is enabled.");
+                }
+                return true;
             }
-            return Fail(_lastError ?? "the camera exposed no ONVIF video source");
+            return Fail(_lastError ?? (_generic
+                ? "the camera did not answer the ONVIF device service"
+                : "the camera exposed no ONVIF video source"));
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
@@ -193,30 +417,81 @@ public sealed class OnvifClient : IDisposable
         }
     }
 
-    /// <summary>One candidate endpoint's discovery: GetCapabilities → GetVideoSources
-    /// → GetOptions. Returns true only when a video-source token was obtained.</summary>
+    /// <summary>One candidate endpoint's discovery: the device's service table, plus
+    /// the video source the imaging service is keyed on. Succeeds as soon as the
+    /// DEVICE service answers — imaging, PTZ and the media profiles are each optional
+    /// and are read LAZILY by whoever wants them, so a Reolink camera (whose only use
+    /// of ONVIF is the picture-settings fallback) pays exactly the round trips it used
+    /// to and not one more.</summary>
     private async Task<bool> TryDiscoverAsync(CancellationToken ct)
     {
-        // 1. Device GetCapabilities → the Media and Imaging service URLs. Some
-        //    firmwares return absolute XAddrs on a different host/port; others
+        // 1. The device's service table. GetCapabilities is the Profile S call and
+        //    is what Reolink answers; GetServices is the ver10 replacement that
+        //    some third-party firmwares offer instead. Either is enough, and a
+        //    camera that answers neither is not speaking ONVIF here at all.
+        //    Some firmwares return absolute XAddrs on a different host/port; others
         //    return the conventional paths. Fall back to conventions on a miss.
+        // 0. The camera's clock, FIRST and unauthenticated — every request after
+        //    this one carries a timestamp the camera checks against its own.
+        //    Generic cameras only: a Reolink's picture fallback has always been
+        //    stamped in this server's time and has worked that way.
+        _clockSkew = TimeSpan.Zero;
+        if (_generic) await LearnClockAsync(ct).ConfigureAwait(false);
+
         var caps = await CallAsync(_deviceUrl, NsDevice, "GetCapabilities",
             "<tds:Category>All</tds:Category>", ct).ConfigureAwait(false);
-        _mediaUrl = NormalizeXAddr(ServiceXAddr(caps, "Media")) ?? Conventional("media_service");
-        _imagingUrl = NormalizeXAddr(ServiceXAddr(caps, "Imaging")) ?? Conventional("imaging");
+        var services = caps != null || !_generic ? null
+            : await CallAsync(_deviceUrl, NsDevice, "GetServices",
+                "<tds:IncludeCapability>false</tds:IncludeCapability>", ct).ConfigureAwait(false);
+        // A Reolink carries on to the conventional paths even when GetCapabilities
+        // said nothing, as it always has; its video source below is what decides.
+        if (_generic && caps == null && services == null) return false;
+
+        _mediaUrl = NormalizeXAddr(ServiceXAddr(caps, "Media") ?? ServiceXAddrByNs(services, NsMedia))
+                    ?? Conventional("media_service");
+        _imagingUrl = NormalizeXAddr(ServiceXAddr(caps, "Imaging") ?? ServiceXAddrByNs(services, NsImaging))
+                      ?? Conventional("imaging");
+        _ptzUrl = NormalizeXAddr(ServiceXAddr(caps, "PTZ") ?? ServiceXAddrByNs(services, NsPtz))
+                  ?? Conventional("ptz_service");
+        // The event service is the one thing here that is NOT assumed when the
+        // camera does not advertise it: subscribing against a guessed URL on a
+        // camera with no events would mean a reconnect loop against a 404 forever.
+        _eventsUrl = NormalizeXAddr(ServiceXAddr(caps, "Events") ?? ServiceXAddrByNs(services, NsEvents));
+        // Not guessed either: a camera that does not advertise analytics has no grid
+        // of its own, and a guessed URL would only turn that lasting answer into a
+        // timeout that reads as "ask again".
+        _analyticsUrl = NormalizeXAddr(ServiceXAddr(caps, "Analytics") ?? ServiceXAddrByNs(services, NsAnalytics));
 
         // 2. Media GetVideoSources → the token the imaging service is keyed on.
+        //    This is the one call besides the service table that every user of this
+        //    client needs, so it stays in discovery.
         var sources = await CallAsync(_mediaUrl, NsMedia, "GetVideoSources", "", ct).ConfigureAwait(false);
         _videoSourceToken = VideoSourceToken(sources);
-        if (_videoSourceToken == null) return false;
+        // For a Reolink the picture fallback IS the use of ONVIF, and it is keyed on
+        // the video source: without one there is nothing to be ready for. Failing
+        // here keeps the cooldown and the next port's turn, exactly as before — a
+        // port that half-proxies ONVIF must not be settled on for the whole run.
+        if (!_generic && _videoSourceToken == null) return false;
 
         // 3. Imaging GetOptions → accepted ranges, so 0-255 UI values scale to the
-        //    camera's native units (and back). Optional: without it we pass values
-        //    through unscaled.
-        var options = await CallAsync(_imagingUrl, NsImaging, "GetOptions",
-            $"<timg:VideoSourceToken>{Esc(_videoSourceToken)}</timg:VideoSourceToken>", ct)
-            .ConfigureAwait(false);
-        _ranges = ParseRanges(options);
+        //    camera's native units (and back). Optional: without it values pass
+        //    through unscaled, which is what a Reolink on 0-255 wants anyway.
+        //
+        //    A failure here is NOT recorded as "this camera has no imaging". One
+        //    timeout would otherwise leave a Lumus without picture settings for the
+        //    rest of the run; the imaging calls simply try, and a camera that has
+        //    none answers nothing, exactly as before.
+        if (_videoSourceToken != null)
+        {
+            var options = await CallAsync(_imagingUrl, NsImaging, "GetOptions",
+                $"<timg:VideoSourceToken>{Esc(_videoSourceToken)}</timg:VideoSourceToken>", ct)
+                .ConfigureAwait(false);
+            if (options != null) _hasImaging = true;
+            // A Reolink keeps whatever this read gave, even nothing, exactly as it
+            // always did; a generic camera leaves the ranges unset so that a later
+            // imaging call can ask again.
+            if (options != null || !_generic) _ranges = ParseRanges(options);
+        }
         return true;
     }
 
@@ -227,7 +502,15 @@ public sealed class OnvifClient : IDisposable
     private bool Fail(string reason)
     {
         _retryAfter = DateTime.UtcNow + RetryCooldown;
-        if (!_failLogged)
+        Advise(reason);
+        return false;
+    }
+
+    /// <summary>The one breadcrumb a user gets for why a camera's settings are
+    /// missing, logged once per outage with the two things that actually fix it.</summary>
+    private void Advise(string reason)
+    {
+        if (!_failLogged && !_generic)
         {
             _failLogged = true;
             Log.Info($"{_tag}: ONVIF imaging fallback unavailable — {reason}. If this camera has no Reolink " +
@@ -235,10 +518,26 @@ public sealed class OnvifClient : IDisposable
                      "ONVIF/Port Settings), and if ONVIF is on a non-standard port set 'onvif_address' " +
                      $"(e.g. \"{new Uri(_deviceUrl).Host}:8000\"). Retrying in {RetryCooldown.TotalMinutes:0} min.");
         }
-        return false;
+        else if (!_failLogged)
+        {
+            _failLogged = true;
+            Log.Info($"{_tag}: ONVIF unavailable — {reason}. Check that ONVIF is enabled on the camera " +
+                     "(a Reolink: app > Settings > Network > Advanced > ONVIF/Port Settings; anything else: " +
+                     "its own web page), and if ONVIF is on a non-standard port set 'onvif_address' " +
+                     $"(e.g. \"{new Uri(_deviceUrl).Host}:8899\"). Without it the camera streams and records " +
+                     $"normally but shows no settings. Retrying in {RetryCooldown.TotalMinutes:0} min.");
+        }
     }
 
     private static readonly TimeSpan RetryCooldown = TimeSpan.FromMinutes(5);
+
+    /// <summary>Ceiling on discovering ONE candidate endpoint. Generous enough for a
+    /// slow camera to answer its handful of discovery calls; short enough that a port
+    /// which silently drops packets gives way to the next candidate.</summary>
+    private static readonly TimeSpan CandidateBudget = TimeSpan.FromSeconds(10);
+
+    /// <summary>How long discovery holds off after a reboot this client asked for.</summary>
+    private static readonly TimeSpan AfterReboot = TimeSpan.FromSeconds(45);
 
     private string Conventional(string leaf)
     {
@@ -264,43 +563,85 @@ public sealed class OnvifClient : IDisposable
 
     // ------------------------------------------------------------ SOAP transport
 
+    /// <param name="timeout">Overrides the default per-request ceiling. The event
+    /// service's PullMessages deliberately asks the camera to HOLD the request until
+    /// something happens, so it needs longer than a settings read ever should.</param>
+    /// <param name="wsaAction">When set, WS-Addressing To/Action headers are added.
+    /// A subscription manager is addressed that way rather than by URL alone, and
+    /// cameras that implement the notification spec strictly refuse without them.</param>
+    /// <param name="authenticate">False sends no WS-Security header at all. Only the
+    /// clock read uses it: it exists to learn the correction every OTHER request
+    /// needs, so it cannot itself carry a timestamp the camera might reject.</param>
     private async Task<XElement?> CallAsync(string url, string opNamespace, string op, string innerBody,
-        CancellationToken ct)
+        CancellationToken ct, TimeSpan? timeout = null, string? wsaAction = null, bool authenticate = true) =>
+        (await SendAsync(url, opNamespace, op, innerBody, ct, timeout, wsaAction, authenticate)
+            .ConfigureAwait(false)).Root;
+
+    /// <summary><see cref="CallAsync"/> with the HTTP status beside the reply: 0 when
+    /// nothing came back at all (unreachable, timed out). The difference between "the
+    /// camera said no" and "the camera could not be asked" is a lasting answer in one
+    /// case and a reason to ask again in the other, and only the caller knows which
+    /// matters. Returned rather than kept in a field: the event loop calls in here
+    /// without the gate, so a field could be overwritten between write and read.</summary>
+    private async Task<(XElement? Root, int Status)> SendAsync(string url, string opNamespace, string op,
+        string innerBody, CancellationToken ct, TimeSpan? timeout = null, string? wsaAction = null,
+        bool authenticate = true)
     {
         var nonce = RandomNumberGenerator.GetBytes(16);
-        var security = BuildSecurity(_username, _password, nonce, DateTime.UtcNow);
-        var prefix = op.StartsWith("GetCapabilities", StringComparison.Ordinal) ? "tds"
-            : opNamespace == NsMedia ? "trt"
+        // Stamped in the CAMERA's clock, not ours. The digest is only accepted
+        // inside a few seconds of the camera's own time, and an IP camera with no
+        // working NTP drifting by a minute would otherwise reject every request —
+        // which reads as "wrong password" and leaves the whole panel empty.
+        var security = authenticate
+            ? BuildSecurity(_username, _password, nonce, DateTime.UtcNow + _clockSkew)
+            : "";
+        var prefix = opNamespace == NsMedia ? "trt"
+            : opNamespace == NsMedia2 ? "tr2"
             : opNamespace == NsImaging ? "timg"
+            : opNamespace == NsPtz ? "tptz"
+            : opNamespace == NsEvents ? "tev"
+            : opNamespace == NsWsnt ? "wsnt"
+            : opNamespace == NsAnalytics ? "tan"
             : "tds";
+        // Sent WITHOUT mustUnderstand. A camera that implements WS-Addressing reads
+        // these either way; one that does not would be obliged by mustUnderstand to
+        // FAULT the whole request over headers it could otherwise have ignored —
+        // turning "works, loosely" into "no events at all".
+        var addressing = wsaAction == null ? "" :
+            $"<wsa:To xmlns:wsa=\"{NsWsa}\">{Esc(url)}</wsa:To>" +
+            $"<wsa:Action xmlns:wsa=\"{NsWsa}\">{Esc(wsaAction)}</wsa:Action>";
         var envelope =
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" +
             $"<s:Envelope xmlns:s=\"{NsSoap}\">" +
-            $"<s:Header>{security}</s:Header>" +
+            $"<s:Header>{security}{addressing}</s:Header>" +
             $"<s:Body><{prefix}:{op} xmlns:{prefix}=\"{opNamespace}\" xmlns:tt=\"{NsSchema}\">" +
             innerBody +
             $"</{prefix}:{op}></s:Body></s:Envelope>";
 
+        var limit = timeout ?? RequestTimeout;
         using var content = new StringContent(envelope, Encoding.UTF8, "application/soap+xml");
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(limit);
         HttpResponseMessage res;
         try
         {
-            res = await _http.PostAsync(url, content, ct).ConfigureAwait(false);
+            res = await _http.PostAsync(url, content, deadline.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-        catch (OperationCanceledException) { _lastError = $"{op}: no reply within {RequestTimeout.TotalSeconds:0}s ({url})"; return null; }
-        catch (Exception ex) { _lastError = $"{op}: {ex.Message} ({url})"; return null; }
+        catch (OperationCanceledException) { _lastError = $"{op}: no reply within {limit.TotalSeconds:0}s ({url})"; return (null, 0); }
+        catch (Exception ex) { _lastError = $"{op}: {ex.Message} ({url})"; return (null, 0); }
         using (res)
         {
-            var text = await res.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            var status = (int)res.StatusCode;
+            var text = await res.Content.ReadAsStringAsync(deadline.Token).ConfigureAwait(false);
             if (!res.IsSuccessStatusCode)
             {
                 // A SOAP fault body carries the reason (often an auth message).
-                _lastError = $"{op} → HTTP {(int)res.StatusCode}: {SoapFaultReason(text) ?? Truncate(text, 200)}";
-                return null;
+                _lastError = $"{op} → HTTP {status}: {SoapFaultReason(text) ?? Truncate(text, 200)}";
+                return (null, status);
             }
-            try { return XDocument.Parse(text).Root; }
-            catch (System.Xml.XmlException) { _lastError = $"{op}: malformed reply"; return null; }
+            try { return (XDocument.Parse(text).Root, status); }
+            catch (System.Xml.XmlException) { _lastError = $"{op}: malformed reply"; return (null, status); }
         }
     }
 

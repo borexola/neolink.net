@@ -117,6 +117,12 @@ public sealed class StreamHub : IStreamHub, IMediaSink
     /// <summary>True once codec parameters have been learned (DESCRIBE/init can be answered).</summary>
     public bool VideoReady => _videoReady.Task.IsCompletedSuccessfully;
 
+    /// <inheritdoc/>
+    public bool HasBufferedGop
+    {
+        get { lock (_castGate) return _gopOpen && _gop.Count > 0; }
+    }
+
     // ------------------------------------------------------------------ publish
 
     public void PublishInfo(MediaInfo info)

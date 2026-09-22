@@ -49,6 +49,38 @@ The **PORTS tab** shows the camera's own service switches (HTTP, HTTPS,
 RTSP, ONVIF…) read live, and can enable HTTP/ONVIF right from Neolink
 (admin only, behind a confirmation).
 
+**Non-Reolink (generic RTSP) cameras** get the same panel, built over
+**ONVIF** instead: model/firmware/serial on the identity strip, the media
+profiles' resolution/framerate/bitrate (over Media or the newer Media2), the
+imaging sliders with day/night, pan/tilt with saved presets (only when the
+head really pans and tilts), an optical-zoom slider, where the name and
+timestamp overlays sit, and reboot. Their **detections** come over ONVIF's event service, so event
+recording, notifications, the events page and Home Assistant's motion sensors
+all work for them too.
+Each section appears only if that camera's ONVIF services answer for
+it; what ONVIF cannot do is left out rather than offered and refused (it can
+move an overlay but not switch it off, and there is no ONVIF hue,
+anti-flicker, flip/mirror, HDR or single focus slider). There is no PORTS tab — that table is
+Baichuan's. A camera with ONVIF switched off still streams and records; its
+panel just shows less. See the README for where ONVIF is looked for and how
+to point it somewhere else.
+
+### Detection zone
+
+Every camera has one, behind **Edit zone…**: drag boxes over the camera's
+own picture to mark what is worth watching, in Block or Watch mode, then
+apply. Where it is KEPT depends on the camera and the editor says which —
+**on the camera** for a Reolink with its HTTP API (the same grid the Reolink
+app edits, governing the camera's own motion and AI alarms) and for a
+non-Reolink camera whose ONVIF analytics runs a cell motion detector (its own
+motion grid, which governs its motion alarms only), or **on Neolink** for any
+camera that keeps no zone of its own (generic RTSP without such a detector,
+and Reolink models whose firmware carries no grid). A Neolink-kept zone writes
+nothing to the camera and leaves its own alerts alone; it governs what
+Neolink watches — today, the live object boxes. Cameras with no snapshot
+command of their own get the editor's backdrop from the stream Neolink is
+already carrying, decoded with ffmpeg.
+
 ## Events, timeline, export
 
 - New events land in a **review strip** at the top; the Events page keeps the

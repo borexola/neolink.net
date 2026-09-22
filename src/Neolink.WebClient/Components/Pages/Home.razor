@@ -1793,8 +1793,11 @@
                                     <div class="control-row"><span>@T["Sub RTSP URL (optional)"]</span>
                                         <input class="notif-input" placeholder="rtsp://…" @bind="e.RtspSub" @bind:event="oninput" /></div>
                                     @if (CamRtspError != null) { <div class="field-error">@CamRtspError</div> }
+                                    <div class="control-row"><span>@T["ONVIF address (blank = derived)"]</span>
+                                        <input class="notif-input" placeholder="@T["usually blank"]" @bind="e.OnvifAddress" /></div>
                                     <div class="notice small">
                                         @((MarkupString)T["Put credentials inside the URL (rtsp://user:pass@host/path). A stored password shows as <b>****</b> — leave the URL untouched to keep it."])
+                                        <text> </text>@((MarkupString)T["The camera's settings — model, picture, streams, pan/tilt, overlays — are read over <b>ONVIF</b>, found on the stream URL's own host unless you give an address here. Use a full URL (<b>http://user:pass@host:8000/onvif/device_service</b>) if its ONVIF login differs from the streaming one."])
                                     </div>
                                 }
                                 @* Applies to both camera kinds, so it sits outside the branches. *@
@@ -5163,7 +5166,11 @@
         // save-only (the test has no use for them), except "record" which suits both.
         uid = e.Type == "reolink" ? e.Uid.Trim() : null,
         udp = e.Type == "reolink" ? e.Udp : (bool?)null,
-        onvifAddress = forSave && e.Type == "reolink" ? e.OnvifAddress.Trim() : null,
+        // Both camera kinds: on a Reolink it overrides where the picture-settings
+        // fallback looks, on a generic one where ALL its settings come from.
+        // Sent on the TEST too for a generic camera: the test reports whether its
+        // settings will be reachable, which depends on this field.
+        onvifAddress = forSave || e.Type == "rtsp" ? e.OnvifAddress.Trim() : null,
         alwaysOn = forSave && e.Type == "reolink" ? e.AlwaysOn : null,
         stream = forSave && e.Type == "reolink" ? e.Stream : null,
         udpProbe = forSave && e.Type == "reolink" ? e.UdpProbe : (bool?)null,
