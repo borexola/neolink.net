@@ -497,6 +497,61 @@ public static class SelfTest
             finally { File.Delete(tmpJson); File.Delete(tmpToml); }
         });
 
+        Test("wake hints: trust window defaults, JSON/TOML parsing and expiry", () =>
+        {
+            foreach (var ext in new[] { "json", "toml" })
+            {
+                var path = Path.Combine(Path.GetTempPath(), $"neolink-trust-{Guid.NewGuid():N}.{ext}");
+                NeolinkConfig Load(string? value, bool section = true)
+                {
+                    File.WriteAllText(path, ext == "json"
+                        ? section ? "{\"wake_hints\":{" + (value == null ? "" : "\"trust_hours\":" + value) + "}}" : "{}"
+                        : section ? "[wake_hints]\n" + (value == null ? "" : "trust_hours = " + value) : "");
+                    return NeolinkConfig.Load(path);
+                }
+                try
+                {
+                    Assert(Load(null, section: false).WakeHints == null, "absent section stays disabled");
+                    AssertEq(Load(null).WakeHints!.TrustHours, 2d);
+                    foreach (var hours in new[] { 2d, 72d, 0.5d })
+                    {
+                        var config = Load(hours.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                        AssertEq(config.WakeHints!.TrustHours, hours);
+                        var service = new Streaming.CameraService(new CameraConfig { Name = "trust", Username = "admin" },
+                            Protocol.StreamKind.Main, new Streaming.StreamHub("trust"), TimeSpan.Zero,
+                            TimeSpan.FromHours(config.WakeHints.TrustHours));
+                        long hint = new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc).Ticks;
+                        long expiry = hint + TimeSpan.FromHours(hours).Ticks;
+                        Assert(!service.IsHintTrusted(0, hint), "no hint after startup -> scan-only");
+                        Assert(service.IsHintTrusted(hint, expiry - 1), "trusted until the configured boundary");
+                        Assert(!service.IsHintTrusted(hint, expiry), "expires exactly at the boundary");
+                        Assert(!service.IsHintTrusted(hint, expiry + 1), "expired -> scan-only fallback");
+                        Assert(service.IsHintTrusted(expiry, expiry + 1), "a new hint refreshes trust");
+                        AssertEq(service.IsHintTrusted(hint, hint + TimeSpan.FromHours(3).Ticks), hours == 72);
+                    }
+                    foreach (var value in new[] { "0", "-1", "1e100", "1e-100", "\"72\"", "true" })
+                    {
+                        bool rejected = false;
+                        try { Load(value); } catch (FormatException) { rejected = true; }
+                        Assert(rejected, $"{ext}: invalid trust_hours {value} rejected");
+                    }
+                    if (ext == "toml")
+                        foreach (var value in new[] { "nan", "inf", "-inf" })
+                        {
+                            bool rejected = false;
+                            try { Load(value); } catch (FormatException) { rejected = true; }
+                            Assert(rejected, $"non-finite trust_hours {value} rejected");
+                        }
+                }
+                finally { File.Delete(path); }
+            }
+            var defaultService = new Streaming.CameraService(new CameraConfig { Name = "default", Username = "admin" },
+                Protocol.StreamKind.Main, new Streaming.StreamHub("default"), TimeSpan.Zero);
+            long t0 = DateTime.UtcNow.Ticks;
+            Assert(defaultService.IsHintTrusted(t0, t0 + TimeSpan.FromMinutes(119).Ticks), "default trusts for 2 h");
+            Assert(!defaultService.IsHintTrusted(t0, t0 + TimeSpan.FromHours(2).Ticks), "default expires at 2 h");
+        });
+
         Test("timeline bookmarks: store round-trip, validation, corrupt-file survival", () =>
         {
             var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-bm-{Guid.NewGuid():N}");

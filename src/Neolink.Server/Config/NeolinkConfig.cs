@@ -290,6 +290,11 @@ public sealed class NeolinkConfig
         {
             switch (Key(prop.Name))
             {
+                case "trusthours":
+                    if (prop.Value.ValueKind != JsonValueKind.Number || !prop.Value.TryGetDouble(out var hours))
+                        throw new FormatException("wake_hints.trust_hours must be a number");
+                    wh.TrustHours = hours;
+                    break;
                 case "syslogport" or "port": wh.SyslogPort = prop.Value.GetInt32(); break;
                 case "pushports" or "pushport":
                     // A list or a single number, whichever the user reached for.
@@ -359,6 +364,10 @@ public sealed class NeolinkConfig
             {
                 SyslogPort = (int)(MiniToml.GetInt(wh, "syslog_port") ?? MiniToml.GetInt(wh, "port") ?? 5140),
                 Bind = MiniToml.GetString(wh, "bind"),
+                TrustHours = wh.ContainsKey("trust_hours")
+                    ? MiniToml.GetDouble(wh, "trust_hours")
+                        ?? throw new FormatException("wake_hints.trust_hours must be a number")
+                    : WakeHintConfig.DefaultTrustHours,
             };
             foreach (var p in MiniToml.GetStringList(wh, "push_ports") ?? new List<string>())
                 if (int.TryParse(p, out var port)) config.WakeHints.PushPorts.Add(port);
@@ -712,6 +721,11 @@ public sealed class NeolinkConfig
 
         if (WakeHints != null)
         {
+            // Reject non-finite, non-positive and overflowing durations at load time.
+            if (!double.IsFinite(WakeHints.TrustHours) || WakeHints.TrustHours <= 0
+                || WakeHints.TrustHours >= TimeSpan.MaxValue.TotalHours
+                || TimeSpan.FromHours(WakeHints.TrustHours) == TimeSpan.Zero)
+                throw new FormatException("wake_hints.trust_hours must be positive, finite and representable as a TimeSpan");
             if (WakeHints.SyslogPort is < 0 or > 65535)
                 throw new FormatException("wake_hints.syslog_port must be 0 (off) .. 65535");
             foreach (var p in WakeHints.PushPorts)
@@ -826,6 +840,10 @@ public sealed class MqttConfig
 /// for both recipes.</summary>
 public sealed class WakeHintConfig
 {
+    public const double DefaultTrustHours = 2;
+    /// <summary>Hours to trust each camera's last wake hint before scan-only
+    /// connects resume. Positive fractional hours are supported.</summary>
+    public double TrustHours { get; set; } = DefaultTrustHours;
     /// <summary>UDP port to receive the router's remote syslog (filterlog) on.
     /// 5140 by convention — 514 needs elevated privileges on most systems.
     /// 0 turns the syslog listener off (push_ports may still run).</summary>

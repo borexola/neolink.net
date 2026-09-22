@@ -113,6 +113,7 @@
   //    filterlog) here; the camera's TCP/443 call is the signal. 0 = off.
   // "wake_hints": {
   //   "syslog_port": 5140,             // UDP port to receive the router's syslog on
+  //   "trust_hours": 2,               // hours since last hint; e.g. 72 for infrequent events
   //   "push_ports": [8443, 53]         // decoy push service (NAT-redirect mode; use [443, 53] for a DNS override)
   // },
 
