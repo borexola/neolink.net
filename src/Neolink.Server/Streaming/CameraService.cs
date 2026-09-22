@@ -422,6 +422,11 @@ public sealed class CameraService : ILiveCameraSource
     internal bool IsHintTrusted(long hintTicks, long nowTicks) =>
         hintTicks != 0 && nowTicks - hintTicks < _hintTrustWindow.Ticks;
 
+    // Log wording for the hint age and trust window: minutes read best up to two
+    // hours, but a 72 h window as "4320 min" does not.
+    internal static string Span(TimeSpan t) =>
+        t.TotalHours < 2 ? $"{t.TotalMinutes:0} min" : $"{t.TotalHours:0.#} h";
+
     // A wake-opened session waiting for its detection (see WakeSessionLinger).
     // Anchored to the LATER of connect time and the last router hint: the camera
     // calling the push service again mid-session means another event just fired,
@@ -678,10 +683,10 @@ public sealed class CameraService : ILiveCameraSource
                                     var hintAge = DateTime.UtcNow -
                                         new DateTime(System.Threading.Interlocked.Read(ref _hintTicks), DateTimeKind.Utc);
                                     Log.Info($"{Tag}: ping went flat (a scan-only build would call this a wake) " +
-                                             $"but the router — which reported an event push {hintAge.TotalMinutes:0} min " +
+                                             $"but the router — which reported an event push {Span(hintAge)} " +
                                              "ago — saw no push now: treating it as the camera's housekeeping wake and " +
                                              "staying parked; a wake hint connects us the moment a real event fires " +
-                                             $"(scan-only connects resume if no hint arrives for {_hintTrustWindow.TotalMinutes:0} min)");
+                                             $"(scan-only connects resume if no hint arrives for {Span(_hintTrustWindow)})");
                                     rtt = new WakeRttDetector { ArmThreshold = rtt.ArmThreshold };
                                     continue;
                                 }

@@ -19,6 +19,12 @@ in the README). Paste the matching section below into the GitHub release.
 
 - **The Camera settings tab no longer disappears.** It used to be taken away once the camera answered "I have no controls", which is what a generic RTSP camera answered. Every camera now has at least a detection zone to edit, so the tab stays. The **Ports** tab, which reads a table only Reolink cameras have, is now held back until the camera has answered and is not offered on a non-Reolink one at all.
 - Generic RTSP cameras show their address on the settings panel's identity strip, lifted out of the stream URL (never the login).
+- **The wake-hint trust window is configurable, and in the web UI.** How long a battery camera's last router hint keeps its hint-less wakes filed as housekeeping used to be a fixed 2 hours, which a quiet camera outlived most nights, falling back to connecting on every housekeeping wake. `wake_hints.trust_hours` sets it (thanks to @dragners, #57), and **Server settings → General → Wake hints** now has a field for it, with a warning past 24 hours: a longer window also means a broken hint source goes unnoticed for longer. The default stays 2 hours. The log names long windows in hours rather than "4320 min".
+- **Router wake hints can reach the Home Assistant add-on** (experimental). The add-on only published RTSP and the web UI, so a router's syslog or push-decoy hints had nowhere to land and only HTTP hints worked. It now declares `5140/udp` (syslog) and `8443/tcp` (push decoy), both **off** until you give them a host port in the add-on's Network section, so nothing new is exposed on an existing install. The add-on's documentation walks through the setup. The beta add-on still publishes no ports.
+
+### Fixed
+
+- **Clearing wake hints in Server settings no longer turns the syslog listener back on.** Emptying every hint source removes the section, but a `trust_hours` left behind kept it alive, and a section with no ports reads as syslog on 5140. A section holding only the trust window now counts as empty, and setting the window with no hint source is refused with a message saying what to set first.
 
 ## 1.0.9
 

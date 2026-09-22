@@ -1,6 +1,7 @@
 ﻿// Copyright (c) 2026 Oluwabori Olaleye
 // Licensed under the GNU Affero General Public License v3.0; see the LICENSE file
 // in the repository root.
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -113,6 +114,11 @@ public static class ConfigEditor
                     syslogPort = cfg.WakeHints.SyslogPort,
                     pushPorts = string.Join(", ", cfg.WakeHints.PushPorts),
                     bind = cfg.WakeHints.Bind,
+                    // The default reads as blank, like the other "blank = …" fields;
+                    // an explicit 2 is the same setting.
+                    trustHours = cfg.WakeHints.TrustHours == WakeHintConfig.DefaultTrustHours
+                        ? (double?)null
+                        : cfg.WakeHints.TrustHours,
                 },
             },
         };
@@ -193,6 +199,50 @@ public static class ConfigEditor
             obj.Remove(existing);
         if (value != null)
             obj[key] = value;
+    }
+
+    /// <summary>True when a wake_hints section holds nothing but trust_hours (any
+    /// spelling), or nothing at all. The loader reads such a section as "syslog on
+    /// 5140", which nobody who only tuned the trust window asked for.</summary>
+    public static bool OnlyTrustHoursLeft(JsonObject wakeHints) =>
+        wakeHints.All(kv => kv.Key.Replace("_", "").Replace("-", "").ToLowerInvariant() == "trusthours");
+
+    /// <summary>Applies the settings page's wake-hint edit to the config root. Null
+    /// fields are untouched; empty push ports / bind / trust hours remove those keys
+    /// (the trust window then falls back to its default). Range checks are left to
+    /// the loader's validation of the candidate. Throws <see cref="FormatException"/>
+    /// on a bad port list or trust value, or when a trust window is set with no
+    /// hint source for it to tune.</summary>
+    public static void ApplyWakeHintEdit(JsonObject root, int? syslogPort, string? pushPorts, string? bind,
+        string? trustHours)
+    {
+        if (syslogPort == null && pushPorts == null && bind == null && trustHours == null) return;
+        double? trust = null;
+        if (!string.IsNullOrWhiteSpace(trustHours))
+            trust = double.TryParse(trustHours.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var h)
+                ? h
+                : throw new FormatException("wake_hints.trust_hours must be a number");
+        var wh = Section(root, "wake_hints");
+        if (syslogPort != null) Set(wh, "syslog_port", syslogPort);
+        if (pushPorts != null)
+        {
+            var ports = ParsePortList(pushPorts);
+            Set(wh, "push_ports", ports.Count == 0
+                ? null
+                : new JsonArray(ports.Select(p => (JsonNode)p).ToArray()));
+        }
+        if (bind != null) Set(wh, "bind", bind.Length == 0 ? null : bind);
+        if (trustHours != null) Set(wh, "trust_hours", trust);
+        // An empty section would quietly enable the syslog default (5140); an
+        // all-cleared edit means "no wake hints" instead. trust_hours tunes the
+        // listeners but is not one, so a section holding only it counts as empty.
+        if (OnlyTrustHoursLeft(wh))
+        {
+            if (trust != null)
+                throw new FormatException("The hint trust window needs a hint source: set a router " +
+                                          "syslog port (0 = API hints only) or push decoy ports.");
+            Set(root, "wake_hints", null);
+        }
     }
 
     /// <summary>The (possibly differently-spelled) child object for a section, created on demand.</summary>

@@ -685,6 +685,8 @@
  "Resumed — Neolink.NET is reconnecting to this camera.": "Hervat — Neolink.NET verbindt opnieuw met deze camera.",
  "Right (hold)": "Rechts (vasthouden)",
  "Router syslog UDP port (0 = off)": "Syslog-UDP-poort van de router (0 = uit)",
+ "Hint trust window, hours (blank = 2)": "Vertrouwensvenster voor hints, uren (leeg = 2)",
+ "While a camera has sent a hint in the last {0} h, its wakes without one are treated as housekeeping and skipped. If the hint source breaks, events can go unrecorded for up to that long before scan-only connects take over again.": "Zolang een camera in de afgelopen {0} u een hint heeft gestuurd, worden zijn ontwakingen zonder hint als onderhoud behandeld en overgeslagen. Valt de hintbron uit, dan kunnen gebeurtenissen tot zo lang onopgenomen blijven voordat verbindingen op basis van alleen scans het weer overnemen.",
  "SAVED LAYOUTS": "OPGESLAGEN INDELINGEN",
  "SD card": "SD-kaart",
  "SECURE THIS SERVER": "DEZE SERVER BEVEILIGEN",

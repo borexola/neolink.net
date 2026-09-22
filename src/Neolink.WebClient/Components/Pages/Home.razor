@@ -1613,6 +1613,16 @@
                             AdminPushPortsError())
                         @AdminField(T["Listener bind (blank = server bind)"], "wakeHints.bind", "text",
                             AdminIpError("wakeHints.bind"))
+                        @AdminField(T["Hint trust window, hours (blank = 2)"], "wakeHints.trustHours", "number",
+                            AdminTrustHoursError())
+                        @if (AdminTrustHoursError() == null
+                             && AdminTrustHours() is { } trustH && trustH > 24)
+                        {
+                            <div class="field-warn">
+                                @T.F("While a camera has sent a hint in the last {0} h, its wakes without one are treated as housekeeping and skipped. If the hint source breaks, events can go unrecorded for up to that long before scan-only connects take over again.",
+                                    $"{trustH:0.#}")
+                            </div>
+                        }
                     </div>
 
                     <div class="campanel-section">
@@ -5369,6 +5379,29 @@
         return seen > 16 ? "At most 16 ports." : null;
     }
 
+    // A number input always submits "." decimals, whatever the page language.
+    private double? AdminTrustHours() =>
+        double.TryParse(AdminValue("wakeHints.trustHours").Trim(), System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out var h) && double.IsFinite(h) ? h : null;
+
+    private string? AdminTrustHoursError()
+    {
+        // Blank = the 2 h default (saving it removes the key).
+        var v = AdminValue("wakeHints.trustHours").Trim();
+        if (v.Length == 0) return null;
+        if (AdminTrustHours() is not { } d) return "Enter a number of hours.";
+        if (d <= 0) return "Must be more than 0.";
+        // The window only tunes a hint source; saved alone, the section would
+        // switch the syslog listener on at its default port. Only a CHANGED window
+        // is held to that: the file's own value must not block an edit that clears
+        // the sources (that save drops the section, window included).
+        if (v != AdminRawValue("wakeHints.trustHours").Trim()
+            && AdminValue("wakeHints.syslogPort").Trim().Length == 0
+            && AdminValue("wakeHints.pushPorts").Trim().Length == 0)
+            return "Set a syslog port (0 = API hints only) or push ports first.";
+        return null;
+    }
+
     private string? AdminTrickleError()
     {
         var v = AdminValue("ui.trickleSpeed").Trim();
@@ -5392,7 +5425,7 @@
         ?? AdminIntError("webPort", 1, 65535) ?? AdminPortsClashError() ?? AdminWebBindError()
         ?? AdminTrickleError()
         ?? AdminIntError("wakeHints.syslogPort", 1, 65535, alsoAllowed: 0)
-        ?? AdminPushPortsError() ?? AdminIpError("wakeHints.bind")
+        ?? AdminPushPortsError() ?? AdminIpError("wakeHints.bind") ?? AdminTrustHoursError()
         ?? AdminIntError("recording.retentionDays", 0, 36500)
         ?? AdminIntError("recording.preSeconds", 0, 30)
         ?? AdminIntError("recording.postSeconds", 1, 120)
@@ -5622,6 +5655,8 @@
                 case "wakeHints.syslogPort": wake["syslogPort"] = Int(path); break;
                 case "wakeHints.pushPorts": wake["pushPorts"] = AdminValue(path); break;
                 case "wakeHints.bind": wake["bind"] = AdminValue(path); break;
+                // As text, like pushPorts: blank must reach the server to remove the key.
+                case "wakeHints.trustHours": wake["trustHours"] = AdminValue(path).Trim(); break;
             }
         }
         if (ui.Count > 0) payload["ui"] = ui;

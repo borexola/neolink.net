@@ -552,6 +552,84 @@ public static class SelfTest
             Assert(!defaultService.IsHintTrusted(t0, t0 + TimeSpan.FromHours(2).Ticks), "default expires at 2 h");
         });
 
+        Test("wake hints: a section left with only trust_hours counts as empty; log spans read in hours", () =>
+        {
+            System.Text.Json.Nodes.JsonObject Obj(string json) =>
+                System.Text.Json.Nodes.JsonNode.Parse(json)!.AsObject();
+            // Loaded alone, such a section would switch syslog on at 5140.
+            Assert(ConfigEditor.OnlyTrustHoursLeft(Obj("{}")), "empty section");
+            Assert(ConfigEditor.OnlyTrustHoursLeft(Obj("{\"trust_hours\":72}")), "trust_hours alone");
+            Assert(ConfigEditor.OnlyTrustHoursLeft(Obj("{\"trustHours\":72}")), "any spelling");
+            Assert(!ConfigEditor.OnlyTrustHoursLeft(Obj("{\"trust_hours\":72,\"syslog_port\":0}")),
+                "API-only hints keep the section");
+            Assert(!ConfigEditor.OnlyTrustHoursLeft(Obj("{\"trust_hours\":72,\"push_ports\":[8443]}")), "push ports");
+            Assert(!ConfigEditor.OnlyTrustHoursLeft(Obj("{\"bind\":\"10.0.0.2\"}")), "bind alone is the syslog default");
+
+            // The settings page's save path (values arrive as the text typed).
+            bool Refused(Action edit)
+            {
+                try { edit(); return false; } catch (FormatException) { return true; }
+            }
+            var root = Obj("{\"wake_hints\":{\"push_ports\":[8443]}}");
+            ConfigEditor.ApplyWakeHintEdit(root, null, null, null, "72");
+            AssertEq(root["wake_hints"]!["trust_hours"]!.GetValue<double>(), 72d);
+            ConfigEditor.ApplyWakeHintEdit(root, null, "", null, null);
+            Assert(root["wake_hints"] == null, "clearing the last hint source drops the trust window with it");
+
+            root = Obj("{\"wake_hints\":{\"push_ports\":[8443],\"trust_hours\":72}}");
+            ConfigEditor.ApplyWakeHintEdit(root, null, null, null, "");
+            Assert(root["wake_hints"]!["trust_hours"] == null, "a blank window removes the key (default applies)");
+            AssertEq(root["wake_hints"]!["push_ports"]!.AsArray().Count, 1);
+
+            root = Obj("{\"wake_hints\":{\"push_ports\":[8443],\"trust_hours\":72}}");
+            ConfigEditor.ApplyWakeHintEdit(root, null, "", null, "");
+            Assert(root["wake_hints"] == null, "clearing sources and window together drops the section, no refusal");
+
+            root = Obj("{\"cameras\":[]}");
+            Assert(Refused(() => ConfigEditor.ApplyWakeHintEdit(root, null, null, null, "24")),
+                "a trust window with no hint source is refused");
+            root = Obj("{\"wake_hints\":{\"syslog_port\":0}}");
+            Assert(Refused(() => ConfigEditor.ApplyWakeHintEdit(root, null, null, null, "72h")),
+                "a non-number window is refused");
+
+            root = Obj("{\"cameras\":[]}");
+            ConfigEditor.ApplyWakeHintEdit(root, 0, null, null, " 1.5 ");
+            AssertEq(root["wake_hints"]!["syslog_port"]!.GetValue<int>(), 0);
+            AssertEq(root["wake_hints"]!["trust_hours"]!.GetValue<double>(), 1.5d);
+
+            root = Obj("{\"wake_hints\":{\"syslog_port\":5140}}");
+            ConfigEditor.ApplyWakeHintEdit(root, null, null, null, null);
+            Assert(root["wake_hints"]!["trust_hours"] == null, "an edit with no wake fields leaves the section alone");
+
+            var tmp = Path.Combine(Path.GetTempPath(), $"neolink-trust-edit-{Guid.NewGuid():N}.json");
+            try
+            {
+                // The candidate still goes through the loader, which owns the range checks.
+                root = Obj("{\"wake_hints\":{\"syslog_port\":0}}");
+                ConfigEditor.ApplyWakeHintEdit(root, null, null, null, "0");
+                File.WriteAllText(tmp, root.ToJsonString());
+                Assert(Refused(() => NeolinkConfig.Load(tmp)), "trust_hours 0 from the settings page is rejected at validation");
+
+                // What the settings page reads back: the default shows as blank.
+                string? Described(string wakeHints)
+                {
+                    File.WriteAllText(tmp, "{\"wake_hints\":" + wakeHints + "}");
+                    var json = System.Text.Json.JsonSerializer.SerializeToNode(ConfigEditor.Describe(tmp))!;
+                    return json["settings"]!["wakeHints"]!["trustHours"]?.ToJsonString();
+                }
+                AssertEq(Described("{\"syslog_port\":0,\"trust_hours\":72}"), "72");
+                AssertEq(Described("{\"syslog_port\":0,\"trust_hours\":0.5}"), "0.5");
+                AssertEq(Described("{\"syslog_port\":0}"), null);
+                AssertEq(Described("{\"syslog_port\":0,\"trust_hours\":2}"), null);
+            }
+            finally { File.Delete(tmp); }
+            AssertEq(Streaming.CameraService.Span(TimeSpan.FromMinutes(42)), "42 min");
+            AssertEq(Streaming.CameraService.Span(TimeSpan.FromMinutes(119)), "119 min");
+            AssertEq(Streaming.CameraService.Span(TimeSpan.FromHours(2)), "2 h");
+            AssertEq(Streaming.CameraService.Span(TimeSpan.FromHours(72)), "72 h");
+            AssertEq(Streaming.CameraService.Span(TimeSpan.FromHours(36.5)), "36.5 h");
+        });
+
         Test("timeline bookmarks: store round-trip, validation, corrupt-file survival", () =>
         {
             var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-bm-{Guid.NewGuid():N}");

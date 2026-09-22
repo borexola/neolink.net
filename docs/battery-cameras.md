@@ -304,6 +304,21 @@ The window is global, but each camera's last hint starts/refreshes its own timer
 Trust is not persisted: after restart, scan-only behavior continues until the
 first hint arrives. Restart Neolink after changing the configuration.
 
+The web UI sets it too: **Server settings → General → Wake hints (battery
+cameras) → Hint trust window**. Leave it blank for the 2-hour default. It needs
+a hint source in the same section (a syslog port, `0` for API-only hints, or
+push ports); on its own the section would switch the syslog listener on.
+Clearing every hint source from that page removes the whole section, the trust
+window included.
+
+Under the **Home Assistant add-on** the field is set the same way (wake-hint
+settings live in `config.json`, not the add-on options), but which hints
+arrive depends on its ports. HTTP hints (`POST /api/cameras/{name}/wake-hint`)
+work through 8655 as they are. The syslog listener and the push decoy need
+their port (`5140/udp`, `8443/tcp`) switched on in the add-on's Network section
+first; they are off by default. The add-on's own documentation has the steps.
+The beta add-on publishes no ports, so it gets HTTP hints only.
+
 ## What to expect
 
 - **Events list**: confirmed detections only. Battery cameras usually report

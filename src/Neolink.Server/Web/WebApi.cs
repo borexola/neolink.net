@@ -374,8 +374,10 @@ public static class WebApi
         bool? Tls = null, string? Username = null, string? Password = null, string? ClientId = null,
         string? BaseTopic = null, bool? Discovery = null, string? DiscoveryPrefix = null,
         int? KeepAlive = null, int? MaxPacketBytes = null);
-    /// <summary>PushPorts arrives as the text the user typed ("443, 53"); parsed strictly.</summary>
-    private sealed record AdminWakeHintSettings(int? SyslogPort, string? PushPorts, string? Bind);
+    /// <summary>PushPorts and TrustHours arrive as the text the user typed ("443, 53",
+    /// "72"); parsed strictly, and empty text removes the key.</summary>
+    private sealed record AdminWakeHintSettings(int? SyslogPort, string? PushPorts, string? Bind,
+        string? TrustHours = null);
     private sealed record AdminConfigRequest(string? Bind, int? BindPort, int? WebPort, string? WebBind,
         bool? WebUi, AdminUiSettings? Ui, AdminRecordingSettings? Recording, bool? RemoveRecording,
         AdminMqttSettings? Mqtt = null, AdminWakeHintSettings? WakeHints = null);
@@ -912,25 +914,8 @@ public static class WebApi
                         if (m.StatsInterval != null) ConfigEditor.Set(mq, "stats_interval", m.StatsInterval);
                     }
 
-                    if (req.WakeHints is { } w &&
-                        (w.SyslogPort != null || w.PushPorts != null || w.Bind != null))
-                    {
-                        var wh = ConfigEditor.Section(root, "wake_hints");
-                        if (w.SyslogPort != null) ConfigEditor.Set(wh, "syslog_port", w.SyslogPort);
-                        if (w.PushPorts != null)
-                        {
-                            var ports = ConfigEditor.ParsePortList(w.PushPorts);
-                            ConfigEditor.Set(wh, "push_ports", ports.Count == 0
-                                ? null
-                                : new System.Text.Json.Nodes.JsonArray(
-                                    ports.Select(p => (System.Text.Json.Nodes.JsonNode)p).ToArray()));
-                        }
-                        if (w.Bind != null)
-                            ConfigEditor.Set(wh, "bind", w.Bind.Length == 0 ? null : w.Bind);
-                        // An empty section would quietly enable the syslog default
-                        // (5140); an all-cleared edit means "no wake hints" instead.
-                        if (wh.Count == 0) ConfigEditor.Set(root, "wake_hints", null);
-                    }
+                    if (req.WakeHints is { } w)
+                        ConfigEditor.ApplyWakeHintEdit(root, w.SyslogPort, w.PushPorts, w.Bind, w.TrustHours);
                 });
                 Log.Warn($"config.json updated via the web UI by '{SessionName(ctx)}' — restart to apply");
                 return Results.Json(new { ok = true, requiresRestart = true });

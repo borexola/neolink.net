@@ -685,6 +685,8 @@
  "Resumed — Neolink.NET is reconnecting to this camera.": "Reprise — Neolink.NET se reconnecte à cette caméra.",
  "Right (hold)": "Droite (maintenir)",
  "Router syslog UDP port (0 = off)": "Port UDP syslog du routeur (0 = désactivé)",
+ "Hint trust window, hours (blank = 2)": "Fenêtre de confiance des signaux, heures (vide = 2)",
+ "While a camera has sent a hint in the last {0} h, its wakes without one are treated as housekeeping and skipped. If the hint source breaks, events can go unrecorded for up to that long before scan-only connects take over again.": "Tant qu’une caméra a envoyé un signal dans les dernières {0} h, ses réveils sans signal sont traités comme de la maintenance et ignorés. Si la source des signaux tombe en panne, des événements peuvent ne pas être enregistrés pendant cette durée avant que les connexions par balayage seul ne reprennent.",
  "SAVED LAYOUTS": "DISPOSITIONS ENREGISTRÉES",
  "SD card": "Carte SD",
  "SECURE THIS SERVER": "SÉCURISER CE SERVEUR",

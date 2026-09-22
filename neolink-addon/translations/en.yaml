@@ -30,3 +30,9 @@ configuration:
 network:
   8654/tcp: RTSP server (VLC, Frigate, other NVRs)
   8655/tcp: Web UI + HTTP API
+  5140/udp: >-
+    Wake hints for battery cameras from an OPNsense/pfSense router's syslog.
+    Off until you set a port; also set wake_hints in Neolink's web UI.
+  8443/tcp: >-
+    Wake hints for battery cameras from a router NAT redirect of the camera's
+    push call. Off until you set a port; also set wake_hints in the web UI.

@@ -29,12 +29,21 @@ map:
   # (usage "Media" → /media/<name>) or under /share (usage "Share").
   - media:rw
   - share:rw
+# The wake-hint listeners (battery cameras, see DOCS.md) ship DISABLED: null
+# publishes nothing until the user types a host port in the Network section, so
+# existing installs expose nothing new. Container sides match Neolink's own
+# defaults (wake_hints.syslog_port 5140, push_ports [8443]); 53 is left out,
+# a host DNS port being the likeliest clash on a Home Assistant box.
 ports:
   8654/tcp: 8654
   8655/tcp: 8655
+  5140/udp: null
+  8443/tcp: null
 ports_description:
   8654/tcp: RTSP server (VLC, Frigate, other NVRs)
   8655/tcp: Web UI + HTTP API
+  5140/udp: Wake hints from router syslog (off until you set a port)
+  8443/tcp: Wake hints, push decoy (off until you set a port)
 # Ingress: show the web UI in Home Assistant's sidebar and serve it through the
 # Supervisor's authenticated proxy (no exposed port needed). The app reads the
 # X-Ingress-Path header to serve under HA's per-session sub-path. Direct access on
