@@ -4171,6 +4171,33 @@ public static class SelfTest
             Assert(!Streaming.GenericCameraControl.SameStream(
                 "rtsp://cam.lan/live/main", "rtsp://cam.lan/live/sub"), "different paths are different streams");
             Assert(!Streaming.GenericCameraControl.SameStream(null, "rtsp://cam/live"), "nothing matches nothing");
+            // Dahua and its OEMs tell their streams apart by QUERY alone: the configured
+            // URL's parameters must all be there, or every profile would match every stream.
+            Assert(Streaming.GenericCameraControl.SameStream(
+                "rtsp://cam.lan:554/cam/realmonitor?channel=1&subtype=1",
+                "rtsp://u:p@10.0.0.9/cam/realmonitor?channel=1&subtype=1"), "the same Dahua query matches");
+            Assert(!Streaming.GenericCameraControl.SameStream(
+                "rtsp://cam.lan:554/cam/realmonitor?channel=1&subtype=0",
+                "rtsp://u:p@10.0.0.9/cam/realmonitor?channel=1&subtype=1"), "another subtype is another stream");
+            Assert(!Streaming.GenericCameraControl.SameStream(
+                "rtsp://cam.lan:554/cam/realmonitor?channel=1&subtype=0",
+                "rtsp://u:p@10.0.0.9/cam/realmonitor?channel=3&subtype=0"), "another channel is another camera");
+            var dahua = new[] { P("MediaProfile00000", 2688, 1520), P("MediaProfile00001", 704, 576) };
+            var dahuaUris = new Dictionary<string, string>
+            {
+                ["MediaProfile00000"] = "rtsp://cam.lan:554/cam/realmonitor?channel=1&subtype=0",
+                ["MediaProfile00001"] = "rtsp://cam.lan:554/cam/realmonitor?channel=1&subtype=1",
+            };
+            var subOnly = Streaming.GenericCameraControl.Bind(
+                new[] { ("subStream", "rtsp://u:p@10.0.0.9/cam/realmonitor?channel=1&subtype=1") }, dahua, dahuaUris);
+            Assert(subOnly is [{ Kind: "subStream", Profile.Token: "MediaProfile00001" }],
+                "a sub-only Dahua config binds the sub profile, not the first one listed");
+            // With nothing to match on, a sub stream is guessed as the SMALLEST profile:
+            // handed the main one, a sub-only config would edit the main encoder.
+            var subGuess = Streaming.GenericCameraControl.Bind(
+                new[] { ("subStream", "rtsp://u:p@10.0.0.9/h264/ch1/sub/av_stream") }, profiles, null);
+            Assert(subGuess is [{ Kind: "subStream", Profile.Token: "small" }],
+                "an unmatched sub stream is guessed as the smallest profile");
 
             // ONVIF reports a RANGE where the panel wants a menu.
             var fps = Streaming.GenericCameraControl.StepsWithin(
@@ -4236,10 +4263,19 @@ public static class SelfTest
                       <tt:Data><tt:SimpleItem Name="Failed" Value="false"/></tt:Data>
                     </tt:Message></wsnt:Message>
                   </wsnt:NotificationMessage>
+                  <wsnt:NotificationMessage>
+                    <wsnt:Topic>tns1:RuleEngine/CellMotionDetector/Motion</wsnt:Topic>
+                    <wsnt:Message><tt:Message UtcTime="2026-01-02T03:04:08Z" PropertyOperation="Deleted">
+                      <tt:Source><tt:SimpleItem Name="VideoSourceConfigurationToken" Value="VSC_1"/></tt:Source>
+                      <tt:Data><tt:SimpleItem Name="IsMotion" Value="true"/></tt:Data>
+                    </tt:Message></wsnt:Message>
+                  </wsnt:NotificationMessage>
                 </tev:PullMessagesResponse>
                 """);
             var notes = Protocol.OnvifClient.ParseNotifications(pulled);
-            AssertEq(notes.Count, 3);
+            AssertEq(notes.Count, 4);
+            // The camera withdrawing a property is read as such, and only then.
+            Assert(notes[3].Deleted && !notes[0].Deleted, "PropertyOperation=Deleted is read off the message");
             Assert(notes[0] is { Active: true } && notes[0].Label == "motion",
                 "the ONVIF motion rule is motion");
             // Classification beats the rule that carried it: a field-intrusion rule
@@ -4279,9 +4315,89 @@ public static class SelfTest
             }
             AssertEq(N("tns1:RuleEngine/MyRuleDetector/Detect", "ObjectType", "Vehicle").Label, "vehicle");
             AssertEq(N("tns1:RuleEngine/MyRuleDetector/Detect", "ObjectType", "Dog").Label, "animal");
-            AssertEq(N("tns1:RuleEngine/LineDetector/Crossed", "State", "true").Label, "motion");
+            // A perimeter rule is its own label AND motion, so the default event-type
+            // filter (which leaves the perimeter labels opt-in) still records it.
+            var crossed = N("tns1:RuleEngine/LineDetector/Crossed", "State", "true");
+            AssertEq(crossed.Label, "line-crossing");
+            Assert(crossed.Labels.Contains("motion"), "a line crossing is also motion");
             AssertEq(N("tns1:RuleEngine/TamperDetector/Tamper", "State", "true").Label, null);
             AssertEq(N("tns1:Monitoring/ProcessorUsage", "Value", "42").Label, null);
+
+            // What real cameras send, beyond the spec's own examples. Profile M's object
+            // detection lists classes in a space-separated ClassTypes (spec spelling "Vehical").
+            AssertEq(N("tns1:RuleEngine/MotionRegionDetector/Motion", "State", "true").Label, "motion");
+            var objects = N("tns1:RuleEngine/ObjectDetection/Object", "ClassTypes", "Human Vehical");
+            Assert(objects.Labels.Contains("person") && objects.Labels.Contains("vehicle"),
+                "ObjectDetection's ClassTypes list yields every class in it");
+            // Tapo: the class is folded into the state item's name, and a tamper is
+            // an alarm but not a detection.
+            AssertEq(N("tns1:RuleEngine/CellMotionDetector/People", "IsPeople", "true").Label, "person");
+            var tapo = N("tns1:RuleEngine/CellMotionDetector/TpSmartEvent", "IsVehicle", "true", "IsPet", "false");
+            Assert(tapo is { Active: true, Label: "vehicle" } && !tapo.Labels.Contains("animal"),
+                "a Tapo smart event names what it saw in the item that is true");
+            var tapoEnd = N("tns1:RuleEngine/CellMotionDetector/TpSmartEvent", "IsVehicle", "false", "IsPet", "false");
+            Assert(tapoEnd is { Active: false, IsDetection: true }, "and every item false is the end of it");
+            // A tamper item that is FALSE is not a tamper alarm, and does not silence
+            // the detection it rides beside.
+            AssertEq(N("tns1:RuleEngine/CellMotionDetector/TpSmartEvent", "IsTamper", "false", "IsPeople", "1").Label,
+                "person");
+            Assert(!N("tns1:RuleEngine/CellMotionDetector/Tamper", "IsTamper", "true").IsDetection,
+                "a Tapo tamper alarm is not a detection");
+            // Axis: VMD topics, and states written as 1/0 — valid xs:boolean both.
+            Assert(N("tnsaxis:CameraApplicationPlatform/VMD/Camera1ProfileANY", "active", "1")
+                is { Active: true, Label: "motion" }, "Axis VMD is motion, and '1' is true");
+            Assert(N("tns1:VideoSource/MotionAlarm", "State", "0") is { Active: false, Label: "motion" },
+                "'0' is false — an END, not a fresh start");
+            // A word is matched at a word boundary: an interface is not a face, a
+            // smart card is not a car, and a people counter reports a number.
+            Assert(!N("tns1:Device/Network/InterfaceDown", "Value", "1").IsDetection, "InterfaceDown is not a face");
+            AssertEq(N("tns1:RuleEngine/FaceDetector/HumanFace", "State", "true").Label, "face");
+            Assert(!N("tns1:RuleEngine/SmartCard/Card", "State", "true").Labels.Contains("vehicle"), "a card is not a car");
+            AssertEq(N("tns1:RuleEngine/CarDetector/CarDetect", "State", "true").Label, "vehicle");
+            Assert(!N("tns1:RuleEngine/PeopleCounter/Count", "Count", "3").IsDetection, "a people counter is not a sighting");
+            AssertEq(N("tns1:RuleEngine/CrossRegionDetector/CrossRegion", "State", "true").Label, "intrusion");
+            AssertEq(N("tns1:UserAlarm/IVA/HumanShape", "State", "true").Label, "person");
+            // A classification item on a housekeeping topic does not make it a detection.
+            Assert(!N("tns1:Device/HardwareFailure/StorageFailure", "Type", "Bus").IsDetection,
+                "Type=Bus on a storage notification is not a vehicle");
+            // The speaker: topic plus the Source items, so two rules that both mean
+            // "motion" keep separate state, and channel 2 cannot end channel 1.
+            var src = new Dictionary<string, string> { ["VideoSourceConfigurationToken"] = "VSC_2" };
+            var spoken = new Protocol.OnvifNotification("tns1:RuleEngine/CellMotionDetector/Motion", true,
+                src, src);
+            Assert(spoken.Key.Contains("VSC_2") && spoken.SourceToken == "VSC_2", "the key names the source");
+            Assert(Protocol.OnvifClient.ParseNotifications(pulled)[0].SourceToken == "VSC_1",
+                "the Source block's configuration token is the notification's source");
+
+            // A subscription reference may carry parameters the camera needs echoed
+            // back as headers (Axis identifies the subscription by nothing else).
+            var referenced = Xml("""
+                <tev:CreatePullPointSubscriptionResponse xmlns:tev="http://www.onvif.org/ver10/events/wsdl"
+                                                         xmlns:wsa="http://www.w3.org/2005/08/addressing"
+                                                         xmlns:dom0="http://www.axis.com/2009/event">
+                  <tev:SubscriptionReference>
+                    <wsa:Address>http://cam/onvif/services</wsa:Address>
+                    <wsa:ReferenceParameters><dom0:SubscriptionId>7</dom0:SubscriptionId></wsa:ReferenceParameters>
+                  </tev:SubscriptionReference>
+                </tev:CreatePullPointSubscriptionResponse>
+                """);
+            var headers = Protocol.OnvifClient.ReferenceParameterHeaders(referenced);
+            Assert(headers.Contains("SubscriptionId") && headers.Contains(">7<")
+                   && headers.Contains("IsReferenceParameter=\"true\""),
+                "reference parameters become header blocks marked as such");
+            AssertEq(Protocol.OnvifClient.ReferenceParameterHeaders(created), "");
+            // A fault that rides in on HTTP 200 is still a fault.
+            Assert(Protocol.OnvifClient.SoapFault(Xml("""
+                <s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body><s:Fault>
+                  <s:Code><s:Value>s:Sender</s:Value><s:Subcode><s:Value>ter:NotAuthorized</s:Value></s:Subcode></s:Code>
+                  <s:Reason><s:Text xml:lang="en">Sender not Authorized</s:Text></s:Reason>
+                </s:Fault></s:Body></s:Envelope>
+                """))?.Contains("NotAuthorized") == true, "a SOAP fault is recognised whatever the status");
+            Assert(Protocol.OnvifClient.SoapFault(pulled) == null, "a reply is not a fault");
+            // A Dahua-family firmware on a non-default port writes the port twice.
+            AssertEq(Protocol.OnvifClient.NormalizeXAddr("http://192.168.1.106:8106:8106/onvif/Subscription?Idx=43",
+                    "http://192.168.1.106:8106/onvif/device_service"),
+                "http://192.168.1.106:8106/onvif/Subscription?Idx=43");
 
             // The camera's clock, which every request after discovery is stamped in.
             var clock = Protocol.OnvifClient.ParseUtcTime(Xml("""
@@ -4374,6 +4490,31 @@ public static class SelfTest
             }
         });
 
+        Test("stream hub: an RTSP source's size follows its SPS, a Baichuan's stays as reported", () =>
+        {
+            // A Reolink's real main (2304x1296) and sub (640x360) parameter sets.
+            var main = Convert.FromBase64String("Z2QAMqzSAJACjoQAAA+kAAJxoBA=");
+            var sub = Convert.FromBase64String("Z2QAFqzSAoC/5YQAAA+kAADa+BA=");
+            var pps = Convert.FromBase64String("aOqPLA==");
+            static byte[] Key(byte[] sps, byte[] pps) => new byte[] { 0, 0, 0, 1 }.Concat(sps)
+                .Concat(new byte[] { 0, 0, 0, 1 }).Concat(pps)
+                .Concat(new byte[] { 0, 0, 0, 1, 0x65, 0x88, 0x80 }).ToArray();
+            static Media.VideoFrame F(byte[] data, uint us) => new(Media.VideoCodec.H264, true, us, null, data);
+
+            // A wrong first SPS (the encoder just starting) must not pin the size.
+            var rtsp = new Streaming.StreamHub("rtsp");
+            rtsp.PublishVideo(F(Key(sub, pps), 0));
+            Assert(rtsp.Width == 640 && rtsp.Height == 360, $"first SPS read ({rtsp.Width}x{rtsp.Height})");
+            rtsp.PublishVideo(F(Key(main, pps), 40_000));
+            Assert(rtsp.Width == 2304 && rtsp.Height == 1296, $"the next SPS corrects it ({rtsp.Width}x{rtsp.Height})");
+
+            // The camera's own report wins, exactly as before.
+            var bc = new Streaming.StreamHub("bc");
+            bc.PublishInfo(new Media.MediaInfo(3840, 2160, 25));
+            bc.PublishVideo(F(Key(main, pps), 0));
+            Assert(bc.Width == 3840 && bc.Height == 2160, $"a reported size is kept ({bc.Width}x{bc.Height})");
+        });
+
         Test("frame grab: a decodable run always starts on a keyframe", () =>
         {
             static Streaming.HubVideo V(long i, bool key) => new(i, new byte[] { 0, 0, 0, 1, (byte)i }, key, (uint)i);
@@ -4396,11 +4537,10 @@ public static class SelfTest
             Media.FrameGrab.Take(run, new Streaming.HubAudioAac(6, new byte[] { 1 }, 6));
             AssertEq(run.Count, 1);
 
-            // The follow limit bounds what is fed to the decoder — one picture is
-            // all that comes out of it, so an unbounded run would be memory spent
-            // on frames that are discarded.
+            // The follow limit bounds what is fed to the decoder: the LAST decoded frame
+            // is the still, so the run carries on past the keyframe, but not without end.
             for (long i = 7; i < 60; i++) Media.FrameGrab.Take(run, V(i, false));
-            Assert(run.Count <= 10, $"the run is bounded (was {run.Count})");
+            AssertEq(run.Count, Media.FrameGrab.MaxFollowing + 1);
             Assert(run[0].Keyframe, "and still starts on the keyframe");
         });
         Test("ONVIF detections: stateful ones last until the camera ends them", () =>
@@ -4435,10 +4575,51 @@ public static class SelfTest
                 "every active label is emitted, motion included");
 
             svc.Handle(N("tns1:RuleEngine/CellMotionDetector/Motion", false));
-            Assert(pushes[^1].Active && pushes[^1].AiTypes.SequenceEqual(new[] { "person" }),
-                "ending motion leaves the person");
-            svc.Handle(N("tns1:RuleEngine/FieldDetector/ObjectsInside", false, "ObjectType", "Human"));
+            Assert(pushes[^1].Active && pushes[^1].AiTypes.Contains("person")
+                   && pushes[^1].AiTypes.Contains("intrusion"),
+                "ending the cell-motion rule leaves the field rule's person (and its intrusion) active");
+            // An end WITHOUT the classification the start carried still ends that rule's
+            // detection: starts and ends are matched by the rule, not the label.
+            svc.Handle(N("tns1:RuleEngine/FieldDetector/ObjectsInside", false));
             Assert(!pushes[^1].Active && pushes[^1].Status == "none", "the last end is an all-clear");
+
+            // Two rules that both mean "motion" keep separate state: one ending
+            // must not end the other.
+            pushes.Clear();
+            svc.Handle(N("tns1:VideoSource/MotionAlarm", true));
+            svc.Handle(N("tns1:RuleEngine/CellMotionDetector/Motion", true));
+            svc.Handle(N("tns1:RuleEngine/CellMotionDetector/Motion", false));
+            Assert(pushes[^1].Active && svc.ActiveLabels.Contains("motion"),
+                "the cell-motion end leaves the MotionAlarm property's motion active");
+            svc.Handle(N("tns1:VideoSource/MotionAlarm", false));
+            Assert(!pushes[^1].Active, "and the last speaker's end is the all-clear");
+
+            // Another channel of the same device (an NVR) is filtered out once the camera's
+            // own sources are known; its all-clear must not end channel 1's detection.
+            static Protocol.OnvifNotification S(string source, bool active)
+            {
+                var src = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                    { ["VideoSourceConfigurationToken"] = source };
+                var all = new Dictionary<string, string>(src, StringComparer.OrdinalIgnoreCase)
+                    { ["IsMotion"] = active ? "true" : "false" };
+                return new Protocol.OnvifNotification("tns1:RuleEngine/CellMotionDetector/Motion", active, all, src);
+            }
+            svc.UseSourcesForTest(new[] { "VSC_1" });
+            pushes.Clear();
+            svc.Handle(S("VSC_1", true));
+            svc.Handle(S("VSC_2", false));
+            svc.Handle(S("VSC_2", true));
+            Assert(pushes.Count == 1 && svc.ActiveLabels.Contains("motion"),
+                "channel 2's events are ignored and channel 1's detection stands");
+            svc.Handle(S("VSC_1", false));
+            Assert(!pushes[^1].Active, "channel 1's own end is the all-clear");
+            // A withdrawn property ends whatever it reported and starts nothing.
+            svc.Handle(S("VSC_1", true));
+            svc.Handle(new Protocol.OnvifNotification("tns1:RuleEngine/CellMotionDetector/Motion", true,
+                new Dictionary<string, string> { ["VideoSourceConfigurationToken"] = "VSC_1" },
+                new Dictionary<string, string> { ["VideoSourceConfigurationToken"] = "VSC_1" }, "Deleted"));
+            Assert(!svc.ActiveLabels.Contains("motion"), "PropertyOperation=Deleted ends the detection");
+            svc.UseSourcesForTest(Array.Empty<string>());
 
             // A one-shot never gets an end, so it lapses — on ITS OWN clock, not the
             // camera's: a stateful label kept busy alongside must not hold it open.
@@ -4472,6 +4653,23 @@ public static class SelfTest
             AssertEq(Config.ConfigEditor.MaskRtspPassword("rtsp://cam/live@main"), "rtsp://cam/live@main");
             var split = Protocol.OnvifClient.SplitCredentials("admin:p@ss@cam.lan:8000");
             Assert(split is { Address: "cam.lan:8000", User: "admin", Pass: "p@ss" }, "the parser splits the same way");
+            // ...and a FULL URL with the same raw '@' (the form the camera editor's hint
+            // shows) splits the same way; System.Uri refuses such a URL outright.
+            var full = Protocol.OnvifClient.SplitCredentials("http://admin:p@ss@cam.lan:8000/onvif/device_service");
+            Assert(full is { Address: "http://cam.lan:8000/onvif/device_service", User: "admin", Pass: "p@ss" },
+                "a raw '@' in a full URL's password is read to the last '@' of the authority");
+            // A raw '/' in a password: the mask must not show it and the parser must read
+            // it. An '@' in a PATH after a port is still not a login.
+            AssertEq(Config.ConfigEditor.MaskRtspPassword("admin:pa/ss@10.0.0.5:8000"), "admin:****@10.0.0.5:8000");
+            AssertEq(Config.ConfigEditor.MaskRtspPassword("rtsp://admin:pa/ss@cam/live"), "rtsp://admin:****@cam/live");
+            AssertEq(Config.ConfigEditor.MaskRtspPassword("rtsp://cam:554/live@main"), "rtsp://cam:554/live@main");
+            AssertEq(Config.ConfigEditor.MaskRtspPassword("rtsp://[fe80::1]:554/live@main"), "rtsp://[fe80::1]:554/live@main");
+            AssertEq(Config.ConfigEditor.MaskRtspPassword("rtsp://admin:pa/ss@[fe80::1]:554/live"), "rtsp://admin:****@[fe80::1]:554/live");
+            Assert(Protocol.OnvifClient.SplitCredentials("admin:pa/ss@10.0.0.5:8000")
+                is { Address: "10.0.0.5:8000", User: "admin", Pass: "pa/ss" }, "the parser reads the raw '/'");
+            Assert(Protocol.OnvifClient.SplitCredentials("http://admin:pa/ss@cam.lan/onvif/device_service")
+                is { Address: "http://cam.lan/onvif/device_service", User: "admin", Pass: "pa/ss" },
+                "...in a full URL as well, exactly where the mask reads it");
 
             // An edit made around a masked password keeps the real one. Before, it was
             // either written as the literal mask (destroying the credential) or
@@ -4757,12 +4955,19 @@ public static class SelfTest
             Assert(Protocol.OnvifClient.DecodeActiveCells(raw, 22, 18) == null,
                 "an uncompressed mask is not mistaken for a PackBits one");
             // Which replies are the camera's lasting word, and which are asked again.
-            Assert(Protocol.OnvifClient.IsLastingRefusal(500) && Protocol.OnvifClient.IsLastingRefusal(400)
-                   && Protocol.OnvifClient.IsLastingRefusal(404), "a SOAP fault or a missing service is lasting");
-            Assert(!Protocol.OnvifClient.IsLastingRefusal(0) && !Protocol.OnvifClient.IsLastingRefusal(401)
+            // The status alone says little: a rejected login is a 400 and a busy camera a
+            // 500, the same codes as "no such action". The fault's SUBCODE tells them apart.
+            Assert(Protocol.OnvifClient.IsLastingRefusal(404) && Protocol.OnvifClient.IsLastingRefusal(405),
+                "a missing endpoint is lasting");
+            Assert(Protocol.OnvifClient.IsLastingRefusal(500, "ter:Receiver: ter:ActionNotSupported")
+                   && Protocol.OnvifClient.IsLastingRefusal(400, "ter:Sender: ter:InvalidArgVal: ter:NoConfig"),
+                "an unsupported action or a missing configuration is lasting");
+            Assert(!Protocol.OnvifClient.IsLastingRefusal(400, "ter:Sender: ter:NotAuthorized: Sender not Authorized")
+                   && !Protocol.OnvifClient.IsLastingRefusal(500) && !Protocol.OnvifClient.IsLastingRefusal(400)
+                   && !Protocol.OnvifClient.IsLastingRefusal(0) && !Protocol.OnvifClient.IsLastingRefusal(401)
                    && !Protocol.OnvifClient.IsLastingRefusal(403) && !Protocol.OnvifClient.IsLastingRefusal(503)
                    && !Protocol.OnvifClient.IsLastingRefusal(429),
-                "silence, an auth refusal (lockout, clock) or a busy reply is asked again");
+                "silence, an auth refusal (lockout, clock), a bare 4xx/5xx or a busy reply is asked again");
 
             // Where the grid lives: the layout on the module, the cells on the rule.
             var modules = Xml("""
@@ -4878,6 +5083,55 @@ public static class SelfTest
                 Assert(third.Suspended("Gate") && third.Zone("Gate", "md") != null,
                     "suspend and zone coexist");
                 Assert(third.Zone("Never-seen", "md") == null, "an unknown camera has no zone");
+
+                // A hand-edited file (case-duplicate zone keys, a zone with no table, a null
+                // camera) must not reset EVERY camera's state, nor crash a read.
+                File.WriteAllText(Path.Combine(dir, "camera-state.json"), """
+                    {
+                      "Gate": { "Suspended": true, "Zones": { "md": { "Cols": 2, "Rows": 1, "Table": "10" },
+                                                              "MD": { "Cols": 2, "Rows": 1, "Table": "01" } } },
+                      "Shed": { "Suspended": false, "Zones": { "md": { "Cols": 2, "Rows": 1, "Table": null } } },
+                      "Gone": null
+                    }
+                    """);
+                var edited = new Web.CameraStateStore(dir);
+                Assert(edited.Suspended("Gate"), "the suspend flags survive a hand-edited zone");
+                Assert(edited.Zone("Gate", "md")?.Table == "10", "the first of two same-named zones wins");
+                Assert(edited.Zone("Shed", "md") == null, "a zone with no table reads as absent, not as a crash");
+                Assert(!edited.Suspended("Gone"), "a null entry is skipped");
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+        });
+
+        Test("generic cameras' Detection events switch is migrated once, then left alone", () =>
+        {
+            // A stored events=off on a generic camera predates ONVIF detections and was never
+            // chosen, so the first start that can detect turns it on — exactly once.
+            var dir = Path.Combine(Path.GetTempPath(), "neolink-selftest-migrate-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                File.WriteAllText(Path.Combine(dir, "settings.json"),
+                    """{ "gate": { "events": false, "continuous": true, "eventTypes": null } }""");
+                var settings = new Recording.RecordingSettings(dir);
+                Assert(!settings.Get("gate").Events, "the stored value loads as it was written");
+                Assert(settings.MigrationDue(Recording.RecordingSettings.OnvifEventsMigration), "not yet migrated");
+                settings.Seed("gate", eventsDefault: true);
+                Assert(!settings.Get("gate").Events, "seeding never overrides a stored value");
+                settings.ResetEvents("gate", eventsDefault: true);
+                Assert(settings.Get("gate").Events && settings.Get("gate").Continuous,
+                    "the migration switches events on and touches nothing else");
+                settings.CompleteMigration(Recording.RecordingSettings.OnvifEventsMigration);
+                Assert(!settings.MigrationDue(Recording.RecordingSettings.OnvifEventsMigration), "recorded as done");
+                // The user's later choice is theirs, on this and every later start.
+                settings.Update("gate", events: false, continuous: null, eventTypes: null, setEventTypes: false);
+                var restarted = new Recording.RecordingSettings(dir);
+                Assert(!restarted.Get("gate").Events, "the switch turned off after the migration stays off");
+                Assert(!restarted.MigrationDue(Recording.RecordingSettings.OnvifEventsMigration),
+                    "and the migration does not run again");
             }
             finally
             {

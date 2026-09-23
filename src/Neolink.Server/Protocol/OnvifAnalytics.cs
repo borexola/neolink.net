@@ -42,6 +42,7 @@ public sealed partial class OnvifClient
         try
         {
             if (!await EnsureDiscoveredAsync(ct).ConfigureAwait(false)) return (OnvifZoneAnswer.Unknown, null);
+            if (CellWritesIgnored) return (OnvifZoneAnswer.None, null);
             var (answer, target) = await FindCellTargetAsync(ct).ConfigureAwait(false);
             if (target == null) return (answer, null);
             var cells = CellValue(target.Rule)?.Attribute("Value")?.Value;
@@ -83,14 +84,32 @@ public sealed partial class OnvifClient
             if (table.Length != target.Cols * target.Rows)
                 throw new ArgumentException(
                     $"table must be {target.Cols}x{target.Rows} = {target.Cols * target.Rows} cells of '0'/'1'");
+            var before = CellValue(target.Rule)?.Attribute("Value")?.Value is { } was
+                ? DecodeActiveCells(was, target.Cols, target.Rows) : null;
             var body = $"<tan:ConfigurationToken>{Esc(target.Config)}</tan:ConfigurationToken>" +
                        RuleForWrite(target.Rule, EncodeActiveCells(table));
-            var (reply, _) = await SendAsync(_analyticsUrl!, NsAnalytics, "ModifyRules", body, ct).ConfigureAwait(false);
+            var reply = await CallAsync(_analyticsUrl!, NsAnalytics, "ModifyRules", body, ct).ConfigureAwait(false);
             if (reply == null)
                 throw Refused("the camera refused the new motion grid");
+            // Some cameras (a Reolink over ONVIF) answer OK and keep the old grid; only a
+            // read-back proves it. Unchanged AND not what was sent: one that tidies a cell is not ignoring us.
+            if (before == null || before == table) return;
+            var (_, check) = await FindCellTargetAsync(ct).ConfigureAwait(false);
+            var cells = check == null ? null : CellValue(check.Rule)?.Attribute("Value")?.Value;
+            var now = cells == null ? null : DecodeActiveCells(cells, check!.Cols, check.Rows);
+            if (now != null && now == before)
+            {
+                CellWritesIgnored = true;
+                throw new NotSupportedException(
+                    "the camera accepted the motion grid but kept its old one, so it cannot be edited over ONVIF");
+            }
         }
         finally { _gate.Release(); }
     }
+
+    /// <summary>The camera acknowledged a grid write and did not apply it. Its grid is
+    /// then not Neolink's to edit, and reads report none (the zone moves to Neolink).</summary>
+    public bool CellWritesIgnored { get; private set; }
 
     private sealed record CellTarget(string Config, XElement Rule, int Cols, int Rows);
 
@@ -101,32 +120,27 @@ public sealed partial class OnvifClient
         if (_analyticsUrl == null) return (OnvifZoneAnswer.None, null);
         _profiles ??= await ReadProfilesAsync(ct).ConfigureAwait(false);
         if (_profiles == null) return (OnvifZoneAnswer.Unknown, null);
-        var config = _profiles.Select(p => p.AnalyticsToken).FirstOrDefault(t => !string.IsNullOrEmpty(t));
+        // Only this camera's own channel: on an NVR the first profile is channel 1's,
+        // and editing its grid from channel 3's panel would reshape another camera's alarms.
+        var config = OwnChannelProfiles(_profiles).Select(p => p.AnalyticsToken)
+            .FirstOrDefault(t => !string.IsNullOrEmpty(t));
         if (config == null) return (OnvifZoneAnswer.None, null);
 
         var scope = $"<tan:ConfigurationToken>{Esc(config)}</tan:ConfigurationToken>";
-        var (modules, ms) = await SendAsync(_analyticsUrl, NsAnalytics, "GetAnalyticsModules", scope, ct)
+        var modules = await SendAsync(_analyticsUrl, NsAnalytics, "GetAnalyticsModules", scope, ct)
             .ConfigureAwait(false);
-        if (modules == null) return (Settled(ms), null);
-        if (ParseCellLayout(modules) is not { } layout) return (OnvifZoneAnswer.None, null);
-        var (rules, rs) = await SendAsync(_analyticsUrl, NsAnalytics, "GetRules", scope, ct).ConfigureAwait(false);
-        if (rules == null) return (Settled(rs), null);
-        if (FindCellRule(rules) is not { } rule) return (OnvifZoneAnswer.None, null);
+        if (modules.Root == null) return (Settled(modules), null);
+        if (ParseCellLayout(modules.Root) is not { } layout) return (OnvifZoneAnswer.None, null);
+        var rules = await SendAsync(_analyticsUrl, NsAnalytics, "GetRules", scope, ct).ConfigureAwait(false);
+        if (rules.Root == null) return (Settled(rules), null);
+        if (FindCellRule(rules.Root) is not { } rule) return (OnvifZoneAnswer.None, null);
         return (OnvifZoneAnswer.Holds, new CellTarget(config, rule, layout.Cols, layout.Rows));
     }
 
     /// <summary>A refusal the camera will repeat is an answer; anything else is not.
     /// See <see cref="IsLastingRefusal"/>.</summary>
-    private static OnvifZoneAnswer Settled(int status) =>
-        IsLastingRefusal(status) ? OnvifZoneAnswer.None : OnvifZoneAnswer.Unknown;
-
-    /// <summary>Whether an error reply is one the camera will give again. A SOAP
-    /// fault (400, or 500 — ONVIF sends a missing operation or configuration as a
-    /// Receiver fault) or a 404/405 is the firmware saying it has no such thing. An
-    /// authentication refusal (401/403) may be a lockout or a rejected clock, and a
-    /// timeout, a 429 or a 5xx from something in between may pass: those, and no
-    /// reply at all, are asked again rather than taken as the camera's word.</summary>
-    internal static bool IsLastingRefusal(int status) => status is 400 or 404 or 405 or 500;
+    private static OnvifZoneAnswer Settled(Reply reply) =>
+        IsLastingRefusal(reply.Status, reply.Fault) ? OnvifZoneAnswer.None : OnvifZoneAnswer.Unknown;
 
     // ------------------------------------------------------------ parsing
 
@@ -168,6 +182,9 @@ public sealed partial class OnvifClient
     internal static string RuleForWrite(XElement rule, string activeCells)
     {
         var copy = new XElement(rule) { Name = XName.Get("Rule", NsAnalytics) };
+        // A default-namespace declaration on the rule itself would fight the element's
+        // new name when serialised ("the prefix '' cannot be redefined").
+        copy.Attributes().Where(a => a.IsNamespaceDeclaration && a.Name.LocalName == "xmlns").Remove();
         CellValue(copy)!.SetAttributeValue("Value", activeCells);
         var type = rule.Attribute("Type")?.Value?.Trim() ?? "CellMotionDetector";
         int colon = type.IndexOf(':');

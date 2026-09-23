@@ -54,8 +54,8 @@ public sealed class CameraStateStore
         public string Table { get; set; } = "";
 
         [System.Text.Json.Serialization.JsonIgnore]
-        public bool IsWellFormed => Cols > 0 && Rows > 0 && (long)Table.Length == (long)Cols * Rows
-                                    && Table.All(ch => ch is '0' or '1');
+        public bool IsWellFormed => Cols > 0 && Rows > 0 && Table is { } t && (long)t.Length == (long)Cols * Rows
+                                    && t.All(ch => ch is '0' or '1');
     }
 
     public CameraStateStore(string stateDir)
@@ -76,11 +76,22 @@ public sealed class CameraStateStore
                 {
                     // Detection-type keys are matched the same way camera names are:
                     // the JSON deserializer builds the nested maps case-sensitively,
-                    // and a hand-edited "MD" must still find its grid.
-                    foreach (var s in parsed.Values)
+                    // and a hand-edited "MD" must still find its grid. Tolerant of a hand-edited
+                    // file throughout, because the alternative is resetting every camera's state.
+                    var state = new Dictionary<string, CameraState>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var (name, s) in parsed)
+                    {
+                        if (s == null || state.ContainsKey(name)) continue;
                         if (s.Zones != null)
-                            s.Zones = new Dictionary<string, StoredZone>(s.Zones, StringComparer.OrdinalIgnoreCase);
-                    return new Dictionary<string, CameraState>(parsed, StringComparer.OrdinalIgnoreCase);
+                        {
+                            var zones = new Dictionary<string, StoredZone>(StringComparer.OrdinalIgnoreCase);
+                            foreach (var (type, zone) in s.Zones)
+                                if (zone != null && !zones.ContainsKey(type)) zones[type] = zone;
+                            s.Zones = zones;
+                        }
+                        state[name] = s;
+                    }
+                    return state;
                 }
             }
         }

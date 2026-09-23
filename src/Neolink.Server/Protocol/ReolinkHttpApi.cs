@@ -10,7 +10,15 @@ namespace Neolink.Protocol;
 /// <summary>The camera's HTTP API rejected a command or sent a reply we cannot use.</summary>
 public sealed class ReolinkApiException : Exception
 {
-    public ReolinkApiException(string message) : base(message) { }
+    public ReolinkApiException(string message, int rspCode = 0) : base(message) => RspCode = rspCode;
+
+    /// <summary>The camera's own rspCode when it processed the command and REFUSED it;
+    /// 0 when the reply never got that far (an HTTP error, malformed JSON, a failed login).</summary>
+    public int RspCode { get; }
+
+    /// <summary>Whether the camera itself turned the command down, as opposed to the
+    /// exchange going wrong: a firmware "not supported" is lasting, a 5xx is not.</summary>
+    public bool RejectedByCamera => RspCode != 0;
 }
 
 /// <summary>
@@ -354,9 +362,10 @@ public sealed class ReolinkHttpApi : IDisposable
             var value = await ExecAsync("GetMdAlarm", new JsonObject { ["channel"] = _channelId }, ct).ConfigureAwait(false);
             if (value?["MdAlarm"] is JsonObject md) return (md, true);
         }
-        catch (ReolinkApiException)
+        catch (ReolinkApiException ex) when (ex.RejectedByCamera)
         {
             // Old firmware: "not support"/"not exist" — fall through to GetAlarm.
+            // A garbled reply or an HTTP error says nothing about the dialect, so it does not.
         }
         var alarm = await ExecAsync("GetAlarm",
             new JsonObject { ["Alarm"] = new JsonObject { ["channel"] = _channelId, ["type"] = "md" } },
@@ -387,9 +396,11 @@ public sealed class ReolinkHttpApi : IDisposable
                 ct).ConfigureAwait(false);
             return (alarm?["Alarm"] as JsonObject, false);
         }
-        catch (ReolinkApiException)
+        catch (ReolinkApiException ex)
         {
-            return (null, true);
+            // Rejected only when the firmware itself said so: the caller treats a rejection
+            // as lasting, so an HTTP error or a garbled reply reads as "no answer" instead.
+            return (null, ex.RejectedByCamera);
         }
     }
 
@@ -590,7 +601,8 @@ public sealed class ReolinkHttpApi : IDisposable
                     continue;
                 }
                 throw new ReolinkApiException(
-                    $"camera HTTP API rejected {cmd}: {reply.Detail ?? "unknown error"} (rspCode {reply.RspCode})");
+                    $"camera HTTP API rejected {cmd}: {reply.Detail ?? "unknown error"} (rspCode {reply.RspCode})",
+                    reply.RspCode == 0 ? -1 : reply.RspCode);
             }
         }
         finally

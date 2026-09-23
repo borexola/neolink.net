@@ -54,7 +54,10 @@ public sealed record ApiFeatures(bool Ptz, bool Led, bool Pir, bool Battery,
     bool StreamSettings = false, bool Reboot = true,
     bool Zoom = false, bool Siren = false, bool Floodlight = false, bool Privacy = false,
     bool WhiteLed = false, bool Spotlight = false, bool Doorbell = false, bool Imaging = false,
-    bool Onvif = false);
+    bool Onvif = false,
+    // The camera keeps no detection zone of its own (knowably), so Neolink keeps
+    // one for it and the panel offers the editor on a card of its own.
+    bool LocalZone = false);
 
 /// <summary>GET/POST /api/cameras/{name}/whiteled — spotlight brightness (0-100),
 /// on/off and auto mode, over the camera's HTTP API.</summary>

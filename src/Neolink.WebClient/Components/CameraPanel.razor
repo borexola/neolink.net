@@ -727,8 +727,10 @@
            to sit under — a generic RTSP camera, or a Baichuan one with no HTTP API
            — it gets a section of its own rather than disappearing. It sits at the
            end of this column, where the zone row sits on a Reolink; on a camera
-           with nothing else to show it is simply the only card here. *@
-        @if (!HasSensitivitySection)
+           with nothing else to show it is simply the only card here.
+           Only where the zone can actually be edited: an ONVIF camera, or one the server
+           knows keeps none. A Reolink whose HTTP API is down keeps its zone in the sensitivity row. *@
+        @if (!HasSensitivitySection && (OnvifOnly || _caps.Features?.LocalZone == true))
         {
             <div class="campanel-section">
                 <div class="campanel-section-title">@UiIcon.Render("bolt", 13) @T["DETECTION ZONE"]</div>
@@ -861,7 +863,6 @@
                 </div>
             </div>
         }
-
 
         @if (_caps.Features?.Doorbell == true && _http?.QuickReplies is { Count: > 0 } replies)
         {
@@ -1527,14 +1528,14 @@
     /// <summary>Panel tab: "controls" (device) or "recording" (server-side).</summary>
     private string _camTab = "controls";
 
-    /// <summary>Whether the camera reports detection thresholds to tune. When it
-    /// doesn't, the detection zone stands on its own instead of riding along under
-    /// sliders that aren't there.</summary>
     /// <summary>Every setting on this camera came over ONVIF (a non-Reolink camera).
     /// The standard covers less than Reolink's own API, so some controls are left
     /// out rather than offered and refused.</summary>
     private bool OnvifOnly => _caps?.Features?.Onvif == true;
 
+    /// <summary>Whether the camera reports detection thresholds to tune. When it
+    /// doesn't, the detection zone stands on its own instead of riding along under
+    /// sliders that aren't there.</summary>
     private bool HasSensitivitySection =>
         _http?.MdSensitivity != null || _http?.AiSensitivities is { Count: > 0 };
 

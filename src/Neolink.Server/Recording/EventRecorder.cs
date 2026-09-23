@@ -1000,9 +1000,12 @@ public sealed class EventRecorder
             // came back empty; its only other picture is the stream this very event
             // is being cut from. A Reolink camera keeps its own snap, full stop —
             // decoding video here is not something its event path has ever paid.
-            if (!IsJpeg(jpeg) && _control.OnvifOnly)
-                jpeg = await Neolink.Media.FrameGrab.FromHubAsync(_previewHub ?? _hub, 720, ct)
-                    .ConfigureAwait(false);
+            // From whichever stream is carrying video right now: the sub stream when it is
+            // (a small frame decodes fastest), else the one being recorded.
+            if (!IsJpeg(jpeg) && _control.OnvifOnly
+                && (_previewHub is { HasBufferedGop: true } ? _previewHub
+                    : (_activeRecordHub ?? _hub) is { HasBufferedGop: true } live ? live : null) is { } hub)
+                jpeg = await Neolink.Media.FrameGrab.FromHubAsync(hub, 720, ct).ConfigureAwait(false);
             if (!IsJpeg(jpeg))
                 return; // not a JPEG (or camera doesn't support snapshots)
             await FootageVault.WriteAllBytesAsync(Path.Combine(_store.EventDir(rec), "thumb.jpg"), jpeg!, ct)
@@ -1016,7 +1019,7 @@ public sealed class EventRecorder
         }
     }
 
-    private static bool IsJpeg(byte[]? b) => b is { Length: > 100 } && b[0] == 0xFF && b[1] == 0xD8;
+    private static bool IsJpeg(byte[]? b) => Neolink.Media.FrameGrab.IsJpeg(b);
 
     /// <summary>Camera AI classifications → normalized event labels.</summary>
     internal static List<string> LabelsOf(MotionPush push)

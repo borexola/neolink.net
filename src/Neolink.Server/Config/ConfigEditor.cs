@@ -325,12 +325,8 @@ public static class ConfigEditor
         return null;
     }
 
-    /// <summary>An RTSP URL safe to show in the UI: the userinfo password (if any)
-    /// is replaced with ****. Round-trip contract: a client that sends the masked
-    /// value back means "keep the stored one".</summary>
-    /// <summary>Hides the password inside a "scheme://user:pass@host" URL before it
-    /// goes to a browser. Named for the stream URLs it was written for; the ONVIF
-    /// address takes the same shape and the same masking.</summary>
+    /// <summary>Replaces the password in a "scheme://user:pass@host" URL (or a bare "user:pass@host:port")
+    /// with ****; a client sending the mask back means "keep the stored one" (<see cref="UnmaskPassword"/>).</summary>
     public static string? MaskRtspPassword(string? url)
     {
         if (LoginSpan(url) is not { } s || s.PassStart < 0) return url;
@@ -364,16 +360,31 @@ public static class ConfigEditor
     /// at the LAST '@' inside the authority — which is how a URL parser reads it, and
     /// so how the camera sees it — because an '@' in a password is common and people
     /// do not percent-escape it. Null when the value carries no login at all.</summary>
-    private static (int PassStart, int At)? LoginSpan(string? url)
+    internal static (int PassStart, int At)? LoginSpan(string? url)
     {
         if (string.IsNullOrEmpty(url)) return null;
         int scheme = url.IndexOf("://", StringComparison.Ordinal);
         int start = scheme < 0 ? 0 : scheme + 3;
-        int end = url.IndexOf('/', start);
+        int end = url.IndexOfAny(new[] { '/', '?', '#' }, start);
         if (end < 0) end = url.Length;
         if (end <= start) return null; // no authority to hold a login
         int at = url.LastIndexOf('@', end - 1, end - start);
-        if (at < start) return null;
+        if (at < start)
+        {
+            // A raw '/' in the password puts the '@' after the first '/' ("user:pa/ss@host"):
+            // unless what precedes that '/' is "host:port", the login runs on to the last '@'.
+            int colonBefore = url.IndexOf(':', start, end - start);
+            if (colonBefore < 0 || end == url.Length) return null;
+            // An IPv6 literal's own colons ("[fe80::1]:554") are not a login's.
+            int bracket = url.IndexOf('[', start, end - start);
+            if (bracket >= 0 && bracket < colonBefore) return null;
+            bool port = int.TryParse(url.AsSpan(colonBefore + 1, end - colonBefore - 1), out _);
+            if (port) return null;
+            int stop = url.IndexOfAny(new[] { '?', '#' }, end);
+            if (stop < 0) stop = url.Length;
+            at = url.LastIndexOf('@', stop - 1, stop - start);
+            if (at < start) return null;
+        }
         int colon = url.IndexOf(':', start, at - start);
         return (colon < 0 ? -1 : colon + 1, at);
     }

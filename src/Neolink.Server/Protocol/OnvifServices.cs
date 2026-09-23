@@ -94,21 +94,79 @@ public sealed partial class OnvifClient
             return xml == null ? null : ParseDeviceInfo(xml);
         }, "device information", ct).ConfigureAwait(false);
 
-    /// <summary>The camera's media profiles as discovery read them, or null when
-    /// ONVIF is unavailable. Read once per run — profiles are configuration, and a
-    /// write refreshes them.</summary>
+    /// <summary>The camera's media profiles, or null when ONVIF is unavailable. Cached
+    /// for <see cref="ProfilesMaxAge"/>: the camera's own web page can change them under us.</summary>
     public async Task<IReadOnlyList<OnvifProfile>?> TryGetProfilesAsync(CancellationToken ct) =>
         await GuardedAsync(async () =>
         {
-            if (_profiles == null)
-                _profiles = await ReadProfilesAsync(ct).ConfigureAwait(false);
+            if (_profiles == null || DateTime.UtcNow - _profilesAt > ProfilesMaxAge)
+                _profiles = await ReadProfilesAsync(ct).ConfigureAwait(false) ?? _profiles;
             return _profiles;
         }, "media profiles", ct).ConfigureAwait(false);
+
+    private DateTime _profilesAt;
+    private static readonly TimeSpan ProfilesMaxAge = TimeSpan.FromSeconds(20);
+
+    /// <summary>The profile this camera's streams were matched to; it picks which channel
+    /// of a multi-channel device per-channel calls address. Null until bound (first profile).</summary>
+    public string? PreferredProfileToken => _preferredProfileToken;
+
+    /// <summary>Sets <see cref="PreferredProfileToken"/> under the gate, so a PTZ move
+    /// in flight does not find its profile pulled away.</summary>
+    public async Task SetPreferredProfileAsync(string? token, CancellationToken ct)
+    {
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            if (_preferredProfileToken == token) return;
+            _preferredProfileToken = token;
+            // The head is addressed per channel, so it is picked again for the new one.
+            if (_profiles != null) SelectPtzProfile(_profiles);
+        }
+        finally { _gate.Release(); }
+    }
+
+    private string? _preferredProfileToken;
+
+    private OnvifProfile? PreferredProfile =>
+        _profiles?.FirstOrDefault(p => p.Token == _preferredProfileToken);
+
+    /// <summary>The profiles on the preferred profile's video source — one channel's
+    /// worth. Every profile when no preference is known or the profile names no source.</summary>
+    private IEnumerable<OnvifProfile> OwnChannelProfiles(IReadOnlyList<OnvifProfile> profiles)
+    {
+        var preferred = profiles.FirstOrDefault(p => p.Token == _preferredProfileToken);
+        if (preferred?.SourceToken is not { } source) return preferred == null ? profiles : Prefer(profiles, preferred);
+        var same = profiles.Where(p => p.SourceToken == source).ToList();
+        return same.Count == 0 ? Prefer(profiles, preferred) : Prefer(same, preferred);
+
+        static IEnumerable<OnvifProfile> Prefer(IEnumerable<OnvifProfile> all, OnvifProfile first) =>
+            new[] { first }.Concat(all.Where(p => p != first));
+    }
+
+    /// <summary>The profile PTZ calls go to: one with PTZ on this camera's own channel,
+    /// since a multi-sensor device's other head is not this camera's to move.</summary>
+    private void SelectPtzProfile(IReadOnlyList<OnvifProfile> profiles)
+    {
+        var ptzProfile = OwnChannelProfiles(profiles).FirstOrDefault(p => p.HasPtz);
+        if (ptzProfile?.Token != _ptzProfileToken)
+        {
+            _ptzNode = null;
+            _ptzNodeRefused = false;
+            _presetTokens = Array.Empty<string>();
+        }
+        _ptzProfileToken = ptzProfile?.Token;
+        _ptzNodeToken = ptzProfile?.PtzNodeToken;
+    }
 
     /// <summary>Whether this camera answered with a moving head — PTZ calls are
     /// addressed to a profile, so this only means anything once the profiles have
     /// been read (TryGetProfilesAsync).</summary>
     public bool HasPtz => _ptzProfileToken != null;
+
+    /// <summary>What the head can do, once <see cref="TryGetPtzNodeAsync"/> has
+    /// answered; null before that.</summary>
+    public OnvifPtzNode? PtzNode => _ptzNode;
 
     /// <summary>Each profile's RTSP URL as the camera reports it, keyed by profile
     /// token — how a configured stream URL is matched to the profile behind it.
@@ -155,11 +213,15 @@ public sealed partial class OnvifClient
     /// advertises — what a Profile S camera is meant to offer, and far cheaper than
     /// decoding a frame out of the video. Null when it offers none, or when the
     /// fetch failed; the caller falls back to the stream. Never throws.</summary>
-    public async Task<byte[]?> TrySnapshotAsync(CancellationToken ct)
+    public async Task<byte[]?> TrySnapshotAsync(CancellationToken ct) => await TrySnapshotAsync(false, ct).ConfigureAwait(false);
+
+    /// <summary>As <see cref="TrySnapshotAsync(CancellationToken)"/>; with <paramref name="small"/>
+    /// the still comes from the channel's smallest profile, for a consumer with a size cap.</summary>
+    public async Task<byte[]?> TrySnapshotAsync(bool small, CancellationToken ct)
     {
         try
         {
-            var uri = await SnapshotUriAsync(ct).ConfigureAwait(false);
+            var uri = await SnapshotUriAsync(small, ct).ConfigureAwait(false);
             if (uri == null) return null;
             // Its own deadline, covering the body as well as the headers. This client
             // has no timeout of its own (the event long-poll needs far longer than a
@@ -173,15 +235,14 @@ public sealed partial class OnvifClient
             if (!res.IsSuccessStatusCode)
             {
                 Log.Debug($"{_tag}: ONVIF snapshot fetch returned HTTP {(int)res.StatusCode}");
-                // A URI that answers 401/404 is not going to start working; forget it
-                // and let the caller fall back rather than re-fetching every poll.
-                if (res.StatusCode is System.Net.HttpStatusCode.Unauthorized
-                    or System.Net.HttpStatusCode.Forbidden or System.Net.HttpStatusCode.NotFound)
-                    _snapshotUri = "";
+                // A 404 will not start working, so the URI is forgotten; a 401/403 may be
+                // a stale digest nonce or a slow login, and must not cost the still for the run.
+                if (res.StatusCode is System.Net.HttpStatusCode.NotFound)
+                    ForgetSnapshotUri(uri);
                 return null;
             }
             var bytes = await res.Content.ReadAsByteArrayAsync(deadline.Token).ConfigureAwait(false);
-            return bytes is { Length: > 100 } && bytes[0] == 0xFF && bytes[1] == 0xD8 ? bytes : null;
+            return Neolink.Media.FrameGrab.IsJpeg(bytes) ? bytes : null;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
@@ -194,33 +255,61 @@ public sealed partial class OnvifClient
     /// <summary>Whether a snapshot URI is known to exist. Only true once the camera
     /// has actually given one, so the caller keeps its stream-decoded fallback until
     /// then rather than assuming a still it may never get.</summary>
-    public bool HasSnapshotUri => _snapshotUri is { Length: > 0 };
+    public bool HasSnapshotUri
+    {
+        get { lock (_snapshotUris) return _snapshotUris.Values.Any(u => u.Length > 0); }
+    }
 
     /// <summary>A still is a few hundred KB at most; a camera slower than this to
     /// hand one over is better answered by the last frame on hand.</summary>
     private static readonly TimeSpan SnapshotTimeout = TimeSpan.FromSeconds(8);
 
-    /// <summary>The snapshot URI for the first profile that offers one, asked once
-    /// per run. An empty string is the remembered "this camera has none".</summary>
-    private async Task<string?> SnapshotUriAsync(CancellationToken ct) =>
+    /// <summary>Each profile's snapshot URI, keyed by token: "" when the camera said it
+    /// has none; absent when it could not be asked, so it is asked again.</summary>
+    private readonly Dictionary<string, string> _snapshotUris = new(StringComparer.Ordinal);
+    private bool _snapshotLogged;
+
+    private void ForgetSnapshotUri(string uri)
+    {
+        lock (_snapshotUris)
+            foreach (var k in _snapshotUris.Where(kv => kv.Value == uri).Select(kv => kv.Key).ToList())
+                _snapshotUris[k] = "";
+    }
+
+    /// <summary>The preferred profile's snapshot URI, or with <paramref name="small"/>
+    /// the channel's smallest profile's; null when no profile of the channel offers one.</summary>
+    private async Task<string?> SnapshotUriAsync(bool small, CancellationToken ct) =>
         await GuardedAsync(async () =>
         {
-            if (_snapshotUri != null) return _snapshotUri.Length == 0 ? null : _snapshotUri;
             var profiles = _profiles ?? await ReadProfilesAsync(ct).ConfigureAwait(false);
             if (profiles == null) return null; // could not ask — try again later
-            foreach (var p in profiles)
+            var order = OwnChannelProfiles(profiles).ToList();
+            if (small)
+                order = order.OrderBy(p => (long)p.Width * p.Height == 0 ? long.MaxValue : (long)p.Width * p.Height)
+                    .ToList();
+            foreach (var p in order)
             {
-                var xml = await CallAsync(MediaUrl, MediaNs, "GetSnapshotUri",
-                    $"<{Mp}:ProfileToken>{Esc(p.Token)}</{Mp}:ProfileToken>", ct).ConfigureAwait(false);
-                var uri = xml?.Descendants().FirstOrDefault(e => e.Name.LocalName == "Uri")?.Value?.Trim();
-                if (string.IsNullOrWhiteSpace(uri)) continue;
-                // As with the service table, a camera reporting its own idea of its
-                // hostname must still be reachable from here.
-                _snapshotUri = NormalizeXAddr(uri);
-                Log.Info($"{_tag}: ONVIF snapshot available — stills come from the camera rather than its video");
-                return _snapshotUri;
+                string? uri;
+                lock (_snapshotUris) _snapshotUris.TryGetValue(p.Token, out uri);
+                if (uri == null)
+                {
+                    var reply = await SendAsync(MediaUrl, MediaNs, "GetSnapshotUri",
+                        $"<{Mp}:ProfileToken>{Esc(p.Token)}</{Mp}:ProfileToken>", ct).ConfigureAwait(false);
+                    var answered = reply.Root?.Descendants().FirstOrDefault(e => e.Name.LocalName == "Uri")?.Value?.Trim();
+                    // Only an answer is remembered: no reply at all is asked again next time.
+                    if (reply.Status == 0) continue;
+                    // As with the service table, a camera reporting its own idea of
+                    // its hostname must still be reachable from here.
+                    uri = string.IsNullOrWhiteSpace(answered) ? "" : NormalizeXAddr(answered) ?? "";
+                    lock (_snapshotUris) _snapshotUris[p.Token] = uri;
+                    if (uri.Length > 0 && !_snapshotLogged)
+                    {
+                        _snapshotLogged = true;
+                        Log.Info($"{_tag}: ONVIF snapshot available — stills come from the camera rather than its video");
+                    }
+                }
+                if (uri.Length > 0) return uri;
             }
-            _snapshotUri = ""; // asked, and it has none
             return null;
         }, "snapshot URI", ct).ConfigureAwait(false);
 
@@ -237,11 +326,19 @@ public sealed partial class OnvifClient
         string configToken, CancellationToken ct, string? encoding = null) =>
         await GuardedAsync(async () =>
         {
+            // The options reply is ONVIF's largest and only changes with firmware, so it
+            // is remembered per configuration until a write.
+            var key = configToken + "|" + encoding;
+            if (_encoderOptions.TryGetValue(key, out var known)) return known;
             var xml = await CallAsync(MediaUrl, MediaNs, "GetVideoEncoderConfigurationOptions",
                 $"<{Mp}:ConfigurationToken>{Esc(configToken)}</{Mp}:ConfigurationToken>" +
                 $"<{Mp}:ProfileToken>{Esc(profileToken)}</{Mp}:ProfileToken>", ct).ConfigureAwait(false);
-            return xml == null ? null : ParseEncoderOptions(xml, encoding);
+            var options = xml == null ? null : ParseEncoderOptions(xml, encoding);
+            if (options != null) _encoderOptions[key] = options;
+            return options;
         }, "encoder options", ct).ConfigureAwait(false);
+
+    private readonly Dictionary<string, OnvifEncoderOptions> _encoderOptions = new(StringComparer.Ordinal);
 
     /// <summary>Changes one profile's encoder settings. Null fields are left as the
     /// camera has them: ONVIF replaces the whole configuration, so the camera's own
@@ -255,8 +352,11 @@ public sealed partial class OnvifClient
         {
             if (!await EnsureDiscoveredAsync(ct).ConfigureAwait(false))
                 throw new NotSupportedException("the camera's ONVIF media service is not reachable");
-            var profile = (_profiles ?? await ReadProfilesAsync(ct).ConfigureAwait(false))
-                ?.FirstOrDefault(p => p.Token == profileToken)
+            // Read afresh, never from the cache: the whole configuration goes back, and
+            // a stale copy would quietly undo a change made in the camera's own web page.
+            var profile = (await ReadProfilesAsync(ct).ConfigureAwait(false)
+                    ?? throw new IOException("the camera's ONVIF profiles could not be read just now — try again shortly"))
+                .FirstOrDefault(p => p.Token == profileToken)
                 ?? throw new NotSupportedException($"the camera has no ONVIF profile '{profileToken}'");
             if (profile.Encoder is not { } encoder)
                 throw new NotSupportedException($"ONVIF profile '{profileToken}' carries no encoder configuration");
@@ -276,9 +376,7 @@ public sealed partial class OnvifClient
 
             // The configuration goes back under the media service's own element
             // name; its children keep the ONVIF schema namespace they were read in.
-            var body = new XElement(XName.Get("Configuration", MediaNs));
-            foreach (var a in edited.Attributes()) body.SetAttributeValue(a.Name, a.Value);
-            body.Add(edited.Elements().Select(e => new XElement(e)));
+            var body = Echo(XName.Get("Configuration", MediaNs), edited);
 
             // Media2's setter takes the configuration alone: ForcePersistence is a
             // ver10 element, and a strict Media2 parser faults on one it does not know.
@@ -288,8 +386,20 @@ public sealed partial class OnvifClient
             if (xml == null)
                 throw Refused("the camera did not confirm the ONVIF encoder change");
             _profiles = null; // re-read on the next look: the camera is the authority
+            _encoderOptions.Clear();
         }
         finally { _gate.Release(); }
+    }
+
+    /// <summary>The camera's element sent back under the media service's name. Namespace
+    /// declarations are dropped: a default one would fight the new name when serialised.</summary>
+    private static XElement Echo(XName name, XElement original)
+    {
+        var body = new XElement(name);
+        foreach (var a in original.Attributes().Where(a => !a.IsNamespaceDeclaration))
+            body.SetAttributeValue(a.Name, a.Value);
+        body.Add(original.Elements().Select(e => new XElement(e)));
+        return body;
     }
 
     // ------------------------------------------------------------ PTZ
@@ -317,11 +427,11 @@ public sealed partial class OnvifClient
         {
             if (_ptzNode != null || _ptzNodeRefused) return _ptzNode;
             if (_ptzProfileToken == null) return null;
-            var (xml, status) = await SendAsync(_ptzUrl!, NsPtz, "GetNodes", "", ct).ConfigureAwait(false);
-            _ptzNode = xml == null ? null : ParsePtzNode(xml, _ptzNodeToken);
+            var reply = await SendAsync(_ptzUrl!, NsPtz, "GetNodes", "", ct).ConfigureAwait(false);
+            _ptzNode = reply.Root == null ? null : ParsePtzNode(reply.Root, _ptzNodeToken);
             // A reply without a usable node, or a refusal the camera will repeat,
             // is its answer; silence, a busy 503 or an auth hiccup are asked again.
-            _ptzNodeRefused = _ptzNode == null && (xml != null || IsLastingRefusal(status));
+            _ptzNodeRefused = _ptzNode == null && (reply.Root != null || IsLastingRefusal(reply.Status, reply.Fault));
             return _ptzNode;
         }, "PTZ node", ct).ConfigureAwait(false);
 
@@ -435,7 +545,8 @@ public sealed partial class OnvifClient
     private async Task<string> OsdScopeAsync(CancellationToken ct)
     {
         var profiles = _profiles ?? await ReadProfilesAsync(ct).ConfigureAwait(false);
-        var token = profiles?.Select(p => p.VideoSourceToken).FirstOrDefault(t => !string.IsNullOrEmpty(t));
+        var token = profiles == null ? null
+            : OwnChannelProfiles(profiles).Select(p => p.VideoSourceToken).FirstOrDefault(t => !string.IsNullOrEmpty(t));
         return token == null ? "" : $"<{Mp}:ConfigurationToken>{Esc(token)}</{Mp}:ConfigurationToken>";
     }
 
@@ -457,9 +568,7 @@ public sealed partial class OnvifClient
             if (plainText != null)
                 SetLocal(edited, "TextString", "PlainText", plainText);
 
-            var body = new XElement(XName.Get("OSD", MediaNs));
-            foreach (var a in edited.Attributes()) body.SetAttributeValue(a.Name, a.Value);
-            body.Add(edited.Elements().Select(e => new XElement(e)));
+            var body = Echo(XName.Get("OSD", MediaNs), edited);
 
             var xml = await CallAsync(MediaUrl, MediaNs, "SetOSD", body.ToString(), ct)
                 .ConfigureAwait(false);
@@ -489,7 +598,8 @@ public sealed partial class OnvifClient
             _ready = false;
             _profiles = null;
             _streamUris = null;
-            _snapshotUri = null;
+            lock (_snapshotUris) _snapshotUris.Clear();
+            _encoderOptions.Clear();
             _presetTokens = Array.Empty<string>();
             _ptzProfileToken = null;
             _ptzNode = null;
@@ -502,7 +612,9 @@ public sealed partial class OnvifClient
             // Long enough for a camera to come back from a restart, not the five
             // minutes reserved for "this camera has no ONVIF" — a camera that
             // reboots in 40s would otherwise lose its panel for five and its
-            // detections for up to ten.
+            // detections for up to ten. Misses in the minutes after are retried
+            // quickly too (see Fail).
+            _rebootedAt = DateTime.UtcNow;
             _retryAfter = DateTime.UtcNow + AfterReboot;
         }
         finally { _gate.Release(); }
@@ -566,11 +678,10 @@ public sealed partial class OnvifClient
         if (profiles is { Count: > 0 })
         {
             _hadProfiles = true;
+            _profilesAt = DateTime.UtcNow;
             // Every PTZ call is addressed to a media profile, so the head is only
             // known to exist once the profiles have been read.
-            var ptzProfile = profiles.FirstOrDefault(p => p.HasPtz);
-            _ptzProfileToken = ptzProfile?.Token;
-            _ptzNodeToken = ptzProfile?.PtzNodeToken;
+            SelectPtzProfile(profiles);
         }
         return profiles;
     }

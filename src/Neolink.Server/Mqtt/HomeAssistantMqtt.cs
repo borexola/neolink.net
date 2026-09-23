@@ -793,6 +793,11 @@ internal sealed class CameraBridge
         if (_control.OnvifOnly)
             await AnnounceEntityAsync("binary_sensor", "status", ConnectivityConfig(), ct).ConfigureAwait(false);
 
+        // Only where a reboot can actually be commanded: Baichuan always, a
+        // non-Reolink camera only through ONVIF. Independent of whether it can detect.
+        if (_control.CanReboot)
+            await AnnounceEntityAsync("button", "reboot", ButtonConfig("Reboot", "reboot", "restart"), ct).ConfigureAwait(false);
+
         if (!_cam.EventsAvailableNow)
         {
             // No way to detect anything — a generic RTSP camera with no ONVIF event
@@ -809,6 +814,10 @@ internal sealed class CameraBridge
                 await AnnounceEntityAsync("binary_sensor", "recording", RecordingSensorConfig(), ct).ConfigureAwait(false);
                 await PublishRecordingStateAsync(force: true).ConfigureAwait(false);
             }
+            // A camera without a working event service still has a picture, sliders,
+            // PTZ and presets: those are announced regardless.
+            if (_featuresAnnounced)
+                await AnnounceFeaturesAsync(ct).ConfigureAwait(false);
             return;
         }
 
@@ -818,10 +827,6 @@ internal sealed class CameraBridge
         var labels = HomeAssistantMqtt.DetectionLabels;
         foreach (var label in labels)
             await AnnounceEntityAsync("binary_sensor", label, BinarySensorConfig(label), ct).ConfigureAwait(false);
-        // Only where a reboot can actually be commanded: Baichuan always, a
-        // non-Reolink camera only through ONVIF.
-        if (_control.CanReboot)
-            await AnnounceEntityAsync("button", "reboot", ButtonConfig("Reboot", "reboot", "restart"), ct).ConfigureAwait(false);
 
         // The Record switch: capture one clip on demand from HA — no camera
         // detection involved ("record while the door is open").
@@ -1891,7 +1896,9 @@ internal sealed class CameraBridge
         if (!_featuresAnnounced)
         {
             var caps = await TryGetCapabilitiesAsync(ct).ConfigureAwait(false);
-            if (caps?.Features is { } f)
+            // A provisional answer (ONVIF not reached yet) must not be settled on: it
+            // would announce a camera with no picture, pan/tilt or sliders for good.
+            if (caps?.Features is { } f && !caps.Provisional)
             {
                 _model = caps.Version?.Model;
                 if (f.Led) await ProbeLedAsync(ct).ConfigureAwait(false);

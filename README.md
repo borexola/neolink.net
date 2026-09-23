@@ -562,12 +562,19 @@ login is offered over **HTTP authentication as well as WS-Security**, since
 which of the two a given firmware insists on is not something you can tell from
 the outside.
 
-ONVIF is looked for on the stream URL's own host — port 80 first, then 8000 and
-8899 — and signs in with the login that URL carries. `onvif_address` overrides both:
-give it `host`, `host:port`, or a full URL, and a full URL may carry its own
-`user:pass@` when the camera keeps separate accounts for streaming and
-management. **Test connection** in the Cameras editor says whether ONVIF
-answered, before you save the entry.
+ONVIF is looked for on the stream URL's own host — port 80 first, then 8000,
+2020 (TP-Link Tapo) and 8899 — and signs in with the login that URL carries.
+`onvif_address` overrides both: give it `host`, `host:port`, or a full URL, and a
+full URL may carry its own `user:pass@` when the camera keeps separate accounts
+for streaming and management (an `@` or `/` inside the password may be written
+as-is there; in a stream URL they must still be percent-encoded, `%40` and
+`%2F`). **Test connection** in the Cameras editor says whether ONVIF answered —
+and whether it rejected the login — before you save the entry.
+
+A device that carries several video channels (an NVR, a multi-sensor camera) can
+be added once per channel, each with that channel's stream URLs: the settings,
+stills, pan/tilt, zone and detections of each entry follow the channel its stream
+URLs name, not the device's first.
 
 | Option | Default | Description |
 |---|---|---|

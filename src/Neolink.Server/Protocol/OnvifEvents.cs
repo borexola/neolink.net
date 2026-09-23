@@ -12,71 +12,193 @@ namespace Neolink.Protocol;
 /// because vendors invent their own and the log is where an unrecognised one has to
 /// be visible. <see cref="Active"/> is the state the notification carries: true =
 /// something is happening, false = it stopped, null = the camera said neither (a
-/// one-shot event, which is treated as a start).
+/// one-shot event, which is treated as a start). <see cref="Source"/> is the Source
+/// block's items alone (which channel or rule spoke); <see cref="Operation"/> is the
+/// message's PropertyOperation, when the camera gave one.
 /// </summary>
 public sealed record OnvifNotification(string Topic, bool? Active,
-    IReadOnlyDictionary<string, string> Items)
+    IReadOnlyDictionary<string, string> Items,
+    IReadOnlyDictionary<string, string>? Source = null,
+    string? Operation = null)
 {
     /// <summary>Whether this is a DETECTION rather than housekeeping. ONVIF cameras
     /// publish a great deal that is not motion — recording state, storage, network
     /// changes, clock sync — and a subscription without a filter receives all of it.</summary>
-    public bool IsDetection => Label != null;
+    public bool IsDetection => Labels.Count > 0;
 
-    /// <summary>The event label this maps onto in Neolink's own vocabulary, or null
-    /// when the topic is not a detection at all.
-    ///
-    /// The topics are matched by the SEGMENT that carries the meaning rather than by
-    /// the whole path: every vendor nests them differently, and the ONVIF-defined
-    /// analytics topics (CellMotionDetector, MotionAlarm, the field/line/intrusion
-    /// rules) are the ones every Profile S camera that detects anything publishes.</summary>
-    public string? Label
+    /// <summary>The camera withdrew this property (a rule was deleted or
+    /// reconfigured). Whatever it reported is over, but it is not a detection.</summary>
+    public bool Deleted => string.Equals(Operation, "Deleted", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The primary label, for callers that want one; null when the topic
+    /// is not a detection at all. <see cref="Labels"/> carries the full set.</summary>
+    public string? Label => Labels.Count == 0 ? null : Labels[0];
+
+    private IReadOnlyList<string>? _labels;
+
+    /// <summary>The labels this maps onto in Neolink's vocabulary, empty when not a
+    /// detection; a perimeter rule also yields "motion" so the default filter records it.</summary>
+    public IReadOnlyList<string> Labels => _labels ??= Classify(Topic, Items);
+
+    /// <summary>Identifies the speaker (topic plus Source items), so a start and its
+    /// end are matched to each other and never to another rule's or channel's.</summary>
+    public string Key
     {
         get
         {
-            var t = Topic;
-            // Object classification, where the camera offers it, is worth more than
-            // "something moved" — the events page, notifications and Home Assistant
-            // all key off these.
-            if (Has("ObjectType", "Type", "ClassType", "Classification") is { } cls)
-            {
-                if (Is(cls, "human", "person", "people", "pedestrian")) return "person";
-                if (Is(cls, "vehicle", "car", "truck", "bus", "motorcycle", "bike", "bicycle")) return "vehicle";
-                if (Is(cls, "animal", "dog", "cat", "pet")) return "animal";
-                if (Is(cls, "face")) return "face";
-            }
-            if (Contains(t, "Face")) return "face";
-            if (Contains(t, "PeopleDetect", "HumanDetect", "PersonDetect")) return "person";
-            if (Contains(t, "VehicleDetect", "CarDetect")) return "vehicle";
-            // Everything else that means "the picture changed in a way the camera
-            // was told to care about" is motion.
-            if (Contains(t, "CellMotionDetector", "MotionAlarm", "MotionDetect", "VideoMotion",
-                    "FieldDetector", "LineDetector", "ObjectsInside", "Intrusion", "Crossed",
-                    "LoiteringDetector"))
-                return "motion";
-            return null;
+            if (Source is not { Count: > 0 } src) return Topic;
+            var parts = src.OrderBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(kv => kv.Key + "=" + kv.Value);
+            return Topic + "|" + string.Join(";", parts);
         }
+    }
+
+    /// <summary>The video source the Source block names, or null; a multi-channel
+    /// device sends every channel's events down one subscription.</summary>
+    public string? SourceToken =>
+        Source == null ? null
+        : Source.TryGetValue("VideoSourceConfigurationToken", out var c) && c.Length > 0 ? c
+        : Source.TryGetValue("VideoSourceToken", out var s) && s.Length > 0 ? s
+        : Source.TryGetValue("VideoSource", out var v) && v.Length > 0 ? v
+        : null;
+
+    // ------------------------------------------------------------ classification
+
+    private static readonly string[] PersonWords = { "human", "person", "people", "pedestrian" };
+    private static readonly string[] VehicleWords =
+        { "vehicle", "vehical", "car", "truck", "bus", "motorcycle", "motorbike", "bike", "bicycle" };
+    private static readonly string[] AnimalWords = { "animal", "dog", "cat", "pet", "dogcat", "dog_cat" };
+    private static readonly string[] FaceWords = { "face", "humanface" };
+
+    /// <summary>Topic families about the picture; only these are read as detections, so
+    /// a "Type" item on a storage notification cannot become a vehicle.</summary>
+    private static bool IsAnalyticsTopic(string topic) =>
+        Contains(topic, "RuleEngine", "VideoAnalytics", "Analytics", "Detect", "MotionAlarm",
+            "Motion", "VMD", "IVA", "SmartEvent", "LineCross", "CrossRegion", "Intrusion", "Tripwire");
+
+    internal static IReadOnlyList<string> Classify(string topic, IReadOnlyDictionary<string, string> items)
+    {
+        if (!IsAnalyticsTopic(topic)) return Array.Empty<string>();
+        // Tamper is an alarm, not a detection — as "motion" it would open a recording
+        // that lasts until the lens is uncovered. A counter reports a number, not a sighting.
+        if (Segment(topic, "Tamper") || (items.TryGetValue("IsTamper", out var tamper) && IsTrue(tamper)))
+            return Array.Empty<string>();
+        if (Segment(topic, "Counter") || Segment(topic, "Count") || Segment(topic, "Counting"))
+            return Array.Empty<string>();
+
+        var labels = new List<string>();
+        void Add(string l) { if (!labels.Contains(l)) labels.Add(l); }
+
+        // ClassTypes is a space-separated list, ObjectType one word: each word is mapped alone.
+        foreach (var name in new[] { "ObjectType", "ClassTypes", "ClassType", "Classification", "Type" })
+        {
+            if (!items.TryGetValue(name, out var value) || value.Length == 0) continue;
+            foreach (var word in value.Split(new[] { ' ', ',', ';' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (Is(word, PersonWords)) Add("person");
+                else if (Is(word, VehicleWords)) Add("vehicle");
+                else if (Is(word, AnimalWords)) Add("animal");
+                else if (Is(word, FaceWords)) Add("face");
+            }
+        }
+        // Some vendors fold the class into the state item's name (IsVehicle, IsPet):
+        // each one that is true names what was seen.
+        foreach (var (name, value) in items)
+        {
+            if (!name.StartsWith("Is", StringComparison.OrdinalIgnoreCase) || !IsTrue(value)) continue;
+            var what = name[2..];
+            if (Is(what, PersonWords)) Add("person");
+            else if (Is(what, VehicleWords)) Add("vehicle");
+            else if (Is(what, AnimalWords)) Add("animal");
+            else if (Is(what, FaceWords)) Add("face");
+            else if (what.Equals("package", StringComparison.OrdinalIgnoreCase)) Add("package");
+        }
+        // The topic's own words, matched at a word boundary so that "Interface"
+        // is not a face.
+        if (Segment(topic, "Face")) Add("face");
+        if (Segment(topic, "People") || Segment(topic, "Human") || Segment(topic, "Person")
+            || Segment(topic, "Pedestrian")) Add("person");
+        if (Segment(topic, "Vehicle") || Segment(topic, "Car")) Add("vehicle");
+        if (Segment(topic, "DogCat") || Segment(topic, "Animal") || Segment(topic, "Pet")) Add("animal");
+        if (Segment(topic, "Package")) Add("package");
+        // Perimeter rules: their own label, and motion beside it (see Labels).
+        bool perimeter = false;
+        if (Contains(topic, "LineDetector", "LineCross", "Crossed", "Tripwire"))
+        {
+            Add("line-crossing"); perimeter = true;
+        }
+        if (Contains(topic, "FieldDetector", "ObjectsInside", "Intrusion", "CrossRegion"))
+        {
+            Add("intrusion"); perimeter = true;
+        }
+        if (Contains(topic, "Loitering"))
+        {
+            Add("loitering"); perimeter = true;
+        }
+        if (perimeter) Add("motion");
+        if (labels.Count > 0) return labels;
+        // Everything else the camera was told to care about is motion.
+        if (Contains(topic, "CellMotionDetector", "MotionRegionDetector", "MotionAlarm", "MotionDetect",
+                "VideoMotion", "VMD", "ObjectDetection", "SmartEvent")
+            || Segment(topic, "Motion"))
+            return new[] { "motion" };
+        return Array.Empty<string>();
     }
 
     private static bool Contains(string topic, params string[] needles) =>
         needles.Any(n => topic.Contains(n, StringComparison.OrdinalIgnoreCase));
 
-    private static bool Is(string value, params string[] options) =>
-        options.Any(o => string.Equals(value, o, StringComparison.OrdinalIgnoreCase));
-
-    private string? Has(params string[] names)
+    /// <summary>Whether <paramref name="word"/> appears in the topic at a word or
+    /// CamelCase boundary: "FaceDetect" matches "Face", "Interface" does not.</summary>
+    internal static bool Segment(string topic, string word)
     {
-        foreach (var n in names)
-            if (Items.TryGetValue(n, out var v) && v.Length > 0)
-                return v;
+        int from = 0;
+        while (true)
+        {
+            int i = topic.IndexOf(word, from, StringComparison.OrdinalIgnoreCase);
+            if (i < 0) return false;
+            bool starts = i == 0 || !char.IsLetter(topic[i - 1])
+                          || (char.IsLower(topic[i - 1]) && char.IsUpper(topic[i]));
+            int end = i + word.Length;
+            bool ends = end == topic.Length || !char.IsLower(topic[end])
+                        || (topic[end] == 's' && (end + 1 == topic.Length || !char.IsLower(topic[end + 1])));
+            if (starts && ends) return true;
+            from = i + 1;
+        }
+    }
+
+    private static bool Is(string value, string[] options) =>
+        options.Any(o => string.Equals(value.Trim(), o, StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsTrue(string value) => ParseBool(value) == true;
+
+    /// <summary>xs:boolean, which is "true"/"false" OR "1"/"0" — cameras use both.</summary>
+    internal static bool? ParseBool(string? value)
+    {
+        var v = value?.Trim();
+        if (string.IsNullOrEmpty(v)) return null;
+        if (v == "1" || v.Equals("true", StringComparison.OrdinalIgnoreCase)) return true;
+        if (v == "0" || v.Equals("false", StringComparison.OrdinalIgnoreCase)) return false;
         return null;
     }
 }
 
+/// <summary>Where a pull-point subscription is addressed: the manager's URL, and the
+/// reference parameters, as SOAP header blocks, that every request must carry back.</summary>
+public sealed record PullPointSubscription(string Address, string Headers)
+{
+    public override string ToString() => Address;
+}
+
 /// <summary>The outcome of asking for a pull-point subscription. NoEventService =
 /// a lasting answer (the camera has none, or ONVIF is not reachable at all), worth
-/// re-checking only rarely. Otherwise a null Address is a refusal of THIS attempt,
-/// worth retrying soon; Reason says why, for the one line that reports it.</summary>
-public sealed record PullPointResult(string? Address, bool NoEventService, string? Reason);
+/// re-checking only rarely. Otherwise a null Subscription is a refusal of THIS
+/// attempt, worth retrying soon; Reason says why, for the one line that reports it.</summary>
+public sealed record PullPointResult(PullPointSubscription? Subscription, bool NoEventService, string? Reason)
+{
+    /// <summary>The subscription manager's address, when one was created.</summary>
+    public string? Address => Subscription?.Address;
+}
 
 public sealed partial class OnvifClient
 {
@@ -89,9 +211,9 @@ public sealed partial class OnvifClient
 
     private string? _eventsUrl;
 
-    /// <summary>The URL of the event service, or null when the camera has none.
-    /// Only meaningful after discovery.</summary>
-    public string? EventsUrl => _eventsUrl;
+    /// <summary>How often a camera that advertised no event service is asked for its
+    /// service table again, in case events were switched on in its own web page.</summary>
+    private static readonly TimeSpan ServiceRecheck = TimeSpan.FromMinutes(5);
 
     /// <summary>
     /// Opens a pull-point subscription and returns the address of the subscription
@@ -122,6 +244,9 @@ public sealed partial class OnvifClient
             // cooling down — rather than parking detections for five minutes.
             if (!await EnsureDiscoveredAsync(ct).ConfigureAwait(false))
                 return new PullPointResult(null, NoEventService: false, "ONVIF is not reachable just now");
+            // Discovery is otherwise permanent for the run; see ServiceRecheck.
+            if (_eventsUrl == null && DateTime.UtcNow - _servicesReadAt > ServiceRecheck)
+                await ReadServiceTableAsync(ct, ct).ConfigureAwait(false);
             eventsUrl = _eventsUrl;
         }
         finally { _gate.Release(); }
@@ -136,42 +261,43 @@ public sealed partial class OnvifClient
         var address = SubscriptionAddress(xml);
         if (address == null)
             return new PullPointResult(null, NoEventService: false, "the reply carried no subscription address");
-        return new PullPointResult(NormalizeXAddr(address), NoEventService: false, null);
+        return new PullPointResult(
+            new PullPointSubscription(NormalizeXAddr(address)!, ReferenceParameterHeaders(xml)),
+            NoEventService: false, null);
     }
 
     /// <summary>Waits for the camera to report something, for up to
     /// <paramref name="hold"/>. Returns an empty list when nothing happened (which
     /// is the normal case and not an error) and null when the subscription is no
     /// longer usable, which the caller answers by making a new one.</summary>
-    public async Task<IReadOnlyList<OnvifNotification>?> PullMessagesAsync(string subscription,
+    public async Task<IReadOnlyList<OnvifNotification>?> PullMessagesAsync(PullPointSubscription subscription,
         TimeSpan hold, CancellationToken ct)
     {
         // The camera holds the request for up to `hold`; the transport is allowed a
         // margin on top so a camera answering right at its deadline is not cut off
         // by us a moment before it speaks.
-        var xml = await CallAsync(subscription, NsEvents, "PullMessages",
+        var xml = await CallAsync(subscription.Address, NsEvents, "PullMessages",
             $"<tev:Timeout>{Duration(hold)}</tev:Timeout><tev:MessageLimit>64</tev:MessageLimit>",
-            ct, hold + TimeSpan.FromSeconds(10), ActPull).ConfigureAwait(false);
+            ct, hold + TimeSpan.FromSeconds(10), ActPull, extraHeaders: subscription.Headers).ConfigureAwait(false);
         return xml == null ? null : ParseNotifications(xml);
     }
 
-    /// <summary>Extends the subscription. False means it is gone and a new one is
-    /// needed — cameras drop subscriptions on reboot, on their own timeout, and
-    /// sometimes for no reason at all.</summary>
-    public async Task<bool> RenewSubscriptionAsync(string subscription, TimeSpan termination,
+    /// <summary>Extends the subscription. False means the camera would not — it may be
+    /// gone, or Renew may be unimplemented (optional for a pull point), so keep polling.</summary>
+    public async Task<bool> RenewSubscriptionAsync(PullPointSubscription subscription, TimeSpan termination,
         CancellationToken ct) =>
-        await CallAsync(subscription, NsWsnt, "Renew",
+        await CallAsync(subscription.Address, NsWsnt, "Renew",
             $"<wsnt:TerminationTime>{Duration(termination)}</wsnt:TerminationTime>", ct,
-            null, ActRenew).ConfigureAwait(false) != null;
+            null, ActRenew, extraHeaders: subscription.Headers).ConfigureAwait(false) != null;
 
     /// <summary>Best-effort tidy-up. A camera holds a dropped subscription until it
     /// times out, and a handful of those is a real cost on small hardware.</summary>
-    public async Task UnsubscribeAsync(string subscription, CancellationToken ct)
+    public async Task UnsubscribeAsync(PullPointSubscription subscription, CancellationToken ct)
     {
         try
         {
-            await CallAsync(subscription, NsWsnt, "Unsubscribe", "", ct, TimeSpan.FromSeconds(4),
-                ActUnsubscribe).ConfigureAwait(false);
+            await CallAsync(subscription.Address, NsWsnt, "Unsubscribe", "", ct, TimeSpan.FromSeconds(4),
+                ActUnsubscribe, extraHeaders: subscription.Headers).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -193,10 +319,27 @@ public sealed partial class OnvifClient
         return string.IsNullOrWhiteSpace(address) ? null : address;
     }
 
+    /// <summary>The SubscriptionReference's ReferenceParameters as SOAP header blocks,
+    /// each marked wsa:IsReferenceParameter="true"; empty when the camera attached none.</summary>
+    internal static string ReferenceParameterHeaders(XElement root)
+    {
+        var reference = root.Descendants().FirstOrDefault(e => e.Name.LocalName == "SubscriptionReference");
+        var parameters = reference?.Elements().FirstOrDefault(e => e.Name.LocalName == "ReferenceParameters");
+        if (parameters == null) return "";
+        var sb = new System.Text.StringBuilder();
+        foreach (var p in parameters.Elements())
+        {
+            var copy = new XElement(p);
+            copy.SetAttributeValue(XName.Get("IsReferenceParameter", NsWsa), "true");
+            sb.Append(copy.ToString(SaveOptions.DisableFormatting));
+        }
+        return sb.ToString();
+    }
+
     /// <summary>The notifications in a PullMessages reply. Every SimpleItem in the
     /// message — from Source, Key and Data alike — is flattened into one bag, because
     /// which of the three a vendor puts the interesting value in is not something
-    /// worth predicting.</summary>
+    /// worth predicting; the Source block is also kept apart, as it identifies the speaker.</summary>
     internal static List<OnvifNotification> ParseNotifications(XElement root)
     {
         var list = new List<OnvifNotification>();
@@ -205,25 +348,52 @@ public sealed partial class OnvifClient
             var topic = m.Descendants().FirstOrDefault(e => e.Name.LocalName == "Topic")?.Value?.Trim();
             if (string.IsNullOrWhiteSpace(topic)) continue;
             var items = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var source = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var data = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var si in m.Descendants().Where(e => e.Name.LocalName == "SimpleItem"))
             {
                 var n = si.Attribute("Name")?.Value;
                 var v = si.Attribute("Value")?.Value;
-                if (!string.IsNullOrEmpty(n) && v != null) items[n] = v;
+                if (string.IsNullOrEmpty(n) || v == null) continue;
+                items[n] = v;
+                var block = si.Parent?.Name.LocalName;
+                if (block == "Source") source[n] = v;
+                else if (block == "Data") data[n] = v;
             }
-            list.Add(new OnvifNotification(topic, ActiveFrom(items), items));
+            var operation = m.Descendants().Select(e => e.Attribute("PropertyOperation")?.Value)
+                .FirstOrDefault(v => !string.IsNullOrEmpty(v));
+            list.Add(new OnvifNotification(topic, ActiveFrom(data.Count > 0 ? data : items), items,
+                source.Count > 0 ? source : null, operation));
         }
         return list;
     }
 
-    /// <summary>The on/off an analytics notification carries. Cameras name it
-    /// differently per rule (State, IsMotion, IsInside…), so any of the known names
-    /// counts; null means the notification said nothing either way.</summary>
+    /// <summary>The names cameras give the on/off of a rule's Data item. Checked
+    /// first, in this order; any other "IsSomething" boolean counts after them.</summary>
+    private static readonly string[] StateItemNames =
+    {
+        "State", "IsMotion", "IsInside", "Motion", "Active", "IsPeople", "IsHuman", "IsPerson",
+        "IsVehicle", "IsPet", "IsAnimal", "IsIntrusion", "IsLineCross", "IsCrossed", "Detected", "active",
+    };
+
+    /// <summary>The on/off an analytics notification carries: any known state name, then
+    /// any "Is…" item, OR-ed. Null when the notification said nothing either way.</summary>
     internal static bool? ActiveFrom(IReadOnlyDictionary<string, string> items)
     {
-        foreach (var name in new[] { "State", "IsMotion", "IsInside", "IsTamper", "Motion", "Active", "IsPeople" })
-            if (items.TryGetValue(name, out var v) && bool.TryParse(v.Trim(), out var b))
-                return b;
-        return null;
+        bool? any = null;
+        foreach (var name in StateItemNames)
+            if (items.TryGetValue(name, out var v) && OnvifNotification.ParseBool(v) is { } b)
+            {
+                if (b) return true;
+                any = false;
+            }
+        foreach (var (name, value) in items)
+            if (name.StartsWith("Is", StringComparison.OrdinalIgnoreCase)
+                && OnvifNotification.ParseBool(value) is { } b)
+            {
+                if (b) return true;
+                any = false;
+            }
+        return any;
     }
 }

@@ -153,7 +153,10 @@ public sealed record HttpFeatures(ImageSettings? Image, int? Volume, WifiReading
     OsdSettings? Osd = null, AudioState? Audio = null);
 
 /// <summary>Discovered camera capabilities: identity, advertised support flags, probed features.</summary>
-public sealed record CameraCapabilities(VersionInfoXml? Version, XElement? Support, CameraFeatures Features);
+/// <param name="Provisional">The camera has not answered yet: a consumer that settles on
+/// its features once (the Home Assistant bridge) must not settle on these.</param>
+public sealed record CameraCapabilities(VersionInfoXml? Version, XElement? Support, CameraFeatures Features,
+    bool Provisional = false);
 
 /// <summary>
 /// The control surface of one camera, as consumed by the web API. Get/set XML
@@ -397,6 +400,10 @@ public interface ICameraControl
     /// the server the first time its HTTP API hiccuped. Control surfaces with no
     /// camera-side zone at all answer false, which is the default here.</summary>
     bool? CameraHoldsZone => false;
+
+    /// <summary>Whether this camera is known to keep no zone WITHOUT asking (no path to a
+    /// camera-side grid at all), so a save to Neolink needs no word from the editor.</summary>
+    bool ZoneNeverOnCamera => CameraHoldsZone == false;
 
     /// <summary>The zone grid for "md" or an AI type, or null when the camera has none.</summary>
     Task<DetectionZone?> GetDetectionZoneAsync(string type, CancellationToken ct) =>
@@ -2132,6 +2139,9 @@ public sealed class CameraControl : ICameraControl
         : _zoneSeen ? true
         : _zoneAbsent ? false
         : null;
+
+    /// <inheritdoc/>
+    public bool ZoneNeverOnCamera => _httpApi == null;
 
     private void LogZoneShapeOnce(JsonObject cfg, JsonObject? legacy)
     {

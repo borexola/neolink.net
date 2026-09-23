@@ -1208,18 +1208,24 @@ public static class WebApi
             static async Task<string> TestOnvifAsync(string? onvifAddress, string rtspUrl,
                 CancellationToken ct)
             {
-                var (host, _, user, pass) = NetUtil.SplitRtspUrl(rtspUrl);
-                var address = onvifAddress is { Length: > 0 } a ? a.Trim() : host;
-                if (address == null) return "";
-                using var probe = new OnvifClient(address, user ?? "", pass, "camera test",
-                    probePorts: new[] { 80, 8000, 8899 }, generic: true); // as the camera will be probed
+                // Exactly as the running camera will be probed: same ports, same login.
+                using var probe = OnvifClient.ForGenericCamera(onvifAddress, rtspUrl, "camera test");
+                if (probe == null) return "";
                 var info = await probe.TryGetDeviceInfoAsync(ct).ConfigureAwait(false);
+                var name = info == null ? "" : string.Join(" ", new[] { info.Manufacturer, info.Model }
+                    .Where(s => !string.IsNullOrWhiteSpace(s)));
+                var who = name.Length > 0 ? $" — {name}" : "";
+                // Many firmwares answer device information without a login; the
+                // first call that needed one (the video source) is what found out.
+                if (probe.AuthRejected)
+                    return $"ONVIF answered{who} but rejected the login, so this camera will stream and record " +
+                           "but show no settings — check the ONVIF user and password (a full URL in the ONVIF " +
+                           "address above can carry its own, http://user:pass@host/onvif/device_service).";
                 if (info == null)
                     return "ONVIF did not answer, so this camera will stream and record but show no settings — " +
-                           "enable ONVIF on the camera, or set its ONVIF address above.";
-                var name = string.Join(" ", new[] { info.Manufacturer, info.Model }
-                    .Where(s => !string.IsNullOrWhiteSpace(s)));
-                return $"ONVIF answered{(name.Length > 0 ? $" — {name}" : "")}, so its settings will be editable here.";
+                           "enable ONVIF on the camera, or set its ONVIF address above." +
+                           (probe.LastError is { Length: > 0 } why ? $" ({why})" : "");
+                return $"ONVIF answered{who}, so its settings will be editable here.";
             }
 
             CameraConfig? stored = null;
@@ -1244,9 +1250,13 @@ public static class WebApi
             {
                 if (req.Type == "rtsp")
                 {
-                    var url = req.RtspMain is { Length: > 0 } m && !m.Contains("****") ? m
-                        : req.RtspSub is { Length: > 0 } s && !s.Contains("****") ? s
-                        : stored?.RtspMain ?? stored?.RtspSub;
+                    // The URL as Save would store it: an edit around a masked password keeps
+                    // the stored one, so the test dials the host the admin typed.
+                    string? Sent(string? edited, string? storedUrl) =>
+                        edited is { Length: > 0 } ? ConfigEditor.UnmaskPassword(edited, storedUrl) ?? storedUrl : null;
+                    var url = Sent(req.RtspMain, stored?.RtspMain)
+                        ?? Sent(req.RtspSub, stored?.RtspSub)
+                        ?? stored?.RtspMain ?? stored?.RtspSub;
                     if (url == null || !url.StartsWith("rtsp://", StringComparison.OrdinalIgnoreCase)
                         || !Uri.TryCreate(url, UriKind.Absolute, out var uri))
                         return Results.Json(new { ok = false, message = "provide a valid rtsp:// URL to test" });
@@ -1272,9 +1282,12 @@ public static class WebApi
                     string onvifNote;
                     try
                     {
+                        // Null (not sent) = the stored address; "" = none, derive it
+                        // from the stream host — the same reading Save gives it.
                         onvifNote = await TestOnvifAsync(
-                            req.OnvifAddress is { Length: > 0 } oa && !oa.Contains("****") ? oa
-                                : stored?.OnvifAddress,
+                            req.OnvifAddress == null ? stored?.OnvifAddress
+                                : req.OnvifAddress.Length == 0 ? null
+                                : ConfigEditor.UnmaskPassword(req.OnvifAddress, stored?.OnvifAddress) ?? stored?.OnvifAddress,
                             url, onvifCts.Token);
                     }
                     catch (OperationCanceledException) when (!ctx.RequestAborted.IsCancellationRequested)
@@ -2108,6 +2121,13 @@ public static class WebApi
                 if (!control.Online)
                     return Results.Json(new { online = false });
                 var caps = await control.GetCapabilitiesAsync(reqCt);
+                // A non-Reolink camera answers provisionally until its background ONVIF probe
+                // lands: wait a little for the real answer rather than open an empty panel.
+                for (int i = 0; caps.Provisional && control is GenericCameraControl { ProbePending: true } && i < 16; i++)
+                {
+                    await Task.Delay(500, reqCt);
+                    caps = await control.GetCapabilitiesAsync(reqCt);
+                }
                 // Refresh the cached capability signals the recording tab filters
                 // its event-type chips with (only a change touches the disk).
                 o.CameraState?.SetDetectionCaps(name, doorbell: caps.Features.Doorbell);
@@ -2149,6 +2169,9 @@ public static class WebApi
                         // Every setting on this camera came from ONVIF: the panel
                         // leaves out what the standard cannot do, and says so.
                         onvif = control.OnvifOnly,
+                        // The camera knowably keeps no detection zone of its own, so Neolink keeps one
+                        // and the panel offers the editor. A Reolink with an unreachable HTTP API is not that.
+                        localZone = CameraStateStore.ZoneIsLocal(control.CameraHoldsZone, "md", control.ZoneTypes().Count),
                     },
                     support = caps.Support == null ? null : XmlToJson(caps.Support),
                 });
@@ -2265,7 +2288,7 @@ public static class WebApi
         // from a 4K frame, and the decode is paid for per grab.
         const int StillHeight = 720;
 
-        static bool IsJpeg(byte[]? b) => b is { Length: > 100 } && b[0] == 0xFF && b[1] == 0xD8;
+        static bool IsJpeg(byte[]? b) => Neolink.Media.FrameGrab.IsJpeg(b);
 
         // The stream to take a still from when the camera has no snapshot command:
         // the sub-stream first (a small frame decodes in a fraction of the time),
@@ -2385,6 +2408,12 @@ public static class WebApi
                     }
                     if (IsJpeg(jpeg)) unavailable = null;
                     else unavailable ??= "no frame could be taken from the camera's stream";
+                }
+                else if (!IsJpeg(jpeg) && cam.Control.OnvifOnly && !cam.Control.HasSnapshot)
+                {
+                    // No stream is carrying video right now (reconnecting): a passing state,
+                    // so the last frame stands in rather than "does not support".
+                    unavailable ??= "no live video to take a still from (the stream is reconnecting)";
                 }
                 if (IsJpeg(jpeg))
                 {
@@ -2837,8 +2866,11 @@ public static class WebApi
         app.MapPost("/api/cameras/{name}/ptzpreset", (string name, PtzPresetRequest req, HttpContext ctx) =>
             ExecAsync(name, ctx, mutating: true, async (control, reqCt) =>
             {
-                if (req.Id is not { } id || id is < 0 or > 63)
-                    return Results.Json(new { error = "provide id: 0-63" }, statusCode: 400);
+                // Reolink numbers its slots 0-63; an ONVIF camera's presets are
+                // numbered as listed, and a head may hold more.
+                var maxId = control.OnvifOnly ? GenericCameraControl.MaxPresetSlots : 63;
+                if (req.Id is not { } id || id < 0 || id > maxId)
+                    return Results.Json(new { error = $"provide id: 0-{maxId}" }, statusCode: 400);
                 if (req.Save == true)
                 {
                     var presetName = (req.Name ?? "").Trim();
@@ -3050,6 +3082,10 @@ public static class WebApi
                 if (control.OnvifOnly && t == "md" && control.CameraHoldsZone == null)
                     await control.GetDetectionZoneAsync(t, reqCt);
                 var local = LocalZoneFits(control, t) && store != null;
+                // A Reolink's zone goes to the camera unless the editor asked for "Save to Neolink",
+                // and even then only for a camera that can hold none (a missed grid may come back).
+                if (local && !control.OnvifOnly && req.Storage != "neolink" && !control.ZoneNeverOnCamera)
+                    local = false;
                 // The editor says where it believed the zone lived. If that changed
                 // while it was open — a camera answering for the first time — the grid
                 // it drew is the wrong one for where the save would now go, so it is

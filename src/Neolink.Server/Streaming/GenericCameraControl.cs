@@ -39,6 +39,9 @@ public sealed class GenericCameraControl : ICameraControl
     private readonly SemaphoreSlim _profileGate = new(1, 1);
     private IReadOnlyList<(string Kind, OnvifProfile Profile)>? _bound;
     private DateTime _boundAt;
+    private volatile bool _boundByUri;
+    /// <summary>Whether the camera has said which URI each profile streams at.</summary>
+    private volatile bool _urisKnown;
 
     public GenericCameraControl(string cameraName, IReadOnlyList<RtspCameraService> services,
         OnvifClient? onvif = null, IReadOnlyList<(string Kind, string Url)>? streams = null)
@@ -61,10 +64,13 @@ public sealed class GenericCameraControl : ICameraControl
 
     public bool HasImagingFallback => _onvif?.HasImaging == true;
 
-    /// <summary>Only offered once ONVIF has actually answered: a button that can
-    /// only fail is worse than no button. The capability probe reads the device
-    /// information first, so this is decided by the time the panel asks.</summary>
-    public bool CanReboot => _onvif?.Ready == true;
+    /// <summary>Only once ONVIF has answered, and not while it rejects the login: a
+    /// button that can only fail is worse than no button.</summary>
+    public bool CanReboot => _onvif is { Ready: true, AuthRejected: false };
+
+    /// <summary>Every stream of this camera is parked on purpose. Neolink holds no
+    /// connection to a suspended camera, and ONVIF calls are connections.</summary>
+    private bool Suspended => _services.Count > 0 && _services.All(s => s.Suspended);
 
     private static readonly CameraCapabilities NoCapabilities = new(null, null,
         new CameraFeatures(Ptz: false, Led: false, Pir: false, Battery: false, Talk: false));
@@ -75,16 +81,31 @@ public sealed class GenericCameraControl : ICameraControl
     /// cameras one after another — so a camera that answers slowly here delays every
     /// camera behind it, Reolink ones included.</summary>
     private CameraCapabilities? _caps;
+    /// <summary>The last incomplete answer, and when to ask for a better one — every
+    /// minute, not on every 20-second tick.</summary>
+    private CameraCapabilities? _lastCaps;
+    private DateTime _capsRetryAt;
+    private static readonly TimeSpan CapsRetry = TimeSpan.FromSeconds(60);
 
     public async Task<CameraCapabilities> GetCapabilitiesAsync(CancellationToken ct)
     {
         if (_onvif == null) return NoCapabilities;
         ReprobeZoneIfDue();
         if (_caps is { } cached) return cached;
+        // Never blocks on discovery: callers walk every camera in turn, and an
+        // unreachable ONVIF would hold the Reolinks behind it for a port scan.
+        if (!_onvif.Ready)
+        {
+            Kick();
+            // Provisional, so a consumer that settles on features once (Home Assistant)
+            // does not settle on "nothing" because the camera was still booting.
+            return NoCapabilities with { Provisional = true };
+        }
+        if (DateTime.UtcNow < _capsRetryAt && _lastCaps is { } recent) return recent;
         var info = await _onvif.TryGetDeviceInfoAsync(ct).ConfigureAwait(false);
-        // HasPtz only means something once the profiles have been read, and reading
-        // them is what this surface wants anyway.
-        await _onvif.TryGetProfilesAsync(ct).ConfigureAwait(false);
+        // HasPtz only means something once the profiles have been read; reading them
+        // through the binding also tells the client which profile is this channel.
+        var bound = await BoundProfilesAsync(ct).ConfigureAwait(false);
         // A PTZ configuration only says there is a head; the node says which axes it
         // drives. When the node cannot be read the head is assumed to pan and tilt —
         // which is what every camera got before the node was asked — and nothing is
@@ -93,10 +114,59 @@ public sealed class GenericCameraControl : ICameraControl
         var caps = new CameraCapabilities(ToVersion(info), null,
             new CameraFeatures(Ptz: _onvif.HasPtz && (node?.PanTilt ?? true), Led: false, Pir: false,
                 Battery: false, Talk: false, Zoom: node?.Zoom == true));
-        // Only a camera that actually answered is worth remembering: caching a
-        // silence would leave it without settings until Neolink restarts.
-        if (_onvif.Ready && (!_onvif.HasPtz || _onvif.PtzNodeSettled)) _caps = caps;
+        // Only a camera that answered EVERYTHING is worth remembering: caching one
+        // timed-out read would leave it without settings until Neolink restarts.
+        var complete = _onvif.Ready && info != null && bound != null
+                       && (!_onvif.HasPtz || _onvif.PtzNodeSettled);
+        if (complete)
+        {
+            _caps = caps;
+            _incompleteSince = DateTime.MinValue;
+        }
+        else
+        {
+            // Provisional while the missing answer may still come, but not for ever: a
+            // read that never answers must not keep the camera unannounced.
+            if (_incompleteSince == DateTime.MinValue) _incompleteSince = DateTime.UtcNow;
+            if (DateTime.UtcNow - _incompleteSince < ProvisionalFor) caps = caps with { Provisional = true };
+            _lastCaps = caps;
+            _capsRetryAt = DateTime.UtcNow + CapsRetry;
+        }
         return caps;
+    }
+
+    private DateTime _incompleteSince = DateTime.MinValue;
+    private static readonly TimeSpan ProvisionalFor = TimeSpan.FromMinutes(3);
+
+    /// <summary>This camera's own video source tokens. Null while unknown (ask again);
+    /// empty, and final, when the profiles were guessed from frame size so no filter is safe.</summary>
+    public async Task<IReadOnlyCollection<string>?> SourceTokensAsync(CancellationToken ct)
+    {
+        var bound = await BoundProfilesAsync(ct).ConfigureAwait(false);
+        if (bound == null || !_urisKnown) return null;
+        if (!_boundByUri) return Array.Empty<string>();
+        return bound.SelectMany(b => new[] { b.Profile.VideoSourceToken, b.Profile.SourceToken })
+            .Where(t => !string.IsNullOrEmpty(t)).Select(t => t!).Distinct(StringComparer.Ordinal).ToList();
+    }
+
+    /// <summary>Whether ONVIF has not answered yet but may still (discovery due or under
+    /// way), so a caller that can wait a moment for the real answer should.</summary>
+    public bool ProbePending => _onvif != null && !_onvif.Ready && (_onvif.DiscoveryDue || _onvif.Discovering);
+
+    /// <summary>Starts discovery in the background. Never inline: callers walk every
+    /// camera in turn, and a port scan there holds every camera behind this one.</summary>
+    private void Kick()
+    {
+        if (_onvif != null && !Suspended) _onvif.KickDiscovery();
+    }
+
+    /// <summary>True when ONVIF has answered; otherwise kicks discovery (see
+    /// <see cref="Kick"/>) and the read answers "nothing yet".</summary>
+    private bool ReadyOrKick()
+    {
+        if (_onvif is { Ready: true }) return true;
+        Kick();
+        return false;
     }
 
     /// <summary>ONVIF's device information in the shape the panel's identity strip
@@ -237,10 +307,23 @@ public sealed class GenericCameraControl : ICameraControl
         try
         {
             if (_bound != null && DateTime.UtcNow - _boundAt < ProfileCacheFor) return _bound;
+            if (!ReadyOrKick()) return null;
             var profiles = await _onvif.TryGetProfilesAsync(ct).ConfigureAwait(false);
             if (profiles is not { Count: > 0 }) return null;
             var uris = await _onvif.TryGetStreamUrisAsync(ct).ConfigureAwait(false);
-            _bound = Bind(_streams, profiles, uris);
+            var bound = Bind(_streams, profiles, uris);
+            // Matched by URI, or guessed from frame size? Only a match says which
+            // channel of a multi-channel device this camera is (see SourceTokensAsync).
+            _boundByUri = uris != null && bound.Count == _streams.Count && bound.All(b =>
+                uris.TryGetValue(b.Profile.Token, out var u)
+                && SameStream(u, _streams.FirstOrDefault(s => s.Kind == b.Kind).Url));
+            _urisKnown = uris != null;
+            // The main stream's profile is the camera's channel for every per-channel
+            // ONVIF call (snapshot, PTZ, overlays, picture, the motion grid).
+            await _onvif.SetPreferredProfileAsync(
+                (bound.FirstOrDefault(b => b.Kind == "mainStream").Profile ?? bound.FirstOrDefault().Profile)?.Token,
+                ct).ConfigureAwait(false);
+            _bound = bound;
             _boundAt = DateTime.UtcNow;
             return _bound;
         }
@@ -268,44 +351,58 @@ public sealed class GenericCameraControl : ICameraControl
             bound.Add((kind, match));
         }
         if (bound.Count == streams.Count) return bound;
-        // Nothing (or not everything) matched: fall back to biggest-first over the
-        // profiles still free, in the streams' own order — main before sub.
-        var spare = profiles.Where(p => !taken.Contains(p.Token))
-            .OrderByDescending(p => (long)p.Width * p.Height).ToList();
-        int i = 0;
+        // Fall back to frame size: biggest for a main stream, SMALLEST for a sub stream,
+        // so a sub-only config is never handed the main encoder's settings to save over.
+        var spare = profiles.Where(p => !taken.Contains(p.Token)).ToList();
         foreach (var (kind, _) in streams)
         {
-            if (bound.Any(b => b.Kind == kind)) continue;
-            if (i >= spare.Count) break;
-            bound.Add((kind, spare[i++]));
+            if (bound.Any(b => b.Kind == kind) || spare.Count == 0) continue;
+            var pick = kind == "subStream"
+                ? spare.OrderBy(p => (long)p.Width * p.Height == 0 ? long.MaxValue : (long)p.Width * p.Height).First()
+                : spare.OrderByDescending(p => (long)p.Width * p.Height).First();
+            spare.Remove(pick);
+            bound.Add((kind, pick));
         }
         // Keep the config's order, so "mainStream" leads the panel's list.
         return streams.Select(s => bound.FirstOrDefault(b => b.Kind == s.Kind))
             .Where(b => b.Profile != null).ToList()!;
     }
 
-    /// <summary>Whether an ONVIF stream URI and a configured RTSP URL name the same
-    /// stream. Only the path and query are compared: the host can differ (the camera
-    /// may report its own name, or a NAT address), and the credentials live in the
-    /// configured URL alone.</summary>
+    /// <summary>Whether an ONVIF URI and a configured RTSP URL name the same stream: same
+    /// path and the configured query parameters (Dahua tells streams apart by query alone).</summary>
     internal static bool SameStream(string? onvifUri, string? configured)
     {
         if (!Uri.TryCreate(onvifUri, UriKind.Absolute, out var a)
             || !Uri.TryCreate(configured, UriKind.Absolute, out var b))
             return false;
-        // PATH only. Plenty of cameras append their own query to the URI they report
-        // (session ids, transport hints) that nobody would ever have typed into the
-        // config — comparing those would mean no profile ever matched and every
-        // camera silently fell back to guessing by frame size.
-        return string.Equals(a.AbsolutePath.TrimEnd('/'), b.AbsolutePath.TrimEnd('/'),
-            StringComparison.OrdinalIgnoreCase);
+        if (!string.Equals(a.AbsolutePath.TrimEnd('/'), b.AbsolutePath.TrimEnd('/'),
+                StringComparison.OrdinalIgnoreCase))
+            return false;
+        var wanted = QueryPairs(b.Query);
+        if (wanted.Count == 0) return true;
+        var offered = QueryPairs(a.Query);
+        return wanted.All(kv => offered.TryGetValue(kv.Key, out var v)
+                                && string.Equals(v, kv.Value, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static Dictionary<string, string> QueryPairs(string query)
+    {
+        var pairs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var part in query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var eq = part.IndexOf('=');
+            var key = Uri.UnescapeDataString(eq < 0 ? part : part[..eq]);
+            var value = eq < 0 ? "" : Uri.UnescapeDataString(part[(eq + 1)..]);
+            if (key.Length > 0) pairs[key] = value;
+        }
+        return pairs;
     }
 
     // ------------------------------------------------------------ picture / OSD / presets
 
     public async Task<HttpFeatures?> GetHttpFeaturesAsync(CancellationToken ct)
     {
-        if (_onvif == null) return null;
+        if (_onvif == null || !ReadyOrKick()) return null;
         var image = await GetImageSettingsAsync(ct).ConfigureAwait(false);
         var osd = await GetOsdSettingsAsync(ct).ConfigureAwait(false);
         var presets = await GetPtzPresetsAsync(ct).ConfigureAwait(false);
@@ -316,7 +413,7 @@ public sealed class GenericCameraControl : ICameraControl
 
     public async Task<ImageSettings?> GetImageSettingsAsync(CancellationToken ct)
     {
-        if (_onvif == null) return null;
+        if (_onvif == null || !ReadyOrKick()) return null;
         var o = await _onvif.TryGetImagingAsync(ct).ConfigureAwait(false);
         if (o == null) return null;
         // Hue, anti-flicker and flip/mirror have no ONVIF imaging equivalent, and
@@ -344,7 +441,7 @@ public sealed class GenericCameraControl : ICameraControl
 
     public async Task<OsdSettings?> GetOsdSettingsAsync(CancellationToken ct)
     {
-        if (_onvif == null) return null;
+        if (_onvif == null || !ReadyOrKick()) return null;
         var osds = await _onvif.TryGetOsdsAsync(ct).ConfigureAwait(false);
         if (osds is not { Count: > 0 }) return null;
         var (name, time) = SplitOsds(osds);
@@ -388,17 +485,22 @@ public sealed class GenericCameraControl : ICameraControl
 
     public async Task<IReadOnlyList<PtzPresetInfo>?> GetPtzPresetsAsync(CancellationToken ct)
     {
-        if (_onvif is not { HasPtz: true }) return null;
+        if (_onvif is not { HasPtz: true } || !ReadyOrKick()) return null;
         var presets = await _onvif.TryGetPresetsAsync(ct).ConfigureAwait(false);
         if (presets == null) return null;
         // The panel saves into the first FREE slot, so a few empty ones are offered
         // past the camera's own — ONVIF creates a preset on demand rather than
-        // filling a fixed table, and it refuses once the head is full.
+        // filling a fixed table, and it refuses once the head is full, which the
+        // node says (MaximumNumberOfPresets); a head that did not say gets sixteen.
+        var max = Math.Min(_onvif.PtzNode?.MaxPresets ?? 16, MaxPresetSlots);
         var list = presets.Select((p, i) => new PtzPresetInfo(i + 1, p.Name, true)).ToList();
-        for (int i = presets.Count; i < Math.Min(presets.Count + 4, 16); i++)
+        for (int i = presets.Count; i < Math.Min(presets.Count + 4, max); i++)
             list.Add(new PtzPresetInfo(i + 1, "", false));
         return list;
     }
+
+    /// <summary>The most preset slots ever offered: the web API's ceiling on a preset id.</summary>
+    internal const int MaxPresetSlots = 255;
 
     public Task PtzToPresetAsync(int id, CancellationToken ct) =>
         _onvif is { HasPtz: true } o
@@ -440,9 +542,16 @@ public sealed class GenericCameraControl : ICameraControl
     /// <summary>ONVIF advertises a snapshot URI, which is what a Profile S camera is
     /// meant to offer and far cheaper than decoding a frame out of the video. A
     /// camera that offers none returns null here and the caller falls back to the
-    /// stream (see Media/FrameGrab).</summary>
+    /// stream (see Media/FrameGrab). A suspended camera is not asked: Neolink holds
+    /// no connection to it.</summary>
     public Task<byte[]?> SnapshotAsync(CancellationToken ct) =>
-        _onvif?.TrySnapshotAsync(ct) ?? Task.FromResult<byte[]?>(null);
+        _onvif == null || Suspended || !ReadyOrKick() ? Task.FromResult<byte[]?>(null) : _onvif.TrySnapshotAsync(ct);
+
+    /// <summary>The sub stream's still, for consumers with a size cap (the MQTT
+    /// camera entity): a 4K main-profile snapshot would be dropped at the broker.</summary>
+    public Task<byte[]?> SnapshotSmallAsync(CancellationToken ct) =>
+        _onvif == null || Suspended || !ReadyOrKick() ? Task.FromResult<byte[]?>(null)
+            : _onvif.TrySnapshotAsync(small: true, ct);
 
     /// <summary>Only once the camera has actually given a snapshot URI. Until then
     /// the stream-decoded still stands in, which is what a camera with no ONVIF (or
@@ -468,7 +577,7 @@ public sealed class GenericCameraControl : ICameraControl
     /// zoom or will not say where the lens is.</summary>
     public async Task<XElement?> GetZoomFocusAsync(CancellationToken ct)
     {
-        if (_onvif is not { HasPtz: true } o) return null;
+        if (_onvif is not { HasPtz: true } o || !ReadyOrKick()) return null;
         if (await o.TryGetPtzNodeAsync(ct).ConfigureAwait(false) is not { Zoom: true } node) return null;
         if ((await o.TryGetZoomAsync(ct).ConfigureAwait(false)).At is not { } at) return null;
         return new XElement("zoomFocus",
@@ -532,10 +641,9 @@ public sealed class GenericCameraControl : ICameraControl
     private static readonly TimeSpan ZoneNoneRetry = TimeSpan.FromMinutes(30);
 
     /// <summary>Whether the zone lives on the camera (its ONVIF cell motion grid) or
-    /// on Neolink. Unknown only until the camera has first been asked: a camera that
-    /// could not be asked keeps its zone on Neolink meanwhile — which is where every
-    /// camera without a Reolink API kept it before this could be asked at all — and
-    /// is asked again in the background (see <see cref="GetCapabilitiesAsync"/>).
+    /// on Neolink. Unknown until the camera has answered (or, with only its analytics
+    /// silent, been asked a few times); one that could not be asked keeps its zone on
+    /// Neolink meanwhile and is asked again (see <see cref="GetCapabilitiesAsync"/>).
     /// Once the camera has shown a grid of its own, that is where the zone lives.</summary>
     public bool? CameraHoldsZone => _onvif == null ? false : _zone switch
     {
@@ -543,6 +651,11 @@ public sealed class GenericCameraControl : ICameraControl
         ZoneNotAsked => null,
         _ => false,
     };
+
+    /// <inheritdoc/>
+    /// <remarks>Once settled on Neolink (the camera said "no grid", or could not be
+    /// reached) the zone stays there until the camera shows one; no editor's word needed.</remarks>
+    public bool ZoneNeverOnCamera => _onvif == null || _zone is ZoneNone or ZoneUnsure;
 
     /// <summary>The camera's own grid could not be read just now. Only consulted
     /// once it has shown one: a camera whose grid is on Neolink is never asked.</summary>
@@ -552,6 +665,14 @@ public sealed class GenericCameraControl : ICameraControl
     public async Task<DetectionZone?> GetDetectionZoneAsync(string type, CancellationToken ct)
     {
         if (type != "md" || _onvif == null) return null;
+        if (!_onvif.Ready)
+        {
+            // Not asked inline (see Kick). "Not yet" while discovery may still succeed;
+            // once it has failed the camera could not be asked, and keeps its zone on Neolink.
+            if (ProbePending) { Kick(); return null; }
+            Settle(OnvifZoneAnswer.Unknown);
+            return null;
+        }
         var (answer, zone) = await _onvif.ReadCellZoneAsync(ct).ConfigureAwait(false);
         Settle(answer);
         return zone == null ? null : new DetectionZone("md", zone.Cols, zone.Rows, zone.Table);
@@ -561,7 +682,19 @@ public sealed class GenericCameraControl : ICameraControl
     {
         if (type != "md" || _onvif == null)
             throw new NotSupportedException($"{CameraName} keeps no {type} detection zone of its own");
-        await _onvif.WriteCellZoneAsync(table, ct).ConfigureAwait(false);
+        try
+        {
+            await _onvif.WriteCellZoneAsync(table, ct).ConfigureAwait(false);
+        }
+        catch (NotSupportedException) when (_onvif.CellWritesIgnored)
+        {
+            // Settle cannot leave ZoneHolds on a read, so the move to Neolink happens here.
+            _zone = ZoneNone;
+            _zoneRetryAt = DateTime.UtcNow + ZoneNoneRetry;
+            Log.Info($"{CameraName}: the camera ignored the motion grid written over ONVIF — " +
+                     "the detection zone is kept on Neolink instead (it limits the live boxes, not the camera's alerts)");
+            throw;
+        }
         Log.Info($"{CameraName}: motion grid written to the camera over ONVIF " +
                  $"({table.Count(ch => ch == '0')} of {table.Length} cells ignored)");
     }

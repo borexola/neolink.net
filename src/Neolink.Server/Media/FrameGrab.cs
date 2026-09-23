@@ -34,12 +34,15 @@ public static class FrameGrab
     /// the queue short.</summary>
     private static readonly SemaphoreSlim Decoders = new(2, 2);
 
-    /// <summary>Frames fed to the decoder after the keyframe. One keyframe alone
-    /// decodes, but a few following packets let the decoder settle and cost
-    /// nothing — they are already in the buffer.</summary>
-    private const int MaxFollowing = 8;
+    /// <summary>Frames fed to the decoder after the keyframe; the still is the LAST of them,
+    /// since the keyframe alone can be a whole GOP old. Bounded because every frame is a decode.</summary>
+    internal const int MaxFollowing = 16;
 
     private static int _missingLogged;
+
+    /// <summary>Whether these bytes are a JPEG worth serving: cameras answer a failed snapshot
+    /// with an empty body or an HTML error page more often than with an error status.</summary>
+    public static bool IsJpeg(byte[]? b) => b is { Length: > 100 } && b[0] == 0xFF && b[1] == 0xD8;
 
     /// <summary>A JPEG of the stream's current picture, or null when one can't be
     /// made. Never throws (except on the caller's own cancellation).</summary>
@@ -91,12 +94,13 @@ public static class FrameGrab
                 // its shape instead of being squeezed into a 16:9 box. A frame
                 // already shorter than the bound is left alone.
                 "-vf", $"scale=-2:'min({maxHeight},ih)'",
-                "-frames:v", "1",
+                // Every buffered frame, and the last one is the still (see MaxFollowing).
+                "-frames:v", packets.Count.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 "-q:v", "4",
                 "-f", "image2pipe", "-c:v", "mjpeg", "pipe:1",
             }, chunks, TimeSpan.FromSeconds(20), ct).ConfigureAwait(false);
 
-            var jpeg = Ai.AiPreroll.SplitJpegs(outBytes).FirstOrDefault();
+            var jpeg = Ai.AiPreroll.SplitJpegs(outBytes).LastOrDefault();
             if (jpeg is not { Length: > 100 })
             {
                 Log.Debug($"{hub.Name}: frame grab produced no JPEG from {packets.Count} packet(s)" +
@@ -135,7 +139,7 @@ public static class FrameGrab
         try
         {
             // Stop at the KEYFRAME, not at a packet count. One decodable picture is
-            // all that leaves this method (ffmpeg is told -frames:v 1), so waiting
+            // all that leaves this method (the last frame decoded), so waiting
             // on for frames that will be thrown away would spend the whole timeout
             // on a stream that had already given us what we came for. Anything that
             // happens to be buffered alongside it comes along for free.
@@ -159,7 +163,7 @@ public static class FrameGrab
     {
         if (packet is not HubVideo v) return;
         if (v.Keyframe) run.Clear();
-        else if (run.Count == 0 || run.Count > MaxFollowing) return;
+        else if (run.Count == 0 || run.Count > MaxFollowing) return; // the keyframe plus MaxFollowing
         run.Add(v);
     }
 }
