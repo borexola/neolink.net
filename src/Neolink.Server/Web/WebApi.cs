@@ -164,7 +164,7 @@ public sealed class WebApiOptions
 ///   WS  /api/stream?path=...                — live fMP4 video (MSE-compatible)
 ///   GET /api/cameras/{name}/capabilities    — discovered device info + feature flags
 ///   GET /api/cameras/{name}/streaminfo      — encode profiles (resolution/fps/bitrate tables)
-///   GET/POST/PUT .../settings/stream        — current encode selection / change it (needs http_address)
+///   GET/POST/PUT .../settings/stream        — current encode selection / change it (needs http_address, or ONVIF)
 ///   GET/POST .../led /pir /zoomfocus /floodlight /siren /privacy /whiteled;
 ///   POST .../ptz /reboot; GET .../battery   — camera control
 ///   GET .../httpfeatures — combined HTTP-API extras (picture/volume/Wi-Fi/presets/
@@ -1032,10 +1032,13 @@ public static class WebApi
             {
                 foreach (var url in new[] { req.RtspMain, req.RtspSub })
                 {
-                    if (url is { Length: > 0 } && !url.Contains("****")
+                    // A masked URL is checked too: the mask is a valid password, and an edit around it is saved.
+                    // The login is split off first, as the puller does: System.Uri rejects a raw '@' or '#' in it.
+                    if (url is { Length: > 0 }
                         && (!url.StartsWith("rtsp://", StringComparison.OrdinalIgnoreCase)
-                            || !Uri.TryCreate(url, UriKind.Absolute, out _)))
-                        return Results.Json(new { error = $"\"{url}\" is not a valid rtsp:// URL" }, statusCode: 400);
+                            || !Uri.TryCreate(OnvifClient.SplitCredentials(url).Address, UriKind.Absolute, out _)))
+                        return Results.Json(new { error = $"\"{ConfigEditor.MaskRtspPassword(url)}\" is not a valid rtsp:// URL" },
+                            statusCode: 400);
                 }
                 if (req.OriginalName == null
                     && string.IsNullOrWhiteSpace(req.RtspMain) && string.IsNullOrWhiteSpace(req.RtspSub))
@@ -1145,9 +1148,7 @@ public static class WebApi
                     if (req.Record is { } record)
                         ConfigEditor.Set(cam, "record", record ? null : false);
                 });
-                // Per-camera state is keyed by name, so a rename has to take it
-                // along — otherwise the camera comes back un-suspended, with its
-                // cached capabilities gone and its detection zone forgotten.
+                // The detection zone Neolink keeps is keyed by name, so it follows a rename (only the zone).
                 if (req.OriginalName is { Length: > 0 } was)
                     o.CameraState?.Rename(was, name);
                 Log.Warn($"config.json cameras updated via the web UI by '{SessionName(ctx)}' " +
@@ -1176,9 +1177,7 @@ public static class WebApi
                         ?? throw new FormatException($"unknown camera \"{name}\"");
                     cams.Remove(cam);
                 });
-                // Its per-camera state goes with it. Kept, it would lie in wait: add a
-                // camera under the same name later and it would come back suspended,
-                // or with a detection zone drawn for a different view entirely.
+                // Its stored detection zone goes too, so a new camera of the same name does not inherit it.
                 o.CameraState?.Forget(name);
                 Log.Warn($"config.json camera \"{name}\" deleted via the web UI by '{SessionName(ctx)}' — restart to apply");
                 return Results.Json(new { ok = true, requiresRestart = true });
@@ -2121,9 +2120,10 @@ public static class WebApi
                 if (!control.Online)
                     return Results.Json(new { online = false });
                 var caps = await control.GetCapabilitiesAsync(reqCt);
-                // A non-Reolink camera answers provisionally until its background ONVIF probe
-                // lands: wait a little for the real answer rather than open an empty panel.
-                for (int i = 0; caps.Provisional && control is GenericCameraControl { ProbePending: true } && i < 16; i++)
+                // A non-Reolink camera answers provisionally until its ONVIF probe lands: wait a little
+                // for the real answer, unless the probe has already failed (no ONVIF).
+                for (int i = 0; caps.Provisional && control is GenericCameraControl { ProbePending: true, DiscoveryFailed: false }
+                                && i < 16; i++)
                 {
                     await Task.Delay(500, reqCt);
                     caps = await control.GetCapabilitiesAsync(reqCt);
@@ -2196,9 +2196,8 @@ public static class WebApi
                 return Results.Json(new { profiles = (object?)profiles ?? Array.Empty<object>() });
             }));
 
-        // Stream encode settings ride the camera's Reolink HTTP API (http_address in
-        // the config); the Baichuan protocol has no verified setter. The camera
-        // restarts the affected stream to apply — CameraService reconnects on its own.
+        // Stream encode settings ride the Reolink HTTP API (http_address; Baichuan has no
+        // verified setter), or ONVIF on a non-Reolink camera. The stream restarts to apply.
         Task<IResult> SetStreamSettings(string name, StreamSettingsRequest req, HttpContext ctx) =>
             ExecAsync(name, ctx, mutating: true, async (control, reqCt) =>
             {
@@ -2223,7 +2222,12 @@ public static class WebApi
             {
                 var enc = await control.GetStreamSettingsAsync(reqCt);
                 return enc == null
-                    ? Results.Json(new { error = "reading stream settings requires the camera's http_address" }, statusCode: 404)
+                    ? Results.Json(new
+                    {
+                        error = control.OnvifOnly
+                            ? "stream settings come from the camera's ONVIF media profiles, which could not be read"
+                            : "reading stream settings requires the camera's http_address",
+                    }, statusCode: 404)
                     : Results.Json(enc.Select(s => new
                     {
                         stream = s.Stream,
@@ -2298,7 +2302,9 @@ public static class WebApi
         // for a keyframe that is never coming.
         static IStreamHub? StillHub(WebCameraInfo cam) =>
             cam.Streams.FirstOrDefault(s => s.Kind == "subStream" && s.Hub.HasBufferedGop)?.Hub
-            ?? cam.Streams.FirstOrDefault(s => s.Hub.HasBufferedGop)?.Hub;
+            ?? cam.Streams.FirstOrDefault(s => s.Hub.HasBufferedGop)?.Hub
+            // Live but with a group too big to buffer: the grab waits for its next keyframe.
+            ?? cam.Streams.FirstOrDefault(s => s.Hub.LiveVideo)?.Hub;
 
         async Task<IResult> SnapshotAsync(string name, HttpContext ctx)
         {
@@ -2369,19 +2375,8 @@ public static class WebApi
                 catch (CameraCommandException ex) { unavailable = ex.Message; }
                 if (jpeg != null && !IsJpeg(jpeg))
                     unavailable ??= "camera returned an invalid snapshot";
-                // A camera with NO snapshot command of its own — every generic RTSP
-                // one — gets its still out of the stream Neolink is already
-                // carrying. That is the only picture it can ever have, and what the
-                // detection-zone editor draws its grid over.
-                //
-                // A camera that HAS a snapshot command and simply failed is left
-                // exactly as it always was: offline, asleep or busy is not something
-                // an ffmpeg decode per poll would fix, and a Reolink camera must not
-                // start paying one.
-                // A non-Reolink camera falls back to the stream even when it DOES have
-                // an ONVIF snapshot, if that snapshot came back empty: the stream is
-                // the only other picture it has, and without it a camera whose
-                // snapshot URI hiccups would have no still at all.
+                // A generic camera whose ONVIF snapshot is missing or failed gets its still out of the
+                // stream; a Reolink's failed snapshot is not something an ffmpeg decode per poll would fix.
                 if (!IsJpeg(jpeg) && (!cam.Control.HasSnapshot || cam.Control.OnvifOnly)
                     && StillHub(cam) is { } hub)
                 {

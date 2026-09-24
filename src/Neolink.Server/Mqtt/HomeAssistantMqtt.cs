@@ -1891,7 +1891,28 @@ internal sealed class CameraBridge
         // a camera can go offline mid-event and the OFF still has to land.
         await PublishRecordingStateAsync(force: false).ConfigureAwait(false);
         if (!_control.Online) return;
+        // A generic camera's reads go over ONVIF, which can be slow: they run beside the loop,
+        // one at a time, so the cameras after it (a Reolink's motion-off) are not held up.
+        if (_control is GenericCameraControl)
+        {
+            if (Interlocked.Exchange(ref _cameraRefreshing, 1) == 0)
+                _ = Task.Run(async () =>
+                {
+                    try { await RefreshFromCameraAsync(ct).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { }
+                    catch (Exception ex) { Log.Debug($"MQTT: refresh for '{Id}' failed: {Log.Flatten(ex)}"); }
+                    finally { Volatile.Write(ref _cameraRefreshing, 0); }
+                }, CancellationToken.None);
+            return;
+        }
+        await RefreshFromCameraAsync(ct).ConfigureAwait(false);
+    }
 
+    private int _cameraRefreshing;
+
+    /// <summary>The part of the refresh that asks the camera itself.</summary>
+    private async Task RefreshFromCameraAsync(CancellationToken ct)
+    {
         // First time online: probe capabilities, then announce the feature entities.
         if (!_featuresAnnounced)
         {

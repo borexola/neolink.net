@@ -71,6 +71,7 @@ public sealed partial class OnvifClient
     /// must move, the alarm delays) stay exactly as the camera had them.</summary>
     public async Task WriteCellZoneAsync(string table, CancellationToken ct)
     {
+        string? before;
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
@@ -84,7 +85,7 @@ public sealed partial class OnvifClient
             if (table.Length != target.Cols * target.Rows)
                 throw new ArgumentException(
                     $"table must be {target.Cols}x{target.Rows} = {target.Cols * target.Rows} cells of '0'/'1'");
-            var before = CellValue(target.Rule)?.Attribute("Value")?.Value is { } was
+            before = CellValue(target.Rule)?.Attribute("Value")?.Value is { } was
                 ? DecodeActiveCells(was, target.Cols, target.Rows) : null;
             var body = $"<tan:ConfigurationToken>{Esc(target.Config)}</tan:ConfigurationToken>" +
                        RuleForWrite(target.Rule, EncodeActiveCells(table));
@@ -93,18 +94,31 @@ public sealed partial class OnvifClient
                 throw Refused("the camera refused the new motion grid");
             // Some cameras (a Reolink over ONVIF) answer OK and keep the old grid; only a
             // read-back proves it. Unchanged AND not what was sent: one that tidies a cell is not ignoring us.
-            if (before == null || before == table) return;
-            var (_, check) = await FindCellTargetAsync(ct).ConfigureAwait(false);
-            var cells = check == null ? null : CellValue(check.Rule)?.Attribute("Value")?.Value;
-            var now = cells == null ? null : DecodeActiveCells(cells, check!.Cols, check.Rows);
-            if (now != null && now == before)
-            {
-                CellWritesIgnored = true;
-                throw new NotSupportedException(
-                    "the camera accepted the motion grid but kept its old one, so it cannot be edited over ONVIF");
-            }
+            if (before == null || before == table || await ReadBackCellsAsync(ct).ConfigureAwait(false) != before)
+                return;
         }
         finally { _gate.Release(); }
+        // Some apply it a moment later: one more look, off the gate, before calling it ignored.
+        await Task.Delay(CellWriteSettle, ct).ConfigureAwait(false);
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            if (await ReadBackCellsAsync(ct).ConfigureAwait(false) != before) return;
+            CellWritesIgnored = true;
+            throw new NotSupportedException(
+                "the camera accepted the motion grid but kept its old one, so it cannot be edited over ONVIF");
+        }
+        finally { _gate.Release(); }
+    }
+
+    private static readonly TimeSpan CellWriteSettle = TimeSpan.FromSeconds(2);
+
+    /// <summary>The grid as the camera now reports it, or null when it could not be read. Caller holds the gate.</summary>
+    private async Task<string?> ReadBackCellsAsync(CancellationToken ct)
+    {
+        var (_, check) = await FindCellTargetAsync(ct).ConfigureAwait(false);
+        var cells = check == null ? null : CellValue(check.Rule)?.Attribute("Value")?.Value;
+        return cells == null ? null : DecodeActiveCells(cells, check!.Cols, check.Rows);
     }
 
     /// <summary>The camera acknowledged a grid write and did not apply it. Its grid is
@@ -119,7 +133,7 @@ public sealed partial class OnvifClient
     {
         if (_analyticsUrl == null) return (OnvifZoneAnswer.None, null);
         _profiles ??= await ReadProfilesAsync(ct).ConfigureAwait(false);
-        if (_profiles == null) return (OnvifZoneAnswer.Unknown, null);
+        if (_profiles == null || ChannelUnknownIn(_profiles)) return (OnvifZoneAnswer.Unknown, null);
         // Only this camera's own channel: on an NVR the first profile is channel 1's,
         // and editing its grid from channel 3's panel would reshape another camera's alarms.
         var config = OwnChannelProfiles(_profiles).Select(p => p.AnalyticsToken)

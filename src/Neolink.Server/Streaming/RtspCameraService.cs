@@ -19,6 +19,8 @@ public sealed class RtspCameraService
     private volatile bool _online;
     private volatile bool _suspended;
     private volatile CancellationTokenSource? _activePull;
+    /// <summary>A pull that streamed this long before dropping counts as healthy.</summary>
+    private static readonly TimeSpan HealthyFor = TimeSpan.FromSeconds(30);
 
     public bool Online => _online;
 
@@ -77,10 +79,11 @@ public sealed class RtspCameraService
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
             _activePull = linked; // let SetSuspended interrupt this pull at once
             if (_suspended) linked.Cancel(); // a suspend that raced the assignment above
+            RtspPuller? puller = null;
             try
             {
                 Log.Info($"{_tag}: connecting (RTSP pull)");
-                var puller = new RtspPuller(_tag, _url, _hub);
+                puller = new RtspPuller(_tag, _url, _hub); // a bad URL throws here, and backs off like any failure
                 _online = true; // refined below: any failure before PLAY drops it again
                 await puller.RunAsync(linked.Token).ConfigureAwait(false);
             }
@@ -96,6 +99,9 @@ public sealed class RtspCameraService
             catch (Exception ex)
             {
                 if (_suspended) continue; // suspend raced the error; the park holds it
+                // Only failures in a row back off: a drop after a healthy stream retries at once (go2rtc does too).
+                if (puller?.StreamingSince is { } since && DateTime.UtcNow - since > HealthyFor)
+                    backoff = TimeSpan.FromSeconds(1);
                 Log.Warn($"{_tag}: RTSP pull ended: {Log.Flatten(ex)}; retrying in {backoff.TotalSeconds:0}s");
             }
             finally

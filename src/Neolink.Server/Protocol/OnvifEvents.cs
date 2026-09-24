@@ -6,20 +6,13 @@ using System.Xml.Linq;
 
 namespace Neolink.Protocol;
 
-/// <summary>
-/// One thing a camera told us over ONVIF's event service. <see cref="Topic"/> is
-/// the raw topic path ("tns1:RuleEngine/CellMotionDetector/Motion"), kept verbatim
-/// because vendors invent their own and the log is where an unrecognised one has to
-/// be visible. <see cref="Active"/> is the state the notification carries: true =
-/// something is happening, false = it stopped, null = the camera said neither (a
-/// one-shot event, which is treated as a start). <see cref="Source"/> is the Source
-/// block's items alone (which channel or rule spoke); <see cref="Operation"/> is the
-/// message's PropertyOperation, when the camera gave one.
-/// </summary>
+/// <summary>One thing a camera reported over ONVIF events: the raw topic, its state (null = a one-shot),
+/// the Source block (which channel or rule), the PropertyOperation, and the subject one rule reports on.</summary>
 public sealed record OnvifNotification(string Topic, bool? Active,
     IReadOnlyDictionary<string, string> Items,
     IReadOnlyDictionary<string, string>? Source = null,
-    string? Operation = null)
+    string? Operation = null,
+    string? Subject = null)
 {
     /// <summary>Whether this is a DETECTION rather than housekeeping. ONVIF cameras
     /// publish a great deal that is not motion — recording state, storage, network
@@ -40,9 +33,12 @@ public sealed record OnvifNotification(string Topic, bool? Active,
     /// detection; a perimeter rule also yields "motion" so the default filter records it.</summary>
     public IReadOnlyList<string> Labels => _labels ??= Classify(Topic, Items);
 
-    /// <summary>Identifies the speaker (topic plus Source items), so a start and its
-    /// end are matched to each other and never to another rule's or channel's.</summary>
-    public string Key
+    /// <summary>Identifies the speaker (topic, Source items, subject), so a start and its
+    /// end are matched to each other and never to another rule's, channel's or object's.</summary>
+    public string Key => Subject == null ? Speaker : Speaker + "|" + Subject;
+
+    /// <summary>The rule on its channel, without the subject: what a Deleted message withdraws.</summary>
+    public string Speaker
     {
         get
         {
@@ -51,6 +47,16 @@ public sealed record OnvifNotification(string Topic, bool? Active,
                 .Select(kv => kv.Key + "=" + kv.Value);
             return Topic + "|" + string.Join(";", parts);
         }
+    }
+
+    /// <summary>A state item named for a class ("IsVehicle", "IsPet", "IsPackageDeliver"):
+    /// Tapo reports each class with its own state on one topic.</summary>
+    internal static bool IsClassItem(string name)
+    {
+        if (name.Length < 3 || !name.StartsWith("Is", StringComparison.OrdinalIgnoreCase)) return false;
+        var what = name[2..];
+        return Is(what, PersonWords) || Is(what, VehicleWords) || Is(what, AnimalWords) || Is(what, FaceWords)
+               || what.StartsWith("package", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>The video source the Source block names, or null; a multi-channel
@@ -111,7 +117,7 @@ public sealed record OnvifNotification(string Topic, bool? Active,
             else if (Is(what, VehicleWords)) Add("vehicle");
             else if (Is(what, AnimalWords)) Add("animal");
             else if (Is(what, FaceWords)) Add("face");
-            else if (what.Equals("package", StringComparison.OrdinalIgnoreCase)) Add("package");
+            else if (what.StartsWith("package", StringComparison.OrdinalIgnoreCase)) Add("package"); // Tapo: IsPackageDeliver/-Pickup
         }
         // The topic's own words, matched at a word boundary so that "Interface"
         // is not a face.
@@ -121,13 +127,15 @@ public sealed record OnvifNotification(string Topic, bool? Active,
         if (Segment(topic, "Vehicle") || Segment(topic, "Car")) Add("vehicle");
         if (Segment(topic, "DogCat") || Segment(topic, "Animal") || Segment(topic, "Pet")) Add("animal");
         if (Segment(topic, "Package")) Add("package");
+        if (Segment(topic, "Visitor")) Add("visitor"); // Reolink's doorbell press (MyRuleDetector/Visitor)
         // Perimeter rules: their own label, and motion beside it (see Labels).
         bool perimeter = false;
         if (Contains(topic, "LineDetector", "LineCross", "Crossed", "Tripwire"))
         {
             Add("line-crossing"); perimeter = true;
         }
-        if (Contains(topic, "FieldDetector", "ObjectsInside", "Intrusion", "CrossRegion"))
+        // Bosch IVA names its field rule tns1:IVA/EnteringField/<user's rule name>.
+        if (Contains(topic, "FieldDetector", "ObjectsInside", "Intrusion", "CrossRegion", "EnteringField"))
         {
             Add("intrusion"); perimeter = true;
         }
@@ -194,7 +202,8 @@ public sealed record PullPointSubscription(string Address, string Headers)
 /// a lasting answer (the camera has none, or ONVIF is not reachable at all), worth
 /// re-checking only rarely. Otherwise a null Subscription is a refusal of THIS
 /// attempt, worth retrying soon; Reason says why, for the one line that reports it.</summary>
-public sealed record PullPointResult(PullPointSubscription? Subscription, bool NoEventService, string? Reason)
+public sealed record PullPointResult(PullPointSubscription? Subscription, bool NoEventService, string? Reason,
+    TimeSpan Granted = default)
 {
     /// <summary>The subscription manager's address, when one was created.</summary>
     public string? Address => Subscription?.Address;
@@ -254,41 +263,88 @@ public sealed partial class OnvifClient
             return new PullPointResult(null, NoEventService: true, "the camera advertises no event service");
 
         var xml = await CallAsync(eventsUrl, NsEvents, "CreatePullPointSubscription",
-            $"<tev:InitialTerminationTime>{Duration(termination)}</tev:InitialTerminationTime>", ct,
+            $"<tev:InitialTerminationTime>{TerminationValue(termination)}</tev:InitialTerminationTime>", ct,
             null, ActCreate).ConfigureAwait(false);
         if (xml == null)
+        {
+            // Refused in absolute time: the camera's clock may have stepped, so durations get another go.
+            _absoluteTermination = false;
             return new PullPointResult(null, NoEventService: false, _lastError);
+        }
         var address = SubscriptionAddress(xml);
         if (address == null)
             return new PullPointResult(null, NoEventService: false, "the reply carried no subscription address");
-        return new PullPointResult(
-            new PullPointSubscription(NormalizeXAddr(address)!, ReferenceParameterHeaders(xml)),
-            NoEventService: false, null);
+        var subscription = new PullPointSubscription(NormalizeXAddr(address)!, ReferenceParameterHeaders(xml));
+        var granted = GrantedPeriod(xml, DateTime.UtcNow + _clockSkew);
+        // Far less than asked may mean the camera misread the duration: an absolute time in its own
+        // clock is tried (onvif-zeep-async's fix) and kept only if it granted more, so a camera that
+        // merely caps subscriptions keeps getting durations, which do not depend on the clock skew.
+        if (!_absoluteTermination && granted is { } g && g < termination / 2)
+        {
+            _absoluteTermination = true;
+            var (renewed, _) = await RenewSubscriptionAsync(subscription, termination, ct).ConfigureAwait(false);
+            if (renewed is { } r && r > g)
+            {
+                Log.Debug($"{_tag}: the camera granted an event subscription {g.TotalSeconds:0}s of " +
+                          $"{termination.TotalSeconds:0}s, and {r.TotalSeconds:0}s asked in absolute time — using that");
+                granted = r;
+            }
+            else _absoluteTermination = false;
+        }
+        return new PullPointResult(subscription, NoEventService: false, null, granted ?? termination);
     }
 
-    /// <summary>Waits for the camera to report something, for up to
-    /// <paramref name="hold"/>. Returns an empty list when nothing happened (which
-    /// is the normal case and not an error) and null when the subscription is no
-    /// longer usable, which the caller answers by making a new one.</summary>
-    public async Task<IReadOnlyList<OnvifNotification>?> PullMessagesAsync(PullPointSubscription subscription,
+    private bool _absoluteTermination;
+
+    /// <summary>A termination time as this camera takes it: a duration, or an absolute time
+    /// in its own clock for one that misreads durations.</summary>
+    private string TerminationValue(TimeSpan period) => !_absoluteTermination ? Duration(period)
+        : (DateTime.UtcNow + _clockSkew + period).ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
+
+    /// <summary>How long the camera grants a subscription: TerminationTime minus its CurrentTime, or minus
+    /// <paramref name="cameraNow"/> when a Renew reply leaves CurrentTime out. Null when it does not say.</summary>
+    internal static TimeSpan? GrantedPeriod(XElement root, DateTime? cameraNow = null)
+    {
+        static DateTime? At(XElement root, string name) =>
+            DateTime.TryParse(root.Descendants().FirstOrDefault(e => e.Name.LocalName == name)?.Value?.Trim(),
+                CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal,
+                out var t) ? t : null;
+        return (At(root, "CurrentTime") ?? cameraNow) is { } now && At(root, "TerminationTime") is { } end && end > now
+            ? end - now : null;
+    }
+
+    /// <summary>A PullMessages outcome: the messages, or null with whether the subscription is gone.
+    /// HungUp: the camera closed the poll without a reply, read as "nothing happened".</summary>
+    public sealed record PullResult(IReadOnlyList<OnvifNotification>? Messages, bool SubscriptionLost,
+        bool HungUp = false);
+
+    /// <summary>Waits up to <paramref name="hold"/> for the camera to report something (empty = nothing
+    /// happened, as is a hang-up). Only a fault or a missing address loses the subscription.</summary>
+    public async Task<PullResult> PullMessagesAsync(PullPointSubscription subscription,
         TimeSpan hold, CancellationToken ct)
     {
         // The camera holds the request for up to `hold`; the transport is allowed a
         // margin on top so a camera answering right at its deadline is not cut off
         // by us a moment before it speaks.
-        var xml = await CallAsync(subscription.Address, NsEvents, "PullMessages",
+        var reply = await SendAsync(subscription.Address, NsEvents, "PullMessages",
             $"<tev:Timeout>{Duration(hold)}</tev:Timeout><tev:MessageLimit>64</tev:MessageLimit>",
             ct, hold + TimeSpan.FromSeconds(10), ActPull, extraHeaders: subscription.Headers).ConfigureAwait(false);
-        return xml == null ? null : ParseNotifications(xml);
+        if (reply.Root != null) return new PullResult(ParseNotifications(reply.Root), false);
+        if (reply.HungUp) return new PullResult(Array.Empty<OnvifNotification>(), false, HungUp: true);
+        return new PullResult(null, reply.Fault != null || reply.Status is 400 or 404 or 405);
     }
 
-    /// <summary>Extends the subscription. False means the camera would not — it may be
-    /// gone, or Renew may be unimplemented (optional for a pull point), so keep polling.</summary>
-    public async Task<bool> RenewSubscriptionAsync(PullPointSubscription subscription, TimeSpan termination,
-        CancellationToken ct) =>
-        await CallAsync(subscription.Address, NsWsnt, "Renew",
-            $"<wsnt:TerminationTime>{Duration(termination)}</wsnt:TerminationTime>", ct,
-            null, ActRenew, extraHeaders: subscription.Headers).ConfigureAwait(false) != null;
+    /// <summary>Extends the subscription: the period granted, or null when the camera would not
+    /// (Refused: it said so, which a conformant pull point survives, since its polls keep it alive).</summary>
+    public async Task<(TimeSpan? Granted, bool Refused)> RenewSubscriptionAsync(PullPointSubscription subscription,
+        TimeSpan termination, CancellationToken ct)
+    {
+        var reply = await SendAsync(subscription.Address, NsWsnt, "Renew",
+            $"<wsnt:TerminationTime>{TerminationValue(termination)}</wsnt:TerminationTime>", ct,
+            null, ActRenew, extraHeaders: subscription.Headers).ConfigureAwait(false);
+        if (reply.Root != null) return (GrantedPeriod(reply.Root, DateTime.UtcNow + _clockSkew) ?? termination, false);
+        return (null, reply.Fault != null || IsLastingRefusal(reply.Status, reply.Fault));
+    }
 
     /// <summary>Best-effort tidy-up. A camera holds a dropped subscription until it
     /// times out, and a handful of those is a real cost on small hardware.</summary>
@@ -350,6 +406,7 @@ public sealed partial class OnvifClient
             var items = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var source = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var data = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var keys = new SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var si in m.Descendants().Where(e => e.Name.LocalName == "SimpleItem"))
             {
                 var n = si.Attribute("Name")?.Value;
@@ -359,11 +416,36 @@ public sealed partial class OnvifClient
                 var block = si.Parent?.Name.LocalName;
                 if (block == "Source") source[n] = v;
                 else if (block == "Data") data[n] = v;
+                else if (block == "Key") keys[n] = v; // one object among several a rule tracks (ObjectId)
             }
             var operation = m.Descendants().Select(e => e.Attribute("PropertyOperation")?.Value)
                 .FirstOrDefault(v => !string.IsNullOrEmpty(v));
-            list.Add(new OnvifNotification(topic, ActiveFrom(data.Count > 0 ? data : items), items,
-                source.Count > 0 ? source : null, operation));
+            var src = source.Count > 0 ? source : null;
+            string? subject = keys.Count == 0 ? null : string.Join(";", keys.Select(kv => kv.Key + "=" + kv.Value));
+
+            // Each class a Tapo reports is its own state on the shared topic: one ending must not end the others.
+            var classes = data.Keys.Where(OnvifNotification.IsClassItem).ToList();
+            if (classes.Count > 0)
+            {
+                foreach (var name in classes)
+                {
+                    var own = new Dictionary<string, string>(items, StringComparer.OrdinalIgnoreCase);
+                    foreach (var other in classes) if (other != name) own.Remove(other);
+                    list.Add(new OnvifNotification(topic, OnvifNotification.ParseBool(data[name]), own, src,
+                        operation, subject == null ? name : subject + ";" + name));
+                }
+                // A state beside the classes (IsMotion, IsLineCross) is a notification of its own.
+                var rest = new Dictionary<string, string>(data, StringComparer.OrdinalIgnoreCase);
+                foreach (var name in classes) { rest.Remove(name); items.Remove(name); }
+                if (ActiveFrom(rest) == null) continue;
+                data = rest;
+            }
+
+            var active = ActiveFrom(data.Count > 0 ? data : items);
+            // ObjectDetection's ClassTypes is the state itself: empty means nothing is in view.
+            if (active == null && data.TryGetValue("ClassTypes", out var classTypes))
+                active = string.IsNullOrWhiteSpace(classTypes) ? false : operation != null ? true : null;
+            list.Add(new OnvifNotification(topic, active, items, src, operation, subject));
         }
         return list;
     }

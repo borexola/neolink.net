@@ -61,12 +61,15 @@ public sealed class EventRecorder
 
     /// <param name="hubsByKind">The camera's streams by kind, enabling the per-camera
     /// "record from main/sub" runtime choice; null pins recording to <paramref name="hub"/>.</param>
+    /// <param name="prerollWanted">Whether to keep a pre-roll now; null = always. A camera
+    /// that may never detect anything holds none (a clip it records starts at the next keyframe).</param>
     public EventRecorder(string camera, IStreamHub hub, ICameraControl control,
         EventStore store, RecordingConfig cfg, RecordingSettings settings,
         IStreamHub? previewHub = null, IReadOnlyDictionary<string, IStreamHub>? hubsByKind = null,
         Func<bool>? hasRoom = null, Action<string>? onWriteError = null,
-        Neolink.Ai.AiDescriber? ai = null)
+        Neolink.Ai.AiDescriber? ai = null, Func<bool>? prerollWanted = null)
     {
+        _prerollWanted = prerollWanted;
         _ai = ai;
         _camera = camera;
         _hub = hub;
@@ -78,6 +81,20 @@ public sealed class EventRecorder
         _settings = settings;
         _hasRoom = hasRoom;
         _onWriteError = onWriteError;
+    }
+
+    private readonly Func<bool>? _prerollWanted;
+
+    /// <summary>Adds a packet to a pre-roll buffer, or empties it while none is wanted. Caller holds _mediaGate.</summary>
+    private void KeepForPreroll(List<(HubPacket Packet, bool Gap)> buffer, HubPacket packet, bool gap)
+    {
+        if (_prerollWanted?.Invoke() == false)
+        {
+            if (buffer.Count > 0) buffer.Clear();
+            return;
+        }
+        buffer.Add((packet, gap));
+        if (packet is HubVideo) TrimPreroll(buffer);
     }
 
     /// <summary>Free-space guard for the clips tier; null = never blocks.</summary>
@@ -378,8 +395,7 @@ public sealed class EventRecorder
                             }
                             else
                             {
-                                _preroll.Add((packet, gap));
-                                if (packet is HubVideo) TrimPreroll(_preroll);
+                                KeepForPreroll(_preroll, packet, gap);
                             }
                         }
                     }
@@ -465,9 +481,7 @@ public sealed class EventRecorder
                     }
                     else
                     {
-                        var buffer = preview ? _previewPreroll : _preroll;
-                        buffer.Add((packet, gap));
-                        if (packet is HubVideo) TrimPreroll(buffer);
+                        KeepForPreroll(preview ? _previewPreroll : _preroll, packet, gap);
                     }
                 }
             }
@@ -1004,7 +1018,9 @@ public sealed class EventRecorder
             // (a small frame decodes fastest), else the one being recorded.
             if (!IsJpeg(jpeg) && _control.OnvifOnly
                 && (_previewHub is { HasBufferedGop: true } ? _previewHub
-                    : (_activeRecordHub ?? _hub) is { HasBufferedGop: true } live ? live : null) is { } hub)
+                    : (_activeRecordHub ?? _hub) is { HasBufferedGop: true } buffered ? buffered
+                    : _previewHub is { LiveVideo: true } ? _previewHub
+                    : (_activeRecordHub ?? _hub) is { LiveVideo: true } live ? live : null) is { } hub)
                 jpeg = await Neolink.Media.FrameGrab.FromHubAsync(hub, 720, ct).ConfigureAwait(false);
             if (!IsJpeg(jpeg))
                 return; // not a JPEG (or camera doesn't support snapshots)

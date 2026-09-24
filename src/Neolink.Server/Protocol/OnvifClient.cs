@@ -56,6 +56,7 @@ public sealed partial class OnvifClient : IDisposable
     private const string NsWsa = "http://www.w3.org/2005/08/addressing";
     private const string NsSchema = "http://www.onvif.org/ver10/schema";
     private const string PwDigestType = "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordDigest";
+    private const string PwTextType = "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordText";
     private const string Base64Type = "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-message-security-1.0#Base64Binary";
 
     private readonly HttpClient _http;
@@ -97,7 +98,6 @@ public sealed partial class OnvifClient : IDisposable
     private bool _hadProfiles;
     private string? _ptzProfileToken;
     private IReadOnlyList<string> _presetTokens = Array.Empty<string>();
-    private IReadOnlyDictionary<string, string>? _streamUris;
     private OnvifPtzNode? _ptzNode;
     private bool _ptzNodeRefused;
     private string? _ptzNodeToken;
@@ -136,19 +136,17 @@ public sealed partial class OnvifClient : IDisposable
         {
             PooledConnectionIdleTimeout = TimeSpan.FromSeconds(30),
             ConnectTimeout = TimeSpan.FromSeconds(5),
-            // Some cameras want HTTP authentication INSTEAD of (or as well as) the
-            // WS-Security header every request already carries — Profile S allows
-            // either, and a camera configured for Digest answers 401 to a perfectly
-            // good SOAP request. Handing the same credentials to the transport lets
-            // it answer that challenge, so those cameras work without the user
-            // having to know which scheme theirs chose. Costs nothing on a camera
-            // that never challenges. Basic is answered as well as Digest: some snapshot
-            // CGIs challenge that way. Generic cameras only: a Reolink's picture fallback
-            // has only ever used WS-Security, and keeps doing exactly that.
-            Credentials = generic ? new System.Net.NetworkCredential(_username, _password) : null,
+            // Some cameras want HTTP authentication instead of (or as well as) WS-Security, which
+            // Profile S allows. Generic cameras only: a Reolink's picture fallback uses WS-Security.
+            Credentials = generic ? new CameraCredentials(this, new System.Net.NetworkCredential(_username, _password)) : null,
             PreAuthenticate = false,
+            // Cameras are on the LAN: an HTTP(S)_PROXY meant for the internet must not catch them
+            // (onvif-zeep-async drops the proxy settings too).
+            UseProxy = !generic,
         };
-        if (_candidates.Any(c => c.StartsWith("https:", StringComparison.OrdinalIgnoreCase)))
+        // Camera certificates are self-signed, on any XAddr or snapshot URI they advertise
+        // (onvif-zeep-async never verifies them).
+        if (generic || _candidates.Any(c => c.StartsWith("https:", StringComparison.OrdinalIgnoreCase)))
             handler.SslOptions = new System.Net.Security.SslClientAuthenticationOptions
             {
                 RemoteCertificateValidationCallback = (_, _, _, _) => true,
@@ -184,6 +182,16 @@ public sealed partial class OnvifClient : IDisposable
         }
     }
 
+    /// <summary>The login for HTTP challenges: Digest always, Basic (cleartext on plain HTTP)
+    /// only once the host has answered as an ONVIF camera, never to a web server merely probed.</summary>
+    private sealed class CameraCredentials(OnvifClient owner, System.Net.NetworkCredential login) : System.Net.ICredentials
+    {
+        public System.Net.NetworkCredential? GetCredential(Uri uri, string authType) =>
+            authType.Equals("Digest", StringComparison.OrdinalIgnoreCase)
+            || (authType.Equals("Basic", StringComparison.OrdinalIgnoreCase) && (owner._ready || owner._onvifConfirmed))
+                ? login : null;
+    }
+
     /// <summary>The ONVIF client for a non-Reolink camera, from its ONVIF address or
     /// the stream URL's host and login. Null when neither names a host.</summary>
     public static OnvifClient? ForGenericCamera(string? onvifAddress, string? rtspUrl, string tag)
@@ -203,6 +211,10 @@ public sealed partial class OnvifClient : IDisposable
     internal static string[] BuildCandidates(string address, IReadOnlyList<int>? probePorts = null)
     {
         var a = address.Trim();
+        // A bare IPv6 literal needs its brackets to become a URL (TryParse also accepts one already bracketed).
+        if (!a.StartsWith('[') && System.Net.IPAddress.TryParse(a, out var ip)
+            && ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6)
+            a = "[" + a + "]";
         if (a.Contains("://", StringComparison.Ordinal))
         {
             var baseUrl = a.TrimEnd('/');
@@ -223,6 +235,9 @@ public sealed partial class OnvifClient : IDisposable
     }
 
     public void Dispose() => _http.Dispose();
+
+    // Some firmwares answer in gb2312, which .NET only decodes with the code-page encodings registered.
+    static OnvifClient() => Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
     /// <summary>Best-effort imaging read (0-255 scaled), or null when ONVIF is
     /// unavailable on this camera. Never throws.</summary>
@@ -281,9 +296,12 @@ public sealed partial class OnvifClient : IDisposable
     private async Task LearnClockAsync(CancellationToken ct)
     {
         _clockCheckedAt = DateTime.UtcNow;
-        var clock = await CallAsync(_deviceUrl, NsDevice, "GetSystemDateAndTime", "", ct,
+        var reply = await SendAsync(_deviceUrl, NsDevice, "GetSystemDateAndTime", "", ct,
             authenticate: false).ConfigureAwait(false);
-        if (clock == null || ParseUtcTime(clock) is not { } cameraNow) return;
+        // Some firmwares (Axis) want even this request signed; onvif-zeep-async asks again the same way.
+        if (reply.Root == null && reply.Fault != null && DateTime.UtcNow >= _loginPauseUntil)
+            reply = await SendAsync(_deviceUrl, NsDevice, "GetSystemDateAndTime", "", ct).ConfigureAwait(false);
+        if (reply.Root is not { } clock || ParseUtcTime(clock) is not { } cameraNow) return;
         var skew = cameraNow - DateTime.UtcNow;
         var previous = _clockSkew;
         var corrects = Math.Abs(skew.TotalSeconds) > 5;
@@ -312,7 +330,7 @@ public sealed partial class OnvifClient : IDisposable
     /// again here costs one round trip, only while it is missing. Caller holds _gate.</summary>
     private async Task<bool> EnsureVideoSourceAsync(CancellationToken ct)
     {
-        // After a reboot the profiles are read back before the first per-channel
+        // After a reboot or a write the profiles are read back before the first per-channel
         // call, so it does not fall back to channel 1's source.
         if (_preferredProfileToken != null && _profiles == null)
             _profiles = await ReadProfilesAsync(ct).ConfigureAwait(false);
@@ -320,6 +338,7 @@ public sealed partial class OnvifClient : IDisposable
         {
             var sources = await CallAsync(_mediaUrl!, NsMedia, "GetVideoSources", "", ct).ConfigureAwait(false);
             _videoSourceToken = VideoSourceToken(sources);
+            _sourceCount = Math.Max(_sourceCount, VideoSourceCount(sources));
             // GetVideoSources is a ver10 call; a camera that speaks only Media2 names
             // its source inside each profile's VideoSource configuration instead. Only
             // consulted once the camera is KNOWN to be Media2 — a ver10 camera whose
@@ -329,6 +348,8 @@ public sealed partial class OnvifClient : IDisposable
                 _videoSourceToken = _profiles?.Select(p => p.SourceToken).FirstOrDefault(t => t != null);
             if (_videoSourceToken == null) return false;
         }
+        // On a multi-channel device only this camera's own source will do: the first is channel 1's.
+        if (MultiChannel(_profiles) && PreferredProfile?.SourceToken == null) return false;
         // Missing ranges are asked for again on a schedule (GetOptions may have timed
         // out), and at once when the imaging source is not the one they were read for.
         var source = ImagingSourceToken;
@@ -377,6 +398,7 @@ public sealed partial class OnvifClient : IDisposable
         // Once for the whole scan, not per port: a port that rejected the login is
         // the answer even when the ports after it are closed.
         _authRejected = false;
+        _plainTextTried = false;
         // Each candidate's device service is bounded, not the list as a whole: an
         // unreachable host must not hold callers for a connect timeout per port.
         try
@@ -436,6 +458,7 @@ public sealed partial class OnvifClient : IDisposable
     {
         _ready = true;
         _failLogged = false; // a future outage warns again
+        _failStreak = 0;
         if (!_generic)
         {
             // A Reolink's picture fallback logs exactly what it always has.
@@ -533,6 +556,7 @@ public sealed partial class OnvifClient : IDisposable
         //    Generic cameras only: a Reolink's picture fallback has always been
         //    stamped in this server's time and has worked that way.
         _clockSkew = TimeSpan.Zero;
+        _onvifConfirmed = false;
         if (_generic) await LearnClockAsync(deviceCt).ConfigureAwait(false);
 
         // 1. The device's service table. GetCapabilities is the Profile S call and
@@ -548,6 +572,7 @@ public sealed partial class OnvifClient : IDisposable
         //    client needs, so it stays in discovery.
         var sources = await CallAsync(_mediaUrl!, NsMedia, "GetVideoSources", "", ct).ConfigureAwait(false);
         _videoSourceToken = VideoSourceToken(sources);
+        if (sources != null) _sourceCount = VideoSourceCount(sources);
         // For a Reolink the picture fallback IS the use of ONVIF, and it is keyed on
         // the video source: without one there is nothing to be ready for. Failing
         // here keeps the cooldown and the next port's turn, exactly as before — a
@@ -589,7 +614,8 @@ public sealed partial class OnvifClient : IDisposable
         // GetServices is also asked (generic only) when GetCapabilities listed no
         // events or analytics service: some firmwares list those only in the newer table.
         var services = !_generic || (caps != null && ServiceXAddr(caps, "Events") != null
-                                     && ServiceXAddr(caps, "Analytics") != null) ? null
+                                     && ServiceXAddr(caps, "Analytics") != null
+                                     && ServiceXAddr(caps, "PTZ") != null) ? null
             : await CallAsync(_deviceUrl, NsDevice, "GetServices",
                 "<tds:IncludeCapability>false</tds:IncludeCapability>", caps == null ? deviceCt : ct)
                 .ConfigureAwait(false);
@@ -601,8 +627,10 @@ public sealed partial class OnvifClient : IDisposable
                     ?? Conventional("media_service");
         _imagingUrl = NormalizeXAddr(ServiceXAddr(caps, "Imaging") ?? ServiceXAddrByNs(services, NsImaging))
                       ?? Conventional("imaging");
+        // Not guessed for a generic camera: one that advertises no PTZ service has none, however
+        // its profiles read (Frigate and Home Assistant require it advertised too).
         _ptzUrl = NormalizeXAddr(ServiceXAddr(caps, "PTZ") ?? ServiceXAddrByNs(services, NsPtz))
-                  ?? Conventional("ptz_service");
+                  ?? (_generic ? null : Conventional("ptz_service"));
         // The event service is the one thing here that is NOT assumed when the
         // camera does not advertise it: subscribing against a guessed URL on a
         // camera with no events would mean a reconnect loop against a 404 forever.
@@ -625,15 +653,27 @@ public sealed partial class OnvifClient : IDisposable
         // Misses within the grace after a deliberate reboot are retried quickly, not
         // held for the five-minute "no ONVIF" cooldown.
         bool rebooting = DateTime.UtcNow - _rebootedAt < RebootGrace;
-        _retryAfter = DateTime.UtcNow + (rebooting ? RebootRetry : RetryCooldown);
+        // A generic camera that keeps not answering (it has no ONVIF) is asked less and less
+        // often: 5, 10, 20, 40, then every 60 minutes.
+        var cooldown = rebooting ? RebootRetry
+            : !_generic ? RetryCooldown
+            : TimeSpan.FromMinutes(Math.Min(60, 5 << Math.Min(4, _failStreak)));
+        if (!rebooting) _failStreak++;
+        _retryAfter = DateTime.UtcNow + cooldown;
         // No advice while the camera is expected to be away; it comes if the grace runs out.
         if (rebooting)
             Log.Debug($"{_tag}: ONVIF not back since the reboot ({reason}); trying again in " +
                       $"{RebootRetry.TotalSeconds:0}s");
         else
-            Advise(reason);
+            Advise(reason, cooldown);
         return false;
     }
+
+    /// <summary>Discovery failures in a row, for the generic camera's growing cooldown.</summary>
+    private int _failStreak;
+
+    /// <summary>Whether discovery has failed since it last succeeded.</summary>
+    public bool DiscoveryFailed => _failStreak > 0;
 
     /// <summary>When this client last asked the camera to reboot.</summary>
     private DateTime _rebootedAt = DateTime.MinValue;
@@ -643,7 +683,7 @@ public sealed partial class OnvifClient : IDisposable
 
     /// <summary>The one breadcrumb a user gets for why a camera's settings are
     /// missing, logged once per outage with the two things that actually fix it.</summary>
-    private void Advise(string reason)
+    private void Advise(string reason, TimeSpan retryIn)
     {
         if (!_failLogged && !_generic)
         {
@@ -651,7 +691,7 @@ public sealed partial class OnvifClient : IDisposable
             Log.Info($"{_tag}: ONVIF imaging fallback unavailable — {reason}. If this camera has no Reolink " +
                      "HTTP API, check that ONVIF is enabled on it (Reolink app > Settings > Network > Advanced > " +
                      "ONVIF/Port Settings), and if ONVIF is on a non-standard port set 'onvif_address' " +
-                     $"(e.g. \"{HostOf(_deviceUrl)}:8000\"). Retrying in {RetryCooldown.TotalMinutes:0} min.");
+                     $"(e.g. \"{HostOf(_deviceUrl)}:8000\"). Retrying in {retryIn.TotalMinutes:0} min.");
         }
         else if (!_failLogged)
         {
@@ -661,7 +701,7 @@ public sealed partial class OnvifClient : IDisposable
                      "its own web page), and if ONVIF is on a port other than " +
                      $"{string.Join("/", GenericProbePorts)} set 'onvif_address' " +
                      $"(e.g. \"{HostOf(_deviceUrl)}:8080\"). Without it the camera streams and records " +
-                     $"normally but shows no settings. Retrying in {RetryCooldown.TotalMinutes:0} min.");
+                     $"normally but shows no settings. Retrying in {retryIn.TotalMinutes:0} min.");
         }
     }
 
@@ -732,7 +772,7 @@ public sealed partial class OnvifClient : IDisposable
 
     /// <summary>A request's outcome beside the reply: the HTTP status (0 when nothing
     /// came back) and the SOAP fault, if any, whatever the status.</summary>
-    internal readonly record struct Reply(XElement? Root, int Status, string? Fault = null)
+    internal readonly record struct Reply(XElement? Root, int Status, string? Fault = null, bool HungUp = false)
     {
         public void Deconstruct(out XElement? root, out int status) { root = Root; status = Status; }
     }
@@ -743,13 +783,80 @@ public sealed partial class OnvifClient : IDisposable
         string innerBody, CancellationToken ct, TimeSpan? timeout = null, string? wsaAction = null,
         bool authenticate = true, string? extraHeaders = null)
     {
+        // A refused login is not retried on a loop: cameras lock an address out after a few
+        // (Hikvision's Illegal Login Lock), which would stop its RTSP stream too.
+        if (authenticate && _generic && DateTime.UtcNow < _loginPauseUntil)
+        {
+            // Calls a camera answers to anyone still go, unsigned.
+            if (!MaybeAnonymous(op))
+            {
+                _lastError = $"{op}: waiting after the camera refused the ONVIF login";
+                return new Reply(null, 401, "NotAuthorized");
+            }
+            authenticate = false;
+        }
+        var reply = await SendOnceAsync(url, opNamespace, op, innerBody, ct, timeout, wsaAction, authenticate,
+            extraHeaders, _plainText).ConfigureAwait(false);
+        if (!authenticate || !_generic || reply.Root != null || !LooksLikeAuthRefusal(reply.Fault, reply.Status))
+            return reply;
+        // Some firmwares (OpenIPC/Majestic) take the password only in plain text: tried once, while
+        // discovering a host that has answered as ONVIF (as Frigate's camera wizard does).
+        if (!_ready && _onvifConfirmed && !_plainText && !_plainTextTried)
+        {
+            var text = await SendOnceAsync(url, opNamespace, op, innerBody, ct, timeout, wsaAction, authenticate,
+                extraHeaders, plainText: true).ConfigureAwait(false);
+            _plainTextTried = text.Status != 0; // a transport failure says nothing either way
+            if (text.Root != null)
+            {
+                _plainText = true;
+                Log.Info($"{_tag}: the camera accepts its ONVIF password only in plain text — signing in that way");
+                return text;
+            }
+        }
+        NoteRefusal();
+        return reply;
+    }
+
+    private bool _plainText, _plainTextTried;
+    /// <summary>The host being discovered has answered as an ONVIF device (not just any web server).</summary>
+    private bool _onvifConfirmed;
+
+    /// <summary>Refusals since the last accepted signed call; pauses since then; whether one was accepted.</summary>
+    private int _refusals, _pauses;
+    private bool _loginProven;
+    private DateTime _loginPauseUntil;
+
+    /// <summary>Paces sign-ins after refusals: the first pause waits for a clock re-read (a camera whose
+    /// clock stepped), later ones 15, 30, then 60 minutes.</summary>
+    private void NoteRefusal()
+    {
+        _refusals++;
+        // Once a login has been accepted, a lone refusal is more likely a right this user lacks.
+        if (_loginProven && _refusals < 3) return;
+        _loginProven = false;
+        _pauses++;
+        var pause = _pauses == 1 ? ClockRecheckAfterRefusal
+            : TimeSpan.FromMinutes(Math.Min(60, 15 << Math.Min(2, _pauses - 2)));
+        _loginPauseUntil = DateTime.UtcNow + pause;
+        if (_pauses >= 2)
+            Log.Info($"{_tag}: the camera refused the ONVIF login again — waiting {pause.TotalMinutes:0} min before " +
+                     "signing in again, so it does not lock Neolink out. Check the camera's ONVIF user and password.");
+    }
+
+    /// <summary>Calls many firmwares answer without checking the login: one accepted proves nothing.</summary>
+    private static bool MaybeAnonymous(string op) => op is "GetSystemDateAndTime" or "GetCapabilities"
+        or "GetServices" or "GetServiceCapabilities" or "GetDeviceInformation" or "GetWsdlUrl";
+
+    private async Task<Reply> SendOnceAsync(string url, string opNamespace, string op,
+        string innerBody, CancellationToken ct, TimeSpan? timeout, string? wsaAction,
+        bool authenticate, string? extraHeaders, bool plainText)
+    {
         var nonce = RandomNumberGenerator.GetBytes(16);
-        // Stamped in the CAMERA's clock, not ours. The digest is only accepted
-        // inside a few seconds of the camera's own time, and an IP camera with no
-        // working NTP drifting by a minute would otherwise reject every request —
-        // which reads as "wrong password" and leaves the whole panel empty.
+        // Stamped in the camera's clock, which a digest must fall within. Generic cameras get no
+        // mustUnderstand (as zeep): firmware without WS-Security faults "Security must be understood".
         var security = authenticate
-            ? BuildSecurity(_username, _password, nonce, DateTime.UtcNow + _clockSkew)
+            ? BuildSecurity(_username, _password, nonce, DateTime.UtcNow + _clockSkew,
+                mustUnderstand: !_generic, plainText: plainText)
             : "";
         var prefix = opNamespace == NsMedia ? "trt"
             : opNamespace == NsMedia2 ? "tr2"
@@ -765,7 +872,9 @@ public sealed partial class OnvifClient : IDisposable
         // turning "works, loosely" into "no events at all".
         var addressing = wsaAction == null ? "" :
             $"<wsa:To xmlns:wsa=\"{NsWsa}\">{Esc(url)}</wsa:To>" +
-            $"<wsa:Action xmlns:wsa=\"{NsWsa}\">{Esc(wsaAction)}</wsa:Action>";
+            $"<wsa:Action xmlns:wsa=\"{NsWsa}\">{Esc(wsaAction)}</wsa:Action>" +
+            // Required on a request that expects a reply (WS-Addressing); zeep always sends one.
+            $"<wsa:MessageID xmlns:wsa=\"{NsWsa}\">urn:uuid:{Guid.NewGuid()}</wsa:MessageID>";
         var envelope =
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" +
             $"<s:Envelope xmlns:s=\"{NsSoap}\">" +
@@ -792,15 +901,22 @@ public sealed partial class OnvifClient : IDisposable
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (OperationCanceledException) { _lastError = $"{op}: no reply within {limit.TotalSeconds:0}s ({Safe(url)})"; return new Reply(null, 0); }
+        catch (HttpRequestException ex) when (ex.HttpRequestError == HttpRequestError.ResponseEnded)
+        {
+            // Connected, then the camera hung up without a reply — what some do to an idle event poll.
+            _lastError = $"{op}: the camera closed the connection ({Safe(url)})";
+            return new Reply(null, 0, HungUp: true);
+        }
         catch (Exception ex) { _lastError = $"{op}: {ex.Message} ({Safe(url)})"; return new Reply(null, 0); }
 
         XElement? root = null;
         try { root = XDocument.Parse(text).Root; }
         catch (System.Xml.XmlException) { /* not XML — reported below */ }
-        // A SOAP fault is the camera saying no, whatever HTTP status it rode in on
-        // (some firmwares send every fault as 200).
+        if (root?.Name.LocalName == "Envelope") _onvifConfirmed = true; // a SOAP endpoint, not just a web server
+        // A SOAP fault is the camera saying no, whatever HTTP status it rode in on (some
+        // firmwares send every fault as 200). A Reolink's fallback keeps taking a 200 as a yes.
         var fault = root == null ? null : SoapFault(root);
-        if (fault != null || status is < 200 or > 299)
+        if ((fault != null && _generic) || status is < 200 or > 299)
         {
             _lastError = $"{op} → HTTP {status}: {fault ?? Truncate(text, 200)}";
             // A refused login, or a rejected timestamp, is the one refusal worth
@@ -810,13 +926,19 @@ public sealed partial class OnvifClient : IDisposable
             return new Reply(null, status, fault ?? (status is 401 or 403 ? "NotAuthorized" : null));
         }
         if (root == null) { _lastError = $"{op}: malformed reply"; return new Reply(null, status); }
-        // An accepted stamped request is the camera's word that the login is good again.
-        if (authenticate) _authRejected = false;
+        // An accepted stamped request is the camera's word that the login is good again,
+        // unless it is one a camera may answer without checking the login at all.
+        if (authenticate && !MaybeAnonymous(op))
+        {
+            _authRejected = false;
+            _refusals = _pauses = 0;
+            _loginProven = true;
+        }
         return new Reply(root, status);
     }
 
     /// <summary>The reply body as text, read as UTF-8 bytes when its charset label is
-    /// one .NET lacks (gb2312, "utf8"), which makes ReadAsStringAsync throw.</summary>
+    /// one .NET does not know ("utf8"), which makes ReadAsStringAsync throw.</summary>
     private static async Task<string> ReadBodyAsync(HttpResponseMessage res, CancellationToken ct)
     {
         try
@@ -830,12 +952,10 @@ public sealed partial class OnvifClient : IDisposable
         }
     }
 
+    // Most cameras do not fault with a proper code on a bad login, so the text counts too (as in onvif-zeep-async).
     private static bool LooksLikeAuthRefusal(string? fault, int status) =>
         status is 401 or 403
-        || (fault != null && (fault.Contains("NotAuthorized", StringComparison.OrdinalIgnoreCase)
-                              || fault.Contains("not authorized", StringComparison.OrdinalIgnoreCase)
-                              || fault.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase)
-                              || fault.Contains("FailedAuthentication", StringComparison.OrdinalIgnoreCase)
+        || (fault != null && (fault.Contains("auth", StringComparison.OrdinalIgnoreCase)
                               || fault.Contains("InvalidSecurity", StringComparison.OrdinalIgnoreCase)
                               || fault.Contains("timestamp", StringComparison.OrdinalIgnoreCase)));
 
@@ -873,20 +993,29 @@ public sealed partial class OnvifClient : IDisposable
 
     /// <summary>The WS-Security UsernameToken header with a password digest:
     /// Base64(SHA1(nonce + created + password)). ONVIF's standard auth.</summary>
-    internal static string BuildSecurity(string username, string password, byte[] nonce, DateTime createdUtc)
+    internal static string BuildSecurity(string username, string password, byte[] nonce, DateTime createdUtc,
+        bool mustUnderstand = true, bool plainText = false)
     {
         var created = createdUtc.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture);
-        var toHash = new byte[nonce.Length + Encoding.UTF8.GetByteCount(created) + Encoding.UTF8.GetByteCount(password)];
-        var pos = 0;
-        Buffer.BlockCopy(nonce, 0, toHash, pos, nonce.Length); pos += nonce.Length;
-        pos += Encoding.UTF8.GetBytes(created, 0, created.Length, toHash, pos);
-        Encoding.UTF8.GetBytes(password, 0, password.Length, toHash, pos);
-        var digest = Convert.ToBase64String(SHA1.HashData(toHash));
+        string passwordElement;
+        if (plainText)
+        {
+            passwordElement = $"<wsse:Password Type=\"{PwTextType}\">{Esc(password)}</wsse:Password>";
+        }
+        else
+        {
+            var toHash = new byte[nonce.Length + Encoding.UTF8.GetByteCount(created) + Encoding.UTF8.GetByteCount(password)];
+            var pos = 0;
+            Buffer.BlockCopy(nonce, 0, toHash, pos, nonce.Length); pos += nonce.Length;
+            pos += Encoding.UTF8.GetBytes(created, 0, created.Length, toHash, pos);
+            Encoding.UTF8.GetBytes(password, 0, password.Length, toHash, pos);
+            passwordElement = $"<wsse:Password Type=\"{PwDigestType}\">{Convert.ToBase64String(SHA1.HashData(toHash))}</wsse:Password>";
+        }
         return
-            $"<wsse:Security s:mustUnderstand=\"1\" xmlns:wsse=\"{NsWsse}\" xmlns:wsu=\"{NsWsu}\">" +
+            $"<wsse:Security{(mustUnderstand ? " s:mustUnderstand=\"1\"" : "")} xmlns:wsse=\"{NsWsse}\" xmlns:wsu=\"{NsWsu}\">" +
             "<wsse:UsernameToken>" +
             $"<wsse:Username>{Esc(username)}</wsse:Username>" +
-            $"<wsse:Password Type=\"{PwDigestType}\">{digest}</wsse:Password>" +
+            passwordElement +
             $"<wsse:Nonce EncodingType=\"{Base64Type}\">{Convert.ToBase64String(nonce)}</wsse:Nonce>" +
             $"<wsu:Created>{created}</wsu:Created>" +
             "</wsse:UsernameToken></wsse:Security>";
@@ -916,6 +1045,13 @@ public sealed partial class OnvifClient : IDisposable
                   ?? vs?.Descendants().FirstOrDefault(e => e.Name.LocalName == "token")?.Value;
         return string.IsNullOrWhiteSpace(tok) ? null : tok.Trim();
     }
+
+    /// <summary>How many video sources a GetVideoSources reply lists: more than one is a multi-channel device.</summary>
+    internal static int VideoSourceCount(XElement? root) =>
+        root?.Descendants().Count(e => e.Name.LocalName == "VideoSources") ?? 0;
+
+    /// <summary>The video sources GetVideoSources listed, 0 until it answered.</summary>
+    private int _sourceCount;
 
     /// <summary>Parses an ImagingSettings reply, scaling each field to 0-255 using the
     /// (optional) ranges. IrCutFilter is passed through raw; WDR is on/off.</summary>

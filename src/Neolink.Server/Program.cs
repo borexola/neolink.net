@@ -558,7 +558,7 @@ foreach (var cam in config.Cameras)
         // connections the camera may have room for, so a relay-only setup holds none.
         if (genericOnvif != null && ((eventStore != null && recordingSettings != null) || config.Mqtt != null))
         {
-            onvifEvents = new OnvifEventService(cam.Name, genericOnvif, genericControl.SourceTokensAsync);
+            onvifEvents = new OnvifEventService(cam.Name, genericOnvif, genericControl.OtherChannelTokensAsync);
             onvifEvents.SetSuspended(cameraState.Suspended(cam.Name));
             var events = onvifEvents;
             tasks.Add(Task.Run(() => events.RunAsync(shutdown.Token)));
@@ -672,11 +672,14 @@ foreach (var cam in config.Cameras)
                 // differs from the recording stream (no point recording twice).
                 var previewStream = webStreams.FirstOrDefault(s => s.Kind == "subStream");
                 if (previewStream == recordStream) previewStream = null;
+                var events = onvifEvents;
                 var recorder = new EventRecorder(cam.Name, recordStream.Hub, control, eventStore,
                     config.Recording, recordingSettings, previewStream?.Hub, hubsByKind,
                     hasRoom: storage == null ? null : () => storage.HasRoom(StorageRole.Clips),
                     onWriteError: recordingHealth.MarkWriteError,
-                    ai: aiDescriber);
+                    ai: aiDescriber,
+                    // A generic camera buffers no pre-roll until its ONVIF events are known to work.
+                    prerollWanted: cam.IsGenericRtsp && events != null ? () => events.EverSubscribed : null);
                 eventEmailer ??= new Neolink.Notifications.EventEmailer(
                     notificationStore, notifier, recordingSettings, eventStore)
                 {

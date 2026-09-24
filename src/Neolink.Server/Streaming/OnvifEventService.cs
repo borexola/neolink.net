@@ -21,12 +21,13 @@ namespace Neolink.Streaming;
 /// </summary>
 public sealed class OnvifEventService
 {
-    /// <summary>How long a subscription is asked to live, and how long before that
-    /// it is renewed. Short enough that a camera reclaims it soon after Neolink
-    /// stops, long enough that renewal is not most of the traffic. A refused Renew
-    /// is not fatal: the polling itself keeps a conformant pull point alive.</summary>
-    private static readonly TimeSpan Termination = TimeSpan.FromSeconds(60);
-    private static readonly TimeSpan RenewAt = TimeSpan.FromSeconds(30);
+    /// <summary>How long a subscription is asked to live; it is renewed at 80% of what the
+    /// camera grants. As Home Assistant does: renewing often upsets some cameras (Tapo).</summary>
+    private static readonly TimeSpan Termination = TimeSpan.FromMinutes(10);
+
+    /// <summary>Polls in a row that may fail on the transport (timeout, refused connection)
+    /// before the subscription is given up for a new one.</summary>
+    private const int MaxPollFailures = 5;
 
     /// <summary>How long the camera is asked to hold each poll open. This is the
     /// latency floor for a detection only if the camera batches; a camera that
@@ -57,29 +58,33 @@ public sealed class OnvifEventService
 
     private readonly string _camera;
     private readonly OnvifClient _onvif;
-    private readonly Func<CancellationToken, Task<IReadOnlyCollection<string>?>>? _ownSources;
+    private readonly Func<CancellationToken, Task<IReadOnlyCollection<string>?>>? _otherChannels;
     private readonly object _gate = new();
 
     /// <summary>One active detection per speaker (<see cref="OnvifNotification.Key"/>), so
     /// one rule ending cannot end another's; one-shots lapse after <see cref="OneShotHold"/>.</summary>
-    private readonly Dictionary<string, (IReadOnlyList<string> Labels, bool Stateful, DateTime LastReport)> _active =
-        new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (IReadOnlyList<string> Labels, bool Stateful, DateTime LastReport, string? Source)>
+        _active = new(StringComparer.Ordinal);
 
-    private bool _unknownLogged;
+    /// <summary>How long a subscription may give nothing but hang-ups before it is asked to renew,
+    /// and replaced if it will not: a camera that rebooted hangs up on one it no longer has.</summary>
+    private static readonly TimeSpan HangUpProbe = TimeSpan.FromMinutes(5);
+
+    private readonly HashSet<string> _unknownTopics = new(StringComparer.Ordinal);
     private DateTime _lastEmit = DateTime.MinValue;
-    private IReadOnlyCollection<string>? _sources;
-    private bool _sourcesKnown;
-    private DateTime _sourcesAskedAt = DateTime.MinValue;
+    private IReadOnlyCollection<string>? _others;
+    private bool _othersKnown;
+    private DateTime _othersAskedAt = DateTime.MinValue;
     private CancellationTokenSource? _poll;
 
-    /// <param name="ownSources">This camera's own video sources, for a device that sends every
-    /// channel's events down one subscription. Null means "ask again"; empty means "no filter".</param>
+    /// <param name="otherChannels">The video source tokens of an NVR's OTHER channels, whose events share
+    /// the subscription. Null means "ask again"; empty means "no filter".</param>
     public OnvifEventService(string camera, OnvifClient onvif,
-        Func<CancellationToken, Task<IReadOnlyCollection<string>?>>? ownSources = null)
+        Func<CancellationToken, Task<IReadOnlyCollection<string>?>>? otherChannels = null)
     {
         _camera = camera;
         _onvif = onvif;
-        _ownSources = ownSources;
+        _otherChannels = otherChannels;
     }
 
     /// <summary>Where a detection goes. Set by the wiring in Program, exactly as the
@@ -149,7 +154,8 @@ public sealed class OnvifEventService
                 }
                 else
                 {
-                    (proved, tidy) = await PollAsync(subscription, troubled || !EverSubscribed, ct).ConfigureAwait(false);
+                    (proved, tidy) = await PollAsync(subscription, created.Granted, troubled || !EverSubscribed, ct)
+                        .ConfigureAwait(false);
                     if (proved) refusalLogged = false;
                 }
             }
@@ -193,11 +199,12 @@ public sealed class OnvifEventService
 
     /// <summary>The poll loop for one subscription. Proved: it delivered at least one
     /// poll. Alive: it still worked when we left it (suspended), so unsubscribing is worth doing.</summary>
-    private async Task<(bool Proved, bool Alive)> PollAsync(PullPointSubscription subscription, bool announce,
-        CancellationToken ct)
+    private async Task<(bool Proved, bool Alive)> PollAsync(PullPointSubscription subscription, TimeSpan granted,
+        bool announce, CancellationToken ct)
     {
-        var subscribedAt = DateTime.UtcNow;
-        var renewDue = subscribedAt + RenewAt;
+        var renewDue = DateTime.UtcNow + RenewAfter(granted);
+        var answeredAt = DateTime.UtcNow; // the camera's last real reply on this subscription
+        int failures = 0;
         bool delivered = false;
         // The poll is cancellable on its own, so a suspend cuts it short without
         // ending the service.
@@ -208,8 +215,19 @@ public sealed class OnvifEventService
             while (!ct.IsCancellationRequested && !Suspended)
             {
                 var started = DateTime.UtcNow;
-                var messages = await _onvif.PullMessagesAsync(subscription, Hold, poll.Token).ConfigureAwait(false);
-                if (messages == null) return (delivered, false); // gone: re-subscribe
+                var pulled = await _onvif.PullMessagesAsync(subscription, Hold, poll.Token).ConfigureAwait(false);
+                if (pulled.Messages is not { } messages)
+                {
+                    // Gone by the camera's word: re-subscribe. A timeout or a refused connection is retried
+                    // on this subscription instead — making new ones often is what upsets some cameras.
+                    if (pulled.SubscriptionLost || ++failures > MaxPollFailures) return (delivered, false);
+                    // What it reported stands: the subscription is intact, so its ends still come (ONVIF
+                    // never repeats a state), and one that lapsed meanwhile faults the next poll.
+                    await Task.Delay(TimeSpan.FromSeconds(Math.Min(60, 2 << failures)), poll.Token).ConfigureAwait(false);
+                    continue;
+                }
+                failures = 0;
+                if (!pulled.HungUp) answeredAt = DateTime.UtcNow;
                 if (!delivered)
                 {
                     delivered = true;
@@ -230,18 +248,24 @@ public sealed class OnvifEventService
                 // camera. When a poll comes back early and empty, pause before the next.
                 if (messages.Count == 0 && DateTime.UtcNow - started < MinPollInterval)
                     await Task.Delay(MinPollInterval, poll.Token).ConfigureAwait(false);
+                bool onlyHangUps = DateTime.UtcNow - answeredAt > HangUpProbe;
+                if (onlyHangUps) renewDue = DateTime.UtcNow;
                 if (DateTime.UtcNow >= renewDue)
                 {
-                    // A refused Renew is not the end: the polling itself keeps a conformant
-                    // pull point alive, and a lapsed subscription shows up on the next poll.
-                    if (!await _onvif.RenewSubscriptionAsync(subscription, Termination, poll.Token).ConfigureAwait(false)
-                        && !_renewRefusedLogged)
+                    // A refused Renew is not the end: the polling itself keeps a conformant pull point
+                    // alive, and a lapsed subscription faults the next poll. It is not asked again.
+                    var (renewed, refused) = await _onvif.RenewSubscriptionAsync(subscription, Termination, poll.Token)
+                        .ConfigureAwait(false);
+                    if (renewed != null) answeredAt = DateTime.UtcNow;
+                    else if (onlyHangUps) return (delivered, false); // nothing on it answers: a new one
+                    if (refused && !_renewRefusedLogged)
                     {
                         _renewRefusedLogged = true;
                         Log.Debug($"{_camera}: the camera refused to renew its ONVIF event subscription — " +
                                   "relying on the polls to keep it alive");
                     }
-                    renewDue = DateTime.UtcNow + RenewAt;
+                    renewDue = renewed is { } g ? DateTime.UtcNow + RenewAfter(g)
+                        : refused ? DateTime.MaxValue : DateTime.UtcNow + TimeSpan.FromMinutes(1);
                 }
             }
             return (delivered, Suspended);
@@ -259,23 +283,28 @@ public sealed class OnvifEventService
 
     private bool _renewRefusedLogged;
 
-    /// <summary>Learns which video sources are this camera's, once the control surface
-    /// has bound the streams. Asked again while unknown; any answer is final.</summary>
+    /// <summary>When to renew a subscription the camera granted for <paramref name="granted"/>.</summary>
+    internal static TimeSpan RenewAfter(TimeSpan granted) =>
+        TimeSpan.FromSeconds(Math.Max(5, granted.TotalSeconds * 0.8));
+
+    /// <summary>Learns which video sources are the device's other channels, once the control
+    /// surface has bound the streams. Asked again while unknown; any answer is final.</summary>
     private async Task FilterSourcesAsync(CancellationToken ct)
     {
-        if (_ownSources == null || _sourcesKnown) return;
-        if (DateTime.UtcNow - _sourcesAskedAt < TimeSpan.FromSeconds(30)) return;
-        _sourcesAskedAt = DateTime.UtcNow;
+        if (_otherChannels == null || _othersKnown) return;
+        if (DateTime.UtcNow - _othersAskedAt < TimeSpan.FromSeconds(30)) return;
+        _othersAskedAt = DateTime.UtcNow;
         try
         {
-            var sources = await _ownSources(ct).ConfigureAwait(false);
-            if (sources == null) return;
-            _sources = sources.Count > 0 ? sources : null;
-            _sourcesKnown = true;
+            var others = await _otherChannels(ct).ConfigureAwait(false);
+            if (others == null) return;
+            _others = others.Count > 0 ? others : null;
+            _othersKnown = true;
+            if (_others != null) EndOtherChannels(_others);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            Log.Debug($"{_camera}: could not learn the camera's own video sources: {Log.Flatten(ex)}");
+            Log.Debug($"{_camera}: could not learn the device's other channels: {Log.Flatten(ex)}");
         }
     }
 
@@ -291,40 +320,54 @@ public sealed class OnvifEventService
             ExpireOneShots();
             bool any;
             lock (_gate) any = _active.Count > 0;
-            if (any && DateTime.UtcNow - _lastEmit >= Repush) Emit();
+            if (any && DateTime.UtcNow - _lastEmit >= Repush) Emit(repush: true);
         }
+    }
+
+    /// <summary>Ends what the device's other channels were reported doing before they were known to be other.</summary>
+    private void EndOtherChannels(IReadOnlyCollection<string> others)
+    {
+        bool any;
+        lock (_gate)
+        {
+            var gone = _active.Where(kv => kv.Value.Source is { } s && others.Contains(s)).Select(kv => kv.Key).ToList();
+            foreach (var k in gone) _active.Remove(k);
+            any = gone.Count > 0;
+        }
+        if (any) Emit();
     }
 
     /// <summary>One notification, turned into a start or an end of a detection.</summary>
     internal void Handle(OnvifNotification n)
     {
-        // Another channel's business: a device with several video sources sends
-        // every one's events down the one subscription.
-        if (_sources is { Count: > 0 } mine && n.SourceToken is { } source && !mine.Contains(source))
-            return;
+        // Only a start naming another channel is dropped: an end still closes what it started, and an
+        // unknown value (Foscam: VideoSource=HUMAN_DETECTION_ALARM) is this camera's.
+        bool other = _others is { Count: > 0 } others && n.SourceToken is { } source && others.Contains(source);
         if (n.Deleted)
         {
             // The property was withdrawn (a rule reconfigured or removed): whatever it reported is over.
-            End(n.Key);
+            EndSpeaker(n.Speaker);
             return;
         }
         if (!n.IsDetection)
         {
-            // Worth exactly one line: an unrecognised topic is how a vendor's own
-            // detection rule stays invisible, and the topic is what someone would
-            // need to report to have it added.
-            if (!_unknownLogged && n.Items.Count > 0)
-            {
-                _unknownLogged = true;
-                Log.Debug($"{_camera}: ONVIF topics that are not detections are ignored (first: {n.Topic})");
-            }
+            // One line per topic: an unrecognised topic is how a vendor's own detection
+            // rule stays invisible, and it is what someone would report to have it added.
+            bool first;
+            lock (_gate) first = _unknownTopics.Count < 64 && _unknownTopics.Add(n.Topic);
+            if (first && n.Items.Count > 0)
+                Log.Debug($"{_camera}: ONVIF topic is not a detection, ignored: {n.Topic}");
             return;
         }
+        // Initialized is the rule's current value, replayed on subscribing: a one-shot's is not
+        // a new sighting, and a doorbell already ringing does not ring again.
+        bool replay = string.Equals(n.Operation, "Initialized", StringComparison.OrdinalIgnoreCase);
+        if (n.Active == null && replay) return;
         if (n.Active == false) End(n.Key);
-        else Start(n.Key, n.Labels, stateful: n.Active == true);
+        else if (!other) Start(n.Key, n.Labels, stateful: n.Active == true, n.SourceToken, ring: !replay);
     }
 
-    private void Start(string key, IReadOnlyList<string> labels, bool stateful)
+    private void Start(string key, IReadOnlyList<string> labels, bool stateful, string? source = null, bool ring = true)
     {
         bool changed;
         lock (_gate)
@@ -333,12 +376,12 @@ public sealed class OnvifEventService
             // Once a speaker has been reported with state it stays stateful until it ends:
             // a one-shot for the same thing must not turn it into one that lapses by itself.
             var wasStateful = _active.TryGetValue(key, out var prior) && prior.Stateful;
-            _active[key] = (labels, stateful || wasStateful, DateTime.UtcNow);
+            _active[key] = (labels, stateful || wasStateful, DateTime.UtcNow, source);
         }
         // Emitted even when nothing changed: a re-report is harmless to the recorder
         // (labels accumulate, nothing restarts) and is what re-opens an event that
         // had gone quiet and was sitting in its post-roll.
-        Emit();
+        Emit(ring: ring && changed && labels.Contains("visitor"));
         if (changed)
             Log.Debug($"{_camera}: ONVIF detection started ({string.Join("+", labels)}{(stateful ? "" : ", one-shot")})");
     }
@@ -352,6 +395,21 @@ public sealed class OnvifEventService
             labels = was.Labels;
         }
         Log.Debug($"{_camera}: ONVIF detection ended ({string.Join("+", labels)})");
+        Emit();
+    }
+
+    /// <summary>Ends everything one rule on one channel reported, whatever its subject.</summary>
+    private void EndSpeaker(string speaker)
+    {
+        bool any;
+        lock (_gate)
+        {
+            var gone = _active.Keys.Where(k => k == speaker || k.StartsWith(speaker + "|", StringComparison.Ordinal)).ToList();
+            foreach (var k in gone) _active.Remove(k);
+            any = gone.Count > 0;
+        }
+        if (!any) return;
+        Log.Debug($"{_camera}: ONVIF detection withdrawn by the camera ({speaker})");
         Emit();
     }
 
@@ -394,7 +452,7 @@ public sealed class OnvifEventService
     /// rules; dropping "motion" whenever something else was also active left the
     /// recorder a set in which an event could be filtered out entirely (a camera
     /// set to record motion but not people would record nothing).</summary>
-    private void Emit()
+    private void Emit(bool repush = false, bool ring = false)
     {
         // Held across snapshot AND delivery: the poll thread and the re-push loop both
         // emit, and a stale "MD" landing after a "none" would re-arm an event nobody ends.
@@ -403,6 +461,11 @@ public sealed class OnvifEventService
             string[] labels;
             lock (_gate)
                 labels = _active.Values.SelectMany(v => v.Labels).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            // A doorbell press goes out once, with its own start: Home Assistant takes every push carrying it as a ring.
+            bool visitor = labels.Contains("visitor", StringComparer.OrdinalIgnoreCase);
+            if (!ring) labels = labels.Where(l => !l.Equals("visitor", StringComparison.OrdinalIgnoreCase)).ToArray();
+            // Nor is the all-clear sent while it is still active: the recording stays open until it ends.
+            if (labels.Length == 0 && (repush || visitor)) return;
             _lastEmit = DateTime.UtcNow;
             MotionSink?.Invoke(labels.Length == 0
                 ? new MotionPush("none", Array.Empty<string>())
@@ -428,14 +491,18 @@ public sealed class OnvifEventService
     {
         lock (_gate)
             foreach (var k in _active.Keys.ToList())
-                _active[k] = (_active[k].Labels, _active[k].Stateful, _active[k].LastReport - by);
+                _active[k] = _active[k] with { LastReport = _active[k].LastReport - by };
     }
 
-    /// <summary>Test seam: restricts the detections to these video sources, as the
-    /// control surface would once it has bound the streams.</summary>
-    internal void UseSourcesForTest(IReadOnlyCollection<string> sources)
+    /// <summary>Test seam: one re-push, as the loop would send it.</summary>
+    internal void RepushForTest() => Emit(repush: true);
+
+    /// <summary>Test seam: ignores events naming these video sources, as the control
+    /// surface would once it has bound the streams.</summary>
+    internal void UseOtherChannelsForTest(IReadOnlyCollection<string> others)
     {
-        _sources = sources;
-        _sourcesKnown = true;
+        _others = others;
+        _othersKnown = true;
+        if (others.Count > 0) EndOtherChannels(others);
     }
 }

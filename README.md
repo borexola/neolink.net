@@ -609,12 +609,12 @@ Where the zone is KEPT depends on the camera, and the editor says which:
   `camera-state.json` alongside the other per-camera settings and survives
   restarts.
 
-The editor draws the grid over the camera's latest still. Cameras with no
-snapshot command of their own (every generic RTSP one) get that still from the
-stream Neolink is already carrying, decoded with ffmpeg — without ffmpeg the
-grid is drawn over an empty frame instead. A camera that *has* a snapshot
-command is untouched by this: when its snapshot fails, the answer is the same
-as it always was (the last frame, honestly labelled, or nothing).
+The editor draws the grid over the camera's latest still. A generic RTSP
+camera with no ONVIF snapshot, or whose ONVIF snapshot fails, gets that still
+from the stream Neolink is already carrying, decoded with ffmpeg — without
+ffmpeg the grid is drawn over an empty frame instead. A Reolink camera is
+untouched by this: when its snapshot fails, the answer is the last frame,
+honestly labelled, or nothing.
 
 ## Behind a reverse proxy (HAProxy / nginx / Caddy)
 

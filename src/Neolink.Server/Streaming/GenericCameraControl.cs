@@ -39,9 +39,11 @@ public sealed class GenericCameraControl : ICameraControl
     private readonly SemaphoreSlim _profileGate = new(1, 1);
     private IReadOnlyList<(string Kind, OnvifProfile Profile)>? _bound;
     private DateTime _boundAt;
-    private volatile bool _boundByUri;
-    /// <summary>Whether the camera has said which URI each profile streams at.</summary>
-    private volatile bool _urisKnown;
+    /// <summary>The video source a stream was matched to by URI: which channel of the device this is.</summary>
+    private volatile string? _ownSource;
+    /// <summary>Whether every profile has said which URI it streams at, so an unmatched stream is final.</summary>
+    private volatile bool _urisComplete;
+    private bool _unmatchedLogged;
 
     public GenericCameraControl(string cameraName, IReadOnlyList<RtspCameraService> services,
         OnvifClient? onvif = null, IReadOnlyList<(string Kind, string Url)>? streams = null)
@@ -101,8 +103,27 @@ public sealed class GenericCameraControl : ICameraControl
             // does not settle on "nothing" because the camera was still booting.
             return NoCapabilities with { Provisional = true };
         }
-        if (DateTime.UtcNow < _capsRetryAt && _lastCaps is { } recent) return recent;
-        var info = await _onvif.TryGetDeviceInfoAsync(ct).ConfigureAwait(false);
+        if (_lastCaps is { } recent)
+        {
+            // An incomplete answer is asked again off the caller's path, one at a time.
+            if (DateTime.UtcNow >= _capsRetryAt && Interlocked.Exchange(ref _capsReading, 1) == 0)
+                _ = Task.Run(async () =>
+                {
+                    try { await ReadCapabilitiesAsync(CancellationToken.None).ConfigureAwait(false); }
+                    catch (Exception ex) { Log.Debug($"{CameraName}: ONVIF capability re-read failed: {Log.Flatten(ex)}"); }
+                    finally { Volatile.Write(ref _capsReading, 0); }
+                });
+            return recent;
+        }
+        return await ReadCapabilitiesAsync(ct).ConfigureAwait(false);
+    }
+
+    private int _capsReading;
+
+    private async Task<CameraCapabilities> ReadCapabilitiesAsync(CancellationToken ct)
+    {
+        var onvif = _onvif!;
+        var info = await onvif.TryGetDeviceInfoAsync(ct).ConfigureAwait(false);
         // HasPtz only means something once the profiles have been read; reading them
         // through the binding also tells the client which profile is this channel.
         var bound = await BoundProfilesAsync(ct).ConfigureAwait(false);
@@ -110,14 +131,14 @@ public sealed class GenericCameraControl : ICameraControl
         // drives. When the node cannot be read the head is assumed to pan and tilt —
         // which is what every camera got before the node was asked — and nothing is
         // assumed about zoom, whose slider needs a position to start from.
-        var node = _onvif.HasPtz ? await _onvif.TryGetPtzNodeAsync(ct).ConfigureAwait(false) : null;
+        var node = onvif.HasPtz ? await onvif.TryGetPtzNodeAsync(ct).ConfigureAwait(false) : null;
         var caps = new CameraCapabilities(ToVersion(info), null,
-            new CameraFeatures(Ptz: _onvif.HasPtz && (node?.PanTilt ?? true), Led: false, Pir: false,
+            new CameraFeatures(Ptz: onvif.HasPtz && (node?.PanTilt ?? true), Led: false, Pir: false,
                 Battery: false, Talk: false, Zoom: node?.Zoom == true));
-        // Only a camera that answered EVERYTHING is worth remembering: caching one
-        // timed-out read would leave it without settings until Neolink restarts.
-        var complete = _onvif.Ready && info != null && bound != null
-                       && (!_onvif.HasPtz || _onvif.PtzNodeSettled);
+        // Only a full answer is remembered (a timed-out read would stick for the run); no binding
+        // counts only once every stream URI has answered.
+        var complete = onvif.Ready && info != null && bound != null && (bound.Count > 0 || _urisComplete)
+                       && (!onvif.HasPtz || onvif.PtzNodeSettled);
         if (complete)
         {
             _caps = caps;
@@ -138,20 +159,33 @@ public sealed class GenericCameraControl : ICameraControl
     private DateTime _incompleteSince = DateTime.MinValue;
     private static readonly TimeSpan ProvisionalFor = TimeSpan.FromMinutes(3);
 
-    /// <summary>This camera's own video source tokens. Null while unknown (ask again);
-    /// empty, and final, when the profiles were guessed from frame size so no filter is safe.</summary>
-    public async Task<IReadOnlyCollection<string>?> SourceTokensAsync(CancellationToken ct)
+    /// <summary>The video source tokens of the device's OTHER channels. Null while unknown (ask again);
+    /// empty for a single-channel device; every channel's when no stream matched one.</summary>
+    public async Task<IReadOnlyCollection<string>?> OtherChannelTokensAsync(CancellationToken ct)
     {
         var bound = await BoundProfilesAsync(ct).ConfigureAwait(false);
-        if (bound == null || !_urisKnown) return null;
-        if (!_boundByUri) return Array.Empty<string>();
-        return bound.SelectMany(b => new[] { b.Profile.VideoSourceToken, b.Profile.SourceToken })
-            .Where(t => !string.IsNullOrEmpty(t)).Select(t => t!).Distinct(StringComparer.Ordinal).ToList();
+        if (bound == null) return null;
+        var all = await _onvif!.TryGetProfilesAsync(ct).ConfigureAwait(false);
+        if (all == null) return null;
+        if (OnvifClient.Channels(all) <= 1) return Array.Empty<string>();
+        var own = _ownSource;
+        if (own == null && !_urisComplete) return null;
+        // Unmatched, every channel is another camera's: only events naming none are taken.
+        var ownTokens = all.Where(p => own != null && p.SourceToken == own)
+            .SelectMany(p => new[] { p.VideoSourceToken, p.SourceToken })
+            .Where(t => !string.IsNullOrEmpty(t)).ToHashSet(StringComparer.Ordinal);
+        return all.Where(p => p.SourceToken is { Length: > 0 } s && s != own)
+            .SelectMany(p => new[] { p.VideoSourceToken, p.SourceToken })
+            .Where(t => !string.IsNullOrEmpty(t) && !ownTokens.Contains(t!)).Select(t => t!)
+            .Distinct(StringComparer.Ordinal).ToList();
     }
 
     /// <summary>Whether ONVIF has not answered yet but may still (discovery due or under
     /// way), so a caller that can wait a moment for the real answer should.</summary>
     public bool ProbePending => _onvif != null && !_onvif.Ready && (_onvif.DiscoveryDue || _onvif.Discovering);
+
+    /// <summary>Whether discovery has failed since it last succeeded (likely no ONVIF at all).</summary>
+    public bool DiscoveryFailed => _onvif?.DiscoveryFailed == true;
 
     /// <summary>Starts discovery in the background. Never inline: callers walk every
     /// camera in turn, and a port scan there holds every camera behind this one.</summary>
@@ -167,6 +201,13 @@ public sealed class GenericCameraControl : ICameraControl
         if (_onvif is { Ready: true }) return true;
         Kick();
         return false;
+    }
+
+    /// <summary>On a multi-channel device, matches the streams to a channel before a
+    /// per-channel call, which would otherwise be held back (see <see cref="OnvifClient.ChannelUnknown"/>).</summary>
+    private async Task BindChannelAsync(CancellationToken ct)
+    {
+        if (_onvif is { Ready: true, ChannelUnknown: true }) await BoundProfilesAsync(ct).ConfigureAwait(false);
     }
 
     /// <summary>ONVIF's device information in the shape the panel's identity strip
@@ -312,12 +353,18 @@ public sealed class GenericCameraControl : ICameraControl
             if (profiles is not { Count: > 0 }) return null;
             var uris = await _onvif.TryGetStreamUrisAsync(ct).ConfigureAwait(false);
             var bound = Bind(_streams, profiles, uris);
-            // Matched by URI, or guessed from frame size? Only a match says which
-            // channel of a multi-channel device this camera is (see SourceTokensAsync).
-            _boundByUri = uris != null && bound.Count == _streams.Count && bound.All(b =>
-                uris.TryGetValue(b.Profile.Token, out var u)
-                && SameStream(u, _streams.FirstOrDefault(s => s.Kind == b.Kind).Url));
-            _urisKnown = uris != null;
+            // Only a URI match says which channel of a multi-channel device this camera is.
+            _ownSource = bound.Where(b => uris != null && uris.TryGetValue(b.Profile.Token, out var u)
+                                          && SameStream(u, _streams.FirstOrDefault(s => s.Kind == b.Kind).Url))
+                .Select(b => b.Profile.SourceToken).FirstOrDefault(t => !string.IsNullOrEmpty(t));
+            _urisComplete = uris != null && _onvif.StreamUrisComplete;
+            if (bound.Count == 0 && _urisComplete && OnvifClient.Channels(profiles) > 1 && !_unmatchedLogged)
+            {
+                _unmatchedLogged = true;
+                Log.Info($"{CameraName}: none of the device's ONVIF profiles streams at this camera's URL, so which of its " +
+                         $"{OnvifClient.Channels(profiles)} channels it is is unknown — its ONVIF settings, snapshot, " +
+                         "motion grid and channel-tagged detections stay off");
+            }
             // The main stream's profile is the camera's channel for every per-channel
             // ONVIF call (snapshot, PTZ, overlays, picture, the motion grid).
             await _onvif.SetPreferredProfileAsync(
@@ -351,9 +398,12 @@ public sealed class GenericCameraControl : ICameraControl
             bound.Add((kind, match));
         }
         if (bound.Count == streams.Count) return bound;
-        // Fall back to frame size: biggest for a main stream, SMALLEST for a sub stream,
-        // so a sub-only config is never handed the main encoder's settings to save over.
-        var spare = profiles.Where(p => !taken.Contains(p.Token)).ToList();
+        // Fall back to frame size (biggest for main, smallest for sub), within one channel only:
+        // the one a URI matched, or the device's only one.
+        var channel = bound.Select(b => b.Profile.SourceToken).FirstOrDefault(t => !string.IsNullOrEmpty(t));
+        bool single = OnvifClient.Channels(profiles) <= 1;
+        var spare = profiles.Where(p => !taken.Contains(p.Token)
+                                        && (channel != null ? p.SourceToken == channel : single)).ToList();
         foreach (var (kind, _) in streams)
         {
             if (bound.Any(b => b.Kind == kind) || spare.Count == 0) continue;
@@ -414,6 +464,7 @@ public sealed class GenericCameraControl : ICameraControl
     public async Task<ImageSettings?> GetImageSettingsAsync(CancellationToken ct)
     {
         if (_onvif == null || !ReadyOrKick()) return null;
+        await BindChannelAsync(ct).ConfigureAwait(false);
         var o = await _onvif.TryGetImagingAsync(ct).ConfigureAwait(false);
         if (o == null) return null;
         // Hue, anti-flicker and flip/mirror have no ONVIF imaging equivalent, and
@@ -434,6 +485,7 @@ public sealed class GenericCameraControl : ICameraControl
         if (hue != null || antiFlicker != null || flip != null || mirror != null)
             throw new NotSupportedException(
                 $"{CameraName} exposes picture settings over ONVIF, which can't set hue, anti-flicker or flip/mirror");
+        await BindChannelAsync(ct).ConfigureAwait(false);
         await _onvif.SetImagingAsync(bright, contrast, saturation, sharpen,
             CameraControl.DayNightToIrCut(dayNight), wideDynamicRange: null, ct).ConfigureAwait(false);
         Log.Info($"{CameraName}: picture settings changed over ONVIF");
@@ -442,6 +494,7 @@ public sealed class GenericCameraControl : ICameraControl
     public async Task<OsdSettings?> GetOsdSettingsAsync(CancellationToken ct)
     {
         if (_onvif == null || !ReadyOrKick()) return null;
+        await BindChannelAsync(ct).ConfigureAwait(false);
         var osds = await _onvif.TryGetOsdsAsync(ct).ConfigureAwait(false);
         if (osds is not { Count: > 0 }) return null;
         var (name, time) = SplitOsds(osds);
@@ -473,6 +526,7 @@ public sealed class GenericCameraControl : ICameraControl
             throw new NotSupportedException(
                 $"{CameraName} exposes its overlays over ONVIF, which can move them but not switch them off");
         if (namePos == null && timePos == null) return;
+        await BindChannelAsync(ct).ConfigureAwait(false);
         var osds = await _onvif.TryGetOsdsAsync(ct).ConfigureAwait(false)
             ?? throw new NotSupportedException($"{CameraName} reports no ONVIF overlays");
         var (name, time) = SplitOsds(osds);
@@ -485,7 +539,9 @@ public sealed class GenericCameraControl : ICameraControl
 
     public async Task<IReadOnlyList<PtzPresetInfo>?> GetPtzPresetsAsync(CancellationToken ct)
     {
-        if (_onvif is not { HasPtz: true } || !ReadyOrKick()) return null;
+        if (_onvif == null || !ReadyOrKick()) return null;
+        await BindChannelAsync(ct).ConfigureAwait(false);
+        if (!_onvif.HasPtz) return null;
         var presets = await _onvif.TryGetPresetsAsync(ct).ConfigureAwait(false);
         if (presets == null) return null;
         // The panel saves into the first FREE slot, so a few empty ones are offered
@@ -493,33 +549,36 @@ public sealed class GenericCameraControl : ICameraControl
         // filling a fixed table, and it refuses once the head is full, which the
         // node says (MaximumNumberOfPresets); a head that did not say gets sixteen.
         var max = Math.Min(_onvif.PtzNode?.MaxPresets ?? 16, MaxPresetSlots);
-        var list = presets.Select((p, i) => new PtzPresetInfo(i + 1, p.Name, true)).ToList();
-        for (int i = presets.Count; i < Math.Min(presets.Count + 4, max); i++)
-            list.Add(new PtzPresetInfo(i + 1, "", false));
-        return list;
+        var list = presets.Select(p => new PtzPresetInfo(p.Id, p.Name, true)).ToList();
+        var used = presets.Select(p => p.Id).ToHashSet();
+        for (int id = 1, total = Math.Min(presets.Count + 4, max); list.Count < total && id <= MaxPresetSlots; id++)
+            if (!used.Contains(id)) list.Add(new PtzPresetInfo(id, "", false));
+        return list.OrderBy(p => p.Id).ToList();
     }
 
     /// <summary>The most preset slots ever offered: the web API's ceiling on a preset id.</summary>
     internal const int MaxPresetSlots = 255;
 
-    public Task PtzToPresetAsync(int id, CancellationToken ct) =>
-        _onvif is { HasPtz: true } o
-            ? o.GotoPresetAsync(id, ct)
-            : throw new NotSupportedException($"{CameraName} reports no ONVIF PTZ");
+    public async Task PtzToPresetAsync(int id, CancellationToken ct) =>
+        await (await PtzClientAsync(ct).ConfigureAwait(false)).GotoPresetAsync(id, ct).ConfigureAwait(false);
 
-    public Task SavePtzPresetAsync(int id, string name, CancellationToken ct) =>
-        _onvif is { HasPtz: true } o
-            ? o.SavePresetAsync(id, name, ct)
-            : throw new NotSupportedException($"{CameraName} reports no ONVIF PTZ");
+    public async Task SavePtzPresetAsync(int id, string name, CancellationToken ct) =>
+        await (await PtzClientAsync(ct).ConfigureAwait(false)).SavePresetAsync(id, name, ct).ConfigureAwait(false);
+
+    /// <summary>The ONVIF client, once this camera's channel is known to have a head; throws otherwise.</summary>
+    private async Task<OnvifClient> PtzClientAsync(CancellationToken ct)
+    {
+        await BindChannelAsync(ct).ConfigureAwait(false);
+        return _onvif is { HasPtz: true } o ? o : throw new NotSupportedException($"{CameraName} reports no ONVIF PTZ");
+    }
 
     /// <summary>Drives the head. The panel's 1-64 speed is a fraction of full
     /// speed here — ONVIF's velocities are normalized, not stepped.</summary>
-    public Task PtzAsync(string command, float speed, CancellationToken ct)
+    public async Task PtzAsync(string command, float speed, CancellationToken ct)
     {
-        if (_onvif is not { HasPtz: true } o)
-            throw new NotSupportedException($"{CameraName} reports no ONVIF PTZ");
+        var o = await PtzClientAsync(ct).ConfigureAwait(false);
         var v = Math.Clamp(speed / 64f, 0.05f, 1f);
-        return command.ToLowerInvariant() switch
+        await (command.ToLowerInvariant() switch
         {
             "up" => o.PtzMoveAsync(0, v, 0, ct),
             "down" => o.PtzMoveAsync(0, -v, 0, ct),
@@ -527,7 +586,7 @@ public sealed class GenericCameraControl : ICameraControl
             "right" => o.PtzMoveAsync(v, 0, 0, ct),
             "stop" => o.PtzStopAsync(ct),
             _ => throw new ArgumentException($"unknown PTZ command '{command}' (up|down|left|right|stop)"),
-        };
+        }).ConfigureAwait(false);
     }
 
     public Task RebootAsync(CancellationToken ct) =>
@@ -544,14 +603,18 @@ public sealed class GenericCameraControl : ICameraControl
     /// camera that offers none returns null here and the caller falls back to the
     /// stream (see Media/FrameGrab). A suspended camera is not asked: Neolink holds
     /// no connection to it.</summary>
-    public Task<byte[]?> SnapshotAsync(CancellationToken ct) =>
-        _onvif == null || Suspended || !ReadyOrKick() ? Task.FromResult<byte[]?>(null) : _onvif.TrySnapshotAsync(ct);
+    public Task<byte[]?> SnapshotAsync(CancellationToken ct) => SnapshotAsync(small: false, ct);
 
     /// <summary>The sub stream's still, for consumers with a size cap (the MQTT
     /// camera entity): a 4K main-profile snapshot would be dropped at the broker.</summary>
-    public Task<byte[]?> SnapshotSmallAsync(CancellationToken ct) =>
-        _onvif == null || Suspended || !ReadyOrKick() ? Task.FromResult<byte[]?>(null)
-            : _onvif.TrySnapshotAsync(small: true, ct);
+    public Task<byte[]?> SnapshotSmallAsync(CancellationToken ct) => SnapshotAsync(small: true, ct);
+
+    private async Task<byte[]?> SnapshotAsync(bool small, CancellationToken ct)
+    {
+        if (_onvif == null || Suspended || !ReadyOrKick()) return null;
+        await BindChannelAsync(ct).ConfigureAwait(false);
+        return await _onvif.TrySnapshotAsync(small, ct).ConfigureAwait(false);
+    }
 
     /// <summary>Only once the camera has actually given a snapshot URI. Until then
     /// the stream-decoded still stands in, which is what a camera with no ONVIF (or
@@ -577,7 +640,9 @@ public sealed class GenericCameraControl : ICameraControl
     /// zoom or will not say where the lens is.</summary>
     public async Task<XElement?> GetZoomFocusAsync(CancellationToken ct)
     {
-        if (_onvif is not { HasPtz: true } o || !ReadyOrKick()) return null;
+        if (_onvif == null || !ReadyOrKick()) return null;
+        await BindChannelAsync(ct).ConfigureAwait(false);
+        if (_onvif is not { HasPtz: true } o) return null;
         if (await o.TryGetPtzNodeAsync(ct).ConfigureAwait(false) is not { Zoom: true } node) return null;
         if ((await o.TryGetZoomAsync(ct).ConfigureAwait(false)).At is not { } at) return null;
         return new XElement("zoomFocus",
@@ -591,6 +656,7 @@ public sealed class GenericCameraControl : ICameraControl
     {
         if (command != "zoomPos")
             throw new NotSupportedException("focus is not available over ONVIF");
+        await BindChannelAsync(ct).ConfigureAwait(false);
         if (_onvif is not { HasPtz: true } o
             || await o.TryGetPtzNodeAsync(ct).ConfigureAwait(false) is not { Zoom: true } node)
             throw new NotSupportedException($"{CameraName} reports no ONVIF zoom");
@@ -673,6 +739,7 @@ public sealed class GenericCameraControl : ICameraControl
             Settle(OnvifZoneAnswer.Unknown);
             return null;
         }
+        await BindChannelAsync(ct).ConfigureAwait(false);
         var (answer, zone) = await _onvif.ReadCellZoneAsync(ct).ConfigureAwait(false);
         Settle(answer);
         return zone == null ? null : new DetectionZone("md", zone.Cols, zone.Rows, zone.Table);
@@ -682,6 +749,7 @@ public sealed class GenericCameraControl : ICameraControl
     {
         if (type != "md" || _onvif == null)
             throw new NotSupportedException($"{CameraName} keeps no {type} detection zone of its own");
+        await BindChannelAsync(ct).ConfigureAwait(false);
         try
         {
             await _onvif.WriteCellZoneAsync(table, ct).ConfigureAwait(false);

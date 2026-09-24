@@ -1613,7 +1613,7 @@
                             AdminPushPortsError())
                         @AdminField(T["Listener bind (blank = server bind)"], "wakeHints.bind", "text",
                             AdminIpError("wakeHints.bind"))
-                        @AdminField(T["Hint trust window, hours (blank = 2)"], "wakeHints.trustHours", "number",
+                        @AdminField(T["Hint trust window, hours (blank = 2)"], "wakeHints.trustHours", "decimal",
                             AdminTrustHoursError())
                         @if (AdminTrustHoursError() == null
                              && AdminTrustHours() is { } trustH && trustH > 24)
@@ -5130,9 +5130,12 @@
                 return "Provide at least one rtsp:// URL.";
             foreach (var url in new[] { e.RtspMain, e.RtspSub })
             {
-                if (!string.IsNullOrWhiteSpace(url) && !url.Contains("****")
+                // A masked URL is checked too: the mask is a valid password, and an edit around it is saved.
+                // A login is left to the server's check: a raw '@' or '#' in a password is common, and Uri rejects it.
+                if (!string.IsNullOrWhiteSpace(url)
                     && (!url.StartsWith("rtsp://", StringComparison.OrdinalIgnoreCase)
-                        || !Uri.TryCreate(url.Trim(), UriKind.Absolute, out _)))
+                        || !Uri.TryCreate(url.Trim().LastIndexOf('@') is var at and >= 0 ? "rtsp://" + url.Trim()[(at + 1)..] : url.Trim(),
+                            UriKind.Absolute, out _)))
                     return "RTSP URLs must be valid and start with rtsp://";
             }
             return null;
@@ -5379,9 +5382,9 @@
         return seen > 16 ? "At most 16 ports." : null;
     }
 
-    // A number input always submits "." decimals, whatever the page language.
+    // A decimal comma is taken as a point, whatever the page language.
     private double? AdminTrustHours() =>
-        double.TryParse(AdminValue("wakeHints.trustHours").Trim(), System.Globalization.NumberStyles.Float,
+        double.TryParse(AdminValue("wakeHints.trustHours").Trim().Replace(',', '.'), System.Globalization.NumberStyles.Float,
             System.Globalization.CultureInfo.InvariantCulture, out var h) && double.IsFinite(h) ? h : null;
 
     private string? AdminTrustHoursError()
@@ -5449,19 +5452,21 @@
         builder.AddContent(3, label);
         builder.CloseElement();
         builder.OpenElement(4, "input");
-        builder.AddAttribute(5, "type", type);
-        builder.AddAttribute(6, "class", error != null ? "input-error" : null);
-        builder.AddAttribute(7, "value", AdminValue(path));
+        // "decimal" is a text box with a number keypad: a number input reports what it cannot parse as blank.
+        builder.AddAttribute(5, "type", type == "decimal" ? "text" : type);
+        if (type == "decimal") builder.AddAttribute(6, "inputmode", "decimal");
+        builder.AddAttribute(7, "class", error != null ? "input-error" : null);
+        builder.AddAttribute(8, "value", AdminValue(path));
         // oninput (not onchange) so the unsaved signal appears as you type, not on blur.
-        builder.AddAttribute(8, "oninput",
+        builder.AddAttribute(9, "oninput",
             EventCallback.Factory.Create<ChangeEventArgs>(this, e => _adminEdits[path] = e.Value?.ToString() ?? ""));
         builder.CloseElement();
         builder.CloseElement();
         if (error != null)
         {
-            builder.OpenElement(9, "div");
-            builder.AddAttribute(10, "class", "field-error");
-            builder.AddContent(11, error);
+            builder.OpenElement(10, "div");
+            builder.AddAttribute(11, "class", "field-error");
+            builder.AddContent(12, error);
             builder.CloseElement();
         }
     };
@@ -5656,7 +5661,7 @@
                 case "wakeHints.pushPorts": wake["pushPorts"] = AdminValue(path); break;
                 case "wakeHints.bind": wake["bind"] = AdminValue(path); break;
                 // As text, like pushPorts: blank must reach the server to remove the key.
-                case "wakeHints.trustHours": wake["trustHours"] = AdminValue(path).Trim(); break;
+                case "wakeHints.trustHours": wake["trustHours"] = AdminValue(path).Trim().Replace(',', '.'); break;
             }
         }
         if (ui.Count > 0) payload["ui"] = ui;

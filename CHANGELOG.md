@@ -8,9 +8,9 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Added
 
-- **Non-Reolink cameras get detections.** Neolink subscribes to the camera's ONVIF event service: motion, and person, vehicle or animal where the camera classifies them. They become ordinary events (clip, events page, notifications, Home Assistant sensors), just like a Reolink's. Nothing to configure; a camera without ONVIF events streams and records as before.
-- **Settings for non-Reolink cameras, over ONVIF.** Identity, stream resolution/framerate/bitrate, picture sliders and day/night, pan/tilt with presets, optical zoom, overlay positions and reboot, each shown only if the camera offers it. ONVIF is found on the stream URL's host (ports 80, 8000, 2020, 8899) with that URL's login; `onvif_address` overrides both. **Test connection** reports whether ONVIF answered. Media2-only cameras are supported.
-- **A detection zone on every camera.** Where the camera runs ONVIF's cell motion detector, the zone is written to the camera and governs its alarms. Otherwise Neolink keeps the zone, and it limits only the live object boxes. Reolink cameras with their own grid are unchanged.
+- **Non-Reolink cameras get detections** over ONVIF (motion, and person, vehicle or animal where the camera classifies them), recorded, notified and sent to Home Assistant like a Reolink's. Nothing to configure.
+- **Settings for non-Reolink cameras, over ONVIF:** identity, stream settings, picture and day/night, pan/tilt and presets, zoom, overlays and reboot, each shown only if the camera offers it. ONVIF is found on the stream URL's host and login (`onvif_address` overrides both), and **Test connection** reports whether it answered.
+- **A detection zone on every camera:** written to the camera's own grid where its ONVIF runs cell motion detection, otherwise kept by Neolink, where it limits only the live object boxes. Reolink cameras with their own grid are unchanged.
 - **Stills for cameras without a snapshot command**, from the camera's ONVIF snapshot or a frame of its video (needs ffmpeg). Reolink snapshots are unchanged.
 - ONVIF requests are stamped in the camera's own clock, and the login is offered over HTTP authentication as well as WS-Security.
 
@@ -18,14 +18,16 @@ in the README). Paste the matching section below into the GitHub release.
 
 - The Camera settings tab no longer disappears on cameras without controls; the Ports tab is Reolink-only.
 - Generic RTSP cameras show their address on the settings panel's identity strip (never the login).
-- **Existing generic cameras get Detection events switched on, once.** The switch was seeded off before these cameras could detect. A switch turned off afterwards stays off.
+- **Existing generic cameras get Detection events switched on, once.** Turning it off afterwards sticks.
 - **The wake-hint trust window is configurable** (`wake_hints.trust_hours`, thanks to @dragners, #57), also under **Server settings → General → Wake hints**. The default stays 2 hours; past 24 hours the UI warns that a broken hint source goes unnoticed for longer.
 - **Router wake hints can reach the Home Assistant add-on** (experimental): `5140/udp` (syslog) and `8443/tcp` (push decoy) are declared, both off until you map a host port. The beta add-on still publishes no ports.
 
 ### Fixed
 
-- **Clearing wake hints no longer turns the syslog listener back on.** A section holding only `trust_hours` now counts as empty, and setting the window with no hint source is refused.
+- **A raw `#` or `?` in an RTSP password now works**, in the stream URL and the settings page alike.
 - **An RTSP camera's live view no longer fails for good** when its first parameter set was bad (for example as its RTSP service starts): the video size now follows each new SPS, including after a resolution change.
+- **Generic RTSP cameras recover on their own.** A camera that stops sending video, or never answers, is reconnected after 20 s instead of freezing until a restart, and a drop after a healthy stream retries at once instead of after the longest backoff.
+- **More RTSP cameras stream correctly**, handling the connection quirks go2rtc (the engine Frigate uses) handles: cameras that pick their own interleaved channel, send LF-only replies, redirect, lack GET_PARAMETER, or send parameter sets and large frames unusually. A frame with a lost packet is dropped rather than shown damaged.
 
 ## 1.0.9
 

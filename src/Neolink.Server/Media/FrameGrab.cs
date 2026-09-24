@@ -5,18 +5,8 @@ using Neolink.Streaming;
 
 namespace Neolink.Media;
 
-/// <summary>
-/// A still taken from the stream Neolink is already carrying, for cameras that
-/// have no snapshot command of their own — every generic RTSP camera, and any
-/// Baichuan model whose snap is unavailable. The hub primes each new subscriber
-/// with its buffered GOP, so one keyframe-led group is on hand the moment we
-/// subscribe; ffmpeg turns it into a JPEG.
-///
-/// Best-effort throughout: no ffmpeg, no live stream, or a decode that yields
-/// nothing all return null and the caller carries on without a picture. The
-/// subscription is INTERNAL (never a viewer), so a battery camera parked asleep
-/// is not woken by someone loading a page.
-/// </summary>
+/// <summary>A still decoded by ffmpeg from the stream Neolink already carries, for generic cameras whose own
+/// snapshot is missing or failed. Best-effort (null on any failure); an internal subscriber, so it wakes no camera.</summary>
 public static class FrameGrab
 {
     /// <summary>How long to wait for a keyframe when the hub's GOP cache turns out
@@ -25,6 +15,9 @@ public static class FrameGrab
     /// per-camera gate, and a live stream costs none of this because its buffered
     /// group is handed over the moment we subscribe.</summary>
     private static readonly TimeSpan KeyframeWait = TimeSpan.FromSeconds(2);
+
+    /// <summary>The wait when the hub is live but its group of pictures outgrew the buffer.</summary>
+    private static readonly TimeSpan LateKeyframeWait = TimeSpan.FromSeconds(5);
 
     /// <summary>At most this many decodes run at once across every camera. A wall of
     /// tiles refreshing together would otherwise start one ffmpeg per camera at the
@@ -36,7 +29,11 @@ public static class FrameGrab
 
     /// <summary>Frames fed to the decoder after the keyframe; the still is the LAST of them,
     /// since the keyframe alone can be a whole GOP old. Bounded because every frame is a decode.</summary>
-    internal const int MaxFollowing = 16;
+    internal const int MaxFollowing = 32;
+
+    /// <summary>Frames encoded per grab: enough that a decoder short of a few frames still yields
+    /// a still without a second decode, and cheap beside the decode itself.</summary>
+    private const int EncodedTail = 4;
 
     private static int _missingLogged;
 
@@ -58,11 +55,12 @@ public static class FrameGrab
         }
         if (!hub.VideoReady || hub.Codec is not { } codec) return null;
 
+        var wait = hub.HasBufferedGop ? KeyframeWait : LateKeyframeWait;
         var (id, reader) = hub.Subscribe();
         List<HubVideo> packets;
         try
         {
-            packets = await CollectAsync(reader, ct).ConfigureAwait(false);
+            packets = await CollectAsync(reader, wait, ct).ConfigureAwait(false);
         }
         finally
         {
@@ -85,29 +83,28 @@ public static class FrameGrab
         await Decoders.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            var (outBytes, stderr) = await Ffmpeg.RunAsync(ffmpeg, new[]
+            // Every buffered frame is decoded and only the last few are encoded, the last JPEG being the
+            // still; only should the decoder yield fewer frames than that does a second pass encode them all.
+            string stderr = "";
+            foreach (var from in packets.Count > EncodedTail ? new[] { packets.Count - EncodedTail, 0 } : new[] { 0 })
             {
-                "-hide_banner", "-loglevel", "error",
-                "-f", codec == VideoCodec.H265 ? "hevc" : "h264",
-                "-i", "pipe:0",
-                // Height-bounded, width proportional: an ultra-wide panorama keeps
-                // its shape instead of being squeezed into a 16:9 box. A frame
-                // already shorter than the bound is left alone.
-                "-vf", $"scale=-2:'min({maxHeight},ih)'",
-                // Every buffered frame, and the last one is the still (see MaxFollowing).
-                "-frames:v", packets.Count.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                "-q:v", "4",
-                "-f", "image2pipe", "-c:v", "mjpeg", "pipe:1",
-            }, chunks, TimeSpan.FromSeconds(20), ct).ConfigureAwait(false);
-
-            var jpeg = Ai.AiPreroll.SplitJpegs(outBytes).LastOrDefault();
-            if (jpeg is not { Length: > 100 })
-            {
-                Log.Debug($"{hub.Name}: frame grab produced no JPEG from {packets.Count} packet(s)" +
-                          $"{(stderr.Length > 0 ? $": {stderr[..Math.Min(200, stderr.Length)]}" : "")}");
-                return null;
+                (var outBytes, stderr) = await Ffmpeg.RunAsync(ffmpeg, new[]
+                {
+                    "-hide_banner", "-loglevel", "error",
+                    "-f", codec == VideoCodec.H265 ? "hevc" : "h264",
+                    "-i", "pipe:0",
+                    // Height-bounded, width proportional: an ultra-wide panorama keeps its shape.
+                    // A contiguous tail only: a gap in the selection would be refilled with duplicates.
+                    "-vf", $"select='gte(n\\,{from})',scale=-2:'min({maxHeight},ih)'",
+                    "-frames:v", packets.Count.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    "-q:v", "4",
+                    "-f", "image2pipe", "-c:v", "mjpeg", "pipe:1",
+                }, chunks, TimeSpan.FromSeconds(20), ct).ConfigureAwait(false);
+                if (Ai.AiPreroll.SplitJpegs(outBytes).LastOrDefault() is { Length: > 100 } jpeg) return jpeg;
             }
-            return jpeg;
+            Log.Debug($"{hub.Name}: frame grab produced no JPEG from {packets.Count} packet(s)" +
+                      $"{(stderr.Length > 0 ? $": {stderr[..Math.Min(200, stderr.Length)]}" : "")}");
+            return null;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
@@ -125,7 +122,7 @@ public static class FrameGrab
     /// primed us with, or — when it primed nothing — the next keyframe to arrive.
     /// Returns empty when no keyframe shows up inside the wait.</summary>
     private static async Task<List<HubVideo>> CollectAsync(
-        System.Threading.Channels.ChannelReader<HubPacket> reader, CancellationToken ct)
+        System.Threading.Channels.ChannelReader<HubPacket> reader, TimeSpan keyframeWait, CancellationToken ct)
     {
         var run = new List<HubVideo>();
         // Everything already buffered (the primed GOP) is available without
@@ -135,7 +132,7 @@ public static class FrameGrab
         if (run.Count > 0) return run;
 
         using var wait = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        wait.CancelAfter(KeyframeWait);
+        wait.CancelAfter(keyframeWait);
         try
         {
             // Stop at the KEYFRAME, not at a packet count. One decodable picture is

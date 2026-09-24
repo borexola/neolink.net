@@ -220,6 +220,7 @@ public static class ConfigEditor
         double? trust = null;
         if (!string.IsNullOrWhiteSpace(trustHours))
             trust = double.TryParse(trustHours.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var h)
+                    && double.IsFinite(h)
                 ? h
                 : throw new FormatException("wake_hints.trust_hours must be a number");
         var wh = Section(root, "wake_hints");
@@ -371,8 +372,8 @@ public static class ConfigEditor
         int at = url.LastIndexOf('@', end - 1, end - start);
         if (at < start)
         {
-            // A raw '/' in the password puts the '@' after the first '/' ("user:pa/ss@host"):
-            // unless what precedes that '/' is "host:port", the login runs on to the last '@'.
+            // A raw '/', '?' or '#' in the password puts the '@' after it ("user:pa#ss@host"):
+            // unless what precedes it is "host:port", the login runs on to the last '@'.
             int colonBefore = url.IndexOf(':', start, end - start);
             if (colonBefore < 0 || end == url.Length) return null;
             // An IPv6 literal's own colons ("[fe80::1]:554") are not a login's.
@@ -380,10 +381,14 @@ public static class ConfigEditor
             if (bracket >= 0 && bracket < colonBefore) return null;
             bool port = int.TryParse(url.AsSpan(colonBefore + 1, end - colonBefore - 1), out _);
             if (port) return null;
-            int stop = url.IndexOfAny(new[] { '?', '#' }, end);
+            // An '@' in the query or fragment is not the login's: after a '/' those start at the
+            // '?' or '#'; after a '?' or '#' in the password, the login ends before the first '/'.
+            int stop = url[end] == '/' ? url.IndexOfAny(new[] { '?', '#' }, end) : url.IndexOf('/', end);
             if (stop < 0) stop = url.Length;
             at = url.LastIndexOf('@', stop - 1, stop - start);
-            if (at < start) return null;
+            // No '@' before that '/': the password holds one too, and the login runs on to the last '@'.
+            if (at < end && url[end] != '/' && stop < url.Length) at = url.LastIndexOf('@');
+            if (at < end) return null;
         }
         int colon = url.IndexOf(':', start, at - start);
         return (colon < 0 ? -1 : colon + 1, at);

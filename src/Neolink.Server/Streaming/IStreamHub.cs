@@ -41,6 +41,10 @@ public interface IStreamHub
     /// parameters are known, this goes false the moment the source stops. Anything
     /// that wants a frame without waiting asks this first.</summary>
     bool HasBufferedGop => false;
+
+    /// <summary>A publisher is sending video now (a keyframe seen since it started), even while its
+    /// group of pictures is too big to buffer; a frame from it means waiting for the next keyframe.</summary>
+    bool LiveVideo => HasBufferedGop;
     VideoCodec? Codec { get; }
     byte[]? Sps { get; }
     byte[]? Pps { get; }

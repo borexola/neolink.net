@@ -16,9 +16,9 @@ public sealed class ReolinkApiException : Exception
     /// 0 when the reply never got that far (an HTTP error, malformed JSON, a failed login).</summary>
     public int RspCode { get; }
 
-    /// <summary>Whether the camera itself turned the command down, as opposed to the
-    /// exchange going wrong: a firmware "not supported" is lasting, a 5xx is not.</summary>
-    public bool RejectedByCamera => RspCode != 0;
+    /// <summary>Whether the firmware turned the command down for good: not supported (-9), unknown
+    /// command (-24) or no such ability (-26). Busy, receive-failed and other codes may pass.</summary>
+    public bool RejectedByCamera => RspCode is -9 or -24 or -26;
 }
 
 /// <summary>
@@ -357,21 +357,30 @@ public sealed class ReolinkHttpApi : IDisposable
     /// which dialect came back so the write goes out the same way.</summary>
     public async Task<(JsonObject Cfg, bool IsMdAlarm)> GetMdConfigAsync(CancellationToken ct)
     {
+        var (cfg, isMdAlarm, _) = await ReadMdConfigAsync(ct).ConfigureAwait(false);
+        return (cfg, isMdAlarm);
+    }
+
+    /// <summary><see cref="GetMdConfigAsync"/>, plus whether the dialect is settled: false when
+    /// GetMdAlarm failed in a way that may pass and the legacy object stood in for it.</summary>
+    public async Task<(JsonObject Cfg, bool IsMdAlarm, bool Settled)> ReadMdConfigAsync(CancellationToken ct)
+    {
+        bool settled = true;
         try
         {
             var value = await ExecAsync("GetMdAlarm", new JsonObject { ["channel"] = _channelId }, ct).ConfigureAwait(false);
-            if (value?["MdAlarm"] is JsonObject md) return (md, true);
+            if (value?["MdAlarm"] is JsonObject md) return (md, true, true);
         }
-        catch (ReolinkApiException ex) when (ex.RejectedByCamera)
+        catch (ReolinkApiException ex)
         {
-            // Old firmware: "not support"/"not exist" — fall through to GetAlarm.
-            // A garbled reply or an HTTP error says nothing about the dialect, so it does not.
+            // Old firmware: "not support"/"not exist" — fall through to GetAlarm, as on any refusal.
+            settled = ex.RejectedByCamera;
         }
         var alarm = await ExecAsync("GetAlarm",
             new JsonObject { ["Alarm"] = new JsonObject { ["channel"] = _channelId, ["type"] = "md" } },
             ct).ConfigureAwait(false);
         return (alarm?["Alarm"] as JsonObject
-            ?? throw new ReolinkApiException("GetAlarm reply carries no Alarm settings"), false);
+            ?? throw new ReolinkApiException("GetAlarm reply carries no Alarm settings"), false, settled);
     }
 
     /// <summary>The LEGACY motion config (GetAlarm type "md") specifically, or null

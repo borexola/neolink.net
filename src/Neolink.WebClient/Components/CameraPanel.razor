@@ -355,10 +355,15 @@
                         </div>
                     </div>
                 }
+                @* ONVIF reports rate ranges, not tables, and has no http_address to point at. *@
                 <div class="notice small">
-                    @(canSetStream
-                        ? T["Read from the camera; the highlighted resolution is live and the menus show its full framerate/bitrate tables. Changes stage — nothing is sent until you apply below."]
-                        : T["Read from the camera; the highlighted profile is live. To change profiles from here, set the camera's 'http_address' in the server config."])
+                    @(OnvifOnly
+                        ? canSetStream
+                            ? T["Read from the camera; the highlighted resolution is live and the menus offer common rates within the range the camera reports. Changes stage — nothing is sent until you apply below."]
+                            : T["Read from the camera; the highlighted profile is live."]
+                        : canSetStream
+                            ? T["Read from the camera; the highlighted resolution is live and the menus show its full framerate/bitrate tables. Changes stage — nothing is sent until you apply below."]
+                            : T["Read from the camera; the highlighted profile is live. To change profiles from here, set the camera's 'http_address' in the server config."])
                 </div>
             </div>
         }
@@ -1719,7 +1724,7 @@
     private sealed record PendingStream(ApiEncodeProfile Table, uint Fps, uint Kbps);
 
     private readonly Dictionary<string, PendingStream> _pendingStreams = new(StringComparer.Ordinal);
-    private List<ApiStreamEnc>? _encCurrent; // the camera's CURRENT selections (null without http_address)
+    private List<ApiStreamEnc>? _encCurrent; // the camera's CURRENT selections (null when it can't report them)
     private string? _pendingIr;          // "auto" | "open" | "close"
     private string? _pendingStatusLed;   // "open" | "close"
     private bool? _pendingPir;

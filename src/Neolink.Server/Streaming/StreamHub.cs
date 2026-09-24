@@ -125,6 +125,14 @@ public sealed class StreamHub : IStreamHub, IMediaSink
         get { lock (_castGate) return _gopOpen && _gop.Count > 0; }
     }
 
+    /// <inheritdoc/>
+    public bool LiveVideo
+    {
+        get { lock (_castGate) return _live; }
+    }
+
+    private bool _live;
+
     // ------------------------------------------------------------------ publish
 
     public void PublishInfo(MediaInfo info)
@@ -295,6 +303,7 @@ public sealed class StreamHub : IStreamHub, IMediaSink
                 _gop.Clear();
                 _gopBytes = 0;
                 _gopOpen = true;
+                _live = true;
             }
             if (_gopOpen)
             {
@@ -339,6 +348,7 @@ public sealed class StreamHub : IStreamHub, IMediaSink
             _gop.Clear();
             _gopBytes = 0;
             _gopOpen = false;
+            _live = false;
         }
     }
 

@@ -591,6 +591,9 @@ public static class SelfTest
             root = Obj("{\"wake_hints\":{\"syslog_port\":0}}");
             Assert(Refused(() => ConfigEditor.ApplyWakeHintEdit(root, null, null, null, "72h")),
                 "a non-number window is refused");
+            Assert(Refused(() => ConfigEditor.ApplyWakeHintEdit(root, null, null, null, "NaN"))
+                   && Refused(() => ConfigEditor.ApplyWakeHintEdit(root, null, null, null, "Infinity")),
+                "NaN and Infinity are refused, not written into a file JSON cannot hold them in");
 
             root = Obj("{\"cameras\":[]}");
             ConfigEditor.ApplyWakeHintEdit(root, 0, null, null, " 1.5 ");
@@ -3793,6 +3796,38 @@ public static class SelfTest
                 b64Bytes.Concat(System.Text.Encoding.UTF8.GetBytes(createdStr))
                     .Concat(System.Text.Encoding.UTF8.GetBytes("secret")).ToArray()));
             Assert(!header.Contains(wrong, StringComparison.Ordinal), "digest does NOT hash the base64 nonce string");
+            Assert(header.Contains("mustUnderstand=\"1\"", StringComparison.Ordinal), "the Reolink fallback's header is unchanged");
+            // Generic cameras: no mustUnderstand (as zeep sends it), and the plain-text fallback.
+            var unflagged = Protocol.OnvifClient.BuildSecurity("admin", "s<cr&t", nonce, created, mustUnderstand: false);
+            Assert(!unflagged.Contains("mustUnderstand", StringComparison.Ordinal), "no mustUnderstand for a generic camera");
+            var text = Protocol.OnvifClient.BuildSecurity("admin", "s<cr&t", nonce, created, mustUnderstand: false, plainText: true);
+            Assert(text.Contains("#PasswordText\">s&lt;cr&amp;t</wsse:Password>", StringComparison.Ordinal),
+                "a plain-text password is sent escaped, as PasswordText");
+            System.Xml.Linq.XDocument.Parse($"<s:Envelope xmlns:s=\"http://www.w3.org/2003/05/soap-envelope\"><s:Header>{text}</s:Header></s:Envelope>");
+
+            // How long a subscription was granted, in the camera's own clock.
+            var created2 = System.Xml.Linq.XDocument.Parse("""
+                <tev:CreatePullPointSubscriptionResponse xmlns:tev="http://www.onvif.org/ver10/events/wsdl"
+                    xmlns:wsnt="http://docs.oasis-open.org/wsn/b-2">
+                  <wsnt:CurrentTime>2026-01-02T03:04:05Z</wsnt:CurrentTime>
+                  <wsnt:TerminationTime>2026-01-02T03:04:15Z</wsnt:TerminationTime>
+                </tev:CreatePullPointSubscriptionResponse>
+                """).Root!;
+            AssertEq(Protocol.OnvifClient.GrantedPeriod(created2), TimeSpan.FromSeconds(10));
+            // A Renew reply may leave CurrentTime out: measured against the camera's clock as we know it.
+            var renewed = System.Xml.Linq.XDocument.Parse("""
+                <wsnt:RenewResponse xmlns:wsnt="http://docs.oasis-open.org/wsn/b-2">
+                  <wsnt:TerminationTime>2026-01-02T03:05:05Z</wsnt:TerminationTime>
+                </wsnt:RenewResponse>
+                """).Root!;
+            AssertEq(Protocol.OnvifClient.GrantedPeriod(renewed, new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc)),
+                TimeSpan.FromSeconds(60));
+            AssertEq(Protocol.OnvifClient.GrantedPeriod(renewed), null);
+            AssertEq(Streaming.OnvifEventService.RenewAfter(TimeSpan.FromMinutes(10)), TimeSpan.FromMinutes(8));
+            AssertEq(Streaming.OnvifEventService.RenewAfter(TimeSpan.FromSeconds(2)), TimeSpan.FromSeconds(5));
+            // A bare IPv6 address becomes a URL with its brackets.
+            AssertEq(Protocol.OnvifClient.BuildCandidates("fe80::1", new[] { 80, 8000 })[1],
+                "http://[fe80::1]:8000/onvif/device_service");
 
             static System.Xml.Linq.XElement Xml(string s) => System.Xml.Linq.XDocument.Parse(s).Root!;
 
@@ -4199,6 +4234,18 @@ public static class SelfTest
             Assert(subGuess is [{ Kind: "subStream", Profile.Token: "small" }],
                 "an unmatched sub stream is guessed as the smallest profile");
 
+            // An NVR: frame size is only a guess within the channel a URI matched, never across channels.
+            static Protocol.OnvifProfile C(string token, int w, int h, string source) =>
+                P(token, w, h) with { SourceToken = source };
+            var nvr = new[] { C("1m", 2560, 1440, "VS_1"), C("1s", 640, 360, "VS_1"),
+                              C("3m", 1920, 1080, "VS_3"), C("3s", 704, 576, "VS_3") };
+            var ch3 = new[] { ("mainStream", "rtsp://nvr/h264/ch3/main"), ("subStream", "rtsp://nvr/h264/ch3/sub") };
+            var nvrUris = new Dictionary<string, string> { ["3m"] = "rtsp://nvr.lan/h264/ch3/main" };
+            var mixed = Streaming.GenericCameraControl.Bind(ch3, nvr, nvrUris);
+            Assert(mixed is [{ Profile.Token: "3m" }, { Profile.Token: "3s" }],
+                "the unmatched sub stream is guessed from the matched channel only");
+            AssertEq(Streaming.GenericCameraControl.Bind(ch3, nvr, null).Count, 0);
+
             // ONVIF reports a RANGE where the panel wants a menu.
             var fps = Streaming.GenericCameraControl.StepsWithin(
                 Streaming.GenericCameraControl.FramerateSteps, (1, 25), current: 20);
@@ -4490,6 +4537,171 @@ public static class SelfTest
             }
         });
 
+        Test("ONVIF events: the vendor topics Home Assistant's parsers know", () =>
+        {
+            static List<Protocol.OnvifNotification> Parse(string messages) =>
+                Protocol.OnvifClient.ParseNotifications(System.Xml.Linq.XDocument.Parse(
+                    "<tev:PullMessagesResponse xmlns:tev=\"http://www.onvif.org/ver10/events/wsdl\" " +
+                    "xmlns:wsnt=\"http://docs.oasis-open.org/wsn/b-2\" xmlns:tt=\"http://www.onvif.org/ver10/schema\">" +
+                    messages + "</tev:PullMessagesResponse>").Root!);
+            static string Msg(string topic, string data, string source = "", string op = "", string key = "") =>
+                $"<wsnt:NotificationMessage><wsnt:Topic>{topic}</wsnt:Topic><wsnt:Message>" +
+                $"<tt:Message UtcTime=\"2026-01-02T03:04:05Z\"{(op.Length > 0 ? $" PropertyOperation=\"{op}\"" : "")}>" +
+                (source.Length > 0 ? $"<tt:Source>{source}</tt:Source>" : "") +
+                (key.Length > 0 ? $"<tt:Key>{key}</tt:Key>" : "") +
+                (data.Length > 0 ? $"<tt:Data>{data}</tt:Data>" : "") +
+                "</tt:Message></wsnt:Message></wsnt:NotificationMessage>";
+            static string Item(string name, string value) => $"<tt:SimpleItem Name=\"{name}\" Value=\"{value}\"/>";
+
+            var visitor = Parse(Msg("tns1:RuleEngine/MyRuleDetector/Visitor", Item("State", "true"), Item("Source", "000")))[0];
+            Assert(visitor is { Active: true, Label: "visitor" }, "Reolink's Visitor topic is the doorbell");
+            AssertEq(Parse(Msg("tns1:IVA/EnteringField/Eindringen_in_Feld_1", Item("State", "true")))[0].Label, "intrusion");
+            AssertEq(Parse(Msg("tns1:RuleEngine/TPSmartEventDetector/TPSmartEvent",
+                Item("IsPackageDeliver", "true")))[0].Label, "package");
+
+            // ObjectDetection: ClassTypes is the state, and an empty list is the all-clear.
+            const string objects = "tns1:RuleEngine/ObjectDetection/Object";
+            Assert(Parse(Msg(objects, Item("ClassTypes", ""), op: "Changed"))[0].Active == false,
+                "an empty ClassTypes ends the detection");
+            // A state beside the classes is its own notification, not lost to the split.
+            var beside = Parse(Msg("tns1:RuleEngine/TPSmartEventDetector/TPSmartEvent",
+                Item("IsPeople", "false") + Item("IsMotion", "true"), op: "Changed"));
+            Assert(beside.Count == 2 && beside[0] is { Active: false, Label: "motion" } && beside[1] is { Active: true, Label: "motion" }
+                   && beside[1].Key != beside[0].Key, "the motion beside an ended class still starts");
+            AssertEq(Parse(Msg("tns1:RuleEngine/TPSmartEventDetector/TPSmartEvent", Item("IsPeople", "true"), op: "Changed")).Count, 1);
+            var seen = Parse(Msg(objects, Item("ClassTypes", "Human Vehicle"), op: "Changed"))[0];
+            Assert(seen.Active == true && seen.Labels.Contains("person") && seen.Labels.Contains("vehicle"),
+                "a property listing classes is on");
+            Assert(Parse(Msg(objects, Item("ClassTypes", "Human")))[0].Active == null,
+                "sent as an event (no PropertyOperation) it is a one-shot");
+
+            var pushes = new List<Protocol.MotionPush>();
+            var svc = new Streaming.OnvifEventService("cam",
+                new Protocol.OnvifClient("127.0.0.1:1", "u", "p", "test")) { MotionSink = pushes.Add };
+            void Feed(string m) { foreach (var n in Parse(m)) svc.Handle(n); }
+
+            // Tapo reports each class with its own state on one topic: the pet leaving does not end the vehicle.
+            const string tapo = "tns1:RuleEngine/TPSmartEventDetector/TPSmartEvent";
+            var vsconf = Item("VideoSourceConfigurationToken", "vsconf");
+            Feed(Msg(tapo, Item("IsVehicle", "true"), vsconf, "Changed"));
+            Feed(Msg(tapo, Item("IsPet", "true"), vsconf, "Changed"));
+            Feed(Msg(tapo, Item("IsPet", "false"), vsconf, "Changed"));
+            Assert(svc.ActiveLabels.Contains("vehicle") && !svc.ActiveLabels.Contains("animal"),
+                "each Tapo class keeps its own state");
+            Feed(Msg(tapo, "", vsconf, "Deleted"));
+            AssertEq(svc.ActiveLabels.Count, 0); // a withdrawn property ends every class it reported
+
+            // Per-object state (tt:Key ObjectId): object 6 being absent does not end object 5.
+            const string field = "tns1:RuleEngine/FieldDetector/ObjectsInside";
+            Feed(Msg(field, Item("IsInside", "true"), op: "Changed", key: Item("ObjectId", "5")));
+            Feed(Msg(field, Item("IsInside", "false"), op: "Initialized", key: Item("ObjectId", "6")));
+            Assert(svc.ActiveLabels.Contains("intrusion"), "object 5 is still inside");
+            Feed(Msg(field, Item("IsInside", "false"), op: "Changed", key: Item("ObjectId", "5")));
+            AssertEq(svc.ActiveLabels.Count, 0);
+
+            // A one-shot's Initialized message replays the rule's last value; it is not a sighting.
+            pushes.Clear();
+            Feed(Msg("tns1:RuleEngine/LineDetector/Crossed", Item("ObjectId", "0"), op: "Initialized"));
+            AssertEq(pushes.Count, 0);
+
+            // The doorbell rings once: neither a re-push nor another detection repeats it.
+            Feed(Msg("tns1:RuleEngine/MyRuleDetector/Visitor", Item("State", "true"), Item("Source", "000"), "Changed"));
+            Assert(pushes[^1].AiTypes.Contains("visitor"), "the press goes out");
+            int rung = pushes.Count;
+            svc.RepushForTest();
+            AssertEq(pushes.Count, rung); // only the ring is active: nothing to re-push
+            Feed(Msg("tns1:RuleEngine/CellMotionDetector/Motion", Item("IsMotion", "true"), op: "Changed"));
+            svc.RepushForTest();
+            Assert(pushes.Skip(rung).All(p => !p.AiTypes.Contains("visitor")) && pushes[^1].AiTypes.Contains("motion"),
+                "later pushes carry the motion, not the ring");
+        });
+
+        Test("rtsp puller: the camera quirks go2rtc handles", () =>
+        {
+            // The camera may answer SETUP with other interleaved channels than asked.
+            AssertEq(Protocol.RtspPuller.InterleavedChannel("RTP/AVP/TCP;unicast;interleaved=10-11;ssrc=10117CB7"), 10);
+            AssertEq(Protocol.RtspPuller.InterleavedChannel("RTP/AVP/TCP;unicast"), null);
+
+            // Control URLs: a leading '/', a Content-Base without scheme, Dahua's query URL.
+            const string sdp = "v=0\r\nm=video 0 RTP/AVP 96\r\na=rtpmap:96 H264/90000\r\na=control:/media/1/video/1\r\n";
+            AssertEq(Protocol.RtspPuller.ParseSdpVideo(sdp, "rtsp://192.168.101.22").Control,
+                "rtsp://192.168.101.22/media/1/video/1");
+            var track0 = sdp.Replace("/media/1/video/1", "trackID=0");
+            AssertEq(Protocol.RtspPuller.ParseSdpVideo(track0, "192.168.253.220:1935/").Control,
+                "rtsp://192.168.253.220:1935/trackID=0");
+            AssertEq(Protocol.RtspPuller.ParseSdpVideo(track0, "rtsp://h:554/cam/realmonitor?channel=1&subtype=0").Control,
+                "rtsp://h:554/cam/realmonitor?channel=1&subtype=0/trackID=0");
+            // The video's fmtp filed under the audio section (go2rtc: WebRTC#419).
+            var misfiled = "v=0\r\nm=video 0 RTP/AVP 96\r\na=rtpmap:96 H264/90000\r\na=control:trackID=0\r\n" +
+                           "m=audio 0 RTP/AVP 8\r\na=fmtp:96 packetization-mode=1;" +
+                           "sprop-parameter-sets=Z2QAMqzSAJACjoQAAA+kAAJxoBA=,aOqPLA==\r\n";
+            Assert(Protocol.RtspPuller.ParseSdpVideo(misfiled, "rtsp://h/").SpropNals is { Length: > 20 },
+                "a misfiled fmtp still yields the parameter sets");
+
+            var sink = new FrameSink();
+            var puller = new Protocol.RtspPuller("t", "rtsp://h/x", sink);
+            ushort seq = 0;
+            byte[] Rtp(uint ts, bool marker, byte[] payload)
+            {
+                var p = new byte[12 + payload.Length];
+                p[0] = 0x80;
+                p[1] = (byte)((marker ? 0x80 : 0) | 96);
+                System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(p.AsSpan(2), seq++);
+                System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(p.AsSpan(4), ts);
+                payload.CopyTo(p, 12);
+                return p;
+            }
+            int[] Types(VideoFrame f) => Media.H26x.SplitNals(f.Data).Select(n => Media.H26x.H264NalType(n.Span)).ToArray();
+            var sps = Convert.FromBase64String("Z2QAMqzSAJACjoQAAA+kAAJxoBA=");
+            var pps = Convert.FromBase64String("aOqPLA==");
+            byte[] idr = { 0x65, 0x88, 0x80, 0x10 };
+
+            // SPS and PPS each sent with the marker bit (Tapo TC70, Reolink Duo 2) lead the IDR.
+            puller.FeedRtpForTest(Rtp(1000, true, sps));
+            puller.FeedRtpForTest(Rtp(1000, true, pps));
+            puller.FeedRtpForTest(Rtp(1000, true, idr));
+            Assert(sink.Frames.Count == 1 && sink.Frames[0].Keyframe, "the parameter sets wait for the picture");
+            AssertEq(string.Join(",", Types(sink.Frames[0])), "7,8,5");
+
+            // SPS+PPS+IDR packed into one payload behind start codes: the IDR is still found.
+            sink.Frames.Clear();
+            byte[] sc = { 0, 0, 0, 1 };
+            puller.FeedRtpForTest(Rtp(4000, true, sps.Concat(sc).Concat(pps).Concat(sc).Concat(idr).ToArray()));
+            Assert(sink.Frames.Count == 1 && sink.Frames[0].Keyframe, "a packed payload's keyframe is recognised");
+            AssertEq(string.Join(",", Types(sink.Frames[0])), "7,8,5");
+
+            // A lost fragment drops its frame instead of publishing it with a hole.
+            sink.Frames.Clear();
+            puller.FeedRtpForTest(Rtp(7000, false, new byte[] { 0x7C, 0x81, 1, 2 }));  // FU-A start of a slice
+            seq++;                                                                     // lost in the camera
+            puller.FeedRtpForTest(Rtp(7000, true, new byte[] { 0x7C, 0x41, 5, 6 }));   // FU-A end
+            AssertEq(sink.Frames.Count, 0);
+            puller.FeedRtpForTest(Rtp(10000, true, new byte[] { 0x41, 0x9A, 0x00, 0x10 }));
+            AssertEq(sink.Frames.Count, 1); // the next whole frame flows again
+
+            // A frame's last packet lost just before a keyframe costs that frame, not the keyframe.
+            sink.Frames.Clear();
+            puller.FeedRtpForTest(Rtp(13000, false, new byte[] { 0x41, 0x9A, 0x00, 0x11 }));
+            seq++;                                                                     // its marker packet, lost
+            puller.FeedRtpForTest(Rtp(16000, true, idr));
+            Assert(sink.Frames.Count == 1 && sink.Frames[0].Keyframe, "the keyframe after the loss is kept");
+
+            // A loss right after a finished frame was the next frame's opening: that one is dropped.
+            sink.Frames.Clear();
+            seq++;
+            puller.FeedRtpForTest(Rtp(19000, true, new byte[] { 0x41, 0x9A, 0x00, 0x12 }));
+            AssertEq(sink.Frames.Count, 0);
+
+            // A source that never advances the sequence number still streams.
+            var stuck = seq;
+            for (uint t = 22000; t < 31000; t += 3000)
+            {
+                seq = stuck;
+                puller.FeedRtpForTest(Rtp(t, true, new byte[] { 0x41, 0x9A, 0x00, 0x13 }));
+            }
+            AssertEq(sink.Frames.Count, 3);
+        });
+
         Test("stream hub: an RTSP source's size follows its SPS, a Baichuan's stays as reported", () =>
         {
             // A Reolink's real main (2304x1296) and sub (640x360) parameter sets.
@@ -4513,6 +4725,24 @@ public static class SelfTest
             bc.PublishInfo(new Media.MediaInfo(3840, 2160, 25));
             bc.PublishVideo(F(Key(main, pps), 0));
             Assert(bc.Width == 3840 && bc.Height == 2160, $"a reported size is kept ({bc.Width}x{bc.Height})");
+
+            // A group of pictures too big to buffer still reads as live video, until the source stops.
+            var big = new Streaming.StreamHub("big");
+            big.PublishVideo(F(Key(main, pps), 0));
+            var slice = new byte[1 << 20];
+            new byte[] { 0, 0, 0, 1, 0x41 }.CopyTo(slice, 0);
+            for (uint i = 1; i <= 7; i++) big.PublishVideo(new Media.VideoFrame(Media.VideoCodec.H264, false, i * 40_000, null, slice));
+            Assert(!big.HasBufferedGop && big.LiveVideo, "an overflowed group leaves the stream live");
+            big.SourceStopped();
+            Assert(!big.LiveVideo, "and a stopped source is not");
+        });
+
+        Test("Reolink HTTP API: only a lasting refusal counts as the firmware's answer", () =>
+        {
+            foreach (var code in new[] { -9, -24, -26 })
+                Assert(new Protocol.ReolinkApiException("x", code).RejectedByCamera, $"rspCode {code} is lasting");
+            foreach (var code in new[] { 0, -1, -5, -12, -17, -31 })
+                Assert(!new Protocol.ReolinkApiException("x", code).RejectedByCamera, $"rspCode {code} may pass");
         });
 
         Test("frame grab: a decodable run always starts on a keyframe", () =>
@@ -4594,8 +4824,8 @@ public static class SelfTest
             svc.Handle(N("tns1:VideoSource/MotionAlarm", false));
             Assert(!pushes[^1].Active, "and the last speaker's end is the all-clear");
 
-            // Another channel of the same device (an NVR) is filtered out once the camera's
-            // own sources are known; its all-clear must not end channel 1's detection.
+            // Another channel of the same device (an NVR) is filtered out once the device's
+            // other channels are known; its all-clear must not end channel 1's detection.
             static Protocol.OnvifNotification S(string source, bool active)
             {
                 var src = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -4604,7 +4834,7 @@ public static class SelfTest
                     { ["IsMotion"] = active ? "true" : "false" };
                 return new Protocol.OnvifNotification("tns1:RuleEngine/CellMotionDetector/Motion", active, all, src);
             }
-            svc.UseSourcesForTest(new[] { "VSC_1" });
+            svc.UseOtherChannelsForTest(new[] { "VSC_2" });
             pushes.Clear();
             svc.Handle(S("VSC_1", true));
             svc.Handle(S("VSC_2", false));
@@ -4613,13 +4843,39 @@ public static class SelfTest
                 "channel 2's events are ignored and channel 1's detection stands");
             svc.Handle(S("VSC_1", false));
             Assert(!pushes[^1].Active, "channel 1's own end is the all-clear");
+            // A source value that names no channel (Foscam: HUMAN_DETECTION_ALARM) is still this camera's.
+            svc.Handle(S("HUMAN_DETECTION_ALARM", true));
+            Assert(svc.ActiveLabels.Contains("motion"), "an unknown source value is not filtered out");
+            svc.Handle(S("HUMAN_DETECTION_ALARM", false));
             // A withdrawn property ends whatever it reported and starts nothing.
             svc.Handle(S("VSC_1", true));
             svc.Handle(new Protocol.OnvifNotification("tns1:RuleEngine/CellMotionDetector/Motion", true,
                 new Dictionary<string, string> { ["VideoSourceConfigurationToken"] = "VSC_1" },
                 new Dictionary<string, string> { ["VideoSourceConfigurationToken"] = "VSC_1" }, "Deleted"));
             Assert(!svc.ActiveLabels.Contains("motion"), "PropertyOperation=Deleted ends the detection");
-            svc.UseSourcesForTest(Array.Empty<string>());
+            svc.UseOtherChannelsForTest(Array.Empty<string>());
+            // One taken from channel 2 before the channels were known ends once they are.
+            svc.Handle(S("VSC_2", true));
+            svc.UseOtherChannelsForTest(new[] { "VSC_2" });
+            Assert(!svc.ActiveLabels.Contains("motion") && !pushes[^1].Active,
+                "another channel's detection is ended when the channels become known");
+            svc.UseOtherChannelsForTest(Array.Empty<string>());
+
+            // A doorbell rings once, keeps the recording open while pressed, and a re-subscribe's
+            // replay of it rings nothing.
+            const string bell = "tns1:RuleEngine/MyRuleDetector/Visitor";
+            pushes.Clear();
+            svc.Handle(N(bell, true));
+            svc.Handle(N("tns1:RuleEngine/CellMotionDetector/Motion", true));
+            svc.Handle(N("tns1:RuleEngine/CellMotionDetector/Motion", false));
+            Assert(pushes.Count(p => p.AiTypes.Contains("visitor")) == 1 && pushes[^1].Active,
+                "one ring, and motion ending while the doorbell is active sends no all-clear");
+            svc.Handle(N(bell, false));
+            Assert(!pushes[^1].Active, "the doorbell's own end is the all-clear");
+            pushes.Clear();
+            svc.Handle(new Protocol.OnvifNotification(bell, true, new Dictionary<string, string>(), null, "Initialized"));
+            AssertEq(pushes.Count, 0);
+            svc.Handle(N(bell, false));
 
             // A one-shot never gets an end, so it lapses — on ITS OWN clock, not the
             // camera's: a stateful label kept busy alongside must not hold it open.
@@ -4670,6 +4926,19 @@ public static class SelfTest
             Assert(Protocol.OnvifClient.SplitCredentials("http://admin:pa/ss@cam.lan/onvif/device_service")
                 is { Address: "http://cam.lan/onvif/device_service", User: "admin", Pass: "pa/ss" },
                 "...in a full URL as well, exactly where the mask reads it");
+            // A raw '#' or '?' in a password is masked and read the same way.
+            AssertEq(Config.ConfigEditor.MaskRtspPassword("rtsp://admin:Pass#123@192.168.1.10/stream"),
+                "rtsp://admin:****@192.168.1.10/stream");
+            AssertEq(Config.ConfigEditor.MaskRtspPassword("rtsp://admin:Pa?ss@cam/live?x=1"), "rtsp://admin:****@cam/live?x=1");
+            // ...and an '@' in the query after such a password is not the login's; nor is one after a '/' in it.
+            AssertEq(Config.ConfigEditor.MaskRtspPassword("rtsp://user:pa?ss@cam/live?token=a@b"), "rtsp://user:****@cam/live?token=a@b");
+            AssertEq(Config.ConfigEditor.MaskRtspPassword("rtsp://user:pa?s/s@cam/live"), "rtsp://user:****@cam/live");
+            // The puller reads the same login the mask does, so such a URL streams.
+            var raw = new Protocol.RtspPuller("t", "rtsp://admin:Pass#123@10.0.0.5/stream", new FrameSink());
+            AssertEq(raw.BareUrl, "rtsp://10.0.0.5:554/stream");
+            Assert(Protocol.OnvifClient.SplitCredentials("http://admin:Pass#1@cam/onvif/device_service")
+                is { Address: "http://cam/onvif/device_service", User: "admin", Pass: "Pass#1" }, "the parser reads the raw '#'");
+            AssertEq(Config.ConfigEditor.MaskRtspPassword("rtsp://10.0.0.5:554?cam@1"), "rtsp://10.0.0.5:554?cam@1");
 
             // An edit made around a masked password keeps the real one. Before, it was
             // either written as the literal mask (destroying the credential) or
@@ -4684,6 +4953,106 @@ public static class SelfTest
             Assert(Config.ConfigEditor.UnmaskPassword(shown, null) == null,
                 "nothing to restore from -> keep what is stored, never write the mask");
             AssertEq(Config.ConfigEditor.UnmaskPassword("", stored), ""); // cleared = removed
+        });
+
+        Test("ONVIF login: a refused login is paced, and the password never goes out in clear to a stranger", () =>
+        {
+            var ct = CancellationToken.None;
+            static bool Signed(string raw) => raw.Contains("UsernameToken", StringComparison.Ordinal);
+            static bool Anyone(string op) => op is "GetSystemDateAndTime" or "GetCapabilities" or "GetServices"
+                or "GetDeviceInformation";
+
+            // A camera that answers the service table to anyone and refuses this login for everything else.
+            using (var cam = new FakeOnvif((op, raw) => Anyone(op) ? FakeOnvif.Answer(op) : FakeOnvif.Refused()))
+            {
+                using var onvif = new Protocol.OnvifClient($"127.0.0.1:{cam.Port}", "admin", "wrong", "t", generic: true);
+                var info = onvif.TryGetDeviceInfoAsync(ct).GetAwaiter().GetResult();
+                Assert(onvif.Ready && onvif.AuthRejected && info?.Model == "Cam9", "ready, with the refusal noted");
+                var refused = cam.Requests.Where(r => r.Op == "GetVideoSources").Select(r => r.Raw).ToList();
+                Assert(refused.Count == 2 && refused.Count(r => r.Contains("#PasswordText")) == 1,
+                    "one digest try and one plain-text try at a host that answered as ONVIF");
+                int before = cam.Requests.Count;
+                onvif.TryGetProfilesAsync(ct).GetAwaiter().GetResult();
+                onvif.TryGetImagingAsync(ct).GetAwaiter().GetResult();
+                onvif.TryGetDeviceInfoAsync(ct).GetAwaiter().GetResult();
+                Assert(!cam.Requests.Skip(before).Any(r => Signed(r.Raw)), "no signed request while the login is paused");
+                Assert(onvif.AuthRejected, "an unsigned answer does not clear the refusal");
+            }
+
+            // A web server that is not a camera: it gets neither the password in clear nor a Basic login.
+            using (var web = new FakeOnvif((op, raw) => (401, "<html>sign in</html>", "WWW-Authenticate: Basic realm=\"router\"\r\n")))
+            {
+                using var probe = new Protocol.OnvifClient($"127.0.0.1:{web.Port}", "admin", "secret", "t", generic: true);
+                probe.TryGetDeviceInfoAsync(ct).GetAwaiter().GetResult();
+                Assert(web.Requests.Count > 0 && !web.Requests.Any(r => r.Raw.Contains("#PasswordText")
+                                                                  || r.Raw.Contains("Authorization: Basic")),
+                    "no plain-text password or Basic login to a host that never answered as ONVIF");
+            }
+
+            // A camera that takes its password only in plain text (OpenIPC) is signed in that way.
+            using (var ipc = new FakeOnvif((op, raw) =>
+                       Anyone(op) || raw.Contains("#PasswordText") ? FakeOnvif.Answer(op) : FakeOnvif.Refused()))
+            {
+                using var onvif = new Protocol.OnvifClient($"127.0.0.1:{ipc.Port}", "admin", "pw", "t", generic: true);
+                Assert(onvif.TryGetProfilesAsync(ct).GetAwaiter().GetResult() is { Count: 1 }, "profiles read in plain text");
+                Assert(!onvif.AuthRejected, "the plain-text login is accepted");
+            }
+
+            // Once the login is proven, a refusal is a right this user lacks: nothing else pauses.
+            using (var cam = new FakeOnvif((op, raw) => op == "SystemReboot" ? FakeOnvif.Refused() : FakeOnvif.Answer(op)))
+            {
+                using var onvif = new Protocol.OnvifClient($"127.0.0.1:{cam.Port}", "operator", "pw", "t", generic: true);
+                onvif.TryGetProfilesAsync(ct).GetAwaiter().GetResult();
+                try { onvif.RebootAsync(ct).GetAwaiter().GetResult(); } catch (IOException) { }
+                int before = cam.Requests.Count;
+                onvif.TryGetImagingAsync(ct).GetAwaiter().GetResult();
+                Assert(cam.Requests.Skip(before).Any(r => r.Op == "GetImagingSettings" && Signed(r.Raw)),
+                    "a refused reboot does not hold the other calls back");
+            }
+        });
+
+        Test("ONVIF presets keep their ids when others are removed in the camera's own app", () =>
+        {
+            var ct = CancellationToken.None;
+            var presets = new List<string> { "A", "B", "C" };
+            var gone = new List<string>();
+            using var cam = new FakeOnvif((op, raw) =>
+            {
+                lock (presets)
+                    switch (op)
+                    {
+                        case "GetCapabilities":
+                            var host = System.Text.RegularExpressions.Regex.Match(raw, @"Host: ([^\r\n]+)").Groups[1].Value;
+                            return FakeOnvif.Ok("<tds:GetCapabilitiesResponse xmlns:tds=\"http://www.onvif.org/ver10/device/wsdl\" " +
+                                "xmlns:tt=\"http://www.onvif.org/ver10/schema\"><tds:Capabilities><tt:PTZ><tt:XAddr>" +
+                                $"http://{host}/onvif/ptz_service</tt:XAddr></tt:PTZ></tds:Capabilities></tds:GetCapabilitiesResponse>");
+                        case "GetPresets":
+                            return FakeOnvif.Ok("<tptz:GetPresetsResponse xmlns:tptz=\"http://www.onvif.org/ver20/ptz/wsdl\">" +
+                                string.Concat(presets.Select(p => $"<tptz:Preset token=\"{p}\"><tt:Name xmlns:tt=\"http://www.onvif.org/ver10/schema\">{p}</tt:Name></tptz:Preset>")) +
+                                "</tptz:GetPresetsResponse>");
+                        case "SetPreset":
+                            presets.Add("N1");
+                            return FakeOnvif.Ok("<tptz:SetPresetResponse xmlns:tptz=\"http://www.onvif.org/ver20/ptz/wsdl\">" +
+                                                "<tptz:PresetToken>N1</tptz:PresetToken></tptz:SetPresetResponse>");
+                        case "GotoPreset":
+                            gone.Add(System.Text.RegularExpressions.Regex.Match(raw, "PresetToken>([^<]+)<").Groups[1].Value);
+                            return FakeOnvif.Answer(op);
+                        default:
+                            return FakeOnvif.Answer(op);
+                    }
+            });
+            using var onvif = new Protocol.OnvifClient($"127.0.0.1:{cam.Port}", "admin", "pw", "t", generic: true);
+            onvif.TryGetProfilesAsync(ct).GetAwaiter().GetResult();
+            var first = onvif.TryGetPresetsAsync(ct).GetAwaiter().GetResult()!;
+            AssertEq(string.Join(",", first.Select(p => $"{p.Token}={p.Id}")), "A=1,B=2,C=3");
+            lock (presets) presets.Remove("A");
+            var later = onvif.TryGetPresetsAsync(ct).GetAwaiter().GetResult()!;
+            AssertEq(string.Join(",", later.Select(p => $"{p.Token}={p.Id}")), "B=2,C=3");
+            onvif.GotoPresetAsync(2, ct).GetAwaiter().GetResult();
+            AssertEq(gone.Last(), "B");
+            onvif.SavePresetAsync(1, "new", ct).GetAwaiter().GetResult();
+            var saved = onvif.TryGetPresetsAsync(ct).GetAwaiter().GetResult()!;
+            Assert(saved.Any(p => p is { Token: "N1", Id: 1 }), "a new preset takes the id it was saved into");
         });
 
         Test("a stored zone's shape cannot overflow into a valid-looking grid", () =>
@@ -4857,6 +5226,19 @@ public static class SelfTest
             AssertEq(domeNode.ZoomSpace, "http://www.onvif.org/ver10/tptz/ZoomSpaces/PositionGenericSpace");
             Assert(Protocol.OnvifClient.ParsePtzNode(twoNodes) is { PanTilt: false, Zoom: false },
                 "with no token to go by, the first node");
+            // The arrows send ContinuousMove: a head with only relative/absolute spaces gets none.
+            var stepper = Protocol.OnvifClient.ParsePtzNode(Xml("""
+                <tptz:GetNodesResponse xmlns:tptz="http://www.onvif.org/ver20/ptz/wsdl"
+                                       xmlns:tt="http://www.onvif.org/ver10/schema">
+                  <tptz:PTZNode token="Node_1">
+                    <tt:SupportedPTZSpaces>
+                      <tt:RelativePanTiltTranslationSpace><tt:URI>x</tt:URI></tt:RelativePanTiltTranslationSpace>
+                      <tt:AbsolutePanTiltPositionSpace><tt:URI>y</tt:URI></tt:AbsolutePanTiltPositionSpace>
+                    </tt:SupportedPTZSpaces>
+                  </tptz:PTZNode>
+                </tptz:GetNodesResponse>
+                """));
+            Assert(stepper is { PanTilt: false }, "no continuous pan/tilt space, no arrows");
 
             var moving = Xml("""
                 <tptz:GetStatusResponse xmlns:tptz="http://www.onvif.org/ver20/ptz/wsdl"
@@ -5132,6 +5514,10 @@ public static class SelfTest
                 Assert(!restarted.Get("gate").Events, "the switch turned off after the migration stays off");
                 Assert(!restarted.MigrationDue(Recording.RecordingSettings.OnvifEventsMigration),
                     "and the migration does not run again");
+                // A state_dir moved later takes the marker along with settings.json.
+                var moved = new Recording.RecordingSettings(Directory.CreateDirectory(Path.Combine(dir, "state")).FullName, dir);
+                Assert(!moved.Get("gate").Events && !moved.MigrationDue(Recording.RecordingSettings.OnvifEventsMigration),
+                    "the migration stays done in the new state directory");
             }
             finally
             {
@@ -9414,6 +9800,96 @@ public static class SelfTest
 
     // ------------------------------------------------------------- helpers
 
+    /// <summary>An ONVIF camera on loopback for the client tests: every request is recorded
+    /// (operation, and the raw headers and body) and answered by the given function.</summary>
+    private sealed class FakeOnvif : IDisposable
+    {
+        private readonly System.Net.Sockets.TcpListener _listener = new(System.Net.IPAddress.Loopback, 0);
+        private readonly Func<string, string, (int Status, string Body, string? Headers)> _answer;
+        public readonly System.Collections.Concurrent.ConcurrentQueue<(string Op, string Raw)> Requests = new();
+        public int Port => ((System.Net.IPEndPoint)_listener.LocalEndpoint).Port;
+
+        public FakeOnvif(Func<string, string, (int Status, string Body, string? Headers)> answer)
+        {
+            _answer = answer;
+            _listener.Start();
+            _ = Task.Run(AcceptAsync);
+        }
+
+        public const string Soap = "http://www.w3.org/2003/05/soap-envelope";
+        public static string Env(string inner) => $"<s:Envelope xmlns:s=\"{Soap}\"><s:Body>{inner}</s:Body></s:Envelope>";
+        public static (int, string, string?) Ok(string inner) => (200, Env(inner), null);
+        public static (int, string, string?) Refused() => (400, Env(
+            "<s:Fault><s:Code><s:Value>s:Sender</s:Value><s:Subcode><s:Value>ter:NotAuthorized</s:Value></s:Subcode>" +
+            "</s:Code><s:Reason><s:Text>Sender not Authorized</s:Text></s:Reason></s:Fault>"), null);
+
+        /// <summary>A plain answer for the calls discovery and the settings reads make.</summary>
+        public static (int, string, string?) Answer(string op) => Ok(op switch
+        {
+            "GetVideoSources" => "<trt:GetVideoSourcesResponse xmlns:trt=\"http://www.onvif.org/ver10/media/wsdl\">" +
+                                 "<trt:VideoSources token=\"VS_1\"/></trt:GetVideoSourcesResponse>",
+            "GetDeviceInformation" => "<tds:GetDeviceInformationResponse xmlns:tds=\"http://www.onvif.org/ver10/device/wsdl\">" +
+                                      "<tds:Manufacturer>Acme</tds:Manufacturer><tds:Model>Cam9</tds:Model></tds:GetDeviceInformationResponse>",
+            "GetProfiles" => "<trt:GetProfilesResponse xmlns:trt=\"http://www.onvif.org/ver10/media/wsdl\" " +
+                             "xmlns:tt=\"http://www.onvif.org/ver10/schema\"><trt:Profiles token=\"P1\"><tt:Name>main</tt:Name>" +
+                             "<tt:PTZConfiguration token=\"ptz\"><tt:NodeToken>n</tt:NodeToken></tt:PTZConfiguration>" +
+                             "</trt:Profiles></trt:GetProfilesResponse>",
+            _ => $"<x:{op}Response xmlns:x=\"urn:test\"/>",
+        });
+
+        private async Task AcceptAsync()
+        {
+            while (true)
+            {
+                System.Net.Sockets.TcpClient c;
+                try { c = await _listener.AcceptTcpClientAsync(); }
+                catch { return; }
+                _ = Task.Run(() => ServeAsync(c));
+            }
+        }
+
+        private async Task ServeAsync(System.Net.Sockets.TcpClient c)
+        {
+            using (c)
+            {
+                var s = c.GetStream();
+                try
+                {
+                    while (true)
+                    {
+                        var head = new StringBuilder();
+                        var one = new byte[1];
+                        while (!head.ToString().EndsWith("\r\n\r\n", StringComparison.Ordinal))
+                        {
+                            if (await s.ReadAsync(one) == 0) return;
+                            head.Append((char)one[0]);
+                        }
+                        var len = System.Text.RegularExpressions.Regex.Match(head.ToString(), @"Content-Length:\s*(\d+)",
+                            System.Text.RegularExpressions.RegexOptions.IgnoreCase) is { Success: true } m ? int.Parse(m.Groups[1].Value) : 0;
+                        var body = new byte[len];
+                        for (int got = 0; got < len;)
+                        {
+                            int n = await s.ReadAsync(body.AsMemory(got));
+                            if (n == 0) return;
+                            got += n;
+                        }
+                        var raw = head + Encoding.UTF8.GetString(body);
+                        var op = System.Text.RegularExpressions.Regex.Match(raw, @"<s:Body><\w+:(\w+)").Groups[1].Value;
+                        Requests.Enqueue((op, raw));
+                        var (status, reply, headers) = _answer(op, raw);
+                        var bytes = Encoding.UTF8.GetBytes(reply);
+                        await s.WriteAsync(Encoding.ASCII.GetBytes($"HTTP/1.1 {status} X\r\nContent-Type: application/soap+xml\r\n" +
+                                                                   $"Content-Length: {bytes.Length}\r\n{headers}\r\n"));
+                        await s.WriteAsync(bytes);
+                    }
+                }
+                catch (IOException) { }
+            }
+        }
+
+        public void Dispose() => _listener.Stop();
+    }
+
     private static int FreeTcpPort()
     {
         var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
@@ -9694,6 +10170,17 @@ public static class SelfTest
         public void Unsubscribe(Guid id) { }
         public DateTime LastViewerAskUtc => DateTime.MinValue;
         public Task<bool> WaitForDescribeInfoAsync(TimeSpan timeout, CancellationToken ct) => Task.FromResult(true);
+    }
+
+    /// <summary>Collects the frames a puller publishes.</summary>
+    private sealed class FrameSink : Streaming.IMediaSink
+    {
+        public readonly List<VideoFrame> Frames = new();
+        public void PublishInfo(MediaInfo info) { }
+        public void PublishVideo(VideoFrame frame) => Frames.Add(frame);
+        public void PublishAac(AacFrame frame) { }
+        public void PublishAdpcm(AdpcmFrame frame) { }
+        public void SourceStopped() { }
     }
 
     private sealed class StallableStream(Stream inner) : Stream

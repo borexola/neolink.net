@@ -2052,7 +2052,7 @@ public sealed class CameraControl : ICameraControl
             if (_mdZoneIsLegacy == true)
                 return await _httpApi!.TryGetLegacyMdConfigAsync(c).ConfigureAwait(false) is { } known
                     ? ParseZone(type, known) : null;
-            var (cfg, isMdAlarm) = await _httpApi!.GetMdConfigAsync(c).ConfigureAwait(false);
+            var (cfg, isMdAlarm, settled) = await _httpApi!.ReadMdConfigAsync(c).ConfigureAwait(false);
             if (ParseZone(type, cfg) is { } zone)
             {
                 _mdZoneIsLegacy = false;
@@ -2066,12 +2066,9 @@ public sealed class CameraControl : ICameraControl
                 _mdZoneIsLegacy = true;
                 return shared;
             }
-            // The camera ANSWERED, and no dialect it speaks carries a grid: when the
-            // read already fell back to the legacy object (it is `cfg`, and it
-            // answered), when both dialects answered, and when the firmware refused
-            // the legacy command outright. A legacy probe that got NO answer settles
-            // nothing. This is THIS read's answer only — see CameraHoldsZone.
-            if (!isMdAlarm || legacy != null || legacyRejected) answeredWithoutGrid = true;
+            // No grid in any dialect the camera answered or refused for good; a silence, or a GetMdAlarm
+            // failure that may pass, settles nothing. This read's answer only (see CameraHoldsZone).
+            if ((!isMdAlarm && settled) || legacy != null || legacyRejected) answeredWithoutGrid = true;
             LogZoneShapeOnce(cfg, legacy);
             return null;
         }, ct, force: !SleepingOnPurpose).ConfigureAwait(false);

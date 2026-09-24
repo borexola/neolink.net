@@ -79,10 +79,13 @@ public static class Ffmpeg
                 stdin.Close(); // EOF flushes whatever the codec still buffers
             }, limit.Token);
             using var outBuf = new MemoryStream();
+            // Both pipes drain at once: finishing one while the other fills its buffer deadlocks.
+            var err = proc.StandardError.ReadToEndAsync(limit.Token);
+            _ = err.ContinueWith(static t => _ = t.Exception, TaskContinuationOptions.OnlyOnFaulted);
             await proc.StandardOutput.BaseStream.CopyToAsync(outBuf, limit.Token).ConfigureAwait(false);
             try { await feed.ConfigureAwait(false); }
             catch (Exception) { /* stdin may close early if ffmpeg bailed; stdout decides */ }
-            var stderr = await proc.StandardError.ReadToEndAsync(limit.Token).ConfigureAwait(false);
+            var stderr = await err.ConfigureAwait(false);
             await proc.WaitForExitAsync(limit.Token).ConfigureAwait(false);
             return (outBuf.ToArray(), stderr);
         }

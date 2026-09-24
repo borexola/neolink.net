@@ -170,7 +170,10 @@ public sealed class RecordingSettings
                 if (loaded != null)
                     _cameras = new Dictionary<string, CameraRecordingSettings>(loaded, StringComparer.OrdinalIgnoreCase);
                 if (!ReferenceEquals(source, _file) && source != _file)
+                {
                     Save();
+                    CopyMigrationMarkers(Path.GetDirectoryName(source) ?? ".");
+                }
             }
         }
         catch (Exception ex)
@@ -210,6 +213,20 @@ public sealed class RecordingSettings
 
     private string MigrationMarker(string name) =>
         Path.Combine(Path.GetDirectoryName(_file) ?? ".", $"settings.migrated-{name}");
+
+    /// <summary>Brings the migration markers along with a settings.json moved from <paramref name="fromDir"/>.</summary>
+    private void CopyMigrationMarkers(string fromDir)
+    {
+        try
+        {
+            foreach (var marker in Directory.EnumerateFiles(fromDir, "settings.migrated-*"))
+            {
+                var to = Path.Combine(Path.GetDirectoryName(_file) ?? ".", Path.GetFileName(marker));
+                if (!File.Exists(to)) File.Copy(marker, to);
+            }
+        }
+        catch (Exception ex) { Log.Warn($"Cannot carry the settings migration markers over: {ex.Message}"); }
+    }
 
     /// <summary>Sets a camera's Detection events switch to <paramref name="eventsDefault"/> when
     /// the stored value differs. For a migration: the stored value was never the user's choice.</summary>
