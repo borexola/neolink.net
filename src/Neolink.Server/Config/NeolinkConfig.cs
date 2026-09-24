@@ -24,6 +24,11 @@ public sealed class NeolinkConfig
     public MqttConfig? Mqtt { get; set; }
     /// <summary>Router wake hints ("wake_hints" section); null = disabled.</summary>
     public WakeHintConfig? WakeHints { get; set; }
+    /// <summary>The shared ONVIF PTZ port: every camera with ptz_share is a profile on it. 0 = off.</summary>
+    public int PtzPort { get; set; } = DefaultPtzPort;
+    public const int DefaultPtzPort = 8656;
+    /// <summary>Bind address for the ONVIF PTZ ports; defaults to the RTSP bind address.</summary>
+    public string? PtzBind { get; set; }
     /// <summary>Recovery switch (legacy top-level spelling; "ui.reset_admin_password" preferred).</summary>
     public bool ResetAdminPassword { get; set; }
 
@@ -119,6 +124,12 @@ public sealed class NeolinkConfig
                 case "wakehints":
                     config.WakeHints = ParseJsonWakeHints(prop.Value);
                     break;
+                case "ptzport":
+                    config.PtzPort = prop.Value.GetInt32();
+                    break;
+                case "ptzbind":
+                    config.PtzBind = prop.Value.GetString();
+                    break;
                 case "users":
                     foreach (var u in prop.Value.EnumerateArray())
                         config.Users.Add(ParseJsonUser(u));
@@ -160,6 +171,8 @@ public sealed class NeolinkConfig
     {
         string? name = null, username = null, password = null, address = null, uid = null, httpAddress = null;
         string? onvifAddress = null;
+        int? ptzPort = null;
+        bool ptzShare = false;
         string? rtspMain = null, rtspSub = null;
         string? audioTranscode = null;
         string? maxEncryption = null;
@@ -184,6 +197,17 @@ public sealed class NeolinkConfig
                 case "address": address = prop.Value.GetString(); break;
                 case "httpaddress": httpAddress = prop.Value.GetString(); break;
                 case "onvifaddress": onvifAddress = prop.Value.GetString(); break;
+                // Judged in ValidatePtz, which turns off only the PTZ endpoint, never the camera.
+                case "ptzport":
+                    ptzPort = prop.Value.ValueKind == JsonValueKind.Null ? null
+                        : prop.Value.ValueKind == JsonValueKind.Number && prop.Value.TryGetInt32(out var pp) ? pp
+                        : CameraConfig.NotAPort;
+                    break;
+                case "ptzshare":
+                    ptzShare = prop.Value.ValueKind == JsonValueKind.True;
+                    if (prop.Value.ValueKind is not (JsonValueKind.True or JsonValueKind.False or JsonValueKind.Null))
+                        Log.Warn($"Camera \"{name ?? "?"}\": ptz_share must be true or false (got {prop.Value.GetRawText()}), so it is off");
+                    break;
                 case "uid": uid = prop.Value.GetString(); break;
                 case "stream": stream = prop.Value.GetString() ?? "both"; break;
                 case "channelid":
@@ -221,7 +245,7 @@ public sealed class NeolinkConfig
 
         return BuildCamera(name, username, password, address, uid, stream, channelId, permitted, httpAddress,
             record, rtspMain, rtspSub, alwaysOn, udpProbe, udp, wakeCapture, onvifAddress,
-            keepAliveHours, audioTranscode, maxEncryption, legacyLogin);
+            keepAliveHours, audioTranscode, maxEncryption, legacyLogin, ptzShare, ptzPort);
     }
 
     private static RecordingConfig ParseJsonRecording(JsonElement el)
@@ -351,6 +375,8 @@ public sealed class NeolinkConfig
             BindPort = (int)(MiniToml.GetInt(root, "bind_port") ?? 8654),
             WebPort = (int)(MiniToml.GetInt(root, "web_port") ?? 8655),
             WebBind = MiniToml.GetString(root, "web_bind"),
+            PtzPort = (int)(MiniToml.GetInt(root, "ptz_port") ?? DefaultPtzPort),
+            PtzBind = MiniToml.GetString(root, "ptz_bind"),
             WebUi = MiniToml.GetBool(root, "web_ui") ?? MiniToml.GetBool(root, "webui") ?? true,
             ResetAdminPassword = MiniToml.GetBool(root, "reset_admin_password") ?? false,
         };
@@ -464,7 +490,10 @@ public sealed class NeolinkConfig
                     Math.Clamp(MiniToml.GetDouble(c, "keep_alive_hours") ?? 0, 0, 24),
                     MiniToml.GetString(c, "audio_transcode"),
                     MiniToml.GetString(c, "max_encryption"),
-                    MiniToml.GetBool(c, "legacy_login") ?? false));
+                    MiniToml.GetBool(c, "legacy_login") ?? false,
+                    MiniToml.GetBool(c, "ptz_share") ?? false,
+                    MiniToml.GetInt(c, "ptz_port") is { } ptzPort
+                        ? ptzPort is >= 0 and <= 65535 ? (int)ptzPort : CameraConfig.NotAPort : null));
             }
             catch (Exception ex) when (!strict && IsBadEntry(ex))
             {
@@ -511,7 +540,8 @@ public sealed class NeolinkConfig
         string? httpAddress = null, bool record = true, string? rtspMain = null, string? rtspSub = null,
         bool? alwaysOn = null, bool udpProbe = false, bool udp = false, bool wakeCapture = false,
         string? onvifAddress = null, double keepAliveHours = 0,
-        string? audioTranscode = null, string? maxEncryption = null, bool legacyLogin = false)
+        string? audioTranscode = null, string? maxEncryption = null, bool legacyLogin = false,
+        bool ptzShare = false, int? ptzPort = null)
     {
         if (name == null) throw new FormatException("camera entry missing \"name\"");
         audioTranscode = NormalizeAudioTranscode(name, audioTranscode);
@@ -548,6 +578,8 @@ public sealed class NeolinkConfig
                 // A non-Reolink camera's settings all come over ONVIF, which is
                 // found on the stream URL's own host unless this says otherwise.
                 OnvifAddress = string.IsNullOrWhiteSpace(onvifAddress) ? null : onvifAddress.Trim(),
+                PtzShare = ptzShare, // refused in ValidatePtz, which says why
+                PtzPort = ptzPort,
             };
         }
 
@@ -578,6 +610,8 @@ public sealed class NeolinkConfig
             PermittedUsers = permitted,
             HttpAddress = string.IsNullOrWhiteSpace(httpAddress) ? null : httpAddress.Trim(),
             OnvifAddress = string.IsNullOrWhiteSpace(onvifAddress) ? null : onvifAddress.Trim(),
+            PtzShare = ptzShare,
+            PtzPort = ptzPort,
             Record = record,
             AlwaysOn = alwaysOn,
             Uid = string.IsNullOrWhiteSpace(uid) ? null : uid.Trim(),
@@ -739,6 +773,54 @@ public sealed class NeolinkConfig
             // The listeners do IPAddress.Parse on this — fail at load, not at runtime.
             if (WakeHints.Bind is { } whb && !System.Net.IPAddress.TryParse(whb, out _))
                 throw new FormatException($"wake_hints.bind must be an IP address, not \"{whb}\"");
+        }
+
+        if (PtzPort is < 0 or > 65535)
+            throw new FormatException($"Invalid ptz_port {PtzPort} (1-65535, or 0 for no shared PTZ port)");
+        if (PtzBind is { } pb && !System.Net.IPAddress.TryParse(pb, out _))
+            throw new FormatException($"ptz_bind must be an IP address, not \"{pb}\"");
+        ValidatePtz(strict);
+    }
+
+    /// <summary>Turns off a camera's PTZ endpoint that cannot work, recording why in PtzOff; the camera
+    /// itself still starts. A save is refused instead.</summary>
+    private void ValidatePtz(bool strict)
+    {
+        var taken = new Dictionary<int, string> { [BindPort] = "the RTSP port (bind_port)" };
+        if (WebPort > 0) taken.TryAdd(WebPort, "the web port (web_port)");
+        foreach (var p in WakeHints?.PushPorts ?? new List<int>())
+            taken.TryAdd(p, "a wake_hints push port");
+        // The shared port only has to be free for the cameras that use it.
+        string? sharedWhy = PtzPort == 0 ? "the shared PTZ port is off (ptz_port is 0)"
+            : taken.TryGetValue(PtzPort, out var sharedOwner)
+                ? $"the shared PTZ port {PtzPort} is already {sharedOwner}: set ptz_port to a free one"
+            : null;
+        if (PtzPort > 0) taken.TryAdd(PtzPort, "the shared PTZ port (ptz_port)");
+        // Moving a camera must not be open to the network: with no login, only loopback will do.
+        bool loopback = System.Net.IPAddress.TryParse(PtzBind ?? BindAddr, out var bindIp)
+                        && System.Net.IPAddress.IsLoopback(bindIp);
+        foreach (var cam in Cameras)
+        {
+            var mode = cam.PtzMode;
+            if (mode == "off") continue;
+            string? why = cam.IsGenericRtsp
+                ? "a non-Reolink camera has ONVIF of its own: point Frigate at the camera itself"
+                : PermittedUsersFor(cam) == null && !loopback
+                    ? "with no RTSP users applying to this camera there is no login, and anyone who can reach the " +
+                      "port could move it: add users (Frigate signs in as one), or set ptz_bind to 127.0.0.1 " +
+                      "when Frigate runs on this host"
+                : mode == "shared" ? sharedWhy
+                : cam.PtzPort is not (>= 1 and <= 65535) ? "its own port must be a port number (1-65535)"
+                : taken.TryGetValue(cam.PtzPort.Value, out var owner) ? $"port {cam.PtzPort} is already {owner}"
+                : null;
+            if (why == null)
+            {
+                if (mode == "own") taken[cam.PtzPort!.Value] = $"camera \"{cam.Name}\"'s own PTZ port";
+                continue;
+            }
+            if (strict) throw new FormatException($"Camera \"{cam.Name}\": PTZ for Frigate — {why}");
+            Log.Error($"Camera \"{cam.Name}\": PTZ for Frigate is off — {why}. The camera itself still starts.");
+            cam.PtzOff = why;
         }
     }
 
@@ -945,6 +1027,19 @@ public sealed class CameraConfig
     /// path. On a Reolink it is the picture-settings fallback for models with no
     /// HTTP CGI API; on a non-Reolink camera it is where ALL its settings come from.</summary>
     public string? OnvifAddress { get; init; }
+    /// <summary>Opt-in: Neolink answers ONVIF for this camera's PTZ on the shared ptz_port, as a profile
+    /// named after the camera (Frigate 0.18+ picks it with onvif.profile). Reolink cameras only.</summary>
+    public bool PtzShare { get; init; }
+    /// <summary>Opt-in: this camera's own ONVIF PTZ port, for Frigate before 0.18 (no onvif.profile).
+    /// Takes precedence over <see cref="PtzShare"/>; null or 0 = none.</summary>
+    public int? PtzPort { get; init; }
+    /// <summary>A ptz_port value that is not a number, kept for validation to report.</summary>
+    internal const int NotAPort = -1;
+    /// <summary>Why this camera's PTZ endpoint is off although configured; null when it works.</summary>
+    public string? PtzOff { get; set; }
+
+    /// <summary>"off", "shared" (a profile on the shared port) or "own" (its own port), as configured.</summary>
+    public string PtzMode => PtzPort is not (null or 0) ? "own" : PtzShare ? "shared" : "off";
     /// <summary>Record detection events for this camera (when recording is configured).</summary>
     public bool Record { get; init; } = true;
     /// <summary>

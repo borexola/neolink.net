@@ -215,8 +215,12 @@ public sealed record ApiAdminCamera(string Name, string Type, string? Address, s
     bool HasPassword, int ChannelId, string? HttpAddress, string? RtspMain, string? RtspSub,
     string? Uid = null, string? AlwaysOn = null, string? Stream = null, string? OnvifAddress = null,
     bool Record = true, bool Udp = false, bool UdpProbe = false, bool WakeCapture = false,
-    double KeepAliveHours = 0);
-public sealed record ApiAdminCameras(bool Writable, List<ApiAdminCamera> Cameras);
+    double KeepAliveHours = 0, string? PtzMode = null, int? PtzPort = null, string? PtzOff = null, bool PtzOpen = false);
+public sealed record ApiAdminCameras(bool Writable, List<ApiAdminCamera> Cameras, ApiAdminPtz? Ptz = null);
+
+/// <summary>What the camera editor checks a PTZ port against: the shared ONVIF port, the RTSP and web
+/// ports, whether it binds to loopback only, and whether any RTSP users exist.</summary>
+public sealed record ApiAdminPtz(int SharedPort, int RtspPort, int WebPort, bool Loopback, bool Users);
 
 /// <summary>GET/PUT /api/admin/notifications — email alert settings. The SMTP
 /// password is never returned (only HasPassword); it is sent write-only on PUT.</summary>

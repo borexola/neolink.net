@@ -31,6 +31,18 @@ internal static class NetUtil
         return (decoded[..colon], decoded[(colon + 1)..]);
     }
 
+    /// <summary>The RTSP users' access rule (RTSP, the web API's Basic path, ONVIF PTZ): open when no
+    /// users apply to the camera, else a permitted user with the right password.</summary>
+    public static bool Permits(IReadOnlyDictionary<string, string> users, IReadOnlySet<string>? permitted,
+        string? user, string? pass) =>
+        Allows(users, permitted, user != null && pass != null && users.TryGetValue(user, out var expected)
+                                 && FixedTimeEquals(expected, pass) ? user : null);
+
+    /// <summary><see cref="Permits"/> for a user whose password is already verified (null = no login).</summary>
+    public static bool Allows(IReadOnlyDictionary<string, string> users, IReadOnlySet<string>? permitted,
+        string? verifiedUser) =>
+        permitted == null || users.Count == 0 || (verifiedUser != null && permitted.Contains(verifiedUser));
+
     /// <summary>Constant-time string equality for credential checks (only length can leak).</summary>
     public static bool FixedTimeEquals(string a, string b) =>
         System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(

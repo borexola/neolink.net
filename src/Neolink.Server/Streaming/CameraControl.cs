@@ -230,6 +230,11 @@ public interface ICameraControl
     Task<XElement?> GetPirStateAsync(CancellationToken ct);
     Task SetPirEnabledAsync(bool enabled, CancellationToken ct);
     Task PtzAsync(string command, float speed, CancellationToken ct);
+
+    /// <summary>Raised with the command ("up"… "stop", or "preset") after each PTZ command the camera
+    /// accepted, whoever sent it.</summary>
+    event Action<string>? PtzCommandSent { add { } remove { } }
+
     Task RebootAsync(CancellationToken ct);
 
     /// <summary>The camera's own service-port table — Baichuan, HTTP, HTTPS, RTSP,
@@ -649,8 +654,17 @@ public sealed class CameraControl : ICameraControl
     }
 
     /// <summary>The zoom range's maxPos from a &lt;PtzZoomFocus&gt; reply (0 = none/fixed lens).</summary>
-    internal static long ZoomMax(XElement? zoomFocus) =>
-        long.TryParse(zoomFocus?.Element("zoom")?.Element("maxPos")?.Value.Trim(), out var v) ? v : 0;
+    internal static long ZoomMax(XElement? zoomFocus) => ZoomPosition(zoomFocus)?.Max ?? 0;
+
+    /// <summary>The zoom range and where the lens is, from a &lt;PtzZoomFocus&gt; reply; null for a fixed lens.</summary>
+    internal static (long Min, long Max, long Cur)? ZoomPosition(XElement? zoomFocus)
+    {
+        var zoom = zoomFocus?.Element("zoom");
+        static long? Read(XElement? e) => long.TryParse(e?.Value.Trim(), out var v) ? v : null;
+        if (Read(zoom?.Element("maxPos")) is not { } max || max <= 0) return null;
+        var min = Math.Min(Read(zoom!.Element("minPos")) ?? 0, max);
+        return (min, max, Math.Clamp(Read(zoom.Element("curPos")) ?? min, min, max));
+    }
 
     public Task<StreamInfoListXml?> GetStreamInfoAsync(CancellationToken ct) =>
         WithCameraAsync(camera => camera.GetStreamInfoAsync(ct: ct), ct);
@@ -847,12 +861,17 @@ public sealed class CameraControl : ICameraControl
             return null;
         }, ct);
 
-    public Task PtzAsync(string command, float speed, CancellationToken ct) =>
-        WithCameraAsync<object?>(async camera =>
+    public async Task PtzAsync(string command, float speed, CancellationToken ct)
+    {
+        await WithCameraAsync<object?>(async camera =>
         {
             await camera.PtzAsync(command, speed, ct).ConfigureAwait(false);
             return null;
-        }, ct);
+        }, ct).ConfigureAwait(false);
+        PtzCommandSent?.Invoke(command);
+    }
+
+    public event Action<string>? PtzCommandSent;
 
     public Task<XElement?> GetZoomFocusAsync(CancellationToken ct) =>
         WithCameraAsync(camera => camera.GetZoomFocusAsync(ct: ct), ct);
@@ -1672,6 +1691,7 @@ public sealed class CameraControl : ICameraControl
         if (_httpApi == null)
             throw new NotSupportedException($"PTZ presets need the camera's HTTP API ('{CameraName}' has none)");
         await _httpApi.PtzToPresetAsync(id, speed: 32, ct).ConfigureAwait(false);
+        PtzCommandSent?.Invoke("preset");
         Log.Info($"{CameraName}: moving to PTZ preset {id}");
     }
 

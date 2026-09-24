@@ -5011,6 +5011,535 @@ public static class SelfTest
             }
         });
 
+        Test("RTSP users' access rule: one helper for RTSP, the web API's Basic path and ONVIF PTZ", () =>
+        {
+            var users = new Dictionary<string, string> { ["frigate"] = "pw", ["other"] = "x" };
+            var only = new HashSet<string> { "frigate" };
+            Assert(NetUtil.Permits(new Dictionary<string, string>(), only, null, null), "no users: open");
+            Assert(NetUtil.Permits(users, null, null, null), "a camera open to anonymous: open");
+            Assert(NetUtil.Permits(users, only, "frigate", "pw"), "a permitted user with the right password");
+            Assert(!NetUtil.Permits(users, only, "frigate", "bad") && !NetUtil.Permits(users, only, "other", "x")
+                   && !NetUtil.Permits(users, only, null, null), "a wrong password, an unpermitted user, or no login");
+            var rtsp = new Rtsp.RtspServer(users);
+            var mount = new Rtsp.RtspMount { Path = "/e1", Hub = new Streaming.StreamHub("e1"), PermittedUsers = only };
+            string Basic(string u, string p) => "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes($"{u}:{p}"));
+            Assert(rtsp.Authorize(mount, Basic("frigate", "pw")) && !rtsp.Authorize(mount, Basic("other", "x"))
+                   && !rtsp.Authorize(mount, null), "RTSP applies the same rule");
+        });
+
+        Test("ONVIF PTZ: ptz_share and ptz_port are read, and one that cannot work is turned off, not the camera", () =>
+        {
+            var json = Path.Combine(Path.GetTempPath(), $"neolink-ptz-{Guid.NewGuid():N}.json");
+            var toml = Path.ChangeExtension(json, ".toml");
+            File.WriteAllText(json, """
+                {
+                  "bind_port": 8654, "web_port": 8655, "ptz_bind": "127.0.0.1",
+                  "cameras": [
+                    { "name": "office", "username": "admin", "address": "10.0.0.2", "ptz_share": true },
+                    { "name": "own", "username": "admin", "address": "10.0.0.3", "ptz_port": 8081 },
+                    { "name": "twin", "username": "admin", "address": "10.0.0.4", "ptz_port": 8081 },
+                    { "name": "rtsp", "username": "admin", "address": "10.0.0.5", "ptz_port": 8654 },
+                    { "name": "shared", "username": "admin", "address": "10.0.0.6", "ptz_port": 8656 },
+                    { "name": "generic", "rtsp_main": "rtsp://10.0.0.7/s", "ptz_share": true },
+                    { "name": "typo", "username": "admin", "address": "10.0.0.8", "ptz_port": "8083" },
+                    { "name": "nulled", "username": "admin", "address": "10.0.0.9", "ptz_port": null },
+                    { "name": "zero", "username": "admin", "address": "10.0.0.10", "ptz_port": 0 }
+                  ]
+                }
+                """);
+            File.WriteAllText(toml, """
+                ptz_bind = "127.0.0.1"
+                ptz_port = 9100
+                [[cameras]]
+                name = "office"
+                username = "admin"
+                address = "10.0.0.2"
+                ptz_share = true
+                [[cameras]]
+                name = "own"
+                username = "admin"
+                address = "10.0.0.3"
+                ptz_port = 8081
+                """);
+            CameraConfig Cam(NeolinkConfig c, string name) => c.Cameras.Single(x => x.Name == name);
+            NeolinkConfig Json(string text) { File.WriteAllText(json, text); return NeolinkConfig.Load(json); }
+            try
+            {
+                var c = NeolinkConfig.Load(json);
+                Assert(c.PtzBind == "127.0.0.1" && c.PtzPort == 8656, "the shared port defaults to 8656");
+                AssertEq(c.Cameras.Count, 9); // no value, however bad, costs the camera
+                Assert(Cam(c, "office") is { PtzMode: "shared", PtzOff: null }, "a profile on the shared port");
+                Assert(Cam(c, "own") is { PtzMode: "own", PtzPort: 8081, PtzOff: null }, "a port of its own");
+                Assert(new[] { "twin", "rtsp", "shared", "generic", "typo" }.All(n => Cam(c, n).PtzOff != null),
+                    "a taken port, the shared port, a camera with ONVIF of its own, or a string turn it off");
+                StringAssert(Cam(c, "shared").PtzOff!, "shared PTZ port");
+                Assert(Cam(c, "nulled").PtzMode == "off" && Cam(c, "zero").PtzMode == "off", "null and 0 are off");
+                bool refused = false;
+                try { NeolinkConfig.Load(json, strict: true); } catch (FormatException) { refused = true; }
+                Assert(refused, "a save is refused to the admin's face instead");
+
+                // The shared port off, or taken: the cameras sharing it say so.
+                const string sharer = """{ "name": "office", "username": "admin", "address": "10.0.0.2", "ptz_share": true }""";
+                StringAssert(Cam(Json($$"""{ "ptz_port": 0, "ptz_bind": "127.0.0.1", "cameras": [ {{sharer}} ] }"""), "office").PtzOff!,
+                    "ptz_port is 0");
+                StringAssert(Cam(Json($$"""{ "web_port": 8656, "ptz_bind": "127.0.0.1", "cameras": [ {{sharer}} ] }"""), "office").PtzOff!,
+                    "already the web port");
+                File.WriteAllText(json, $$"""{ "web_port": 8656, "cameras": [ {{sharer.Replace("\"ptz_share\": true", "\"record\": true")}} ] }""");
+                NeolinkConfig.Load(json, strict: true); // the shared port matters only once a camera uses it
+
+                // With no login it listens on loopback only; with users, anywhere.
+                AssertEq(Cam(Json($$"""{ "cameras": [ {{sharer}} ] }"""), "office").PtzOff != null, true);
+                AssertEq(Cam(Json($$"""{ "users": [ { "name": "frigate", "pass": "pw" } ], "cameras": [ {{sharer}} ] }"""), "office").PtzOff, null);
+                AssertEq(Cam(Json($$"""{ "users": [ { "name": "frigate", "pass": "pw" } ], "cameras": [ {{sharer.Replace("\"ptz_share\"", "\"permitted_users\": [\"anonymous\"], \"ptz_share\"")}} ] }"""),
+                    "office").PtzOff != null, true); // a camera open to anonymous has no login either
+
+                var t = NeolinkConfig.Load(toml);
+                Assert(t is { PtzBind: "127.0.0.1", PtzPort: 9100 } && Cam(t, "office").PtzMode == "shared"
+                       && Cam(t, "own") is { PtzMode: "own", PtzPort: 8081 }, "TOML reads the same keys");
+                foreach (var bad in new[] { """{ "ptz_bind": "nvr.lan", "cameras": [] }""", """{ "ptz_port": 70000, "cameras": [] }""" })
+                {
+                    refused = false;
+                    try { Json(bad); } catch (FormatException) { refused = true; }
+                    Assert(refused, $"refused: {bad}");
+                }
+            }
+            finally { File.Delete(json); File.Delete(toml); }
+
+            static void StringAssert(string text, string part) => Assert(text.Contains(part, StringComparison.Ordinal), $"\"{part}\" in \"{text}\"");
+        });
+
+        Test("ONVIF PTZ: an ONVIF client signs in over TCP and drives the camera's pan/tilt", () =>
+        {
+            var ct = CancellationToken.None;
+            var control = new PtzRecordingControl("e1");
+            var users = new Dictionary<string, string> { ["frigate"] = "pw", ["other"] = "x" };
+            var cam = new Onvif.OnvifPtzCamera("e1", control, new HashSet<string> { "frigate" }, () => (2560u, 1440u));
+            var ptz = new Onvif.OnvifPtzServer("e1: ONVIF pan/tilt", users, new[] { cam });
+            int port = FreeTcpPort();
+            using var stop = new CancellationTokenSource();
+            var run = Task.Run(() => ptz.RunAsync("127.0.0.1", port, stop.Token));
+            try
+            {
+                // Listening before the client's discovery, which would otherwise back off for minutes.
+                for (int i = 0; ; i++)
+                {
+                    try { using var probe = new System.Net.Sockets.TcpClient("127.0.0.1", port); break; }
+                    catch (System.Net.Sockets.SocketException) when (i < 50) { Thread.Sleep(50); }
+                }
+                using (var onvif = new Protocol.OnvifClient($"127.0.0.1:{port}", "frigate", "pw", "t", generic: true))
+                {
+                    Assert(onvif.TryGetProfilesAsync(ct).GetAwaiter().GetResult() is { Count: 1 } && onvif.HasPtz,
+                        "one profile, carrying pan/tilt");
+                    Assert(onvif.TryGetPtzNodeAsync(ct).GetAwaiter().GetResult() is { PanTilt: true, Zoom: false },
+                        "continuous pan/tilt and no zoom");
+                    onvif.PtzMoveAsync(-0.5, 0, 0, ct).GetAwaiter().GetResult();
+                    onvif.PtzStopAsync(ct).GetAwaiter().GetResult();
+                    AssertEq(control.Log(), "left@32,stop@32");
+                    cam.CapabilitiesRead.Wait(TimeSpan.FromSeconds(5)); // started when the endpoint came up
+                    AssertEq(onvif.TryGetDeviceInfoAsync(ct).GetAwaiter().GetResult()?.Model, "E1");
+                }
+                // A wrong password, or a user not permitted on this camera, moves nothing.
+                foreach (var (user, pass) in new[] { ("frigate", "bad"), ("other", "x") })
+                {
+                    using var intruder = new Protocol.OnvifClient($"127.0.0.1:{port}", user, pass, "t", generic: true);
+                    intruder.TryGetProfilesAsync(ct).GetAwaiter().GetResult();
+                    try { intruder.PtzMoveAsync(0.5, 0, 0, ct).GetAwaiter().GetResult(); }
+                    catch (Exception ex) when (ex is NotSupportedException or IOException) { }
+                }
+                AssertEq(control.Log(), "left@32,stop@32");
+            }
+            finally
+            {
+                stop.Cancel();
+                run.Wait(TimeSpan.FromSeconds(5));
+            }
+        });
+
+        Test("ONVIF PTZ: Frigate's requests, logins, replays, clocks and the stop watchdog", () =>
+        {
+            var ct = CancellationToken.None;
+            var control = new PtzRecordingControl("e1");
+            var users = new Dictionary<string, string> { ["frigate"] = "pw", ["other"] = "x" };
+            var cam = new Onvif.OnvifPtzCamera("e1", control, new HashSet<string> { "frigate" }, () => (2560u, 1440u));
+            var ptz = new Onvif.OnvifPtzServer("e1", users, new[] { cam });
+            var signed = PtzSigned(DateTime.UtcNow);
+
+            // The clock and the services answer anyone; everything else wants a permitted user.
+            Assert(PtzCall(ptz, "", "<tds:GetSystemDateAndTime/>") is (200, var clock) && clock.Contains("UTCDateTime"),
+                "the clock needs no login");
+            var caps = PtzCall(ptz, "", "<tds:GetCapabilities><tds:Category>All</tds:Category></tds:GetCapabilities>");
+            AssertEq(PtzFirst(caps.Body, "PTZ").Value, "http://nvr:8081/onvif/ptz_service");
+            Assert(PtzCall(ptz, "", "<trt:GetProfiles/>") is (400, var anon) && anon.Contains("ter:NotAuthorized"),
+                "an unsigned GetProfiles is refused");
+
+            // GetProfiles as Frigate reads it: named after the camera, an H264 encoder and a continuous pan/tilt space,
+            // in schema order.
+            var profiles = PtzCall(ptz, signed, "<trt:GetProfiles/>");
+            AssertEq(profiles.Status, 200);
+            var profile = PtzFirst(profiles.Body, "Profiles");
+            AssertEq(profile.Attribute("token")?.Value, "e1");
+            AssertEq(string.Join(",", profile.Elements().Select(e => e.Name.LocalName)),
+                "Name,VideoSourceConfiguration,VideoEncoderConfiguration,PTZConfiguration");
+            AssertEq(PtzFirst(profiles.Body, "Name").Value, "e1");
+            AssertEq(PtzFirst(profiles.Body, "Encoding").Value, "H264");
+            AssertEq(PtzFirst(profiles.Body, "Width").Value, "2560");
+            Assert(PtzFirst(profiles.Body, "DefaultContinuousPanTiltVelocitySpace").Value.EndsWith("VelocityGenericSpace"),
+                "Frigate's \"pt\" feature comes from this space");
+            Assert(PtzCall(ptz, signed, "<trt:GetProfiles/>") is (400, var replay) && replay.Contains("already used"),
+                "a captured request cannot be replayed");
+            Assert(PtzCall(ptz, PtzSigned(DateTime.UtcNow.AddMinutes(-10)), "<trt:GetProfiles/>") is (400, var skew)
+                   && skew.Contains("ignore_time_mismatch"), "a clock ten minutes out is refused, and says what to do");
+            Assert(PtzCall(ptz, PtzSigned(DateTime.UtcNow, "other", "x"), "<trt:GetProfiles/>").Status == 400,
+                "a user not permitted on this camera is refused");
+
+            // HTTP Basic works too; the options offer continuous pan/tilt only.
+            var auth = PtzBasic("frigate", "pw");
+            var options = PtzCall(ptz, "", "<tptz:GetConfigurationOptions><tptz:ConfigurationToken>ptz_e1</tptz:ConfigurationToken></tptz:GetConfigurationOptions>", auth);
+            AssertEq(string.Join(",", PtzFirst(options.Body, "Spaces").Elements().Select(e => e.Name.LocalName)),
+                "ContinuousPanTiltVelocitySpace,PanTiltSpeedSpace");
+            AssertEq(PtzCall(ptz, "", "<tptz:GetPresets/>", PtzBasic("frigate", "wrong")).Status, 400);
+            Assert(PtzCall(ptz, "", "<trt:GetStreamUri/>", auth) is (500, var noStream)
+                   && noStream.Contains("ter:ActionNotSupported"), "video is not served here");
+            Assert(PtzCall(ptz, "", "<tptz:AbsoluteMove/>", auth).Body.Contains("ter:ActionNotSupported"),
+                "nor any move but a continuous one");
+            Assert(ptz.HandleAsync("<s:Envelope", "http://nvr:8081", null, "test", ct).GetAwaiter().GetResult() is (400, var bad)
+                   && bad.Contains("ter:WellFormed"), "malformed XML is a Sender fault");
+
+            // Velocity to a camera command: the stronger axis, at 1-64.
+            AssertEq(Onvif.OnvifPtzServer.Direction(0.5, 0), ("right", 32f));
+            AssertEq(Onvif.OnvifPtzServer.Direction(0.3, -0.6), ("down", 38f));
+            AssertEq(Onvif.OnvifPtzServer.Direction(1.5, 0.2), ("right", 64f));
+            AssertEq(Onvif.OnvifPtzServer.Direction(0.01, -0.02), null);
+            AssertEq(Onvif.OnvifPtzServer.MoveTimeout("PT0.2S"), TimeSpan.FromSeconds(1));
+            AssertEq(Onvif.OnvifPtzServer.MoveTimeout("PT5M"), TimeSpan.FromSeconds(60));
+            AssertEq(Onvif.OnvifPtzServer.MoveTimeout("soon"), TimeSpan.FromSeconds(10));
+
+            // A move whose Stop never comes ends by itself after its Timeout.
+            AssertEq(PtzCall(ptz, "", "<tptz:ContinuousMove><tptz:ProfileToken>e1</tptz:ProfileToken>" +
+                                      "<tptz:Velocity><tt:PanTilt x=\"0.1\" y=\"0.9\"/></tptz:Velocity>" +
+                                      "<tptz:Timeout>PT1S</tptz:Timeout></tptz:ContinuousMove>", auth).Status, 200);
+            var moveStatus = PtzFirst(PtzCall(ptz, "", "<tptz:GetStatus/>", auth).Body, "MoveStatus");
+            Assert(cam.Moving && moveStatus.Elements().First(e => e.Name.LocalName == "PanTilt").Value == "MOVING",
+                "the status says it moves");
+            for (int i = 0; i < 60 && cam.Moving; i++) Thread.Sleep(50);
+            AssertEq(control.Log(), "up@58,stop@32");
+            // A zoom-only Stop has nothing to stop; a zero velocity is a stop.
+            PtzCall(ptz, "", "<tptz:Stop><tptz:PanTilt>false</tptz:PanTilt><tptz:Zoom>true</tptz:Zoom></tptz:Stop>", auth);
+            PtzCall(ptz, "", "<tptz:ContinuousMove><tptz:Velocity><tt:PanTilt x=\"0\" y=\"0\"/></tptz:Velocity></tptz:ContinuousMove>", auth);
+            AssertEq(control.Log(), "up@58,stop@32,stop@32");
+
+            // A camera that reports no pan/tilt gets a profile without it, once it has answered (read behind the
+            // request, never holding it); with no users, no login is asked.
+            var fixedCam = new Onvif.OnvifPtzCamera("fixed", new PtzRecordingControl("fixed", hasPtz: false), null);
+            var fixedPtz = new Onvif.OnvifPtzServer("fixed", new Dictionary<string, string>(), new[] { fixedCam });
+            Assert(PtzCall(fixedPtz, "", "<trt:GetProfiles/>") is (200, var early) && early.Contains("PTZConfiguration"),
+                "before the camera answers, pan/tilt is assumed");
+            fixedCam.CapabilitiesRead.Wait(TimeSpan.FromSeconds(5));
+            Assert(PtzCall(fixedPtz, "", "<trt:GetProfiles/>") is (200, var plain) && !plain.Contains("PTZConfiguration"),
+                "no pan/tilt, no PTZ configuration; and an install with no users asks no login");
+        });
+
+        Test("ONVIF PTZ: one shared port serves each camera as a profile named after it, to its permitted users", () =>
+        {
+            var users = new Dictionary<string, string> { ["frigate"] = "pw", ["garagist"] = "g" };
+            var officeControl = new PtzRecordingControl("office");
+            var garageControl = new PtzRecordingControl("garage");
+            var office = new Onvif.OnvifPtzCamera("office", officeControl, new HashSet<string> { "frigate" });
+            var garage = new Onvif.OnvifPtzCamera("garage", garageControl, new HashSet<string> { "frigate", "garagist" });
+            var ptz = new Onvif.OnvifPtzServer("shared", users, new[] { office, garage });
+            var frigate = PtzBasic("frigate", "pw");
+            var garagist = PtzBasic("garagist", "g");
+            static string Tokens(string body) => string.Join(",", System.Xml.Linq.XDocument.Parse(body).Descendants()
+                .Where(e => e.Name.LocalName == "Profiles").Select(e => e.Attribute("token")?.Value));
+            static string Move(string? profile) =>
+                "<tptz:ContinuousMove>" + (profile == null ? "" : $"<tptz:ProfileToken>{profile}</tptz:ProfileToken>") +
+                "<tptz:Velocity><tt:PanTilt x=\"0.5\" y=\"0\"/></tptz:Velocity></tptz:ContinuousMove>";
+
+            AssertEq(Tokens(PtzCall(ptz, "", "<trt:GetProfiles/>", frigate).Body), "office,garage");
+            AssertEq(Tokens(PtzCall(ptz, "", "<trt:GetProfiles/>", garagist).Body), "garage"); // only what it may move
+            AssertEq(PtzFirst(PtzCall(ptz, "", "<tds:GetDeviceInformation/>", frigate).Body, "Manufacturer").Value, "Neolink.NET");
+
+            // Each move goes to the camera its profile names.
+            AssertEq(PtzCall(ptz, "", Move("garage"), frigate).Status, 200);
+            Assert(garageControl.Log() == "right@32" && officeControl.Log() == "", "the garage moved, the office did not");
+            Assert(PtzCall(ptz, "", "<tptz:GetStatus><tptz:ProfileToken>garage</tptz:ProfileToken></tptz:GetStatus>", frigate).Body.Contains(">MOVING<")
+                   && PtzCall(ptz, "", "<tptz:GetStatus><tptz:ProfileToken>office</tptz:ProfileToken></tptz:GetStatus>", frigate).Body.Contains(">IDLE<"),
+                "each profile reports its own camera");
+            Assert(PtzCall(ptz, "", Move("office"), garagist) is (400, var hidden) && hidden.Contains("ter:InvalidArgVal"),
+                "a camera the user may not move is no profile of theirs");
+            Assert(PtzCall(ptz, "", Move(null), frigate) is (400, var unnamed) && unnamed.Contains("onvif.profile"),
+                "with several cameras, a move must name one");
+            AssertEq(PtzCall(ptz, "", Move(null), garagist).Status, 200); // one camera in view: that one
+            AssertEq(garageControl.Log(), "right@32,right@32");
+            PtzCall(ptz, "", "<tptz:Stop><tptz:ProfileToken>garage</tptz:ProfileToken></tptz:Stop>", frigate);
+            Assert(!garage.Moving && officeControl.Log() == "", "a stop reaches only its camera");
+        });
+
+        Test("ONVIF PTZ: presets are the camera's own, listed, gone to and saved", () =>
+        {
+            var control = new PtzRecordingControl("e1")
+            {
+                Presets = new() { new(1, "Porch", true), new(2, "Gate", true), new(3, "", false), new(4, "", false) },
+            };
+            var cam = new Onvif.OnvifPtzCamera("e1", control, null);
+            var ptz = new Onvif.OnvifPtzServer("e1", new Dictionary<string, string>(), new[] { cam });
+            static string Tokens(string body) => string.Join(",", System.Xml.Linq.XDocument.Parse(body).Descendants()
+                .Where(e => e.Name.LocalName == "Preset").Select(e => $"{e.Attribute("token")?.Value}={e.Value}"));
+            static string Goto(string token) =>
+                $"<tptz:GotoPreset><tptz:ProfileToken>e1</tptz:ProfileToken><tptz:PresetToken>{token}</tptz:PresetToken></tptz:GotoPreset>";
+            static string Save(string? token, string? name) => "<tptz:SetPreset><tptz:ProfileToken>e1</tptz:ProfileToken>" +
+                (name == null ? "" : $"<tptz:PresetName>{name}</tptz:PresetName>") +
+                (token == null ? "" : $"<tptz:PresetToken>{token}</tptz:PresetToken>") + "</tptz:SetPreset>";
+
+            // Only the slots in use are presets, each by the camera's own id.
+            AssertEq(Tokens(PtzCall(ptz, "", "<tptz:GetPresets><tptz:ProfileToken>e1</tptz:ProfileToken></tptz:GetPresets>").Body),
+                "1=Porch,2=Gate");
+            AssertEq(PtzFirst(PtzCall(ptz, "", "<tptz:GetNodes/>").Body, "MaximumNumberOfPresets").Value, "4");
+            AssertEq(PtzCall(ptz, "", Goto("2")).Status, 200);
+            Assert(PtzCall(ptz, "", Goto("3")) is (400, var free) && free.Contains("ter:InvalidArgVal")
+                   && PtzCall(ptz, "", Goto("gate")).Status == 400, "a free slot, or a name, is no preset token");
+
+            // A save without a token fills the first free slot; one over a preset keeps its name unless given one.
+            AssertEq(PtzFirst(PtzCall(ptz, "", Save(null, "Door")).Body, "PresetToken").Value, "3");
+            AssertEq(PtzCall(ptz, "", Save("1", null)).Status, 200);
+            AssertEq(PtzCall(ptz, "", Save(null, null)).Status, 200); // slot 4, named after itself
+            Assert(PtzCall(ptz, "", Save(null, "More")) is (500, var full) && full.Contains("ter:TooManyPresets"),
+                "with every slot in use, a new preset is refused");
+            AssertEq(control.Log(), "preset@2,save@3:Door,save@1:Porch,save@4:preset 4");
+
+            // A preset move retires the watchdog of a continuous move before it.
+            PtzCall(ptz, "", "<tptz:ContinuousMove><tptz:Velocity><tt:PanTilt x=\"0.5\" y=\"0\"/></tptz:Velocity>" +
+                             "<tptz:Timeout>PT1S</tptz:Timeout></tptz:ContinuousMove>");
+            PtzCall(ptz, "", Goto("1"));
+            Thread.Sleep(1500);
+            Assert(control.Log().EndsWith("right@32,preset@1") && !cam.Moving, "no watchdog stop cuts the preset move short");
+
+            // Before any GetPresets there is no list to check against: the move goes to the camera, which judges.
+            var unread = new PtzRecordingControl("e1") { Presets = new() { new(2, "Gate", true) } };
+            var unreadPtz = new Onvif.OnvifPtzServer("e1", new Dictionary<string, string>(),
+                new[] { new Onvif.OnvifPtzCamera("e1", unread, null) });
+            AssertEq(PtzCall(unreadPtz, "", Goto("2")).Status, 200);
+            AssertEq(unread.Log(), "preset@2");
+
+            // A camera without the HTTP API that keeps presets lists none, and cannot save one.
+            var bare = new Onvif.OnvifPtzServer("bare", new Dictionary<string, string>(),
+                new[] { new Onvif.OnvifPtzCamera("e1", new PtzRecordingControl("e1"), null) });
+            AssertEq(Tokens(PtzCall(bare, "", "<tptz:GetPresets/>").Body), "");
+            Assert(PtzCall(bare, "", Save(null, "Door")) is (500, var noApi) && noApi.Contains("http_address"),
+                "saving needs the camera's HTTP API, and says so");
+        });
+
+        Test("ONVIF PTZ: zoom steps the lens through its own positions while held (no zoom camera to test on)", () =>
+        {
+            static string Zoom(double x, string timeout = "PT10S") =>
+                "<tptz:ContinuousMove><tptz:Velocity><tt:Zoom x=\"" + x.ToString(System.Globalization.CultureInfo.InvariantCulture) +
+                $"\"/></tptz:Velocity><tptz:Timeout>{timeout}</tptz:Timeout></tptz:ContinuousMove>";
+            static void WaitFor(Func<bool> done) { for (int i = 0; i < 100 && !done(); i++) Thread.Sleep(50); }
+            int Steps(PtzRecordingControl c) => c.Log().Split(',').Count(s => s.StartsWith("zoom@"));
+
+            var control = new PtzRecordingControl("zoomy") { Lens = (0, 100, 50) };
+            var cam = new Onvif.OnvifPtzCamera("zoomy", control, null);
+            var ptz = new Onvif.OnvifPtzServer("zoomy", new Dictionary<string, string>(), new[] { cam });
+            cam.StartCapabilitiesRead();
+            cam.CapabilitiesRead.Wait(TimeSpan.FromSeconds(5));
+
+            // A zoom lens adds continuous zoom beside pan/tilt: Frigate's "zoom" feature.
+            var profiles = PtzCall(ptz, "", "<trt:GetProfiles/>").Body;
+            Assert(profiles.Contains("DefaultContinuousPanTiltVelocitySpace") && profiles.Contains("DefaultContinuousZoomVelocitySpace"),
+                "the profile offers pan/tilt and zoom");
+            AssertEq(string.Join(",", PtzFirst(PtzCall(ptz, "",
+                    "<tptz:GetConfigurationOptions><tptz:ConfigurationToken>ptz_zoomy</tptz:ConfigurationToken></tptz:GetConfigurationOptions>").Body,
+                    "Spaces").Elements().Select(e => e.Name.LocalName)),
+                "ContinuousPanTiltVelocitySpace,ContinuousZoomVelocitySpace,PanTiltSpeedSpace,ZoomSpeedSpace");
+
+            // Frigate's zoom in: a zoom velocity alone. The lens steps up from where it is; no pan/tilt command goes out.
+            AssertEq(PtzCall(ptz, "", Zoom(0.5)).Status, 200);
+            Assert(cam.Zooming && PtzCall(ptz, "", "<tptz:GetStatus/>").Body.Contains("<tt:Zoom>MOVING</tt:Zoom>"),
+                "the status says the lens moves");
+            Thread.Sleep(600);
+            PtzCall(ptz, "", "<tptz:Stop><tptz:PanTilt>true</tptz:PanTilt><tptz:Zoom>true</tptz:Zoom></tptz:Stop>");
+            var steps = Steps(control);
+            Assert(!cam.Zooming && control.Log().StartsWith("zoom@56,zoom@62"), $"stepped in, then stopped: {control.Log()}");
+            Thread.Sleep(400);
+            AssertEq(Steps(control), steps); // nothing after the stop
+
+            // Zooming out at full speed ends at the lens's end of its own accord.
+            PtzCall(ptz, "", Zoom(-1));
+            WaitFor(() => !cam.Zooming);
+            Assert(!cam.Zooming && control.Log().EndsWith("zoom@0"), $"zoomed out to the end: {control.Log()}");
+
+            // A held zoom whose Stop never comes ends with its timeout.
+            var slow = new PtzRecordingControl("slow") { Lens = (0, 1000, 0) };
+            var slowCam = new Onvif.OnvifPtzCamera("slow", slow, null);
+            var slowPtz = new Onvif.OnvifPtzServer("slow", new Dictionary<string, string>(), new[] { slowCam });
+            PtzCall(slowPtz, "", Zoom(0.06, "PT1S")); // 8 of 1000 per step: far from the end in a second
+            WaitFor(() => !slowCam.Zooming);
+            Assert(!slowCam.Zooming && Steps(slow) is > 0 and <= 6, $"the zoom timed out after about a second: {slow.Log()}");
+
+            // A varifocal camera without pan/tilt still gets a PTZ configuration, for zoom alone.
+            var bullet = new Onvif.OnvifPtzCamera("bullet", new PtzRecordingControl("bullet", hasPtz: false) { Lens = (0, 100, 0) }, null);
+            bullet.StartCapabilitiesRead();
+            bullet.CapabilitiesRead.Wait(TimeSpan.FromSeconds(5));
+            var zoomOnly = PtzCall(new Onvif.OnvifPtzServer("bullet", new Dictionary<string, string>(), new[] { bullet }),
+                "", "<trt:GetProfiles/>").Body;
+            Assert(zoomOnly.Contains("DefaultContinuousZoomVelocitySpace") && !zoomOnly.Contains("DefaultContinuousPanTiltVelocitySpace"),
+                "zoom only");
+        });
+
+        Test("ONVIF PTZ: the stop watchdog retries, and stands down for another UI's command", () =>
+        {
+            var ct = CancellationToken.None;
+            static string Move(double x, double y, string timeout)
+            {
+                var (px, py) = (x.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                                y.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                return $"<s:Envelope xmlns:s=\"{Onvif.OnvifPtzServer.NsSoap}\" xmlns:tptz=\"{Onvif.OnvifPtzServer.NsPtz}\" " +
+                       $"xmlns:tt=\"{Onvif.OnvifPtzServer.NsSchema}\"><s:Body><tptz:ContinuousMove><tptz:Velocity>" +
+                       $"<tt:PanTilt x=\"{px}\" y=\"{py}\"/></tptz:Velocity><tptz:Timeout>{timeout}</tptz:Timeout>" +
+                       "</tptz:ContinuousMove></s:Body></s:Envelope>";
+            }
+            static void WaitFor(Func<bool> done) { for (int i = 0; i < 100 && !done(); i++) Thread.Sleep(50); }
+            (Onvif.OnvifPtzCamera, Onvif.OnvifPtzServer) Endpoint(PtzRecordingControl control)
+            {
+                var cam = new Onvif.OnvifPtzCamera("e1", control, null) { StopRetryDelay = TimeSpan.FromMilliseconds(100) };
+                return (cam, new Onvif.OnvifPtzServer("e1", new Dictionary<string, string>(), new[] { cam }));
+            }
+
+            // Two failed stops, then one that lands.
+            var flaky = new PtzRecordingControl("e1") { FailStops = 2 };
+            var (cam, ptz) = Endpoint(flaky);
+            ptz.HandleAsync(Move(0.5, 0, "PT1S"), "http://nvr", null, "test", ct).GetAwaiter().GetResult();
+            WaitFor(() => !cam.Moving);
+            AssertEq(flaky.Log(), "right@32,stop@32");
+
+            // Every stop fails: after the last try the status stops claiming a move.
+            var dead = new PtzRecordingControl("e1") { FailStops = 10 };
+            (cam, ptz) = Endpoint(dead);
+            ptz.HandleAsync(Move(0, -0.5, "PT1S"), "http://nvr", null, "test", ct).GetAwaiter().GetResult();
+            WaitFor(() => !cam.Moving);
+            Assert(!cam.Moving && dead.Log() == "down@32", "the watchdog gives up after its tries");
+
+            // The web panel drives the head after an ONVIF move: the watchdog leaves that move alone.
+            var shared = new PtzRecordingControl("e1");
+            (cam, ptz) = Endpoint(shared);
+            ptz.HandleAsync(Move(0.5, 0, "PT1S"), "http://nvr", null, "test", ct).GetAwaiter().GetResult();
+            shared.PtzAsync("left", 20, ct).GetAwaiter().GetResult();
+            Thread.Sleep(1500);
+            Assert(shared.Log() == "right@32,left@20" && cam.Moving, "no stop from the watchdog; the status follows the panel");
+            shared.PtzAsync("stop", 32, ct).GetAwaiter().GetResult();
+            Assert(!cam.Moving, "and the panel's stop ends it");
+        });
+
+        Test("ONVIF PTZ: HTTP framing and connection limits", () =>
+        {
+            var ptz = new Onvif.OnvifPtzServer("e1", new Dictionary<string, string>(),
+                new[] { new Onvif.OnvifPtzCamera("e1", new PtzRecordingControl("e1"), null) });
+            int port = FreeTcpPort();
+            using var stop = new CancellationTokenSource();
+            var run = Task.Run(() => ptz.RunAsync("127.0.0.1", port, stop.Token));
+            var soap = $"<s:Envelope xmlns:s=\"{Onvif.OnvifPtzServer.NsSoap}\" xmlns:tds=\"{Onvif.OnvifPtzServer.NsDevice}\">" +
+                       "<s:Body><tds:GetSystemDateAndTime/></s:Body></s:Envelope>";
+            string Post(string version = "HTTP/1.1", string extra = "", string? body = null) =>
+                $"POST /onvif/device_service {version}\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/soap+xml\r\n" +
+                $"Content-Length: {Encoding.UTF8.GetByteCount(body ?? soap)}\r\n{extra}\r\n{body ?? soap}";
+            System.Net.Sockets.TcpClient Connect()
+            {
+                for (int i = 0; ; i++)
+                {
+                    try
+                    {
+                        var c = new System.Net.Sockets.TcpClient("127.0.0.1", port);
+                        c.GetStream().ReadTimeout = 5000;
+                        return c;
+                    }
+                    catch (System.Net.Sockets.SocketException) when (i < 50) { Thread.Sleep(50); }
+                }
+            }
+            static void Send(System.Net.Sockets.TcpClient c, string text) => c.GetStream().Write(Encoding.UTF8.GetBytes(text));
+            // One response: its status line and body, or "" once the server has closed the connection.
+            static string Read(System.Net.Sockets.TcpClient c)
+            {
+                var s = c.GetStream();
+                var head = new StringBuilder();
+                var one = new byte[1];
+                try
+                {
+                    while (!head.ToString().EndsWith("\r\n\r\n", StringComparison.Ordinal))
+                    {
+                        if (s.Read(one) == 0) return "";
+                        head.Append((char)one[0]);
+                    }
+                }
+                catch (IOException) { return ""; }
+                var m = System.Text.RegularExpressions.Regex.Match(head.ToString(), @"Content-Length: (\d+)");
+                var body = new byte[m.Success ? int.Parse(m.Groups[1].Value) : 0];
+                for (int got = 0, n; got < body.Length && (n = s.Read(body, got, body.Length - got)) > 0;) got += n;
+                return head.ToString().Split("\r\n")[0] + (head.ToString().Contains("Connection: close") ? " [close]" : "") +
+                       " " + Encoding.UTF8.GetString(body);
+            }
+            try
+            {
+                // Two requests in one write, answered in order on the same connection.
+                using (var c = Connect())
+                {
+                    Send(c, Post() + Post());
+                    Assert(Read(c).StartsWith("HTTP/1.1 200 OK <?xml") && Read(c).StartsWith("HTTP/1.1 200 OK <?xml"),
+                        "pipelined requests both answered");
+                    Send(c, Post());
+                    Assert(Read(c).StartsWith("HTTP/1.1 200 OK <?xml"), "and the connection stays open for more");
+                }
+                using (var c = Connect())
+                {
+                    Send(c, $"POST /onvif/device_service HTTP/1.1\r\nHost: x\r\nExpect: 100-continue\r\n" +
+                            $"Content-Length: {Encoding.UTF8.GetByteCount(soap)}\r\n\r\n");
+                    AssertEq(Read(c), "HTTP/1.1 100 Continue ");
+                    Send(c, soap);
+                    Assert(Read(c).StartsWith("HTTP/1.1 200 OK"), "the body follows the 100 Continue");
+                }
+                using (var c = Connect())
+                {
+                    Send(c, Post("HTTP/1.0"));
+                    Assert(Read(c).StartsWith("HTTP/1.1 200 OK [close]") && Read(c) == "", "HTTP/1.0 without keep-alive closes");
+                }
+                foreach (var (request, expected) in new[]
+                         {
+                             ($"GET /onvif/device_service HTTP/1.1\r\nHost: x\r\n\r\n", "HTTP/1.1 405 Method Not Allowed [close] "),
+                             ("POST /onvif/device_service HTTP/1.1\r\nHost: x\r\n\r\n", "HTTP/1.1 411 Length Required [close] "),
+                             ("POST /onvif/device_service HTTP/1.1\r\nHost: x\r\nContent-Length: 999999\r\n\r\n",
+                              "HTTP/1.1 413 Content Too Large [close] "),
+                         })
+                {
+                    using var c = Connect();
+                    Send(c, request);
+                    AssertEq(Read(c), expected);
+                }
+
+                // An address holds at most four connections; a fifth is closed until one goes.
+                var idle = Enumerable.Range(0, 4).Select(_ => Connect()).ToList();
+                Thread.Sleep(200);
+                using (var fifth = Connect())
+                {
+                    try { Send(fifth, Post()); } catch (IOException) { }
+                    AssertEq(Read(fifth), "");
+                }
+                foreach (var c in idle) c.Dispose();
+                string answer = "";
+                for (int i = 0; i < 40 && answer == ""; i++)
+                {
+                    Thread.Sleep(50);
+                    using var c = Connect();
+                    try { Send(c, Post()); } catch (IOException) { continue; }
+                    answer = Read(c);
+                }
+                Assert(answer.StartsWith("HTTP/1.1 200 OK"), "a slot frees once a connection closes");
+            }
+            finally
+            {
+                stop.Cancel();
+                run.Wait(TimeSpan.FromSeconds(5));
+            }
+        });
+
         Test("ONVIF presets keep their ids when others are removed in the camera's own app", () =>
         {
             var ct = CancellationToken.None;
@@ -8767,6 +9296,35 @@ public static class SelfTest
                 Assert(!storedMsg.Contains("address is required") && !storedMsg.Contains("username is required"),
                     "a name-only test resolves address and credentials from config.json, got: " + storedMsg);
 
+                // Pan/tilt for Frigate through the camera editor: each mode round-trips, and every rule refuses the save.
+                var configPath = Path.Combine(dir, "config.json");
+                var configBefore = File.ReadAllText(configPath);
+                HttpResponseMessage SavePtz(string mode, int? port = null) => PostRaw(http, $"/api/admin/cameras{tokenQ}",
+                    $$"""{"originalName":"storedcam","name":"storedcam","type":"reolink","address":"127.0.0.1:9","username":"stored-admin","ptzMode":"{{mode}}"{{(port is { } p ? $",\"ptzPort\":{p}" : "")}}}""");
+                string SaveError(HttpResponseMessage res) { using (res) return res.Content.ReadAsStringAsync().Result; }
+                Assert(SaveError(SavePtz("shared")).Contains("no login"), "with no RTSP users, the login rule refuses the save");
+                File.WriteAllText(configPath, configBefore.Replace("\"cameras\"", "\"users\": [ { \"name\": \"frigate\", \"pass\": \"pw\" } ], \"cameras\""));
+                using (var res = SavePtz("own", 18794)) AssertEq((int)res.StatusCode, 200);
+                var saved = File.ReadAllText(configPath);
+                Assert(saved.Contains("\"ptz_port\": 18794") && !saved.Contains("ptz_share"), "own port saved as ptz_port");
+                var listed = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(
+                    http.GetStringAsync($"/api/admin/cameras{tokenQ}").Result);
+                var storedCam = listed.GetProperty("cameras").EnumerateArray().First(c => c.GetProperty("name").GetString() == "storedcam");
+                Assert(storedCam.GetProperty("ptzMode").GetString() == "own" && storedCam.GetProperty("ptzPort").GetInt32() == 18794
+                       && !storedCam.GetProperty("ptzOpen").GetBoolean(), "the editor reads the mode, port and login back");
+                Assert(listed.GetProperty("ptz").GetProperty("sharedPort").GetInt32() == 8656
+                       && listed.GetProperty("ptz").GetProperty("users").GetBoolean(), "and what it checks a port against");
+                using (var res = SavePtz("shared")) AssertEq((int)res.StatusCode, 200);
+                saved = File.ReadAllText(configPath);
+                Assert(saved.Contains("\"ptz_share\": true") && !saved.Contains("ptz_port"), "shared replaces the own port");
+                Assert(SaveError(SavePtz("own", 8655)).Contains("already the web port"), "a taken port is refused");
+                Assert(SaveError(SavePtz("own", 70000)).Contains("1-65535"), "an impossible port is refused");
+                Assert(SaveError(SavePtz("sideways")).Contains("off, shared or own"), "an unknown mode is refused");
+                using (var res = SavePtz("off")) AssertEq((int)res.StatusCode, 200);
+                saved = File.ReadAllText(configPath);
+                Assert(!saved.Contains("ptz_share") && !saved.Contains("ptz_port"), "off removes both keys");
+                File.WriteAllText(configPath, configBefore);
+
                 // With accounts on, the background feed is admin-only: a normal
                 // user gets 403, the admin still reads it.
                 using (var res = PostRaw(http, $"/api/users{tokenQ}", """{"username":"viewer","password":"viewer pass"}"""))
@@ -9939,6 +10497,84 @@ public static class SelfTest
         }
     }
 
+    // ONVIF pan/tilt requests, as Frigate's client sends them.
+    private static (int Status, string Body) PtzCall(Onvif.OnvifPtzServer server, string header, string body, string? auth = null) =>
+        server.HandleAsync(
+            $"<s:Envelope xmlns:s=\"{Onvif.OnvifPtzServer.NsSoap}\" xmlns:tds=\"{Onvif.OnvifPtzServer.NsDevice}\" " +
+            $"xmlns:trt=\"{Onvif.OnvifPtzServer.NsMedia}\" xmlns:tptz=\"{Onvif.OnvifPtzServer.NsPtz}\" " +
+            $"xmlns:tt=\"{Onvif.OnvifPtzServer.NsSchema}\"><s:Header>{header}</s:Header><s:Body>{body}</s:Body></s:Envelope>",
+            "http://nvr:8081", auth, "test", CancellationToken.None).GetAwaiter().GetResult();
+
+    private static string PtzSigned(DateTime at, string user = "frigate", string pass = "pw") =>
+        Protocol.OnvifClient.BuildSecurity(user, pass,
+            System.Security.Cryptography.RandomNumberGenerator.GetBytes(16), at, mustUnderstand: false);
+
+    private static string PtzBasic(string user, string pass) =>
+        "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes($"{user}:{pass}"));
+
+    private static System.Xml.Linq.XElement PtzFirst(string xml, string name) =>
+        System.Xml.Linq.XDocument.Parse(xml).Descendants().First(e => e.Name.LocalName == name);
+
+    /// <summary>Records the PTZ commands it accepts and announces them, as CameraControl does; reports a
+    /// head with pan/tilt (or none), and can refuse the next few stops.</summary>
+    private sealed class PtzRecordingControl(string name, bool hasPtz = true) : StubCameraControl(name), Streaming.ICameraControl
+    {
+        private readonly List<string> _moves = new();
+        public int FailStops;
+        public string Log() { lock (_moves) return string.Join(",", _moves); }
+        public event Action<string>? PtzCommandSent;
+        public override Task PtzAsync(string command, float speed, CancellationToken ct)
+        {
+            if (command == "stop" && Interlocked.Decrement(ref FailStops) >= 0)
+                throw new IOException("link dropped");
+            lock (_moves) _moves.Add(string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{command}@{speed}"));
+            PtzCommandSent?.Invoke(command);
+            return Task.CompletedTask;
+        }
+        public override Task<Streaming.CameraCapabilities> GetCapabilitiesAsync(CancellationToken ct) =>
+            Task.FromResult(new Streaming.CameraCapabilities(
+                new Bc.Xml.VersionInfoXml { Model = "E1", FirmwareVersion = "v3.0" }, null,
+                new Streaming.CameraFeatures(Ptz: hasPtz, Led: false, Pir: false, Battery: false, Talk: false, Zoom: Lens != null)));
+
+        /// <summary>The preset slots, as the camera's HTTP API lists them; null = no HTTP API.</summary>
+        public List<Streaming.PtzPresetInfo>? Presets;
+        /// <summary>The zoom lens's range and position; null = a fixed lens.</summary>
+        public (long Min, long Max, long Cur)? Lens;
+
+        public new Task<IReadOnlyList<Streaming.PtzPresetInfo>?> GetPtzPresetsAsync(CancellationToken ct)
+        {
+            lock (_moves) return Task.FromResult<IReadOnlyList<Streaming.PtzPresetInfo>?>(Presets?.ToList());
+        }
+        public new Task PtzToPresetAsync(int id, CancellationToken ct)
+        {
+            lock (_moves) _moves.Add($"preset@{id}");
+            PtzCommandSent?.Invoke("preset");
+            return Task.CompletedTask;
+        }
+        public new Task SavePtzPresetAsync(int id, string name, CancellationToken ct)
+        {
+            lock (_moves)
+            {
+                _moves.Add($"save@{id}:{name}");
+                Presets = Presets!.Select(p => p.Id == id ? new Streaming.PtzPresetInfo(id, name, true) : p).ToList();
+            }
+            return Task.CompletedTask;
+        }
+        public new Task<System.Xml.Linq.XElement?> GetZoomFocusAsync(CancellationToken ct) =>
+            Task.FromResult(Lens is { } l
+                ? System.Xml.Linq.XElement.Parse($"<PtzZoomFocus><zoom><maxPos>{l.Max}</maxPos><minPos>{l.Min}</minPos><curPos>{l.Cur}</curPos></zoom></PtzZoomFocus>")
+                : null);
+        public new Task SetZoomFocusAsync(string command, uint movePos, CancellationToken ct)
+        {
+            lock (_moves)
+            {
+                _moves.Add($"zoom@{movePos}");
+                Lens = Lens!.Value with { Cur = movePos };
+            }
+            return Task.CompletedTask;
+        }
+    }
+
     private class StubCameraControl(string name) : Streaming.ICameraControl
     {
         public string CameraName => name;
@@ -9962,7 +10598,7 @@ public static class SelfTest
         public Task<System.Xml.Linq.XElement?> GetPirStateAsync(CancellationToken ct) =>
             Task.FromResult<System.Xml.Linq.XElement?>(null);
         public Task SetPirEnabledAsync(bool enabled, CancellationToken ct) => Task.CompletedTask;
-        public Task PtzAsync(string command, float speed, CancellationToken ct) => Task.CompletedTask;
+        public virtual Task PtzAsync(string command, float speed, CancellationToken ct) => Task.CompletedTask;
         public Task RebootAsync(CancellationToken ct) => Task.CompletedTask;
         public Task<System.Xml.Linq.XElement?> GetZoomFocusAsync(CancellationToken ct) =>
             Task.FromResult<System.Xml.Linq.XElement?>(null);

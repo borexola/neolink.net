@@ -214,7 +214,8 @@ public static class WebApi
         string? Address, string? Username, string? Password, int? ChannelId, string? HttpAddress,
         string? RtspMain, string? RtspSub,
         string? Uid, string? AlwaysOn, string? Stream, string? OnvifAddress,
-        bool? Record, bool? Udp, bool? UdpProbe, bool? WakeCapture, double? KeepAliveHours);
+        bool? Record, bool? Udp, bool? UdpProbe, bool? WakeCapture, double? KeepAliveHours,
+        string? PtzMode = null, int? PtzPort = null);
     /// <summary>Uid/Udp matter here as much as they do on save: a UDP-only battery
     /// camera never listens on TCP, so testing it the TCP way always times out.
     /// OnvifAddress rides along so a generic camera's test can also say whether its
@@ -945,6 +946,16 @@ public static class WebApi
                 return Results.Json(new
                 {
                     writable = ConfigEditor.IsWritable(o.ConfigPath),
+                    // What the editor needs to check a PTZ port before saving (the loader has the last word).
+                    ptz = new
+                    {
+                        sharedPort = cfg.PtzPort,
+                        rtspPort = cfg.BindPort,
+                        webPort = cfg.WebPort,
+                        loopback = System.Net.IPAddress.TryParse(cfg.PtzBind ?? cfg.BindAddr, out var ptzBind)
+                                   && System.Net.IPAddress.IsLoopback(ptzBind),
+                        users = cfg.Users.Count > 0,
+                    },
                     cameras = cfg.Cameras.Select(c => new
                     {
                         name = c.Name,
@@ -971,6 +982,10 @@ public static class WebApi
                         udpProbe = c.UdpProbe,
                         wakeCapture = c.WakeCapture,
                         keepAliveHours = c.KeepAliveHours,
+                        ptzMode = c.PtzMode,
+                        ptzPort = c.PtzMode == "own" ? c.PtzPort : null,
+                        ptzOff = c.PtzOff, // why the loader turned it off, shown beside the field
+                        ptzOpen = cfg.PermittedUsersFor(c) == null, // no login applies to this camera
                     }).ToList(),
                 });
             }
@@ -1027,6 +1042,11 @@ public static class WebApi
                     }, statusCode: 400);
                 if (req.Uid is { Length: > 0 } uid && uid.Any(char.IsWhiteSpace))
                     return Results.Json(new { error = "UID must not contain spaces" }, statusCode: 400);
+                // Clashes, the shared port and the login rule are the loader's (ValidatePtz), run on save.
+                if (req.PtzMode is { Length: > 0 } pm && pm is not ("off" or "shared" or "own"))
+                    return Results.Json(new { error = "PTZ for Frigate must be off, shared or own" }, statusCode: 400);
+                if (req.PtzMode == "own" && req.PtzPort is not (>= 1 and <= 65535))
+                    return Results.Json(new { error = "the camera's own PTZ port must be 1-65535" }, statusCode: 400);
             }
             else
             {
@@ -1115,6 +1135,12 @@ public static class WebApi
                         if (req.KeepAliveHours is { } keepAlive)
                             ConfigEditor.Set(cam, "keep_alive_hours",
                                 keepAlive > 0 ? System.Text.Json.Nodes.JsonValue.Create(Math.Clamp(keepAlive, 0, 24)) : null);
+                        // One mode at a time: a profile on the shared port, or a port of the camera's own.
+                        if (req.PtzMode is { Length: > 0 } ptzMode)
+                        {
+                            ConfigEditor.Set(cam, "ptz_share", ptzMode == "shared" ? true : null);
+                            ConfigEditor.Set(cam, "ptz_port", ptzMode == "own" ? req.PtzPort : null);
+                        }
                         // A type switch must not leave generic-RTSP keys behind.
                         ConfigEditor.Set(cam, "rtsp_main", null);
                         ConfigEditor.Set(cam, "rtsp_sub", null);
@@ -1142,6 +1168,9 @@ public static class WebApi
                         ConfigEditor.Set(cam, "udp_probe", null);
                         ConfigEditor.Set(cam, "wake_capture", null);
                         ConfigEditor.Set(cam, "keep_alive_hours", null);
+                        // A generic camera has ONVIF of its own: Frigate goes to it directly.
+                        ConfigEditor.Set(cam, "ptz_share", null);
+                        ConfigEditor.Set(cam, "ptz_port", null);
                     }
                     // Event recording applies to both camera kinds, so it is set
                     // outside the type branches (default true = key omitted).
@@ -2036,13 +2065,8 @@ public static class WebApi
                 return ctx.Items.ContainsKey("authUser")
                     ? null
                     : Results.Json(new { error = "authentication required" }, statusCode: 401);
-            if (cam.PermittedUsers == null || users.Count == 0)
-                return null;
             var creds = NetUtil.DecodeBasicAuth(ctx.Request.Headers.Authorization);
-            if (creds != null
-                && users.TryGetValue(creds.Value.User, out var expected)
-                && NetUtil.FixedTimeEquals(expected, creds.Value.Pass)
-                && cam.PermittedUsers.Contains(creds.Value.User))
+            if (NetUtil.Permits(users, cam.PermittedUsers, creds?.User, creds?.Pass))
                 return null;
             ChallengeBasic(ctx);
             return Results.Json(new { error = "authentication required" }, statusCode: 401);

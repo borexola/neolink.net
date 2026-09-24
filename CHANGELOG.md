@@ -13,6 +13,7 @@ in the README). Paste the matching section below into the GitHub release.
 - **A detection zone on every camera:** written to the camera's own grid where its ONVIF runs cell motion detection, otherwise kept by Neolink, where it limits only the live object boxes. Reolink cameras with their own grid are unchanged.
 - **Stills for cameras without a snapshot command**, from the camera's ONVIF snapshot or a frame of its video (needs ffmpeg). Reolink snapshots are unchanged.
 - ONVIF requests are stamped in the camera's own clock, and the login is offered over HTTP authentication as well as WS-Security.
+- **PTZ in Frigate for Reolink cameras without ONVIF** (pan/tilt, the camera's presets and zoom), switched on per camera under **External connection** in the camera editor: one shared port with a profile per camera (Frigate 0.18+), or a port of the camera's own for older Frigate. Frigate signs in as one of the RTSP users (thanks to @mzspicoli for the prototype).
 
 ### Changed
 

@@ -278,6 +278,8 @@ var webCameras = new List<WebCameraInfo>();
 // Router wake hints (wake_hints.syslog_port) route to each camera's wake-probe
 // owner by source IP; populated as the cameras are built below.
 var wakeHintTargets = new List<CameraService>();
+// Cameras whose PTZ is offered on the shared ONVIF port (ptz_share); the port starts after the loop.
+var sharedPtzCameras = new List<Neolink.Onvif.OnvifPtzCamera>();
 
 // MQTT / Home Assistant bridge is created after the cameras are built (below) so
 // it can reference their controls; declared here so motion wiring can reach it.
@@ -856,6 +858,17 @@ foreach (var cam in config.Cameras)
     if (onvifEvents != null)
         onvifEventTargets.Add((onvifEvents, cam.Name, recorderSink));
 
+    // PTZ for Frigate over ONVIF (ptz_share / ptz_port), started after the loop. Validation has
+    // already turned it off (PtzOff) where it cannot work.
+    if (cam.PtzMode != "off" && cam.PtzOff == null && primaryService != null)
+    {
+        var mainHub = (webStreams.FirstOrDefault(s => s.Kind == "mainStream") ?? webStreams.FirstOrDefault())?.Hub;
+        var ptzCam = new Neolink.Onvif.OnvifPtzCamera(cam.Name, control, permitted,
+            mainHub == null ? null : () => (mainHub.Width, mainHub.Height));
+        if (cam.PtzMode == "own") StartPtzEndpoint($"{cam.Name}: ONVIF PTZ", cam.PtzPort!.Value, new[] { ptzCam });
+        else sharedPtzCameras.Add(ptzCam);
+    }
+
     // Demo cameras have no camera to push detections, so a pulse task plays the
     // camera's part: a labelled push every minute or three, straight into the
     // same recorder sink a Baichuan push lands in. 24/7 recording defaults ON —
@@ -873,6 +886,19 @@ foreach (var cam in config.Cameras)
 // The generic cameras' Detection events switch has been brought up to the new
 // default where it was never a choice (see the seed above); from now on it is.
 recordingSettings?.CompleteMigration(RecordingSettings.OnvifEventsMigration);
+
+// One port for every camera sharing it, each an ONVIF profile named after the camera (Frigate's onvif.profile).
+if (sharedPtzCameras.Count > 0)
+    StartPtzEndpoint($"ONVIF PTZ (shared port {config.PtzPort})", config.PtzPort, sharedPtzCameras);
+
+void StartPtzEndpoint(string tag, int port, IReadOnlyList<Neolink.Onvif.OnvifPtzCamera> ptzCameras)
+{
+    var endpoint = new Neolink.Onvif.OnvifPtzServer(tag, users, ptzCameras);
+    var bind = config.PtzBind ?? config.BindAddr;
+    tasks.Add(Task.Run(() => RunListenerAsync(ct => endpoint.RunAsync(bind, port, ct),
+        ex => $"{tag} cannot listen on tcp:{port} ({ex.Message}); retrying every minute. The cameras are unaffected.",
+        TimeSpan.FromMinutes(1), shutdown.Token)));
+}
 
 // Router wake hints: instant, event-grade wake signals for battery cameras from
 // the camera's own "call the Reolink push service" moment. Two independent
@@ -905,41 +931,19 @@ if (config.WakeHints is { } wakeHintCfg &&
     {
         var hintListener = new WakeHintListener(
             wakeHintCfg.SyslogPort, wakeHintCfg.Bind ?? config.BindAddr, dispatchHint);
-        tasks.Add(Task.Run(async () =>
-        {
-            while (!shutdown.Token.IsCancellationRequested)
-            {
-                try { await hintListener.RunAsync(shutdown.Token); return; }
-                catch (OperationCanceledException) { return; }
-                catch (Exception e)
-                {
-                    Log.Error($"Wake hints: listener failed ({e.Message}); retrying in 30s. " +
-                              $"If another service owns udp:{wakeHintCfg.SyslogPort}, change wake_hints.syslog_port.");
-                    try { await Task.Delay(TimeSpan.FromSeconds(30), shutdown.Token); }
-                    catch (OperationCanceledException) { return; }
-                }
-            }
-        }));
+        tasks.Add(Task.Run(() => RunListenerAsync(hintListener.RunAsync,
+            e => $"Wake hints: listener failed ({e.Message}); retrying in 30s. " +
+                 $"If another service owns udp:{wakeHintCfg.SyslogPort}, change wake_hints.syslog_port.",
+            TimeSpan.FromSeconds(30), shutdown.Token)));
     }
     var pushPorts = wakeHintCfg.PushPorts.Where(p => p is > 0 and < 65536).Distinct().ToList();
     if (pushPorts.Count > 0)
     {
         var pushSink = new PushSinkListener(pushPorts, wakeHintCfg.Bind ?? config.BindAddr, dispatchHint);
-        tasks.Add(Task.Run(async () =>
-        {
-            while (!shutdown.Token.IsCancellationRequested)
-            {
-                try { await pushSink.RunAsync(shutdown.Token); return; }
-                catch (OperationCanceledException) { return; }
-                catch (Exception e)
-                {
-                    Log.Error($"Wake hints: push decoy failed ({e.Message}); retrying in 30s. " +
-                              "If another service owns the port(s), change wake_hints.push_ports.");
-                    try { await Task.Delay(TimeSpan.FromSeconds(30), shutdown.Token); }
-                    catch (OperationCanceledException) { return; }
-                }
-            }
-        }));
+        tasks.Add(Task.Run(() => RunListenerAsync(pushSink.RunAsync,
+            e => $"Wake hints: push decoy failed ({e.Message}); retrying in 30s. " +
+                 "If another service owns the port(s), change wake_hints.push_ports.",
+            TimeSpan.FromSeconds(30), shutdown.Token)));
     }
 }
 
@@ -1181,6 +1185,29 @@ return exitCode;
 
 // Safety net around one camera stream: a crash in CameraService must never take
 // the process (and the other cameras) down. Log it and start the service again.
+// Runs a listener until shutdown, restarting it after a failure so a port freed elsewhere needs no
+// restart. The first failure is an error; its repeats are logged quietly.
+static async Task RunListenerAsync(Func<CancellationToken, Task> run, Func<Exception, string> failed,
+    TimeSpan retry, CancellationToken ct)
+{
+    for (bool first = true; !ct.IsCancellationRequested; first = false)
+    {
+        try
+        {
+            await run(ct);
+            return;
+        }
+        catch (OperationCanceledException) { return; }
+        catch (Exception ex)
+        {
+            if (first) Log.Error(failed(ex));
+            else Log.Debug(failed(ex));
+        }
+        try { await Task.Delay(retry, ct); }
+        catch (OperationCanceledException) { return; }
+    }
+}
+
 static async Task RunCameraGuardedAsync(CameraService service, string tag, CancellationToken ct)
 {
     while (!ct.IsCancellationRequested)

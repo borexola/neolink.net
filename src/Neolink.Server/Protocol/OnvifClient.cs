@@ -991,6 +991,18 @@ public sealed partial class OnvifClient : IDisposable
 
     // ------------------------------------------------------------ WS-Security
 
+    /// <summary>WS-Security's password digest, Base64(SHA1(nonce + created + password)), as the
+    /// client signs with and the ONVIF PTZ endpoint checks.</summary>
+    internal static string PasswordDigest(byte[] nonce, string created, string password)
+    {
+        var toHash = new byte[nonce.Length + Encoding.UTF8.GetByteCount(created) + Encoding.UTF8.GetByteCount(password)];
+        var pos = 0;
+        Buffer.BlockCopy(nonce, 0, toHash, pos, nonce.Length); pos += nonce.Length;
+        pos += Encoding.UTF8.GetBytes(created, 0, created.Length, toHash, pos);
+        Encoding.UTF8.GetBytes(password, 0, password.Length, toHash, pos);
+        return Convert.ToBase64String(SHA1.HashData(toHash));
+    }
+
     /// <summary>The WS-Security UsernameToken header with a password digest:
     /// Base64(SHA1(nonce + created + password)). ONVIF's standard auth.</summary>
     internal static string BuildSecurity(string username, string password, byte[] nonce, DateTime createdUtc,
@@ -1004,12 +1016,7 @@ public sealed partial class OnvifClient : IDisposable
         }
         else
         {
-            var toHash = new byte[nonce.Length + Encoding.UTF8.GetByteCount(created) + Encoding.UTF8.GetByteCount(password)];
-            var pos = 0;
-            Buffer.BlockCopy(nonce, 0, toHash, pos, nonce.Length); pos += nonce.Length;
-            pos += Encoding.UTF8.GetBytes(created, 0, created.Length, toHash, pos);
-            Encoding.UTF8.GetBytes(password, 0, password.Length, toHash, pos);
-            passwordElement = $"<wsse:Password Type=\"{PwDigestType}\">{Convert.ToBase64String(SHA1.HashData(toHash))}</wsse:Password>";
+            passwordElement = $"<wsse:Password Type=\"{PwDigestType}\">{PasswordDigest(nonce, created, password)}</wsse:Password>";
         }
         return
             $"<wsse:Security{(mustUnderstand ? " s:mustUnderstand=\"1\"" : "")} xmlns:wsse=\"{NsWsse}\" xmlns:wsu=\"{NsWsu}\">" +

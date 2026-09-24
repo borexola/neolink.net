@@ -1794,6 +1794,46 @@
                                     <div class="notice small">
                                         @((MarkupString)T["<b>UID</b> is only needed for battery/UDP-only models (Argus family) — with <b>Connect over UDP</b> set, it can replace the address entirely (the camera is then found by broadcast on the local network). <b>Always on</b> auto is right for almost everyone."])
                                     </div>
+
+                                    @* Neolink answering ONVIF for Frigate: the opposite direction to the ONVIF address above. *@
+                                    <div class="campanel-divider"></div>
+                                    <div class="campanel-subtitle">@T["EXTERNAL CONNECTION"]</div>
+                                    <div class="control-row"><span>@T["PTZ for Frigate (ONVIF)"]</span>
+                                        <select class="event-filter" value="@e.PtzMode"
+                                                @onchange='ev => { e.PtzMode = (string?)ev.Value ?? "off"; e.PtzOff = null; }'>
+                                            <option value="off">@T["Off (default)"]</option>
+                                            @if (_adminPtz is { SharedPort: 0 })
+                                            {
+                                                <option value="shared" disabled>@T["Shared port — off in the config (ptz_port is 0)"]</option>
+                                            }
+                                            else
+                                            {
+                                                <option value="shared">@T.F("Shared port {0} — Frigate 0.18+ (recommended)", _adminPtz?.SharedPort ?? 8656)</option>
+                                            }
+                                            <option value="own">@T["Own port — Frigate 0.17 and older"]</option>
+                                        </select></div>
+                                    @if (e.PtzMode == "own")
+                                    {
+                                        <div class="control-row"><span>@T["Own PTZ port"]</span>
+                                            <input class="ret-input @(CamPtzError != null ? "input-error" : "")" type="number" min="1" max="65535"
+                                                   placeholder="8657" @bind="e.PtzPort" @bind:event="oninput" @bind:after="() => e.PtzOff = null" /></div>
+                                    }
+                                    @if (CamPtzError != null)
+                                    {
+                                        <div class="field-error">@CamPtzError</div>
+                                    }
+                                    else if (e.PtzOff != null)
+                                    {
+                                        <div class="field-warn">@T.F("Off when the server last loaded it: {0}", e.PtzOff)</div>
+                                    }
+                                    else if (e.PtzMode != "off")
+                                    {
+                                        <div class="notice small">@T["In Frigate's config for this camera:"]
+                                            <code style="display:block; white-space:pre; margin-top:4px">@PtzFrigateSnippet(e)</code></div>
+                                    }
+                                    <div class="notice small">
+                                        @((MarkupString)T["Here Neolink <b>answers</b> ONVIF, so Frigate can pan, tilt and zoom this camera and use its presets with its own controls. It is not the <b>ONVIF address</b> above, which is where Neolink reads the camera. Video stays on RTSP. <b>Shared port</b> serves every camera on one port, told apart by Frigate's <b>onvif.profile</b> (Frigate 0.18+); <b>Own port</b> is for older Frigate."])
+                                    </div>
                                 }
                                 else
                                 {
@@ -5006,7 +5046,34 @@
         public bool UdpProbe;
         public bool WakeCapture;
         public double KeepAliveHours;
+        // PTZ for Frigate over ONVIF: "off" | "shared" | "own" (with PtzPort).
+        public string PtzMode = "off";
+        public int? PtzPort;
+        /// <summary>Why the server turned it off at its last load; cleared once the fields change.</summary>
+        public string? PtzOff;
     }
+
+    private ApiAdminPtz? _adminPtz;
+
+    /// <summary>The Frigate onvif section for this camera, as the endpoint will expect it.</summary>
+    private string PtzFrigateSnippet(CamEdit e)
+    {
+        var host = _adminPtz?.Loopback == true ? "127.0.0.1" : new Uri(Nav.BaseUri).Host;
+        var port = e.PtzMode == "own" ? e.PtzPort ?? 0 : _adminPtz?.SharedPort ?? 8656;
+        bool open = CamPtzOpen(e);
+        return "onvif:\n" +
+               $"  host: {host}\n" +
+               $"  port: {port}\n" +
+               (open ? "" : "  user: <an RTSP user permitted on this camera>\n  password: <its password>\n") +
+               // Quoted: a name like "Front: Door" or "2024" would otherwise be broken or misread YAML.
+               (e.PtzMode == "shared" ? $"  profile: \"{e.Name.Trim().Replace("\\", "\\\\").Replace("\"", "\\\"")}\"\n" : "");
+    }
+
+    /// <summary>No login applies to the camera: saved, as the server reported it; new, when no RTSP users exist.</summary>
+    private bool CamPtzOpen(CamEdit e) =>
+        _adminCams?.FirstOrDefault(c => string.Equals(c.Name, e.OriginalName, StringComparison.OrdinalIgnoreCase)) is { } saved
+            ? saved.PtzOpen
+            : _adminPtz is { Users: false };
 
     private async Task OpenCamerasTabAsync()
     {
@@ -5029,6 +5096,7 @@
             var payload = await res.Content.ReadFromJsonAsync<ApiAdminCameras>();
             _adminCams = payload?.Cameras ?? new();
             _adminCamsWritable = payload?.Writable ?? false;
+            _adminPtz = payload?.Ptz;
         }
         catch (Exception ex)
         {
@@ -5070,6 +5138,9 @@
             UdpProbe = cam.UdpProbe,
             WakeCapture = cam.WakeCapture,
             KeepAliveHours = cam.KeepAliveHours,
+            PtzMode = cam.PtzMode ?? "off",
+            PtzPort = cam.PtzPort,
+            PtzOff = cam.PtzOff,
         };
     }
 
@@ -5150,8 +5221,36 @@
             ? "The UDP options need the camera's UID (Reolink app → device info, or the sticker)."
             : null;
 
+    /// <summary>PTZ for Frigate: the port checks and the login rule the server applies on save.</summary>
+    private string? CamPtzError
+    {
+        get
+        {
+            if (_camEdit is not { Type: "reolink" } e || e.PtzMode == "off") return null;
+            var p = _adminPtz;
+            if (p != null && CamPtzOpen(e) && !p.Loopback)
+                return "With no RTSP users there is no login, so anyone could move this camera: add users to the config " +
+                       "(Frigate signs in as one), or set ptz_bind to 127.0.0.1 when Frigate runs on this host.";
+            if (e.PtzMode == "shared")
+                return p == null ? null
+                    : p.SharedPort == 0 ? "The shared PTZ port is off in the config (ptz_port is 0): choose Own port, or set ptz_port."
+                    : p.SharedPort == p.RtspPort || p.SharedPort == p.WebPort
+                        ? $"The shared PTZ port {p.SharedPort} clashes with the RTSP or web port: set ptz_port in the config to a free one."
+                    : null;
+            if (e.PtzPort is not (>= 1 and <= 65535)) return "Enter a port from 1 to 65535.";
+            if (p != null && e.PtzPort == p.RtspPort) return "That is the RTSP port.";
+            if (p != null && e.PtzPort == p.WebPort) return "That is the web UI's port.";
+            if (p != null && e.PtzPort == p.SharedPort)
+                return "That is the shared PTZ port: choose Shared port instead, or another port.";
+            return _adminCams?.FirstOrDefault(c => !string.Equals(c.Name, e.OriginalName, StringComparison.OrdinalIgnoreCase)
+                                                   && c.PtzMode == "own" && c.PtzPort == e.PtzPort) is { } other
+                ? $"Camera \"{other.Name}\" already uses port {e.PtzPort}."
+                : null;
+        }
+    }
+
     private string? CamFormError =>
-        CamNameError ?? CamAddressError ?? CamUsernameError ?? CamRtspError ?? CamUidError;
+        CamNameError ?? CamAddressError ?? CamUsernameError ?? CamRtspError ?? CamUidError ?? CamPtzError;
 
     /// <summary>The test has nothing to dial only when there is neither an address
     /// nor a UID-over-UDP to find the camera by. A UDP camera with a UID is testable
@@ -5189,6 +5288,8 @@
         udpProbe = forSave && e.Type == "reolink" ? e.UdpProbe : (bool?)null,
         wakeCapture = forSave && e.Type == "reolink" ? e.WakeCapture : (bool?)null,
         keepAliveHours = forSave && e.Type == "reolink" ? e.KeepAliveHours : (double?)null,
+        ptzMode = forSave && e.Type == "reolink" ? e.PtzMode : null,
+        ptzPort = forSave && e.Type == "reolink" && e.PtzMode == "own" ? e.PtzPort : null,
         record = forSave ? e.Record : (bool?)null,
     };
 

@@ -53,8 +53,8 @@ RUN test -d /usr/share/zoneinfo/America
 COPY --from=mwader/static-ffmpeg:7.1@sha256:a8090df5f5608daef387e1b2e93b98aaacb4d92153ad904e7d715c725724fca4 \
     /ffmpeg /usr/local/bin/ffmpeg
 
-# 8654 = RTSP, 8655 = web UI + HTTP/WebSocket API
-EXPOSE 8654 8655
+# 8654 = RTSP, 8655 = web UI + HTTP/WebSocket API, 8656 = ONVIF PTZ for Frigate (opt-in, ptz_share)
+EXPOSE 8654 8655 8656
 VOLUME /config
 
 # Don't advertise the default ASP.NET port; the app binds from its config file.

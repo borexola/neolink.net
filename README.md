@@ -360,6 +360,8 @@ the original Rust neolink are also accepted.
 | `web_port` | `8655` | Web UI + HTTP/WS API port; `0` disables both |
 | `webui` | `true` | Serve the browser UI on `web_port`; `false` = API only |
 | `web_bind` | = `bind` | Separate bind address for the web port |
+| `ptz_port` | `8656` | Shared ONVIF PTZ port for Frigate ([PTZ buttons in Frigate](#ptz-buttons-in-frigate)); `0` = off |
+| `ptz_bind` | = `bind` | Bind address for the PTZ ports |
 | `users` | *(none)* | **RTSP** Basic-auth users: `{ "name", "pass" }`. Omit for open access. Separate from web-UI accounts! |
 | `recording` | *(none)* | Event recording (see below). Omit to disable |
 | `mqtt` | *(none)* | MQTT / Home Assistant integration (see below). Omit to disable |
@@ -453,6 +455,8 @@ warnings with fill-date forecasts, and AES-256-GCM footage encryption.
 | `stream` | `both` | `mainStream`, `subStream`, `externStream`, `both`, or `all` |
 | `channel_id` | `0` | Channel when connecting through a Reolink NVR (0-based) |
 | `permitted_users` | all users | Restrict this camera's mounts to specific `users` |
+| `ptz_share` | `false` | Offer this camera's PTZ to Frigate on the shared port ([PTZ buttons in Frigate](#ptz-buttons-in-frigate)) |
+| `ptz_port` | *(none)* | Give this camera's PTZ its own port instead (Frigate 0.17 and older) |
 | `record` | `true` | Initial default for this camera's "Detection events" switch (changeable in the web UI) |
 | `max_encryption` | `fullaes` | **Diagnostic.** Caps the encryption the login advertises: `none`, `bcencrypt`, `aes`, `fullaes`. Only for firmware that will not answer the default — see [troubleshooting](docs/troubleshooting.md) |
 | `legacy_login` | `false` | **Diagnostic.** Opens the login with the older credential framing instead of the header-only one. Pairs with `max_encryption` — see [troubleshooting](docs/troubleshooting.md) |
@@ -751,6 +755,33 @@ Neolink.NET keeps exactly one connection per camera stream regardless of how man
 Frigate roles/consumers attach, and hands stalled ffmpeg processes a hard disconnect
 within 10 s so Frigate's watchdog recovers quickly. For headless Frigate boxes set
 `"webui": false` (or `"web_port": 0`).
+
+### PTZ buttons in Frigate
+
+Frigate drives PTZ only over ONVIF, which many Reolink models lack. Neolink.NET
+can answer it for them: pan/tilt, the camera's presets, and zoom on zoom lenses.
+Turn it on per camera under **Cameras → Edit → External connection**, which also
+shows the Frigate config to paste.
+
+- **Shared port** (Frigate 0.18+): `"ptz_share": true`. Each such camera is a
+  profile on `ptz_port` (8656), named after the camera, which Frigate's
+  `onvif.profile` picks.
+- **Own port** (older Frigate): `"ptz_port": 8657` on the camera.
+
+```yaml
+onvif:
+  host: <neolink-host>
+  port: 8656
+  user: <RTSP user permitted on the camera>
+  password: <its password>
+  profile: office
+```
+
+- Frigate signs in as an RTSP user. With no users, PTZ only listens on a
+  loopback `ptz_bind`.
+- Presets need the camera's HTTP API. Zoom is untested on a real zoom camera.
+  Click-to-move and autotracking aren't offered.
+- Video stays on RTSP. In Docker, publish the PTZ port or use host networking.
 
 ## Battery cameras (Argus etc.) — BETA
 
