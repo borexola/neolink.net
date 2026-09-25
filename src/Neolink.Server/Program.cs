@@ -272,7 +272,8 @@ var users = config.Users.ToDictionary(u => u.Name, u => u.Pass);
 if (users.Count > 0)
     Log.Warn("RTSP is unencrypted: usernames and passwords are exchanged in plaintext.");
 
-var server = new RtspServer(users);
+var viewers = new ViewerRegistry();
+var server = new RtspServer(users) { Viewers = viewers };
 var tasks = new List<Task>();
 var webCameras = new List<WebCameraInfo>();
 // Router wake hints (wake_hints.syslog_port) route to each camera's wake-probe
@@ -1118,6 +1119,7 @@ if (config.WebPort > 0)
         Demo = demoMode,
         Updates = updates,
         Monitor = monitor,
+        Viewers = viewers,
         RecordingHealth = recordingHealth,
         Notifier = notifier,
         Ai = aiStore,

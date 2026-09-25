@@ -438,6 +438,9 @@ public sealed record ApiCamAvail(string Cam, bool On, double Pct, long Obs,
 public sealed record ApiSystemStats(ApiSystemInfo? Info, List<ApiSystemSample> Samples,
     List<ApiCamAvail>? Avail = null);
 
+/// <summary>GET /api/system/viewers (admin) — one live viewer; Via is "RTSP" or "Web", Since is unix ms.</summary>
+public sealed record ApiViewer(string Camera, string Stream, string Via, string? From, string? User, long Since);
+
 /// <summary>GET /api/recordings/{camera}/{date} — one continuous-recording segment.
 /// Seconds = media length (0 from servers that predate it); the timeline sizes
 /// coverage with it so a cut-short segment doesn't claim minutes it lacks.</summary>

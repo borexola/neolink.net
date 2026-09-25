@@ -4641,6 +4641,9 @@ body.tl-colresizing, body.tl-colresizing * { cursor: col-resize !important; user
     align-content: stretch;
 }
 
+/* No camera picked: the hint sits centered where the monitors go. */
+.tl-grid > .notice { margin: auto; text-align: center; }
+
 .tl-tile {
     position: relative;
     background: #000;

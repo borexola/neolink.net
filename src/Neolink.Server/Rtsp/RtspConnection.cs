@@ -32,6 +32,14 @@ public sealed class RtspConnection
     private int _readLen;
     private int _readPos;
 
+    /// <summary>The user the last authorized request proved, or null (no login, or none needed).</summary>
+    internal string? User { get; private set; }
+
+    /// <summary>The client's IP, with IPv4-mapped addresses folded back to IPv4.</summary>
+    internal string? RemoteAddress => Web.LoginGuard.ClientAddress((_remote as IPEndPoint)?.Address, null);
+
+    internal RtspServer Server => _server;
+
     public RtspConnection(TcpClient client, RtspServer server)
     {
         _client = client;
@@ -230,8 +238,12 @@ public sealed class RtspConnection
 
     private async Task<bool> CheckAuthAsync(RtspRequest req, RtspMount mount, CancellationToken ct)
     {
-        if (_server.Authorize(mount, req.Header("Authorization")))
+        var header = req.Header("Authorization");
+        if (_server.Authorize(mount, header))
+        {
+            User = _server.VerifiedUser(header);
             return true;
+        }
         await RespondAsync(req, 401, "Unauthorized", "WWW-Authenticate: Basic realm=\"neolink\"", ct: ct).ConfigureAwait(false);
         return false;
     }
@@ -689,11 +701,15 @@ internal sealed class RtspSession
     private Task? _pumpTask;
     private BackchannelReceiver? _backchannel;
 
+    /// <summary>The user the session's SETUP proved; fixed for the session's life.</summary>
+    internal string? User { get; }
+
     public RtspSession(RtspConnection conn, RtspMount mount, bool opus)
     {
         _conn = conn;
         _mount = mount;
         _opus = opus;
+        User = conn.User;
     }
 
     public void SetTrack(int trackId, TrackTransport transport)
@@ -740,7 +756,8 @@ internal sealed class RtspSession
     private async Task PumpAsync(CancellationToken ct)
     {
         var hub = _mount.Hub;
-        var (subId, reader) = hub.Subscribe(viewer: true);
+        var watch = _conn.Server.Viewers.Add(hub, "RTSP", _conn.RemoteAddress, User);
+        var reader = watch.Reader;
         long lastIndex = -1;
         bool waitKeyframe = true; // always start on a keyframe
         // Owned by THIS pump, reused per frame: each send is awaited before the
@@ -813,7 +830,7 @@ internal sealed class RtspSession
         finally
         {
             if (_opus) hub.ReleaseOpus();
-            hub.Unsubscribe(subId);
+            watch.Dispose();
             Log.Info($"{hub.Name}: client stopped streaming (session {Id})");
         }
     }

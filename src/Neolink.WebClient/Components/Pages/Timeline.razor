@@ -412,12 +412,6 @@
             </div>
         }
 
-        @if (included.Count == 0)
-        {
-            <div class="notice">@T["Select cameras above to load their footage — colored marks on the lanes are events."]</div>
-        }
-        else
-        {
         @* The board's height is the user's: the divider under it (over it, in the
            studio layout) drags, and the tracks share out whatever it is given. *@
         <div class="tl-board" id="tl-board" style="@BoardStyle()">
@@ -509,6 +503,11 @@
                             }
                         </div>
                     }
+                    @if (included.Count == 0)
+                    {
+                        @* No camera yet: a blank track keeps the board at its one-camera height. *@
+                        <div class="tl-lane"></div>
+                    }
                     @if (InView(_t, _t))
                     {
                         <div class="tl-cursor" style="left:@Pct(_t)">
@@ -537,6 +536,10 @@
            studio layout, clicking a tile promotes it to the program monitor (the
            rest become a thumbnail rail); clicking it again restores the grid. *@
         <div class="tl-grid @(FocusActive ? "tl-focused" : "")" style="@GridStyle()">
+            @if (included.Count == 0)
+            {
+                <div class="notice">@T["Select cameras above to load their footage — colored marks on the lanes are events."]</div>
+            }
             @foreach (var cam in Included)
             {
                 bool focused = FocusActive && IsFocus(cam.Name);
@@ -597,7 +600,6 @@
                 </div>
             }
         </div>
-        }
     }
 </div>
 
@@ -916,16 +918,17 @@
             await JS.InvokeVoidAsync("neolink.focusEl", "tl-clock-edit");
         }
 
-        // The lane strip only exists while cameras are selected; (re)hook the
-        // scrub + zoom/hover + divider handlers whenever it (re)appears.
-        if (Included.Any() && !_scrubInit)
+        // The board shows, cameras or not, unless an error or no-recording notice
+        // replaces it; (re)hook the scrub + zoom/hover + divider handlers whenever it (re)appears.
+        bool board = _error == null && _supported;
+        if (board && !_scrubInit)
         {
             _scrubInit = true;
             await JS.InvokeVoidAsync("neolink.tlScrubInit", "tl-scrub", _selfRef);
             await JS.InvokeVoidAsync("neolink.tlZoomInit", "tl-scrub", _selfRef);
             await JS.InvokeVoidAsync("neolink.tlResizeInit", "tl-resizer", "tl-board", _selfRef);
         }
-        else if (!Included.Any() && _scrubInit)
+        else if (!board && _scrubInit)
         {
             _scrubInit = false;
             await JS.InvokeVoidAsync("neolink.tlScrubDispose", "tl-scrub");

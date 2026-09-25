@@ -14,6 +14,7 @@ in the README). Paste the matching section below into the GitHub release.
 - **Stills for cameras without a snapshot command**, from the camera's ONVIF snapshot or a frame of its video (needs ffmpeg). Reolink snapshots are unchanged.
 - ONVIF requests are stamped in the camera's own clock, and the login is offered over HTTP authentication as well as WS-Security.
 - **PTZ in Frigate for Reolink cameras without ONVIF** (pan/tilt, the camera's presets and zoom), switched on per camera under **External connection** in the camera editor: one shared port with a profile per camera (Frigate 0.18+), or a port of the camera's own for older Frigate. Frigate signs in as one of the RTSP users (thanks to @mzspicoli for the prototype).
+- **See who is watching:** on the Monitor page, the admin can click the Viewers card to list each live viewer's camera and stream, RTSP or web, address, user and how long they've been watching.
 
 ### Changed
 
@@ -29,6 +30,7 @@ in the README). Paste the matching section below into the GitHub release.
 - **An RTSP camera's live view no longer fails for good** when its first parameter set was bad (for example as its RTSP service starts): the video size now follows each new SPS, including after a resolution change.
 - **Generic RTSP cameras recover on their own.** A camera that stops sending video, or never answers, is reconnected after 20 s instead of freezing until a restart, and a drop after a healthy stream retries at once instead of after the longest backoff.
 - **More RTSP cameras stream correctly**, handling the connection quirks go2rtc (the engine Frigate uses) handles: cameras that pick their own interleaved channel, send LF-only replies, redirect, lack GET_PARAMETER, or send parameter sets and large frames unusually. A frame with a lost packet is dropped rather than shown damaged.
+- **The timeline panel no longer collapses when no camera is selected.** It keeps its height and stays empty until you pick one.
 
 ## 1.0.9
 

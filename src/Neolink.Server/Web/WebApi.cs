@@ -127,6 +127,8 @@ public sealed class WebApiOptions
     public UpdateChecker? Updates { get; init; }
     /// <summary>Process/disk resource sampler feeding the UI's monitor page.</summary>
     public SystemMonitor? Monitor { get; init; }
+    /// <summary>Live viewers (RTSP and web), listed for admins on the monitor page.</summary>
+    public ViewerRegistry Viewers { get; init; } = new();
     /// <summary>Recent recording write-failure tracker — surfaced in /api/features
     /// so the dashboard's browser alerts can fire on it.</summary>
     public Neolink.Recording.RecordingHealth? RecordingHealth { get; init; }
@@ -4065,6 +4067,19 @@ public static class WebApi
             }));
         }
 
+        // Who is watching what: addresses and user names, so admin only.
+        app.MapGet("/api/system/viewers", (HttpContext ctx) => IsAdmin(ctx)
+            ? Results.Json(o.Viewers.Snapshot().Select(v => new
+            {
+                camera = v.Camera,
+                stream = v.Stream,
+                via = v.Via,
+                from = v.From,
+                user = v.User,
+                since = new DateTimeOffset(v.SinceUtc).ToUnixTimeMilliseconds(),
+            }))
+            : Results.Json(new { error = "admin only" }, statusCode: 403));
+
         if (o.Logs is { } logBuffer)
         {
             // Live server log tail over WebSocket: the backlog as one JSON array,
@@ -4117,10 +4132,12 @@ public static class WebApi
                 ctx.Response.StatusCode = 404;
                 return;
             }
+            var from = LoginGuard.ClientAddress(ctx.Connection.RemoteIpAddress, ctx.Request.Headers["X-Forwarded-For"]);
+            var user = SessionName(ctx);
             using var ws = await ctx.WebSockets.AcceptWebSocketAsync();
             try
             {
-                await StreamToWebSocketAsync(ws, hub, ct).ConfigureAwait(false);
+                await StreamToWebSocketAsync(ws, hub, ct, o.Viewers, from, user).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -4423,7 +4440,8 @@ public static class WebApi
     /// Protocol: one JSON text message (mime/codec/size), then binary messages:
     /// first the init segment, then one moof+mdat fragment per video frame.
     /// </summary>
-    private static async Task StreamToWebSocketAsync(WebSocket ws, IStreamHub hub, CancellationToken appCt)
+    private static async Task StreamToWebSocketAsync(WebSocket ws, IStreamHub hub, CancellationToken appCt,
+        ViewerRegistry viewers, string? from, string? user)
     {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(appCt);
         var ct = cts.Token;
@@ -4482,7 +4500,8 @@ public static class WebApi
             audio?.AudioSpecificConfig, audio?.SampleRate ?? 0, audio?.Channels ?? 0);
         await ws.SendAsync(init, WebSocketMessageType.Binary, true, ct).ConfigureAwait(false);
 
-        var (subId, reader) = hub.Subscribe(viewer: true);
+        var watch = viewers.Add(hub, "Web", from, user);
+        var reader = watch.Reader;
         try
         {
             // Cameras deliver video in buffers that may hold anything from a single frame
@@ -4593,7 +4612,7 @@ public static class WebApi
         catch (OperationCanceledException) { }
         finally
         {
-            hub.Unsubscribe(subId);
+            watch.Dispose();
             cts.Cancel();
             await TryCloseAsync(ws, WebSocketCloseStatus.NormalClosure, "bye");
             try { await receiveTask.ConfigureAwait(false); } catch { }

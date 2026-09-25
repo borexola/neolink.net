@@ -35,8 +35,12 @@ internal static class NetUtil
     /// users apply to the camera, else a permitted user with the right password.</summary>
     public static bool Permits(IReadOnlyDictionary<string, string> users, IReadOnlySet<string>? permitted,
         string? user, string? pass) =>
-        Allows(users, permitted, user != null && pass != null && users.TryGetValue(user, out var expected)
-                                 && FixedTimeEquals(expected, pass) ? user : null);
+        Allows(users, permitted, Verified(users, user, pass));
+
+    /// <summary>The configured user a login names, when its password is right; null otherwise.</summary>
+    public static string? Verified(IReadOnlyDictionary<string, string> users, string? user, string? pass) =>
+        user != null && pass != null && users.TryGetValue(user, out var expected) && FixedTimeEquals(expected, pass)
+            ? user : null;
 
     /// <summary><see cref="Permits"/> for a user whose password is already verified (null = no login).</summary>
     public static bool Allows(IReadOnlyDictionary<string, string> users, IReadOnlySet<string>? permitted,

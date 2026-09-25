@@ -2644,6 +2644,121 @@ public static class SelfTest
             serverCts.Cancel();
         });
 
+        Test("viewer list: registry splits hub names, counts on the hub and removes once", () =>
+        {
+            var viewers = new Streaming.ViewerRegistry();
+            AssertEq(Streaming.ViewerRegistry.Split("front door mainStream"), ("front door", "mainStream"));
+            AssertEq(Streaming.ViewerRegistry.Split("cam"), ("cam", ""));
+            var hubA = new Streaming.StreamHub("a mainStream");
+            var first = viewers.Add(hubA, "RTSP", "10.0.0.2", null);
+            var second = viewers.Add(new Streaming.StreamHub("b subStream"), "Web", "10.0.0.3", "bob");
+            AssertEq(hubA.ViewerCount, 1);
+            AssertEq(string.Join(",", viewers.Snapshot().Select(v => v.Camera)), "a,b");
+            first.Dispose();
+            first.Dispose();
+            AssertEq(hubA.ViewerCount, 0);
+            var left = viewers.Snapshot().Single();
+            Assert(left is { Camera: "b", Stream: "subStream", Via: "Web", From: "10.0.0.3", User: "bob" },
+                "the other viewer stays, fields intact");
+            second.Dispose();
+            AssertEq(viewers.Snapshot().Count, 0);
+        });
+
+        Test("viewer list: RTSP sessions list while playing, naming only a verified user", () =>
+        {
+            var viewers = new Streaming.ViewerRegistry();
+            var server = new Rtsp.RtspServer(new Dictionary<string, string> { ["alice"] = "pw" }) { Viewers = viewers };
+            server.AddMount(new Rtsp.RtspMount
+            {
+                Path = "/door", Hub = new Streaming.StreamHub("front door mainStream"),
+                PermittedUsers = new HashSet<string> { "alice" },
+            });
+            server.AddMount(new Rtsp.RtspMount { Path = "/yard", Hub = new Streaming.StreamHub("yard subStream") });
+            int port = FreeTcpPort();
+            using var serverCts = new CancellationTokenSource();
+            _ = Task.Run(() => server.RunAsync("127.0.0.1", port, serverCts.Token));
+
+            System.Net.Sockets.TcpClient Connect()
+            {
+                for (int attempt = 0; ; attempt++)
+                {
+                    var tcp = new System.Net.Sockets.TcpClient(System.Net.Sockets.AddressFamily.InterNetwork);
+                    try
+                    {
+                        tcp.Connect(System.Net.IPAddress.Loopback, port);
+                        tcp.GetStream().ReadTimeout = 5000;
+                        return tcp;
+                    }
+                    catch (System.Net.Sockets.SocketException) when (attempt < 50)
+                    {
+                        tcp.Dispose();
+                        Thread.Sleep(100);
+                    }
+                }
+            }
+
+            // SETUP (+ PLAY when allowed) one video track; returns the SETUP status.
+            int Play(System.Net.Sockets.TcpClient tcp, string path, string? user, string? pass)
+            {
+                var ns = tcp.GetStream();
+                string auth = user == null ? "" :
+                    $"Authorization: Basic {Convert.ToBase64String(Encoding.UTF8.GetBytes($"{user}:{pass}"))}\r\n";
+                string Send(string req)
+                {
+                    var b = Encoding.ASCII.GetBytes(req);
+                    ns.Write(b, 0, b.Length);
+                    var head = new List<byte>();
+                    while (head.Count < 4 || !(head[^4] == 13 && head[^3] == 10 && head[^2] == 13 && head[^1] == 10))
+                    {
+                        int c = ns.ReadByte();
+                        if (c < 0) break;
+                        head.Add((byte)c);
+                    }
+                    return Encoding.ASCII.GetString(head.ToArray());
+                }
+                string uri = $"rtsp://127.0.0.1:{port}{path}";
+                var setup = Send($"SETUP {uri}/trackID=0 RTSP/1.0\r\nCSeq: 1\r\n{auth}" +
+                                 "Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n\r\n");
+                int code = int.Parse(setup.Split(' ')[1]);
+                if (code != 200) return code;
+                var session = setup.Split("\r\n").First(l => l.StartsWith("Session:"))[8..].Split(';')[0].Trim();
+                var play = Send($"PLAY {uri} RTSP/1.0\r\nCSeq: 2\r\n{auth}Session: {session}\r\n\r\n");
+                AssertEq(int.Parse(play.Split(' ')[1]), 200);
+                return code;
+            }
+
+            bool WaitFor(Func<IReadOnlyList<Streaming.ViewerRegistry.Viewer>, bool> ok)
+            {
+                var deadline = DateTime.UtcNow.AddSeconds(5);
+                while (!ok(viewers.Snapshot()))
+                {
+                    if (DateTime.UtcNow > deadline) return false;
+                    Thread.Sleep(20);
+                }
+                return true;
+            }
+
+            using (var refused = Connect())
+                AssertEq(Play(refused, "/door", "alice", "wrong"), 401);
+            AssertEq(viewers.Snapshot().Count, 0);
+
+            var alice = Connect();
+            AssertEq(Play(alice, "/door", "alice", "pw"), 200);
+            Assert(WaitFor(v => v.Count == 1), "a playing session is listed");
+            Assert(viewers.Snapshot()[0] is { Camera: "front door", Stream: "mainStream", Via: "RTSP",
+                   From: "127.0.0.1", User: "alice" }, "with its camera, stream, address and user");
+
+            // An open mount lets a wrong login play, but never shows its name.
+            using var guest = Connect();
+            AssertEq(Play(guest, "/yard", "alice", "wrong"), 200);
+            Assert(WaitFor(v => v.Count == 2), "the second session is listed");
+            Assert(viewers.Snapshot().Single(v => v.Camera == "yard").User == null, "an unverified login stays anonymous");
+
+            alice.Dispose();
+            Assert(WaitFor(v => v.Count == 1 && v[0].Camera == "yard"), "a closed connection leaves the list");
+            serverCts.Cancel();
+        });
+
         Test("camera availability tracking", () =>
         {
             var av = new Web.CameraAvailability();
@@ -8997,6 +9112,7 @@ public static class SelfTest
                 var cam = new Web.WebCameraInfo("apicam",
                     new List<Web.WebStreamInfo> { new("mainStream", "/apicam/mainStream", hub) },
                     new StubCameraControl("apicam"), PermittedUsers: null);
+                var viewers = new Streaming.ViewerRegistry();
                 // A second, snapshot-capable camera: exercises /snapshot.jpg (the
                 // stub above answers null = "no snapshot support").
                 var snapControl = new SnapStub("snapcam");
@@ -9025,6 +9141,7 @@ public static class SelfTest
                     Version = "0.0.0-selftest",
                     ConfigPath = Path.Combine(dir, "config.json"),
                     RestartRequested = () => { },
+                    Viewers = viewers,
                 }, cts.Token);
 
                 using var http = new HttpClient
@@ -9447,6 +9564,33 @@ public static class SelfTest
                 AssertEq(one.GetProperty("camera").GetString()!, "apicam");
                 Assert(!one.GetProperty("hasClip").GetBoolean(), "staged event has no clip");
                 AssertEq((int)http.GetAsync($"/api/events/nope{tokenQ}").Result.StatusCode, 404);
+
+                // The viewer list: a web stream registers as its signed-in user,
+                // and only the admin may read the list.
+                hub.PublishVideo(new VideoFrame(VideoCodec.H264, true, 0, null,
+                    new byte[] { 0, 0, 0, 1, 0x67, 0x42, 0xE0, 0x1F, 0xA0, 0, 0, 1, 0x68, 0xCE, 0x38, 0x80, 0, 0, 0, 1, 0x65, 5, 5, 5 }));
+                hub.PublishAdpcm(new AdpcmFrame(new byte[] { 0, 0, 0, 0 }));
+                using (var ws = new System.Net.WebSockets.ClientWebSocket())
+                {
+                    ws.ConnectAsync(new Uri($"ws://127.0.0.1:{port}/api/stream?path=/apicam/mainStream&token={Uri.EscapeDataString(token)}"),
+                        CancellationToken.None).Wait(TimeSpan.FromSeconds(10));
+                    var buf = new byte[4096];
+                    ws.ReceiveAsync(buf, CancellationToken.None).Wait(TimeSpan.FromSeconds(10)); // the init message
+                    var deadline2 = DateTime.UtcNow.AddSeconds(5);
+                    while (viewers.Snapshot().Count == 0 && DateTime.UtcNow < deadline2) Thread.Sleep(20);
+                    var listedViewers = GetJson(http, $"/api/system/viewers{tokenQ}");
+                    AssertEq(listedViewers.GetArrayLength(), 1);
+                    var w = listedViewers[0];
+                    Assert(w.GetProperty("camera").GetString() == "apicam" && w.GetProperty("via").GetString() == "Web" && w.GetProperty("from").GetString() == "127.0.0.1"
+                           && w.GetProperty("user").GetString() == "admin" && w.GetProperty("since").GetInt64() > 0,
+                        $"the web viewer is listed with its camera, address and user: {w}");
+                    AssertEq((int)http.GetAsync($"/api/system/viewers?token={Uri.EscapeDataString(viewerTok)}").Result.StatusCode, 403);
+                    ws.CloseAsync(System.Net.WebSockets.WebSocketCloseStatus.NormalClosure, "", CancellationToken.None)
+                        .Wait(TimeSpan.FromSeconds(5));
+                }
+                var gone = DateTime.UtcNow.AddSeconds(5);
+                while (viewers.Snapshot().Count > 0 && DateTime.UtcNow < gone) Thread.Sleep(20);
+                AssertEq(viewers.Snapshot().Count, 0);
             }
             finally
             {
