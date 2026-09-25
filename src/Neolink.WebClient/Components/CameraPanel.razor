@@ -183,8 +183,12 @@
                 </button>
                 @* Live view of the camera's own service ports (msg 37) — always
                    read from the camera when opened, never a stored value.
-                   ADMIN ONLY: the table is the camera's network surface. *@
-                @if (IsAdmin)
+                   ADMIN ONLY: the table is the camera's network surface. Baichuan
+                   only: there is no ONVIF equivalent, so it drops away once the
+                   probe says the camera is not a Reolink. Offered from the start
+                   until then, exactly as it always was — holding it back would
+                   delay it for every Reolink admin to tidy one case away. *@
+                @if (IsAdmin && !OnvifOnly)
                 {
                     <button class="settings-tab @(_camTab == "ports" ? "active" : "")" role="tab"
                             @onclick="OpenPortsTabAsync">@UiIcon.Render("lan", 13) @T["Ports"]</button>
@@ -351,10 +355,15 @@
                         </div>
                     </div>
                 }
+                @* ONVIF reports rate ranges, not tables, and has no http_address to point at. *@
                 <div class="notice small">
-                    @(canSetStream
-                        ? T["Read from the camera; the highlighted resolution is live and the menus show its full framerate/bitrate tables. Changes stage — nothing is sent until you apply below."]
-                        : T["Read from the camera; the highlighted profile is live. To change profiles from here, set the camera's 'http_address' in the server config."])
+                    @(OnvifOnly
+                        ? canSetStream
+                            ? T["Read from the camera; the highlighted resolution is live and the menus offer common rates within the range the camera reports. Changes stage — nothing is sent until you apply below."]
+                            : T["Read from the camera; the highlighted profile is live."]
+                        : canSetStream
+                            ? T["Read from the camera; the highlighted resolution is live and the menus show its full framerate/bitrate tables. Changes stage — nothing is sent until you apply below."]
+                            : T["Read from the camera; the highlighted profile is live. To change profiles from here, set the camera's 'http_address' in the server config."])
                 </div>
             </div>
         }
@@ -649,13 +658,19 @@
             var posOptions = osd.PosOptions ?? new List<string>();
             <div class="campanel-section">
                 <div class="campanel-section-title">@UiIcon.Render("logs", 13) @T["ON-SCREEN DISPLAY"]</div>
-                <div class="control-row">
-                    <span>@T["Camera name overlay"] @PendingMark(_pendingOsdName?.ToString())</span>
-                    <button class="chip @((_pendingOsdName ?? osd.ShowName) ? "" : "chip-off") @(_pendingOsdName != null ? "chip-pending" : "")"
-                            disabled="@_applying" @onclick="StageOsdNameToggle">
-                        @((_pendingOsdName ?? osd.ShowName) ? T["on"] : T["off"])
-                    </button>
-                </div>
+                @* ONVIF can move an overlay but has no way to switch one off — an
+                   overlay either exists on the camera or it does not. Offering a
+                   switch that always fails is worse than not offering one. *@
+                @if (!OnvifOnly)
+                {
+                    <div class="control-row">
+                        <span>@T["Camera name overlay"] @PendingMark(_pendingOsdName?.ToString())</span>
+                        <button class="chip @((_pendingOsdName ?? osd.ShowName) ? "" : "chip-off") @(_pendingOsdName != null ? "chip-pending" : "")"
+                                disabled="@_applying" @onclick="StageOsdNameToggle">
+                            @((_pendingOsdName ?? osd.ShowName) ? T["on"] : T["off"])
+                        </button>
+                    </div>
+                }
                 @if ((_pendingOsdName ?? osd.ShowName) && posOptions.Count > 0)
                 {
                     <div class="control-row">
@@ -670,13 +685,16 @@
                         </select>
                     </div>
                 }
-                <div class="control-row">
-                    <span>@T["Timestamp overlay"] @PendingMark(_pendingOsdTime?.ToString())</span>
-                    <button class="chip @((_pendingOsdTime ?? osd.ShowTime) ? "" : "chip-off") @(_pendingOsdTime != null ? "chip-pending" : "")"
-                            disabled="@_applying" @onclick="StageOsdTimeToggle">
-                        @((_pendingOsdTime ?? osd.ShowTime) ? T["on"] : T["off"])
-                    </button>
-                </div>
+                @if (!OnvifOnly)
+                {
+                    <div class="control-row">
+                        <span>@T["Timestamp overlay"] @PendingMark(_pendingOsdTime?.ToString())</span>
+                        <button class="chip @((_pendingOsdTime ?? osd.ShowTime) ? "" : "chip-off") @(_pendingOsdTime != null ? "chip-pending" : "")"
+                                disabled="@_applying" @onclick="StageOsdTimeToggle">
+                            @((_pendingOsdTime ?? osd.ShowTime) ? T["on"] : T["off"])
+                        </button>
+                    </div>
+                }
                 @if ((_pendingOsdTime ?? osd.ShowTime) && posOptions.Count > 0)
                 {
                     <div class="control-row">
@@ -701,7 +719,38 @@
                         </button>
                     </div>
                 }
-                <div class="notice small">@T["Burned into the video by the camera itself — it shows in live view and every recording, here and elsewhere."]</div>
+                <div class="notice small">
+                    @T["Burned into the video by the camera itself — it shows in live view and every recording, here and elsewhere."]
+                    @if (OnvifOnly)
+                    {
+                        <text> </text>@T["Over ONVIF the overlays can be moved but not switched off — use the camera's own web page for that."]
+                    }
+                </div>
+            </div>
+        }
+        @* Every camera has a zone, so when there are no sensitivity sliders for it
+           to sit under — a generic RTSP camera, or a Baichuan one with no HTTP API
+           — it gets a section of its own rather than disappearing. It sits at the
+           end of this column, where the zone row sits on a Reolink; on a camera
+           with nothing else to show it is simply the only card here.
+           Only where the zone can actually be edited: an ONVIF camera, or one the server
+           knows keeps none. A Reolink whose HTTP API is down keeps its zone in the sensitivity row. *@
+        @if (!HasSensitivitySection && (OnvifOnly || _caps.Features?.LocalZone == true))
+        {
+            <div class="campanel-section">
+                <div class="campanel-section-title">@UiIcon.Render("bolt", 13) @T["DETECTION ZONE"]</div>
+                <div class="control-row">
+                    <span>@T["Detection zone"]</span>
+                    <button class="chip" @onclick="OpenZoneAsync">@T["Edit zone…"]</button>
+                </div>
+                @* Deliberately says nothing about WHERE the zone is kept: this card
+                   is rendered off the absence of sensitivity sliders, which is not
+                   the same question, and a Reolink that reports no sensitivities
+                   still holds its own zone. Only the editor has asked the camera,
+                   so only the editor answers that. *@
+                <div class="notice small">
+                    @T["Mark the parts of the picture worth watching. The editor shows what this zone covers and where it is kept."]
+                </div>
             </div>
         }
         </div> @* /campanel-col (left) *@
@@ -782,7 +831,7 @@
             </div>
         }
 
-        @if (_http?.MdSensitivity != null || _http?.AiSensitivities is { Count: > 0 })
+        @if (HasSensitivitySection)
         {
             <div class="campanel-section">
                 <div class="campanel-section-title">@UiIcon.Render("bolt", 13) @T["DETECTION SENSITIVITY"]</div>
@@ -1345,11 +1394,36 @@
                                         @onclick='() => SetZoneModeAsync("watch")'>@UiIcon.Render("eye", 12) @T["Watch"]</button>
                             </div>
                             <canvas class="zone-canvas" @key="_zoneType" @ref="_zoneCanvas"></canvas>
+                            @* A zone Neolink keeps is not the camera's zone, and the
+                               difference decides what the user is actually buying:
+                               the camera goes on alerting exactly as before. Say so
+                               where the grid is drawn, not in a tooltip. *@
+                            @if (_zone.StoredOnServer)
+                            {
+                                <div class="notice small zone-local">
+                                    <b>@T["This zone is stored on Neolink, not on the camera."]</b>
+                                    <text> </text>@T["Neolink cannot edit a detection zone on this camera itself, so the grid is kept here. It limits the live object boxes Neolink draws over this camera. The camera's own motion and AI alerts, and the events recorded from them, are not changed by it, and nothing is written to the camera."]
+                                </div>
+                            }
                             <div class="notice small">
-                                @T["Drag a box to mark an area — in Block mode the camera ignores it (no motion or AI alarms fire there), in Watch mode it watches it again. Build any shape from a few boxes; the grid overlays the camera's latest snapshot."]
-                                @if (_zone.IsGlobal)
+                                @if (_zone.StoredOnServer)
                                 {
-                                    <text> </text>@T["This camera keeps one zone for every detection type, so it governs motion, person, vehicle and the rest alike."]
+                                    @T["Drag a box to mark an area — in Block mode no object boxes are drawn there, in Watch mode they are again. Build any shape from a few boxes; the grid overlays the camera's latest picture."]
+                                }
+                                else if (OnvifOnly)
+                                {
+                                    @* The camera's ONVIF cell motion grid: it decides where MOTION
+                                       counts, and nothing else — its other analytics rules keep
+                                       their own areas, so the Reolink wording would overclaim. *@
+                                    @T["Drag a box to mark an area — in Block mode the camera's motion detection ignores it, in Watch mode it watches it again. Build any shape from a few boxes; the grid overlays the camera's latest picture. This is the camera's own motion grid: it governs its motion alarms, while any other analytics rules it runs (line crossing, intrusion and so on) keep their own areas."]
+                                }
+                                else
+                                {
+                                    @T["Drag a box to mark an area — in Block mode the camera ignores it (no motion or AI alarms fire there), in Watch mode it watches it again. Build any shape from a few boxes; the grid overlays the camera's latest snapshot."]
+                                    @if (_zone.IsGlobal)
+                                    {
+                                        <text> </text>@T["This camera keeps one zone for every detection type, so it governs motion, person, vehicle and the rest alike."]
+                                    }
                                 }
                             </div>
                         }
@@ -1367,7 +1441,8 @@
                         @if (_zone != null)
                         {
                             <button class="chip chip-active" disabled="@_zoneSaving" @onclick="SaveZoneAsync">
-                                @(_zoneSaving ? T["Applying…"] : T["Apply to camera"])
+                                @(_zoneSaving ? T["Applying…"]
+                                    : _zone.StoredOnServer ? T["Save to Neolink"] : T["Apply to camera"])
                             </button>
                         }
                     </div>
@@ -1437,6 +1512,10 @@
     [Parameter] public bool IsAdmin { get; set; }
     [Parameter] public EventCallback OnClose { get; set; }
 
+    /// <summary>Raised with the camera name after a zone reaches the camera: anything
+    /// drawing against that zone (the live object boxes) is now holding a stale one.</summary>
+    [Parameter] public EventCallback<string> OnZoneSaved { get; set; }
+
     private ApiCapabilities? _caps;
     private ApiRecordingSettings? _recording;
     private List<ApiEncodeProfile>? _profiles;
@@ -1454,21 +1533,29 @@
     /// <summary>Panel tab: "controls" (device) or "recording" (server-side).</summary>
     private string _camTab = "controls";
 
-    /// <summary>Whether the Camera settings tab has anything to show — false for
-    /// generic RTSP cameras (no Baichuan/HTTP control surface at all).</summary>
-    // Suspend moved to the panel header (always visible), so it no longer makes
-    // the Camera-settings tab exist on its own.
-    private bool HasDeviceControls =>
-        _profiles is { Count: > 0 } || _http != null
-        || _caps?.Features is { } f && (f.Battery || f.Ptz || f.Zoom || f.Led || f.Siren
-            || f.Privacy || f.Pir || f.Reboot);
+    /// <summary>Every setting on this camera came over ONVIF (a non-Reolink camera).
+    /// The standard covers less than Reolink's own API, so some controls are left
+    /// out rather than offered and refused.</summary>
+    private bool OnvifOnly => _caps?.Features?.Onvif == true;
+
+    /// <summary>Whether the camera reports detection thresholds to tune. When it
+    /// doesn't, the detection zone stands on its own instead of riding along under
+    /// sliders that aren't there.</summary>
+    private bool HasSensitivitySection =>
+        _http?.MdSensitivity != null || _http?.AiSensitivities is { Count: > 0 };
 
     /// <summary>Whether to offer the Camera settings tab. It is present from the
     /// start — including during the capability probe, when it carries a spinner and
     /// its body explains the wait — so it can be opened immediately. Once the probe
-    /// lands it stays only if the camera really has controls.</summary>
-    private bool ShowControlsTab =>
-        _probing || (_caps is { Online: true } && (HasDeviceControls || _recording == null));
+    /// lands it stays for any camera that is ONLINE, because every camera now has at
+    /// least a detection zone to edit.
+    ///
+    /// The online requirement is load-bearing: everything in this tab is read from
+    /// the device, and a camera that cannot be reached has nothing to show but
+    /// controls that can only fail. (For a Baichuan camera this is exactly the old
+    /// condition — its Reboot feature made the old HasDeviceControls test true
+    /// whenever it was online — so nothing changed for Reolink.)</summary>
+    private bool ShowControlsTab => _probing || _caps is { Online: true };
     private bool _loading;
     /// <summary>Phase 2 in flight: the camera is being queried for its capabilities
     /// and control state. The server-side recording settings already render; this
@@ -1637,7 +1724,7 @@
     private sealed record PendingStream(ApiEncodeProfile Table, uint Fps, uint Kbps);
 
     private readonly Dictionary<string, PendingStream> _pendingStreams = new(StringComparer.Ordinal);
-    private List<ApiStreamEnc>? _encCurrent; // the camera's CURRENT selections (null without http_address)
+    private List<ApiStreamEnc>? _encCurrent; // the camera's CURRENT selections (null when it can't report them)
     private string? _pendingIr;          // "auto" | "open" | "close"
     private string? _pendingStatusLed;   // "open" | "close"
     private bool? _pendingPir;
@@ -1984,10 +2071,30 @@
         catch { }
         if (table == null || _zone == null) return;
         _zoneSaving = true;
-        if (await PostAsync("detectionzone", new { type = _zoneType, table }))
+        // Cols/Rows ride along for a zone Neolink keeps: the grid on screen is the
+        // one being saved, and re-deriving its shape server-side would reject the
+        // first save of a camera whose stream became ready while the editor was open.
+        // A zone on the camera takes its dimensions from the camera and ignores them.
+        // Storage says where the editor believed the zone lived: if that has changed
+        // since it opened, the server saves it nowhere rather than somewhere else.
+        if (await PostAsync("detectionzone",
+                new { type = _zoneType, table, cols = _zone.Cols, rows = _zone.Rows, storage = _zone.Storage }))
         {
-            _zone = _zone with { Table = table };
-            ShowToast(T["Zone saved to the camera."]);
+            _zone = _zone with { Table = table, Storage = _lastPostStorage ?? _zone.Storage };
+            // Where it went is what the SERVER did, not what the dialog assumed when
+            // it opened — those can differ if the camera answered differently since.
+            ShowToast(_lastPostStorage == "neolink" ? T["Zone saved to Neolink."]
+                : _lastPostStorage == "camera" ? T["Zone saved to the camera."]
+                : _zone.StoredOnServer ? T["Zone saved to Neolink."] : T["Zone saved to the camera."]);
+            await OnZoneSaved.InvokeAsync(CameraName);
+        }
+        else if (_lastPostStatus == 409)
+        {
+            // The grid on screen belongs to where the zone USED to live (a camera
+            // that answered for the first time while this was open, say). Reload
+            // it as it now stands, and say why the drawing went.
+            await SwitchZoneAsync(_zoneType);
+            ShowToast(T["Where this zone is kept changed while the editor was open, so it has been reloaded. Draw your changes again and save."], error: true);
         }
         _zoneSaving = false;
     }
@@ -2388,7 +2495,8 @@
             // The HTTP-API extras (beta): one combined read; 404/null just hides them.
             // Also fetched for ONVIF-only cameras (no http_address) — the sweep then
             // returns just the picture settings ONVIF can provide.
-            if (_caps.Features?.StreamSettings == true || _caps.Features?.Imaging == true)
+            if (_caps.Features?.StreamSettings == true || _caps.Features?.Imaging == true
+                || _caps.Features?.Onvif == true)
             {
                 _http = await GetAsync<ApiHttpFeatures?>("httpfeatures");
                 _quickReplyId = _http?.QuickReplies?.FirstOrDefault()?.Id ?? 0;
@@ -2398,11 +2506,15 @@
         }
         _loading = false;
         _probing = false;
-        // The tab was offered during the probe; if the answer is "this camera has
-        // no controls" (generic RTSP) it now disappears — don't strand the reader
-        // on a tab that no longer exists. Ports rides the same visibility.
+        // The tab was offered during the probe; a camera that never answered it at
+        // all has no tab to return to — don't strand the reader there.
         if (_camTab is "controls" or "ports" && !ShowControlsTab && _recording != null)
             _camTab = "recording";
+        // Ports was offered during the probe too, and drops away once the camera
+        // turns out to be non-Reolink (it has no service table). Someone who clicked
+        // it in the meantime must not be left on a tab whose button has gone.
+        else if (_camTab == "ports" && OnvifOnly)
+            _camTab = "controls";
     }
 
     private Task CloseAsync() => OnClose.InvokeAsync();
@@ -2619,20 +2731,7 @@
     private bool IsActiveProfile(ApiEncodeProfile p) =>
         Camera?.Streams.Any(s => s.Kind == p.Type && s.Width == p.Width && s.Height == p.Height) == true;
 
-    private static string TypeIcon(string label) => label switch
-    {
-        "person" => "🧍",
-        "vehicle" => "🚗",
-        "animal" => "🐾",
-        "package" => "📦",
-        "doorbell" => "🔔",
-        "crying" => "😢",
-        "line-crossing" => "🚧",
-        "intrusion" => "🚷",
-        "loitering" => "🕒",
-        "motion" => "👁",
-        _ => "•",
-    };
+    private static MarkupString TypeIcon(string label) => UiIcon.Render(UiIcon.ForLabel(label), 12);
 
     // Live probe results win; the server's cached signals (in the phase-1
     // /recording payload) fill in until then — so the chip list renders already
@@ -3000,9 +3099,31 @@
         }
     }
 
+    /// <summary>The "storage" a successful POST reported, when it reported one —
+    /// the zone save is the only caller that cares. Read from the response rather
+    /// than assumed, so the toast says what actually happened.</summary>
+    private string? _lastPostStorage;
+    /// <summary>The HTTP status of the last POST that failed (0 when it never got
+    /// an answer), for the one caller that treats a status differently.</summary>
+    private int _lastPostStatus;
+
+    private static async Task<string?> ReadStorageAsync(HttpResponseMessage res)
+    {
+        try
+        {
+            var doc = await res.Content.ReadFromJsonAsync<JsonElement>();
+            return doc.ValueKind == JsonValueKind.Object
+                   && doc.TryGetProperty("storage", out var s) && s.ValueKind == JsonValueKind.String
+                ? s.GetString() : null;
+        }
+        catch { return null; }
+    }
+
     private async Task<bool> PostAsync(string path, object body, CancellationToken ct = default)
     {
         _toast = null;
+        _lastPostStorage = null;
+        _lastPostStatus = 0;
         try
         {
             var req = NewRequest(HttpMethod.Post, path);
@@ -3013,8 +3134,10 @@
             if (res.IsSuccessStatusCode)
             {
                 _error = null;
+                _lastPostStorage = await ReadStorageAsync(res);
                 return true;
             }
+            _lastPostStatus = (int)res.StatusCode;
             ShowToast(res.StatusCode == System.Net.HttpStatusCode.Unauthorized
                 ? T["Not authorized — set your credentials under server settings (⚙)."]
                 : await ReadErrorAsync(res) ?? T.F("Request failed ({0})", (int)res.StatusCode), error: true);

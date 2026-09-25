@@ -110,6 +110,35 @@ The rules, designed so nothing you set ever gets lost:
 - If you hand-edit `config.json` with `//` comments, the add-on stops merging
   entirely and runs the file exactly as you wrote it.
 
+## Wake hints for battery cameras (experimental)
+
+Wake hints tell Neolink the moment a sleeping battery camera fires a real
+event, so it connects right away instead of guessing from the camera's
+background wakes. The recipes are in the project's
+[battery camera guide](https://github.com/borexola/neolink.net/blob/main/docs/battery-cameras.md);
+under the add-on, the difference is which ports reach it.
+
+- **HTTP hints work as they are.** `POST /api/cameras/{name}/wake-hint`
+  runs on 8655, so a Home Assistant automation (an external PIR sensor, say)
+  can send hints with no extra ports.
+- **Router hints need a port switched on.** The syslog listener (UDP 5140)
+  and the push decoy (TCP 8443) are off by default. To use one:
+  1. In this add-on's **Network** section, type a host port next to
+     `5140/udp` or `8443/tcp`, and restart the add-on.
+  2. In Neolink's web UI (Server settings → General → Wake hints), set the
+     matching source: syslog port **5140**, or push ports **8443**. These
+     are the ports *inside* the add-on — keep them as they are even if you
+     picked a different host port in step 1.
+  3. Point the router at the Home Assistant host's IP and the **host** port
+     from step 1.
+- Use the NAT-redirect recipe for the push decoy. The DNS-override recipe
+  needs the camera to reach the host directly on 443 (and optionally 53),
+  ports a Home Assistant box often has in use, so the add-on does not map them.
+- The **Hint trust window** in the same settings section works with any of
+  these sources.
+- The beta add-on publishes no ports at all (it installs alongside the
+  stable one), so only HTTP hints reach it.
+
 ## Troubleshooting
 
 - **"Restart service" in the web UI stops the add-on and it stays down** —

@@ -13,6 +13,7 @@ services:
     ports:
       - "8654:8654"   # RTSP (TCP-interleaved works for ffmpeg/Frigate/VLC)
       - "8655:8655"   # web UI + API; remove if webui:false and API unused
+      # - "8656:8656" # ONVIF PTZ for Frigate, when a camera shares it (ptz_share)
     volumes:
       # Config directory (not a single file): config.json lives here, and the web
       # UI's runtime settings (settings.json) are persisted next to it.

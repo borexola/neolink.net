@@ -37,6 +37,9 @@ public sealed class RtspServer
         _users = users;
     }
 
+    /// <summary>Where playing sessions subscribe and register for the Monitor page's viewer list.</summary>
+    public ViewerRegistry Viewers { get; init; } = new();
+
     public void AddMount(RtspMount mount)
     {
         _mounts[Normalize(mount.Path)] = mount;
@@ -55,19 +58,14 @@ public sealed class RtspServer
     }
 
     /// <summary>Checks Basic authorization for a mount. Returns true if access is allowed.</summary>
-    public bool Authorize(RtspMount mount, string? authorizationHeader)
+    public bool Authorize(RtspMount mount, string? authorizationHeader) =>
+        NetUtil.Allows(_users, mount.PermittedUsers, VerifiedUser(authorizationHeader));
+
+    /// <summary>The configured user a Basic Authorization header proves, or null.</summary>
+    public string? VerifiedUser(string? authorizationHeader)
     {
-        if (mount.PermittedUsers == null || _users.Count == 0)
-            return true;
-
         var creds = NetUtil.DecodeBasicAuth(authorizationHeader);
-        if (creds == null)
-            return false;
-        var (user, pass) = creds.Value;
-
-        return _users.TryGetValue(user, out var expected)
-            && NetUtil.FixedTimeEquals(expected, pass)
-            && mount.PermittedUsers.Contains(user);
+        return NetUtil.Verified(_users, creds?.User, creds?.Pass);
     }
 
     public async Task RunAsync(string bindAddr, int port, CancellationToken ct)

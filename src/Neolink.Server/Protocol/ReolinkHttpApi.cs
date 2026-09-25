@@ -10,7 +10,15 @@ namespace Neolink.Protocol;
 /// <summary>The camera's HTTP API rejected a command or sent a reply we cannot use.</summary>
 public sealed class ReolinkApiException : Exception
 {
-    public ReolinkApiException(string message) : base(message) { }
+    public ReolinkApiException(string message, int rspCode = 0) : base(message) => RspCode = rspCode;
+
+    /// <summary>The camera's own rspCode when it processed the command and REFUSED it;
+    /// 0 when the reply never got that far (an HTTP error, malformed JSON, a failed login).</summary>
+    public int RspCode { get; }
+
+    /// <summary>Whether the firmware turned the command down for good: not supported (-9), unknown
+    /// command (-24) or no such ability (-26). Busy, receive-failed and other codes may pass.</summary>
+    public bool RejectedByCamera => RspCode is -9 or -24 or -26;
 }
 
 /// <summary>
@@ -349,20 +357,30 @@ public sealed class ReolinkHttpApi : IDisposable
     /// which dialect came back so the write goes out the same way.</summary>
     public async Task<(JsonObject Cfg, bool IsMdAlarm)> GetMdConfigAsync(CancellationToken ct)
     {
+        var (cfg, isMdAlarm, _) = await ReadMdConfigAsync(ct).ConfigureAwait(false);
+        return (cfg, isMdAlarm);
+    }
+
+    /// <summary><see cref="GetMdConfigAsync"/>, plus whether the dialect is settled: false when
+    /// GetMdAlarm failed in a way that may pass and the legacy object stood in for it.</summary>
+    public async Task<(JsonObject Cfg, bool IsMdAlarm, bool Settled)> ReadMdConfigAsync(CancellationToken ct)
+    {
+        bool settled = true;
         try
         {
             var value = await ExecAsync("GetMdAlarm", new JsonObject { ["channel"] = _channelId }, ct).ConfigureAwait(false);
-            if (value?["MdAlarm"] is JsonObject md) return (md, true);
+            if (value?["MdAlarm"] is JsonObject md) return (md, true, true);
         }
-        catch (ReolinkApiException)
+        catch (ReolinkApiException ex)
         {
-            // Old firmware: "not support"/"not exist" — fall through to GetAlarm.
+            // Old firmware: "not support"/"not exist" — fall through to GetAlarm, as on any refusal.
+            settled = ex.RejectedByCamera;
         }
         var alarm = await ExecAsync("GetAlarm",
             new JsonObject { ["Alarm"] = new JsonObject { ["channel"] = _channelId, ["type"] = "md" } },
             ct).ConfigureAwait(false);
         return (alarm?["Alarm"] as JsonObject
-            ?? throw new ReolinkApiException("GetAlarm reply carries no Alarm settings"), false);
+            ?? throw new ReolinkApiException("GetAlarm reply carries no Alarm settings"), false, settled);
     }
 
     /// <summary>The LEGACY motion config (GetAlarm type "md") specifically, or null
@@ -370,18 +388,28 @@ public sealed class ReolinkHttpApi : IDisposable
     /// Doorbell line) answer GetMdAlarm for sensitivity but keep the ZONE grid —
     /// one grid, shared by every detection type — only in this object, so the
     /// zone reader needs the legacy shape even when the new dialect exists.</summary>
-    public async Task<JsonObject?> TryGetLegacyMdConfigAsync(CancellationToken ct)
+    public async Task<JsonObject?> TryGetLegacyMdConfigAsync(CancellationToken ct) =>
+        (await ReadLegacyMdConfigAsync(ct).ConfigureAwait(false)).Alarm;
+
+    /// <summary>The legacy Alarm object, and whether the firmware REFUSED the command
+    /// outright. The two nulls mean different things to anyone deciding something
+    /// lasting: a refusal is this firmware's permanent answer ("no such command"),
+    /// while a transport failure is not an answer at all. Transport errors propagate,
+    /// exactly as they do from <see cref="TryGetLegacyMdConfigAsync"/>.</summary>
+    public async Task<(JsonObject? Alarm, bool Rejected)> ReadLegacyMdConfigAsync(CancellationToken ct)
     {
         try
         {
             var alarm = await ExecAsync("GetAlarm",
                 new JsonObject { ["Alarm"] = new JsonObject { ["channel"] = _channelId, ["type"] = "md" } },
                 ct).ConfigureAwait(false);
-            return alarm?["Alarm"] as JsonObject;
+            return (alarm?["Alarm"] as JsonObject, false);
         }
-        catch (ReolinkApiException)
+        catch (ReolinkApiException ex)
         {
-            return null;
+            // Rejected only when the firmware itself said so: the caller treats a rejection
+            // as lasting, so an HTTP error or a garbled reply reads as "no answer" instead.
+            return (null, ex.RejectedByCamera);
         }
     }
 
@@ -582,7 +610,8 @@ public sealed class ReolinkHttpApi : IDisposable
                     continue;
                 }
                 throw new ReolinkApiException(
-                    $"camera HTTP API rejected {cmd}: {reply.Detail ?? "unknown error"} (rspCode {reply.RspCode})");
+                    $"camera HTTP API rejected {cmd}: {reply.Detail ?? "unknown error"} (rspCode {reply.RspCode})",
+                    reply.RspCode == 0 ? -1 : reply.RspCode);
             }
         }
         finally

@@ -33,8 +33,29 @@ public sealed class CameraStateStore
         /// <summary>Whether the capability probe last saw a doorbell. Null = never probed.</summary>
         public bool? Doorbell { get; set; }
 
+        /// <summary>Detection zones Neolink keeps on the camera's behalf, keyed by
+        /// detection type ("md"). Only cameras that cannot store a zone THEMSELVES
+        /// have entries here — a generic RTSP camera, or a Baichuan one whose
+        /// firmware carries no grid. See <see cref="StoredZone"/>.</summary>
+        public Dictionary<string, StoredZone>? Zones { get; set; }
+
         [System.Text.Json.Serialization.JsonIgnore]
-        public bool IsDefault => !Suspended && AiTypes == null && Doorbell == null;
+        public bool IsDefault => !Suspended && AiTypes == null && Doorbell == null
+                                 && Zones is not { Count: > 0 };
+    }
+
+    /// <summary>One locally-kept detection zone: Table is Cols*Rows characters, row
+    /// by row from the top-left, '1' = watched and '0' = ignored — the same shape a
+    /// camera reports, so everything downstream reads it identically.</summary>
+    public sealed class StoredZone
+    {
+        public int Cols { get; set; }
+        public int Rows { get; set; }
+        public string Table { get; set; } = "";
+
+        [System.Text.Json.Serialization.JsonIgnore]
+        public bool IsWellFormed => Cols > 0 && Rows > 0 && Table is { } t && (long)t.Length == (long)Cols * Rows
+                                    && t.All(ch => ch is '0' or '1');
     }
 
     public CameraStateStore(string stateDir)
@@ -52,7 +73,26 @@ public sealed class CameraStateStore
                 var parsed = JsonSerializer.Deserialize<Dictionary<string, CameraState>>(
                     File.ReadAllText(path), Json);
                 if (parsed != null)
-                    return new Dictionary<string, CameraState>(parsed, StringComparer.OrdinalIgnoreCase);
+                {
+                    // Detection-type keys are matched the same way camera names are:
+                    // the JSON deserializer builds the nested maps case-sensitively,
+                    // and a hand-edited "MD" must still find its grid. Tolerant of a hand-edited
+                    // file throughout, because the alternative is resetting every camera's state.
+                    var state = new Dictionary<string, CameraState>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var (name, s) in parsed)
+                    {
+                        if (s == null || state.ContainsKey(name)) continue;
+                        if (s.Zones != null)
+                        {
+                            var zones = new Dictionary<string, StoredZone>(StringComparer.OrdinalIgnoreCase);
+                            foreach (var (type, zone) in s.Zones)
+                                if (zone != null && !zones.ContainsKey(type)) zones[type] = zone;
+                            s.Zones = zones;
+                        }
+                        state[name] = s;
+                    }
+                    return state;
+                }
             }
         }
         catch (Exception ex)
@@ -119,6 +159,99 @@ public sealed class CameraStateStore
                 changed = true;
             }
             if (changed) Save();
+        }
+    }
+
+    /// <summary>The grid to offer a camera that keeps no zone of its own. Cells are
+    /// square-ish over the picture: the rows are fixed and the columns follow the
+    /// stream's aspect, so a 16:9 camera gets 32x18 and a 4:3 one 24x18. An unknown
+    /// shape (nothing streaming yet) assumes 16:9, which almost every camera is.
+    /// The clamp keeps an ultra-wide panorama from producing a grid so fine that
+    /// each cell is a few pixels.</summary>
+    public static (int Cols, int Rows) DefaultZoneGrid(uint width, uint height)
+    {
+        const int rows = 18;
+        if (width == 0 || height == 0) return (32, rows);
+        var cols = (int)Math.Round(rows * (double)width / height);
+        return (Math.Clamp(cols, 12, 48), rows);
+    }
+
+    /// <summary>Whether a zone for <paramref name="type"/> belongs to Neolink rather
+    /// than to the camera. The whole safety of the feature is in this one predicate,
+    /// so it is a pure function of three facts and is pinned by a test.
+    ///
+    /// <paramref name="cameraHoldsZone"/> is <see cref="ICameraControl.CameraHoldsZone"/>:
+    /// only a definite FALSE — the camera provably has no grid — moves a zone here.
+    /// Null ("not asked yet") and true both mean the camera owns it, so a read that
+    /// merely failed can never migrate a Reolink camera's zone onto the server.
+    /// Only the shared "md" grid is ever kept locally, and only on a camera that
+    /// reports no per-type grids of its own.</summary>
+    public static bool ZoneIsLocal(bool? cameraHoldsZone, string type, int zoneTypeCount) =>
+        type == "md" && cameraHoldsZone == false && zoneTypeCount == 1;
+
+    /// <summary>The zone Neolink keeps for this camera and type, or null when it
+    /// keeps none. A stored grid whose shape no longer adds up is treated as absent
+    /// — a hand-edited file must not put a scrambled grid on screen.</summary>
+    public StoredZone? Zone(string camera, string type)
+    {
+        lock (_gate)
+        {
+            if (_state.TryGetValue(camera, out var s) && s.Zones != null
+                && s.Zones.TryGetValue(type, out var z) && z.IsWellFormed)
+                return new StoredZone { Cols = z.Cols, Rows = z.Rows, Table = z.Table };
+            return null;
+        }
+    }
+
+    /// <summary>Stores a zone for a camera that cannot keep one itself. Throws on a
+    /// grid that does not add up, so a malformed table can never reach the file.</summary>
+    public void SetZone(string camera, string type, int cols, int rows, string table)
+    {
+        var zone = new StoredZone { Cols = cols, Rows = rows, Table = table };
+        if (!zone.IsWellFormed)
+            throw new ArgumentException($"table must be {cols}x{rows} = {cols * rows} cells of '0'/'1'");
+        lock (_gate)
+        {
+            if (!_state.TryGetValue(camera, out var s))
+                _state[camera] = s = new CameraState();
+            s.Zones ??= new Dictionary<string, StoredZone>(StringComparer.OrdinalIgnoreCase);
+            s.Zones[type] = zone;
+            Save();
+        }
+    }
+
+    /// <summary>Drops the zones kept for a camera that has been deleted, so a new
+    /// camera given the same name does not inherit a grid drawn for another view.
+    /// Only the zones: every other value is left exactly as it always was.</summary>
+    public void Forget(string camera)
+    {
+        lock (_gate)
+        {
+            if (!_state.TryGetValue(camera, out var s) || s.Zones == null) return;
+            s.Zones = null;
+            if (s.IsDefault) _state.Remove(camera);
+            Save();
+        }
+    }
+
+    /// <summary>Follows a camera that was renamed in the web UI with the zones
+    /// Neolink keeps for it — the grid someone drew is worth keeping. ONLY the
+    /// zones move: the suspend flag and cached capabilities behave exactly as they
+    /// always have on a rename (they stay under the old name), so a rename does
+    /// nothing new to a camera that has no stored zone, which is every Reolink
+    /// that keeps its own.</summary>
+    public void Rename(string from, string to)
+    {
+        if (string.Equals(from, to, StringComparison.OrdinalIgnoreCase)) return;
+        lock (_gate)
+        {
+            if (!_state.TryGetValue(from, out var s) || s.Zones is not { Count: > 0 } zones) return;
+            s.Zones = null;
+            if (s.IsDefault) _state.Remove(from);
+            if (!_state.TryGetValue(to, out var dest))
+                _state[to] = dest = new CameraState();
+            dest.Zones = zones;
+            Save();
         }
     }
 

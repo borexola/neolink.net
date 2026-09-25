@@ -8,6 +8,7 @@
 @inject LocalApiInfo Local
 @inject NavigationManager Nav
 @inject Translator T
+@inject DetectZones DetectZones
 @implements IAsyncDisposable
 
 <div class="shell">
@@ -395,7 +396,7 @@
                                 }
                                 else
                                 {
-                                    <span class="event-thumb-icon">@ev.Icon</span>
+                                    <span class="event-thumb-icon">@UiIcon.Render(ev.IconName, 28)</span>
                                 }
                                 @if (ev.Ongoing)
                                 {
@@ -406,7 +407,7 @@
                             </div>
                             <div class="event-meta">
                                 <span class="event-title">
-                                    @ev.Icon @EventTitle(ev)
+                                    @UiIcon.Render(ev.IconName, 14) @EventTitle(ev)
                                     @if (ev.AiLevel != null)
                                     {
                                         <span class="ai-dot ai-@ev.AiLevel"
@@ -934,6 +935,10 @@
                                         <button class="cam-rail-btn @TalkClass(railCam)" title="@TalkTitle(railCam)"
                                                 @onclick="() => ToggleTalkAsync(railCam)">@UiIcon.Render("mic", 14)</button>
                                     }
+                                    @if (DetectSurface()?.VideoId == $"vid-{index}")
+                                    {
+                                        @BoxesButton
+                                    }
                                     <button class="cam-rail-btn" title="@T["Camera settings & controls"]"
                                             @onclick="() => _panelCamera = railCam">@UiIcon.Render("gear", 14)</button>
                                 </div>
@@ -958,6 +963,7 @@
                      User="@_user" Pass="@_pass" Token="@_authToken"
                      CanEditRecording="@(!_authEnabled || _authAdmin)"
                      IsAdmin="@(!_authEnabled || _authAdmin)"
+                     OnZoneSaved="DetectZones.Forget"
                      OnClose="() => _panelCamera = null" />
     }
 
@@ -1607,6 +1613,16 @@
                             AdminPushPortsError())
                         @AdminField(T["Listener bind (blank = server bind)"], "wakeHints.bind", "text",
                             AdminIpError("wakeHints.bind"))
+                        @AdminField(T["Hint trust window, hours (blank = 2)"], "wakeHints.trustHours", "decimal",
+                            AdminTrustHoursError())
+                        @if (AdminTrustHoursError() == null
+                             && AdminTrustHours() is { } trustH && trustH > 24)
+                        {
+                            <div class="field-warn">
+                                @T.F("While a camera has sent a hint in the last {0} h, its wakes without one are treated as housekeeping and skipped. If the hint source breaks, events can go unrecorded for up to that long before scan-only connects take over again.",
+                                    $"{trustH:0.#}")
+                            </div>
+                        }
                     </div>
 
                     <div class="campanel-section">
@@ -1778,6 +1794,46 @@
                                     <div class="notice small">
                                         @((MarkupString)T["<b>UID</b> is only needed for battery/UDP-only models (Argus family) — with <b>Connect over UDP</b> set, it can replace the address entirely (the camera is then found by broadcast on the local network). <b>Always on</b> auto is right for almost everyone."])
                                     </div>
+
+                                    @* Neolink answering ONVIF for Frigate: the opposite direction to the ONVIF address above. *@
+                                    <div class="campanel-divider"></div>
+                                    <div class="campanel-subtitle">@T["EXTERNAL CONNECTION"]</div>
+                                    <div class="control-row"><span>@T["PTZ for Frigate (ONVIF)"]</span>
+                                        <select class="event-filter" value="@e.PtzMode"
+                                                @onchange='ev => { e.PtzMode = (string?)ev.Value ?? "off"; e.PtzOff = null; }'>
+                                            <option value="off">@T["Off (default)"]</option>
+                                            @if (_adminPtz is { SharedPort: 0 })
+                                            {
+                                                <option value="shared" disabled>@T["Shared port — off in the config (ptz_port is 0)"]</option>
+                                            }
+                                            else
+                                            {
+                                                <option value="shared">@T.F("Shared port {0} — Frigate 0.18+ (recommended)", _adminPtz?.SharedPort ?? 8656)</option>
+                                            }
+                                            <option value="own">@T["Own port — Frigate 0.17 and older"]</option>
+                                        </select></div>
+                                    @if (e.PtzMode == "own")
+                                    {
+                                        <div class="control-row"><span>@T["Own PTZ port"]</span>
+                                            <input class="ret-input @(CamPtzError != null ? "input-error" : "")" type="number" min="1" max="65535"
+                                                   placeholder="8657" @bind="e.PtzPort" @bind:event="oninput" @bind:after="() => e.PtzOff = null" /></div>
+                                    }
+                                    @if (CamPtzError != null)
+                                    {
+                                        <div class="field-error">@CamPtzError</div>
+                                    }
+                                    else if (e.PtzOff != null)
+                                    {
+                                        <div class="field-warn">@T.F("Off when the server last loaded it: {0}", e.PtzOff)</div>
+                                    }
+                                    else if (e.PtzMode != "off")
+                                    {
+                                        <div class="notice small">@T["In Frigate's config for this camera:"]
+                                            <code style="display:block; white-space:pre; margin-top:4px">@PtzFrigateSnippet(e)</code></div>
+                                    }
+                                    <div class="notice small">
+                                        @((MarkupString)T["Here Neolink <b>answers</b> ONVIF, so Frigate can pan, tilt and zoom this camera and use its presets with its own controls. It is not the <b>ONVIF address</b> above, which is where Neolink reads the camera. Video stays on RTSP. <b>Shared port</b> serves every camera on one port, told apart by Frigate's <b>onvif.profile</b> (Frigate 0.18+); <b>Own port</b> is for older Frigate."])
+                                    </div>
                                 }
                                 else
                                 {
@@ -1787,8 +1843,11 @@
                                     <div class="control-row"><span>@T["Sub RTSP URL (optional)"]</span>
                                         <input class="notif-input" placeholder="rtsp://…" @bind="e.RtspSub" @bind:event="oninput" /></div>
                                     @if (CamRtspError != null) { <div class="field-error">@CamRtspError</div> }
+                                    <div class="control-row"><span>@T["ONVIF address (blank = derived)"]</span>
+                                        <input class="notif-input" placeholder="@T["usually blank"]" @bind="e.OnvifAddress" /></div>
                                     <div class="notice small">
                                         @((MarkupString)T["Put credentials inside the URL (rtsp://user:pass@host/path). A stored password shows as <b>****</b> — leave the URL untouched to keep it."])
+                                        <text> </text>@((MarkupString)T["The camera's settings — model, picture, streams, pan/tilt, overlays — are read over <b>ONVIF</b>, found on the stream URL's own host unless you give an address here. Use a full URL (<b>http://user:pass@host:8000/onvif/device_service</b>) if its ONVIF login differs from the streaming one."])
                                     </div>
                                 }
                                 @* Applies to both camera kinds, so it sits outside the branches. *@
@@ -2524,6 +2583,124 @@
                         </div>
                     }
 
+                    @if (_settingsTab == "experimental" && _detect != null)
+                    {
+                        <div class="campanel-section">
+                            <div class="campanel-section-title">
+                                @UiIcon.Render("eye", 13) @T["LIVE OBJECT BOXES"] <span class="preview-tag">@T["PREVIEW"]</span>
+                            </div>
+                            <div class="notice small">
+                                @T["Outlines the people, vehicles and animals in view while you watch one camera. Your cameras report WHAT they detected but never where it was, so the picture is read here in your browser — the server never looks at your video for this, and no frame leaves the device you are watching on."]
+                                <text> </text>@T["Boxes are drawn on a single camera on its own — click a camera to open it full-size. The wall of tiles never draws them: that would mean one detector running per tile."]
+                                <text> </text>@T["It works on every camera, whether or not the camera itself does any detecting, and it is only ever a second opinion: recording, notifications and Home Assistant still follow what the CAMERA reports."]
+                            </div>
+                            <div class="control-row">
+                                <span>@T["Draw boxes"]</span>
+                                <button class="chip @(_detect.Enabled ? "" : "chip-off")" disabled="@_detectBusy"
+                                        title="@T["Turn live object boxes on for this server"]"
+                                        @onclick="() => SaveDetectAsync(d => d.Enabled = !d.Enabled)">
+                                    @(_detect.Enabled ? T["on"] : T["off"])</button>
+                            </div>
+                            @if (_detect.Enabled)
+                            {
+                                @switch (_detect.Assets.State)
+                                {
+                                    case "ready":
+                                        <div class="notice small ok">@T["Ready — open a camera full-size to see the boxes."]</div>
+                                        break;
+                                    case "downloading":
+                                        <div class="notice small">
+                                            @T.F("Fetching the detector — {0}% of {1} MB.", _detect.Assets.Percent,
+                                                 $"{_detect.Assets.Bytes / 1_000_000.0:0}")
+                                        </div>
+                                        break;
+                                    case "failed":
+                                        <div class="notice small error">
+                                            @T.F("The detector could not be downloaded: {0}", _detect.Assets.Error ?? "")
+                                            <button class="chip" disabled="@_detectBusy"
+                                                    @onclick="() => SaveDetectAsync(_ => { })">@T["Try again"]</button>
+                                        </div>
+                                        break;
+                                    default:
+                                        <div class="notice small">
+                                            @T.F("The detector is about {0} MB — the model and the runtime that runs it. It downloads once, to this server, and is then served to your browsers from here, so this keeps working with no internet.",
+                                                 $"{_detect.Assets.Bytes / 1_000_000.0:0}")
+                                        </div>
+                                        break;
+                                }
+                                <div class="campanel-subtitle">@T["WHAT TO OUTLINE"]</div>
+                                @foreach (var group in _detect.KnownGroups)
+                                {
+                                    var key = group;
+                                    bool on = _detect.Groups.Contains(key);
+                                    <div class="control-row">
+                                        <span>@GroupLabel(key)</span>
+                                        <button class="chip @(on ? "" : "chip-off")" disabled="@_detectBusy"
+                                                @onclick="() => SaveDetectAsync(d => ToggleGroup(d, key))">
+                                            @(on ? T["on"] : T["off"])</button>
+                                    </div>
+                                }
+                                <div class="control-row">
+                                    <span>@T["Draw a box when the match is at least"]</span>
+                                    <select class="notif-input" value="@_detect.MinConfidence" disabled="@_detectBusy"
+                                            title="@T["Lower finds more, and is wrong more often; higher only outlines what it is sure of."]"
+                                            @onchange="e => SaveDetectAsync(d => d.MinConfidence = int.TryParse((string?)e.Value, out var v) ? v : d.MinConfidence)">
+                                        @foreach (var pct in new[] { 20, 30, 45, 60, 75 })
+                                        {
+                                            <option value="@pct">@pct%</option>
+                                        }
+                                    </select>
+                                </div>
+                                <div class="control-row">
+                                    <span>@T["Look at the picture"]</span>
+                                    <select class="notif-input" value="@_detect.Fps" disabled="@_detectBusy"
+                                            title="@T["The video always plays at its own frame rate — this is only how often the boxes are worked out, and it is the whole cost of the feature."]"
+                                            @onchange="e => SaveDetectAsync(d => d.Fps = int.TryParse((string?)e.Value, out var v) ? v : d.Fps)">
+                                        @foreach (var fps in new[] { 1, 2, 5, 10 })
+                                        {
+                                            <option value="@fps">@T.F("{0} times a second", fps)</option>
+                                        }
+                                    </select>
+                                </div>
+                                @* The bigger model is a server-wide offer, not an order:
+                                   each browser takes it only if it has a GPU that can
+                                   keep up, and falls back on its own if it cannot. *@
+                                <div class="control-row">
+                                    <span>@T["Recognise more, using a bigger model"]</span>
+                                    <button class="chip @(_detect.Detailed ? "" : "chip-off")" disabled="@_detectBusy"
+                                            title="@T["Better with awkward angles and half-hidden things, at about three times the work. Only browsers with a working GPU use it."]"
+                                            @onclick="() => SaveDetectAsync(d => d.Detailed = !d.Detailed)">
+                                        @(_detect.Detailed ? T["on"] : T["off"])</button>
+                                </div>
+                                @if (_detect.Detailed)
+                                {
+                                    switch (_detect.DetailedAssets.State)
+                                    {
+                                        case "ready":
+                                            break;
+                                        case "downloading":
+                                            <div class="notice small">
+                                                @T.F("Fetching the bigger model — {0}% of {1} MB.", _detect.DetailedAssets.Percent,
+                                                     $"{_detect.DetailedAssets.Bytes / 1_000_000.0:0}")
+                                            </div>
+                                            break;
+                                        case "failed":
+                                            <div class="notice small error">
+                                                @T.F("The bigger model could not be downloaded: {0}", _detect.DetailedAssets.Error ?? "")
+                                            </div>
+                                            break;
+                                        default:
+                                            <div class="notice small">
+                                                @T.F("The bigger model is a further {0} MB, downloaded once to this server. Until it arrives the boxes keep using the small one.",
+                                                     $"{_detect.DetailedAssets.Bytes / 1_000_000.0:0}")
+                                            </div>
+                                            break;
+                                    }
+                                }
+                            }
+                        </div>
+                    }
+
                     @if (_adminConfig != null && _settingsTab is not ("notifications" or "ai" or "experimental" or "connection" or "users" or "alerts" or "language")
                          && !(_settingsTab == "cameras" && _camEdit != null))
                     {
@@ -2582,6 +2759,10 @@
                         @if (_emgStatus != null && _emg != null)
                         {
                             <div class="notice small @(_emgError ? "error" : "ok")">@_emgStatus</div>
+                        }
+                        @if (_detectStatus != null)
+                        {
+                            <div class="notice small error">@_detectStatus</div>
                         }
                     }
                     else if (_settingsTab is "connection" or "users" or "alerts" or "language")
@@ -2695,7 +2876,7 @@
         <div class="event-player" role="dialog" aria-label="@T["Event playback"]">
             <div class="event-player-head">
                 <div class="event-player-title">
-                    <span class="event-title">@_playEvent.Icon @EventTitle(_playEvent)</span>
+                    <span class="event-title">@UiIcon.Render(_playEvent.IconName, 16) @EventTitle(_playEvent)</span>
                     <span class="event-sub">
                         @_playEvent.Camera · @T.DateShort(_playEvent.Start.ToLocalTime()) @_playEvent.Start.ToLocalTime().ToString("HH:mm:ss") ·
                         @if (_playEvent.Ongoing)
@@ -2750,9 +2931,26 @@
                    tiles (wheel at the cursor, drag to pan, HUD, dbl-click 1:1).
                    Keyed per event so zoom resets when navigating between events
                    but survives the HD↔SD swap. *@
-                <div class="event-player-media zoom-on" @key="_playEvent.Id">
+                @* The player's own fullscreen button hands fullscreen to the bare
+                   <video>, which shows its pixels and nothing else — no boxes, no
+                   zoom, no rail. detect.js catches that and hands it to this
+                   container instead, which carries them all; the rail's own button
+                   goes straight there, for browsers that refuse the hand-off. *@
+                <div class="event-player-media zoom-on" id="event-player-media" @key="_playEvent.Id">
                     <video id="event-player-video" controls autoplay playsinline></video>
                     @ZoomHud
+                    <div class="cam-rail" @onclick:stopPropagation="true" @ondblclick:stopPropagation="true">
+                        <div class="cam-rail-pill">
+                            @if (DetectSurface()?.VideoId == "event-player-video")
+                            {
+                                @BoxesButton
+                            }
+                            <button class="cam-rail-btn" title="@T["Browser fullscreen (click again to exit)"]"
+                                    @onclick='() => JS.InvokeVoidAsync("neolink.fullscreen", "event-player-media")'>
+                                <span class="fs-enter">@UiIcon.Render("fs-enter", 14)</span><span class="fs-exit">@UiIcon.Render("fs-exit", 14)</span>
+                            </button>
+                        </div>
+                    </div>
                 </div>
                 <div class="player-speed">
                     <span class="player-group" title="@T["Playback speed"]">
@@ -2811,6 +3009,9 @@
     };
 
     private const string StorageKey = "neolink.view";
+    /// <summary>Shared with the events page: the switch is on the picture in both
+    /// places, and flipping it there must mean the same thing here.</summary>
+    private const string BoxesKey = "neolink.boxes";
 
     private readonly List<ApiCamera> _cameras = new();
     private List<ViewSlot> _slots = new();
@@ -3349,6 +3550,155 @@
         catch { /* emergency mode simply stays unreported this tick */ }
     }
 
+    // ---- live object boxes (preview) ----
+
+    private ApiDetect? _detect;
+    private string? _detectStatus;
+    private bool _detectBusy;
+
+    /// <summary>
+    /// What the browser's detector should be looking at: the video element and the
+    /// camera whose footage it shows, or null for "nothing". One detector at a time,
+    /// and the recorded clip wins — a pop-up over the wall is what the user is
+    /// actually watching, and a second session would cost another model and another
+    /// decoder on a phone that has few of either. Otherwise it is ONE camera watched
+    /// on its own (/cameras/{name}, which is what a maximized tile is); a wall of
+    /// tiles would mean a detector per tile.
+    /// </summary>
+    private (string VideoId, string Camera)? DetectSurface()
+    {
+        if (_detect is not { Enabled: true, Assets.State: "ready" }) return null;
+        if (Locked || string.IsNullOrWhiteSpace(_server)) return null;
+        if (_playEvent is { HasClip: true, Camera: { Length: > 0 } evCam })
+            return ("event-player-video", evCam);
+        if (Camera == null || _maxIndex is not { } max || max >= _slots.Count) return null;
+        return _slots[max].Camera is { } live ? ($"vid-{max}", live) : null;
+    }
+
+    /// <summary>The surface the detector should actually be running on: the one
+    /// that can draw boxes, unless the viewer has switched them off on the picture.
+    /// Off means no detector at all — not a hidden canvas — so it costs nothing.</summary>
+    private (string VideoId, string Camera)? DetectTarget() => _boxes ? DetectSurface() : null;
+
+    /// <summary>Whether the boxes are wanted. A per-device preference, like a
+    /// subtitle track: it follows the browser, not the account.</summary>
+    private bool _boxes = true;
+
+    private async Task ToggleBoxesAsync()
+    {
+        _boxes = !_boxes;
+        try { await JS.InvokeVoidAsync("neolink.lsSet", BoxesKey, _boxes ? "1" : "0"); } catch { }
+    }
+
+    /// <summary>What the detector should be drawing, or null. Withheld until the
+    /// camera's detection zones have been answered for: a box drawn in a part of
+    /// the view the user has told the camera to ignore is a box they did not
+    /// ask for, and one frame of it is one too many.</summary>
+    private object? DetectWire()
+    {
+        if (_detect is not { } d || DetectTarget() is not { } target) return null;
+        if (!DetectZones.Known(target.Camera)) return null;
+        return new
+        {
+            videoId = target.VideoId,
+            camera = target.Camera,
+            @base = $"{_server.TrimEnd('/')}/detect/asset/",
+            minConfidence = d.MinConfidence / 100.0,
+            fps = d.Fps,
+            groups = d.Groups,
+            model = d.ModelFile,
+        };
+    }
+
+    private void KickDetectZones()
+    {
+        if (DetectTarget() is not { } target || DetectZones.Known(target.Camera)) return;
+        _ = InvokeAsync(async () =>
+        {
+            if (await DetectZones.EnsureAsync(target.Camera, Http, ApiBase, _authToken,
+                    _detect?.Groups ?? new List<string>()))
+                StateHasChanged();
+        });
+    }
+
+    private async Task RefreshDetectAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_server)) return;
+        try
+        {
+            using var res = await Http.SendAsync(ApiRequest(HttpMethod.Get, "/api/detect"));
+            if (res.IsSuccessStatusCode)
+                _detect = await res.Content.ReadFromJsonAsync<ApiDetect>();
+        }
+        catch { /* the boxes simply stay off */ }
+    }
+
+    /// <summary>Polled only when the answer can still change: while an admin is
+    /// looking at the tab, and while a download the wall is waiting on is running.</summary>
+    private async Task RefreshDetectIfNeededAsync()
+    {
+        bool watching = _authAdmin && _showServerSettings && _settingsTab == "experimental";
+        bool waiting = _detect is { Enabled: true } d && d.Assets.State != "ready";
+        if (_detect != null && !watching && !waiting) return;
+        await RefreshDetectAsync();
+    }
+
+    private async Task SaveDetectAsync(Action<ApiDetect> change)
+    {
+        if (_detect == null || _detectBusy) return;
+        _detectBusy = true;
+        _detectStatus = null;
+        var next = _detect;
+        change(next);
+        try
+        {
+            var req = ApiRequest(HttpMethod.Put, "/api/admin/detect");
+            req.Content = JsonContent.Create(new
+            {
+                enabled = next.Enabled,
+                minConfidence = next.MinConfidence,
+                fps = next.Fps,
+                groups = next.Groups,
+                detailed = next.Detailed,
+            });
+            using var res = await Http.SendAsync(req);
+            if (res.IsSuccessStatusCode)
+                _detect = await res.Content.ReadFromJsonAsync<ApiDetect>() ?? _detect;
+            else
+                _detectStatus = T.F("Could not save: HTTP {0}", (int)res.StatusCode);
+        }
+        catch (Exception ex)
+        {
+            _detectStatus = T.F("Could not save: {0}", ex.Message);
+        }
+        finally
+        {
+            _detectBusy = false;
+        }
+        // Which zones are worth reading depends on which groups are outlined, so a
+        // changed group list means the answers on hand were for a different question.
+        DetectZones.ForgetAll();
+        // The server answers with the sanitized truth (and the download state that
+        // switching it on just started), so re-read it rather than trusting the edit.
+        await RefreshDetectAsync();
+    }
+
+    private static void ToggleGroup(ApiDetect d, string group)
+    {
+        if (!d.Groups.Remove(group)) d.Groups.Add(group);
+        // Every group off would silently mean "the default set" on the way back in:
+        // keep at least one, so an empty tick list cannot read as three of them.
+        if (d.Groups.Count == 0) d.Groups.Add(group);
+    }
+
+    private string GroupLabel(string group) => group switch
+    {
+        "people" => T["People"],
+        "vehicles" => T["Vehicles (cars, bikes, lorries)"],
+        "animals" => T["Animals"],
+        _ => T["Anything else it knows (bags, bins, furniture)"],
+    };
+
     private ApiEmergency? _emg;
     // The last state the SERVER confirmed, kept as JSON so a failed save can put
     // it back even when the follow-up read fails too: the tab must never show an
@@ -3732,6 +4082,7 @@
             try { _notifPerm = await JS.InvokeAsync<string>("neolink.notifState"); } catch { }
             try { _isShell = await JS.InvokeAsync<bool>("neolink.isShell"); } catch { }
             await LoadAlertPrefsAsync();
+            await RefreshDetectAsync();
             await RefreshCamerasAsync();
             await RefreshEventsAsync();
             ApplyRoute(); // deep links (/cameras/{name}) need the camera list first
@@ -3765,6 +4116,7 @@
     private async Task WireJsAsync()
     {
         _selfRef ??= DotNetObjectReference.Create(this);
+        KickDetectZones();
         bool strip = _eventsSupported && _events.Any(e => !e.Reviewed);
         // The strip's looping previews hand their decoders back while the
         // event player holds the screen.
@@ -3776,6 +4128,9 @@
                 fallback = PlayerFallback, autoplay = true, ongoing = ev.Ongoing,
             }
             : null;
+        // The grids ride along only the first time: they are thousands of characters,
+        // and this payload crosses the circuit on every render.
+        var zones = DetectZones.TakePush(DetectTarget()?.Camera);
         if (!_legacyWire)
         {
             try
@@ -3787,6 +4142,8 @@
                     trickleSpeed = _trickleSpeed,
                     trickleSuspend,
                     player,
+                    detectZones = zones,
+                    detect = DetectWire(),
                 });
                 return;
             }
@@ -3815,6 +4172,8 @@
         if (player != null)
             await JS.InvokeVoidAsync("neolink.eventPlayer", player.id, player.url, player.rate,
                 player.fallback, player.autoplay, player.ongoing);
+        // No detect() here: this path exists for a tab still running the PREVIOUS
+        // script, which has no such function. It gets boxes when it reloads.
     }
 
     private bool _legacyWire;
@@ -3871,6 +4230,8 @@
             _server = "http://" + _server["https://".Length..];
             await SaveAsync();
         }
+
+        try { _boxes = await JS.InvokeAsync<string?>("neolink.lsGet", BoxesKey) != "0"; } catch { }
 
         try { _origin = await JS.InvokeAsync<string>("neolink.defaultServer"); } catch { }
         if (string.IsNullOrWhiteSpace(_server))
@@ -4570,6 +4931,7 @@
         // Cleared with the rest: the tab must not survive into a session that is
         // no longer an admin, and a stale arm prompt must never reopen primed.
         _emg = null; _emgStatus = null; _emgArmConfirm = false; _emgConfig = false; _emgAdvanced = false;
+        _detectStatus = null;
         // Non-admins (and open installs) get the Connection tab; the admin-only
         // tabs and their loads are skipped entirely.
         if (!_authAdmin)
@@ -4607,6 +4969,7 @@
                     ConfirmEmergency(loaded);
         }
         catch { /* emergency tab just stays hidden */ }
+        await RefreshDetectAsync();
         try
         {
             using var sres = await Http.SendAsync(ApiRequest(HttpMethod.Get, "/api/admin/security"));
@@ -4683,7 +5046,34 @@
         public bool UdpProbe;
         public bool WakeCapture;
         public double KeepAliveHours;
+        // PTZ for Frigate over ONVIF: "off" | "shared" | "own" (with PtzPort).
+        public string PtzMode = "off";
+        public int? PtzPort;
+        /// <summary>Why the server turned it off at its last load; cleared once the fields change.</summary>
+        public string? PtzOff;
     }
+
+    private ApiAdminPtz? _adminPtz;
+
+    /// <summary>The Frigate onvif section for this camera, as the endpoint will expect it.</summary>
+    private string PtzFrigateSnippet(CamEdit e)
+    {
+        var host = _adminPtz?.Loopback == true ? "127.0.0.1" : new Uri(Nav.BaseUri).Host;
+        var port = e.PtzMode == "own" ? e.PtzPort ?? 0 : _adminPtz?.SharedPort ?? 8656;
+        bool open = CamPtzOpen(e);
+        return "onvif:\n" +
+               $"  host: {host}\n" +
+               $"  port: {port}\n" +
+               (open ? "" : "  user: <an RTSP user permitted on this camera>\n  password: <its password>\n") +
+               // Quoted: a name like "Front: Door" or "2024" would otherwise be broken or misread YAML.
+               (e.PtzMode == "shared" ? $"  profile: \"{e.Name.Trim().Replace("\\", "\\\\").Replace("\"", "\\\"")}\"\n" : "");
+    }
+
+    /// <summary>No login applies to the camera: saved, as the server reported it; new, when no RTSP users exist.</summary>
+    private bool CamPtzOpen(CamEdit e) =>
+        _adminCams?.FirstOrDefault(c => string.Equals(c.Name, e.OriginalName, StringComparison.OrdinalIgnoreCase)) is { } saved
+            ? saved.PtzOpen
+            : _adminPtz is { Users: false };
 
     private async Task OpenCamerasTabAsync()
     {
@@ -4706,6 +5096,7 @@
             var payload = await res.Content.ReadFromJsonAsync<ApiAdminCameras>();
             _adminCams = payload?.Cameras ?? new();
             _adminCamsWritable = payload?.Writable ?? false;
+            _adminPtz = payload?.Ptz;
         }
         catch (Exception ex)
         {
@@ -4747,6 +5138,9 @@
             UdpProbe = cam.UdpProbe,
             WakeCapture = cam.WakeCapture,
             KeepAliveHours = cam.KeepAliveHours,
+            PtzMode = cam.PtzMode ?? "off",
+            PtzPort = cam.PtzPort,
+            PtzOff = cam.PtzOff,
         };
     }
 
@@ -4807,9 +5201,12 @@
                 return "Provide at least one rtsp:// URL.";
             foreach (var url in new[] { e.RtspMain, e.RtspSub })
             {
-                if (!string.IsNullOrWhiteSpace(url) && !url.Contains("****")
+                // A masked URL is checked too: the mask is a valid password, and an edit around it is saved.
+                // A login is left to the server's check: a raw '@' or '#' in a password is common, and Uri rejects it.
+                if (!string.IsNullOrWhiteSpace(url)
                     && (!url.StartsWith("rtsp://", StringComparison.OrdinalIgnoreCase)
-                        || !Uri.TryCreate(url.Trim(), UriKind.Absolute, out _)))
+                        || !Uri.TryCreate(url.Trim().LastIndexOf('@') is var at and >= 0 ? "rtsp://" + url.Trim()[(at + 1)..] : url.Trim(),
+                            UriKind.Absolute, out _)))
                     return "RTSP URLs must be valid and start with rtsp://";
             }
             return null;
@@ -4824,8 +5221,36 @@
             ? "The UDP options need the camera's UID (Reolink app → device info, or the sticker)."
             : null;
 
+    /// <summary>PTZ for Frigate: the port checks and the login rule the server applies on save.</summary>
+    private string? CamPtzError
+    {
+        get
+        {
+            if (_camEdit is not { Type: "reolink" } e || e.PtzMode == "off") return null;
+            var p = _adminPtz;
+            if (p != null && CamPtzOpen(e) && !p.Loopback)
+                return "With no RTSP users there is no login, so anyone could move this camera: add users to the config " +
+                       "(Frigate signs in as one), or set ptz_bind to 127.0.0.1 when Frigate runs on this host.";
+            if (e.PtzMode == "shared")
+                return p == null ? null
+                    : p.SharedPort == 0 ? "The shared PTZ port is off in the config (ptz_port is 0): choose Own port, or set ptz_port."
+                    : p.SharedPort == p.RtspPort || p.SharedPort == p.WebPort
+                        ? $"The shared PTZ port {p.SharedPort} clashes with the RTSP or web port: set ptz_port in the config to a free one."
+                    : null;
+            if (e.PtzPort is not (>= 1 and <= 65535)) return "Enter a port from 1 to 65535.";
+            if (p != null && e.PtzPort == p.RtspPort) return "That is the RTSP port.";
+            if (p != null && e.PtzPort == p.WebPort) return "That is the web UI's port.";
+            if (p != null && e.PtzPort == p.SharedPort)
+                return "That is the shared PTZ port: choose Shared port instead, or another port.";
+            return _adminCams?.FirstOrDefault(c => !string.Equals(c.Name, e.OriginalName, StringComparison.OrdinalIgnoreCase)
+                                                   && c.PtzMode == "own" && c.PtzPort == e.PtzPort) is { } other
+                ? $"Camera \"{other.Name}\" already uses port {e.PtzPort}."
+                : null;
+        }
+    }
+
     private string? CamFormError =>
-        CamNameError ?? CamAddressError ?? CamUsernameError ?? CamRtspError ?? CamUidError;
+        CamNameError ?? CamAddressError ?? CamUsernameError ?? CamRtspError ?? CamUidError ?? CamPtzError;
 
     /// <summary>The test has nothing to dial only when there is neither an address
     /// nor a UID-over-UDP to find the camera by. A UDP camera with a UID is testable
@@ -4853,12 +5278,18 @@
         // save-only (the test has no use for them), except "record" which suits both.
         uid = e.Type == "reolink" ? e.Uid.Trim() : null,
         udp = e.Type == "reolink" ? e.Udp : (bool?)null,
-        onvifAddress = forSave && e.Type == "reolink" ? e.OnvifAddress.Trim() : null,
+        // Both camera kinds: on a Reolink it overrides where the picture-settings
+        // fallback looks, on a generic one where ALL its settings come from.
+        // Sent on the TEST too for a generic camera: the test reports whether its
+        // settings will be reachable, which depends on this field.
+        onvifAddress = forSave || e.Type == "rtsp" ? e.OnvifAddress.Trim() : null,
         alwaysOn = forSave && e.Type == "reolink" ? e.AlwaysOn : null,
         stream = forSave && e.Type == "reolink" ? e.Stream : null,
         udpProbe = forSave && e.Type == "reolink" ? e.UdpProbe : (bool?)null,
         wakeCapture = forSave && e.Type == "reolink" ? e.WakeCapture : (bool?)null,
         keepAliveHours = forSave && e.Type == "reolink" ? e.KeepAliveHours : (double?)null,
+        ptzMode = forSave && e.Type == "reolink" ? e.PtzMode : null,
+        ptzPort = forSave && e.Type == "reolink" && e.PtzMode == "own" ? e.PtzPort : null,
         record = forSave ? e.Record : (bool?)null,
     };
 
@@ -5052,6 +5483,29 @@
         return seen > 16 ? "At most 16 ports." : null;
     }
 
+    // A decimal comma is taken as a point, whatever the page language.
+    private double? AdminTrustHours() =>
+        double.TryParse(AdminValue("wakeHints.trustHours").Trim().Replace(',', '.'), System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out var h) && double.IsFinite(h) ? h : null;
+
+    private string? AdminTrustHoursError()
+    {
+        // Blank = the 2 h default (saving it removes the key).
+        var v = AdminValue("wakeHints.trustHours").Trim();
+        if (v.Length == 0) return null;
+        if (AdminTrustHours() is not { } d) return "Enter a number of hours.";
+        if (d <= 0) return "Must be more than 0.";
+        // The window only tunes a hint source; saved alone, the section would
+        // switch the syslog listener on at its default port. Only a CHANGED window
+        // is held to that: the file's own value must not block an edit that clears
+        // the sources (that save drops the section, window included).
+        if (v != AdminRawValue("wakeHints.trustHours").Trim()
+            && AdminValue("wakeHints.syslogPort").Trim().Length == 0
+            && AdminValue("wakeHints.pushPorts").Trim().Length == 0)
+            return "Set a syslog port (0 = API hints only) or push ports first.";
+        return null;
+    }
+
     private string? AdminTrickleError()
     {
         var v = AdminValue("ui.trickleSpeed").Trim();
@@ -5075,7 +5529,7 @@
         ?? AdminIntError("webPort", 1, 65535) ?? AdminPortsClashError() ?? AdminWebBindError()
         ?? AdminTrickleError()
         ?? AdminIntError("wakeHints.syslogPort", 1, 65535, alsoAllowed: 0)
-        ?? AdminPushPortsError() ?? AdminIpError("wakeHints.bind")
+        ?? AdminPushPortsError() ?? AdminIpError("wakeHints.bind") ?? AdminTrustHoursError()
         ?? AdminIntError("recording.retentionDays", 0, 36500)
         ?? AdminIntError("recording.preSeconds", 0, 30)
         ?? AdminIntError("recording.postSeconds", 1, 120)
@@ -5099,19 +5553,21 @@
         builder.AddContent(3, label);
         builder.CloseElement();
         builder.OpenElement(4, "input");
-        builder.AddAttribute(5, "type", type);
-        builder.AddAttribute(6, "class", error != null ? "input-error" : null);
-        builder.AddAttribute(7, "value", AdminValue(path));
+        // "decimal" is a text box with a number keypad: a number input reports what it cannot parse as blank.
+        builder.AddAttribute(5, "type", type == "decimal" ? "text" : type);
+        if (type == "decimal") builder.AddAttribute(6, "inputmode", "decimal");
+        builder.AddAttribute(7, "class", error != null ? "input-error" : null);
+        builder.AddAttribute(8, "value", AdminValue(path));
         // oninput (not onchange) so the unsaved signal appears as you type, not on blur.
-        builder.AddAttribute(8, "oninput",
+        builder.AddAttribute(9, "oninput",
             EventCallback.Factory.Create<ChangeEventArgs>(this, e => _adminEdits[path] = e.Value?.ToString() ?? ""));
         builder.CloseElement();
         builder.CloseElement();
         if (error != null)
         {
-            builder.OpenElement(9, "div");
-            builder.AddAttribute(10, "class", "field-error");
-            builder.AddContent(11, error);
+            builder.OpenElement(10, "div");
+            builder.AddAttribute(11, "class", "field-error");
+            builder.AddContent(12, error);
             builder.CloseElement();
         }
     };
@@ -5305,6 +5761,8 @@
                 case "wakeHints.syslogPort": wake["syslogPort"] = Int(path); break;
                 case "wakeHints.pushPorts": wake["pushPorts"] = AdminValue(path); break;
                 case "wakeHints.bind": wake["bind"] = AdminValue(path); break;
+                // As text, like pushPorts: blank must reach the server to remove the key.
+                case "wakeHints.trustHours": wake["trustHours"] = AdminValue(path).Trim().Replace(',', '.'); break;
             }
         }
         if (ui.Count > 0) payload["ui"] = ui;
@@ -5407,20 +5865,7 @@
         return SaveAsync();
     }
 
-    private static string StripTypeIcon(string label) => label switch
-    {
-        "person" => "🧍",
-        "vehicle" => "🚗",
-        "animal" => "🐾",
-        "package" => "📦",
-        "doorbell" => "🔔",
-        "crying" => "😢",
-        "line-crossing" => "🚧",
-        "intrusion" => "🚷",
-        "loitering" => "🕒",
-        "motion" => "👁",
-        _ => "•",
-    };
+    private static MarkupString StripTypeIcon(string label) => UiIcon.Render(UiIcon.ForLabel(label), 12);
 
     // ------------------------------------------------------------ data
 
@@ -5475,6 +5920,7 @@
             var cams = await res.Content.ReadFromJsonAsync<List<ApiCamera>>(cancellationToken: fetchCts.Token);
             _cameras.Clear();
             if (cams != null) _cameras.AddRange(cams);
+            PruneMissingCameras();
             SyncClipStates();
             await MaybeNotifyCamerasAsync();
             _error = null;
@@ -5503,6 +5949,7 @@
                 await RefreshEventsAsync();
                 await EvaluateBatteryTilesAsync();
                 await RefreshEmergencyArmedAsync();
+                await RefreshDetectIfNeededAsync();
                 // A hidden page renders to nobody, and this is the monolith — a
                 // full render-tree diff per tick per circuit. The first visible
                 // tick repaints everything the quiet ones skipped.
@@ -6308,6 +6755,30 @@
         if (_slots.Count > _count) _slots = _slots.Take(_count).ToList();
     }
 
+    /// <summary>Empties tiles naming a camera this server does not have: a saved
+    /// layout outlives the config that built it, and such a tile keeps asking for a
+    /// snapshot that 404s forever. Never runs on an empty camera list — that is a
+    /// server that has not answered properly, not a config with nothing in it. The
+    /// tile and its span stay, so the grid keeps its shape.</summary>
+    private void PruneMissingCameras()
+    {
+        if (_cameras.Count == 0) return;
+        for (int i = 0; i < _slots.Count; i++)
+        {
+            var slot = _slots[i];
+            if (slot.Camera == null
+                || _cameras.Any(c => string.Equals(c.Name, slot.Camera, StringComparison.OrdinalIgnoreCase)))
+                continue;
+            slot.Camera = slot.Kind = slot.Path = null;
+            if (_maxIndex == i)
+            {
+                _maxIndex = null;
+                _maxPrevKind = _maxPrevPath = _maxPrevCamera = _maxSetKind = null;
+                if (Camera != null) Nav.NavigateTo("");
+            }
+        }
+    }
+
     private void SetMode(string mode)
     {
         ExitMaximize();
@@ -6597,6 +7068,12 @@
         <button type="button" class="icon-btn zoom-btn zoom-reset" data-zoom="reset" title="@T["Restore 1:1 (or double-click the video)"]">1:1</button>
     </div>;
 
+    /// <summary>The object-boxes switch, as the camera rail's own button. Rendered
+    /// only on the surface that can actually draw them.</summary>
+    private RenderFragment BoxesButton => @<button class="cam-rail-btn @(_boxes ? "rail-active" : "")"
+            title="@(_boxes ? T["Hide the object boxes"] : T["Outline people, vehicles and animals"])"
+            @onclick="ToggleBoxesAsync">@UiIcon.Render("boxes", 14)</button>;
+
     private void OnTileClick(int index, MouseEventArgs e)
     {
         // An empty tile invites a click: open the camera picker right there
@@ -6678,6 +7155,7 @@
         _count = ClampCount(_mode, l.Count);
         _slots = l.Slots.Select(s => s.Clone()).ToList();
         EnsureSlots();
+        PruneMissingCameras(); // the saved layout keeps its cameras; this view can't show the gone ones
         ForgetBorrowedSlot(); // these are different tiles; the old index means nothing
         _backup = null; // loading a layout replaces any maximize detour
         _activeLayout = l.Name;

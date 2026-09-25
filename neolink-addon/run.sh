@@ -72,7 +72,8 @@ build_config() {
               + (if $c.keep_alive_hours != null then {keep_alive_hours: $c.keep_alive_hours} else {} end)
               + (if ($c.stream // "") != "" then {stream: $c.stream} else {} end)
               + (if ($c.uid // "") != "" then {uid: $c.uid} else {} end)
-              + (if ($c.http_address // "") != "" then {http_address: $c.http_address} else {} end)]' "$OPTIONS")
+              + (if ($c.http_address // "") != "" then {http_address: $c.http_address} else {} end)
+              + (if ($c.onvif_address // "") != "" then {onvif_address: $c.onvif_address} else {} end)]' "$OPTIONS")
   count=$(jq 'length' <<<"$cams")
   # Names match case-INSENSITIVELY, as the app compares them: renaming a camera's
   # case in the web UI must update that camera, not append a second one under a
@@ -99,6 +100,17 @@ build_config() {
     if [ "$have" -gt 0 ]; then
       log "no cameras in the add-on options — running the $have camera(s) from config.json (add and edit them in Neolink's web UI, camera ⚙)"
     fi
+  fi
+
+  # "udp": true with no uid is a config the app refuses to load, and the merge
+  # above can neither unset a boolean nor invent the uid — so the Options page
+  # could write an entry only a hand edit could take back, and one such entry
+  # used to stop every camera. Repair it instead of shipping it.
+  local noudp
+  noudp=$(jq -r '[(.cameras // [])[] | select(.udp == true and ((.uid // "") == "")) | .name] | join(", ")' <<<"$base")
+  if [ -n "$noudp" ]; then
+    base=$(jq '(.cameras // []) |= map(if .udp == true and ((.uid // "") == "") then del(.udp) else . end)' <<<"$base")
+    log "dropped \"udp\" from $noudp — UDP needs the camera's UID; set one in Neolink's web UI (camera ⚙) to turn it back on"
   fi
 
   # MQTT: fetch the broker the Mosquitto add-on provides and merge ONLY the

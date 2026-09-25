@@ -276,7 +276,48 @@ external PIR) can feed the same path: `POST /api/cameras/{name}/wake-hint`.
 | `udp_probe` | `false` | Diagnostic: probe UDP discovery while unreachable over TCP and log the exchange. Tells you whether a stubborn camera is a UDP-only model. |
 | `record` | `true` | Seed for the event-recording switch (the web UI switch wins afterwards). |
 | `wake_hints.push_ports` (server level) | off | `[8443, 53]`: decoy push service. A router NAT redirect (recommended) or DNS override steers the camera's own event push here; the connection is the wake signal (option A above; app notifications stop). With a DNS override the camera dials 443 directly, so list `[443, 53]`. |
+| `wake_hints.trust_hours` (server level) | `2` | Hours since the last hint to suppress scan-only housekeeping connects; e.g. `72` for infrequent events. Longer values delay fallback if hints fail. |
 | `wake_hints.syslog_port` (server level) | off | `5140`: receive router firewall logs (OPNsense/pfSense) as instant wake signals (option B above). `0` = off. |
+
+`wake_hints.trust_hours` accepts positive, finite hours (including fractions).
+Omitting it preserves the existing 2-hour behavior. For cameras with infrequent
+real events, 72 hours can avoid scan-only connections to periodic housekeeping
+wakes between events. Add the option to your existing `wake_hints` section:
+
+```json
+"wake_hints": {
+  "syslog_port": 5140,
+  "trust_hours": 72
+}
+```
+
+Equivalent TOML:
+
+```toml
+[wake_hints]
+syslog_port = 5140
+trust_hours = 72
+```
+
+Keep your existing listener settings; for API-only hints, set `syslog_port = 0`.
+The window is global, but each camera's last hint starts/refreshes its own timer.
+Trust is not persisted: after restart, scan-only behavior continues until the
+first hint arrives. Restart Neolink after changing the configuration.
+
+The web UI sets it too: **Server settings → General → Wake hints (battery
+cameras) → Hint trust window**. Leave it blank for the 2-hour default. It needs
+a hint source in the same section (a syslog port, `0` for API-only hints, or
+push ports); on its own the section would switch the syslog listener on.
+Clearing every hint source from that page removes the whole section, the trust
+window included.
+
+Under the **Home Assistant add-on** the field is set the same way (wake-hint
+settings live in `config.json`, not the add-on options), but which hints
+arrive depends on its ports. HTTP hints (`POST /api/cameras/{name}/wake-hint`)
+work through 8655 as they are. The syslog listener and the push decoy need
+their port (`5140/udp`, `8443/tcp`) switched on in the add-on's Network section
+first; they are off by default. The add-on's own documentation has the steps.
+The beta add-on publishes no ports, so it gets HTTP hints only.
 
 ## What to expect
 
@@ -358,10 +399,11 @@ With router wake hints flowing, the scan also becomes **hint-corroborated**:
 these cameras wake their radio every 5-14 minutes for ~20 s of cloud
 housekeeping (measured in router logs), which can look identical to a real
 wake from the outside. While the router has reported an event push within the
-last 2 hours, a scan edge with no accompanying hint is treated as
-housekeeping and not connected to; the hint connects us ~4 s after radio-up
-when it's real. If hints stop arriving, scan-only connects resume
-automatically, so a broken pipe never blinds the scan.
+last `wake_hints.trust_hours` hours (default: 2), a scan edge with no
+accompanying hint is treated as housekeeping and not connected to; the hint
+connects us ~4 s after radio-up when it's real. If hints stop arriving, scan-only connects resume
+automatically after this window expires. A longer window also delays this
+fallback if the hint source breaks.
 
 Wake-triggered recordings start **tentatively**: announced and kept only when
 a detection the camera's event types allow arrives (~30 s window), labeled by
@@ -408,7 +450,7 @@ merge.
 | Wake-opened session held for the late detection push | 30 s. Scan-opened: ends early on the first detection. Hint-opened: records the full window; a fresh hint restarts it |
 | Wake hint (either source) → connect | immediate; misfire cooldown 15/30/60 s |
 | Push decoy: repeat connections from one camera | coalesced to one hint per 10 s (failed-delivery retries) |
-| Hint trust window (scan edges without a hint = housekeeping, skipped) | 2 h since the last hint; expires back to scan-only behavior |
+| Hint trust window (scan edges without a hint = housekeeping, skipped) | `wake_hints.trust_hours` (default 2 h) since the last hint; expires back to scan-only behavior |
 | Keep-alive maximum | 24 h |
 
 </details>

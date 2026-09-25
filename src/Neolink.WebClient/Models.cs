@@ -47,10 +47,17 @@ public sealed record ApiBattery(int Percent, bool Charging);
 public sealed record ApiVersion(string? Name, string? Model, string? Serial, string? Firmware,
     string? Hardware, string? Build);
 
+/// <summary>Onvif = every setting this camera offers came over ONVIF (a non-Reolink
+/// camera). The standard covers less than Reolink's own API, so the panel leaves out
+/// what it cannot honour and says where a change is going.</summary>
 public sealed record ApiFeatures(bool Ptz, bool Led, bool Pir, bool Battery,
     bool StreamSettings = false, bool Reboot = true,
     bool Zoom = false, bool Siren = false, bool Floodlight = false, bool Privacy = false,
-    bool WhiteLed = false, bool Spotlight = false, bool Doorbell = false, bool Imaging = false);
+    bool WhiteLed = false, bool Spotlight = false, bool Doorbell = false, bool Imaging = false,
+    bool Onvif = false,
+    // The camera keeps no detection zone of its own (knowably), so Neolink keeps
+    // one for it and the panel offers the editor on a card of its own.
+    bool LocalZone = false);
 
 /// <summary>GET/POST /api/cameras/{name}/whiteled — spotlight brightness (0-100),
 /// on/off and auto mode, over the camera's HTTP API.</summary>
@@ -84,14 +91,19 @@ public sealed record ApiAiSensitivity(string Type, int Sensitivity, int? StayTim
     };
 }
 
-/// <summary>GET/POST /api/cameras/{name}/detectionzone — the camera's own grid of
-/// watched ('1') vs ignored ('0') cells, row by row from the top-left. ZoneTypes
-/// lists the types with a grid of their own; a single entry means this camera keeps
-/// ONE zone that governs every detection type.</summary>
+/// <summary>GET/POST /api/cameras/{name}/detectionzone — the grid of watched ('1')
+/// vs ignored ('0') cells, row by row from the top-left. ZoneTypes lists the types
+/// with a grid of their own; a single entry means one zone governs every detection
+/// type. Storage is "camera" when the grid lives on the camera, "neolink" when the
+/// camera keeps none and the server holds it instead.</summary>
 public sealed record ApiDetectionZone(string Type, int Cols, int Rows, string Table,
-    List<string>? ZoneTypes = null)
+    List<string>? ZoneTypes = null, string? Storage = null)
 {
     public bool IsGlobal => ZoneTypes is not { Count: > 1 };
+
+    /// <summary>True when this grid is kept by Neolink because the camera cannot
+    /// keep one — it governs what Neolink watches, not what the camera alerts on.</summary>
+    public bool StoredOnServer => Storage == "neolink";
 }
 
 /// <summary>The camera's on-screen-display overlay (name/timestamp/watermark).</summary>
@@ -203,8 +215,12 @@ public sealed record ApiAdminCamera(string Name, string Type, string? Address, s
     bool HasPassword, int ChannelId, string? HttpAddress, string? RtspMain, string? RtspSub,
     string? Uid = null, string? AlwaysOn = null, string? Stream = null, string? OnvifAddress = null,
     bool Record = true, bool Udp = false, bool UdpProbe = false, bool WakeCapture = false,
-    double KeepAliveHours = 0);
-public sealed record ApiAdminCameras(bool Writable, List<ApiAdminCamera> Cameras);
+    double KeepAliveHours = 0, string? PtzMode = null, int? PtzPort = null, string? PtzOff = null, bool PtzOpen = false);
+public sealed record ApiAdminCameras(bool Writable, List<ApiAdminCamera> Cameras, ApiAdminPtz? Ptz = null);
+
+/// <summary>What the camera editor checks a PTZ port against: the shared ONVIF port, the RTSP and web
+/// ports, whether it binds to loopback only, and whether any RTSP users exist.</summary>
+public sealed record ApiAdminPtz(int SharedPort, int RtspPort, int WebPort, bool Loopback, bool Users);
 
 /// <summary>GET/PUT /api/admin/notifications — email alert settings. The SMTP
 /// password is never returned (only HasPassword); it is sent write-only on PUT.</summary>
@@ -277,6 +293,40 @@ public sealed class ApiEmergency
     public bool DetectionsAvailable { get; set; } = true;
     public List<ApiEmergencyIssue> Issues { get; set; } = new();
     public Dictionary<string, ApiEmergencyCamera> Overrides { get; set; } = new();
+}
+
+/// <summary>The state of the files the browser's detector needs: "ready",
+/// "missing", "downloading" (with a percentage) or "failed" (with the reason).</summary>
+public sealed class ApiDetectAssets
+{
+    public string State { get; set; } = "missing";
+    public int Percent { get; set; }
+    public string? Error { get; set; }
+    public long Bytes { get; set; }
+}
+
+/// <summary>One detection-zone grid on its way to the browser's box overlay: the
+/// camera's watched/ignored cells, plus the box groups it governs. A camera with
+/// one shared zone sends a single grid naming every group.</summary>
+public sealed record DetectZoneGrid(List<string> Groups, int Cols, int Rows, string Table);
+
+/// <summary>GET /api/detect, PUT /api/admin/detect — live object boxes (preview).</summary>
+public sealed class ApiDetect
+{
+    public bool Enabled { get; set; }
+    public int MinConfidence { get; set; } = 45;
+    public int Fps { get; set; } = 5;
+    public List<string> Groups { get; set; } = new();
+    public List<string> KnownGroups { get; set; } = new();
+    /// <summary>The larger model is wanted; <see cref="DetailedAssets"/> says whether
+    /// it is actually here yet, and the browser decides whether it can run it.</summary>
+    public bool Detailed { get; set; }
+    public ApiDetectAssets Assets { get; set; } = new();
+    public ApiDetectAssets DetailedAssets { get; set; } = new();
+
+    /// <summary>The model file the page should ask for.</summary>
+    public string ModelFile =>
+        Detailed && DetailedAssets.State == "ready" ? "yolov10s.onnx" : "yolov10n.onnx";
 }
 
 /// <summary>GET /api/auth/status — whether/how the UI must authenticate.
@@ -388,6 +438,9 @@ public sealed record ApiCamAvail(string Cam, bool On, double Pct, long Obs,
 public sealed record ApiSystemStats(ApiSystemInfo? Info, List<ApiSystemSample> Samples,
     List<ApiCamAvail>? Avail = null);
 
+/// <summary>GET /api/system/viewers (admin) — one live viewer; Via is "RTSP" or "Web", Since is unix ms.</summary>
+public sealed record ApiViewer(string Camera, string Stream, string Via, string? From, string? User, long Since);
+
 /// <summary>GET /api/recordings/{camera}/{date} — one continuous-recording segment.
 /// Seconds = media length (0 from servers that predate it); the timeline sizes
 /// coverage with it so a cut-short segment doesn't claim minutes it lacks.</summary>
@@ -417,29 +470,30 @@ public sealed record ApiEventSearch(bool AiAvailable, bool Ai = false,
 public sealed record ApiEvent(string Id, string Camera, DateTime Start, DateTime End,
     List<string> Labels, bool Reviewed, bool Ongoing, bool HasClip, bool HasThumb,
     bool HasPreview = false, string? AiDescription = null, string? AiLevel = null,
-    bool AiPending = false)
+    bool AiPending = false, List<string>? AiObjects = null)
 {
-    private static readonly (string Label, string Icon, string Name)[] Known =
+    private static readonly (string Label, string Name)[] Known =
     {
-        ("person", "🧍", "Human"),
-        ("vehicle", "🚗", "Vehicle"),
-        ("animal", "🐾", "Animal"),
-        ("package", "📦", "Package"),
-        ("doorbell", "🔔", "Doorbell"),
+        ("person", "Human"),
+        ("vehicle", "Vehicle"),
+        ("animal", "Animal"),
+        ("package", "Package"),
+        ("doorbell", "Doorbell"),
         // Crying-sound detection (indoor cams listen through the mic)
-        ("crying", "😢", "Crying"),
+        ("crying", "Crying"),
         // Perimeter protection (line/zone crossing configured in the Reolink app)
-        ("line-crossing", "🚧", "Line crossing"),
-        ("intrusion", "🚷", "Intrusion"),
-        ("loitering", "🕒", "Loitering"),
+        ("line-crossing", "Line crossing"),
+        ("intrusion", "Intrusion"),
+        ("loitering", "Loitering"),
         // Recording held open from outside (the Home Assistant "Record" switch).
-        ("external", "⏺", "External"),
-        ("motion", "👁", "Motion"),
+        ("external", "External"),
+        ("motion", "Motion"),
     };
 
     /// <summary>Leading icon: the most specific detection wins over plain motion.</summary>
-    public string Icon =>
-        Known.FirstOrDefault(k => Labels.Contains(k.Label)).Icon ?? "👁";
+    public string IconName =>
+        UiIcon.ForLabel(Known.FirstOrDefault(k => Labels.Contains(k.Label)).Label ?? "motion");
+
 
     /// <summary>Cache-key version for artifact URLs. Closed-event responses are
     /// cached immutable, so a fetch made before the event settled must live under
@@ -478,6 +532,22 @@ public sealed record ApiEvent(string Id, string Camera, DateTime Start, DateTime
 /// </summary>
 public static class UiIcon
 {
+    /// <summary>The icon an event label is drawn with, everywhere a label shows.</summary>
+    public static string ForLabel(string label) => label switch
+    {
+        "person" => "user",
+        "vehicle" => "car",
+        "animal" => "paw",
+        "package" => "package",
+        "doorbell" => "bell",
+        "crying" => "frown",
+        "line-crossing" => "line-cross",
+        "intrusion" => "shield",
+        "loitering" => "clock",
+        "external" => "rec",
+        _ => "activity",
+    };
+
     public static MarkupString Render(string name, int size = 15)
     {
         var body = name switch
@@ -495,8 +565,17 @@ public static class UiIcon
             "collapse" => "<polyline points=\"4 14 10 14 10 20\"/><polyline points=\"20 10 14 10 14 4\"/><line x1=\"14\" y1=\"10\" x2=\"21\" y2=\"3\"/><line x1=\"3\" y1=\"21\" x2=\"10\" y2=\"14\"/>",
             "fs-enter" => "<path d=\"M8 3H5a2 2 0 0 0-2 2v3\"/><path d=\"M21 8V5a2 2 0 0 0-2-2h-3\"/><path d=\"M3 16v3a2 2 0 0 0 2 2h3\"/><path d=\"M16 21h3a2 2 0 0 0 2-2v-3\"/>",
             "fs-exit" => "<path d=\"M8 3v3a2 2 0 0 1-2 2H3\"/><path d=\"M21 8h-3a2 2 0 0 1-2-2V3\"/><path d=\"M3 16h3a2 2 0 0 1 2 2v3\"/><path d=\"M16 21v-3a2 2 0 0 1 2-2h3\"/>",
+            // Object boxes: a viewfinder's corners around something being watched.
+            "boxes" => "<path d=\"M3 8V5a2 2 0 0 1 2-2h3\"/><path d=\"M16 3h3a2 2 0 0 1 2 2v3\"/>"
+                + "<path d=\"M21 16v3a2 2 0 0 1-2 2h-3\"/><path d=\"M8 21H5a2 2 0 0 1-2-2v-3\"/>"
+                + "<rect x=\"8\" y=\"8\" width=\"8\" height=\"8\" rx=\"1.5\"/>",
             "shield" => "<path d=\"M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z\"/>",
             "lock" => "<rect x=\"3\" y=\"11\" width=\"18\" height=\"11\" rx=\"2\"/><path d=\"M7 11V7a5 5 0 0 1 10 0v4\"/>",
+            "car" => "<path d=\"M5 17H3v-4l2-5a2 2 0 0 1 1.9-1.3h10.2A2 2 0 0 1 19 8l2 5v4h-2\"/><line x1=\"3\" y1=\"13\" x2=\"21\" y2=\"13\"/><circle cx=\"7\" cy=\"17\" r=\"2\"/><circle cx=\"17\" cy=\"17\" r=\"2\"/>",
+            "paw" => "<path d=\"M12 20c-3 0-5.5-1.8-5.5-4 0-1.5 1-2.5 2-3.5s1.5-2.5 3.5-2.5 2.5 1.5 3.5 2.5 2 2 2 3.5c0 2.2-2.5 4-5.5 4z\"/><circle cx=\"6\" cy=\"9\" r=\"1.6\"/><circle cx=\"9.5\" cy=\"5.5\" r=\"1.6\"/><circle cx=\"14.5\" cy=\"5.5\" r=\"1.6\"/><circle cx=\"18\" cy=\"9\" r=\"1.6\"/>",
+            "package" => "<path d=\"M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z\"/><polyline points=\"3.27 6.96 12 12.01 20.73 6.96\"/><line x1=\"12\" y1=\"22.08\" x2=\"12\" y2=\"12\"/>",
+            "frown" => "<circle cx=\"12\" cy=\"12\" r=\"10\"/><path d=\"M16 16s-1.5-2-4-2-4 2-4 2\"/><line x1=\"9\" y1=\"9\" x2=\"9.01\" y2=\"9\"/><line x1=\"15\" y1=\"9\" x2=\"15.01\" y2=\"9\"/>",
+            "line-cross" => "<line x1=\"12\" y1=\"2\" x2=\"12\" y2=\"22\" stroke-dasharray=\"3 3\"/><line x1=\"4\" y1=\"12\" x2=\"16\" y2=\"12\"/><polyline points=\"12 8 16 12 12 16\"/>",
             "user" => "<path d=\"M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2\"/><circle cx=\"12\" cy=\"7\" r=\"4\"/>",
             "x" => "<line x1=\"18\" y1=\"6\" x2=\"6\" y2=\"18\"/><line x1=\"6\" y1=\"6\" x2=\"18\" y2=\"18\"/>",
             "mic" => "<path d=\"M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z\"/><path d=\"M19 10v2a7 7 0 0 1-14 0v-2\"/><line x1=\"12\" y1=\"19\" x2=\"12\" y2=\"23\"/><line x1=\"8\" y1=\"23\" x2=\"16\" y2=\"23\"/>",

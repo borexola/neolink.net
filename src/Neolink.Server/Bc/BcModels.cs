@@ -13,6 +13,11 @@ namespace Neolink.Bc;
 public static class BcConstants
 {
     public const uint MagicHeader = 0x0abcdef0;
+    /// <summary>Older firmware (Reolink IPC_36S8M) heads snapshot replies with the
+    /// descending twin of <see cref="MagicHeader"/>. Reference neolink calls it
+    /// MAGIC_HEADER_REV and accepts either; the rest of the header is unchanged.
+    /// Only <see cref="MagicHeader"/> is ever sent.</summary>
+    public const uint MagicHeaderRev = 0x0fedcba0;
 
     public const uint MsgIdLogin = 1;
     public const uint MsgIdLogout = 2;
@@ -77,11 +82,30 @@ public static class BcConstants
 
     // Legacy "login upgrade" request: the response_code advertises the highest
     // encryption scheme the client supports. The camera replies with the scheme it
-    // will actually use plus a login nonce. Advertise AES: modern (post-2021)
-    // cameras are AES-only and drop the connection if the client can't do AES.
+    // will actually use plus a login nonce. The default advertises FullAes: modern
+    // (post-2021) cameras are AES-only and drop the connection if the client can't
+    // do AES. The low byte is the same scheme byte the reply comes back with, so
+    // these are the four tiers EncryptionKind names.
     public const ushort LegacyUpgradeNone = 0xdc00;
     public const ushort LegacyUpgradeBcEncrypt = 0xdc01;
-    public const ushort LegacyUpgradeAes = 0xdc12;
+    public const ushort LegacyUpgradeAes = 0xdc02;
+    public const ushort LegacyUpgradeFullAes = 0xdc12;
+
+    /// <summary>The per-camera "max_encryption" names, in ascending order.</summary>
+    public static readonly string[] MaxEncryptionNames = { "none", "bcencrypt", "aes", "fullaes" };
+
+    /// <summary>Resolves a "max_encryption" name to its upgrade code. Null/empty is
+    /// the default (FullAes); an unrecognised name returns null so the config loader
+    /// can reject it by name rather than silently falling back.</summary>
+    public static ushort? ParseMaxEncryption(string? name) => name?.Trim().ToLowerInvariant() switch
+    {
+        null or "" => LegacyUpgradeFullAes,
+        "none" => LegacyUpgradeNone,
+        "bcencrypt" => LegacyUpgradeBcEncrypt,
+        "aes" => LegacyUpgradeAes,
+        "fullaes" => LegacyUpgradeFullAes,
+        _ => null,
+    };
 
     /// <summary>An empty password in the legacy login format: 32 NUL bytes.</summary>
     public static readonly string EmptyLegacyPassword = new('\0', 32);

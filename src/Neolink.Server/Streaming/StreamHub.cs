@@ -70,6 +70,8 @@ public sealed class StreamHub : IStreamHub, IMediaSink
     public byte[]? Vps { get; private set; }
     public uint Width { get; private set; }
     public uint Height { get; private set; }
+    /// <summary>The size was read off the SPS (no side channel), so it follows each new one.</summary>
+    private bool _sizeFromSps;
 
     // --- Audio track info ---
     public AudioTrackInfo? Audio { get; private set; }
@@ -117,6 +119,20 @@ public sealed class StreamHub : IStreamHub, IMediaSink
     /// <summary>True once codec parameters have been learned (DESCRIBE/init can be answered).</summary>
     public bool VideoReady => _videoReady.Task.IsCompletedSuccessfully;
 
+    /// <inheritdoc/>
+    public bool HasBufferedGop
+    {
+        get { lock (_castGate) return _gopOpen && _gop.Count > 0; }
+    }
+
+    /// <inheritdoc/>
+    public bool LiveVideo
+    {
+        get { lock (_castGate) return _live; }
+    }
+
+    private bool _live;
+
     // ------------------------------------------------------------------ publish
 
     public void PublishInfo(MediaInfo info)
@@ -125,6 +141,7 @@ public sealed class StreamHub : IStreamHub, IMediaSink
         {
             Width = info.Width;
             Height = info.Height;
+            _sizeFromSps = false;
         }
     }
 
@@ -185,12 +202,16 @@ public sealed class StreamHub : IStreamHub, IMediaSink
             Codec = frame.Codec;
             if (_firstVideoAt == DateTime.MaxValue) _firstVideoAt = DateTime.UtcNow;
             // Sources without a resolution side channel (generic RTSP pulls) get
-            // their dimensions from the SPS itself — MSE rejects a 0×0 init.
-            if (Width == 0 && paramsUpdated && Sps != null
+            // their dimensions from the SPS itself — MSE rejects a 0×0 init. Re-read on
+            // every SPS: a bad first one, or a resolution change, must not stick.
+            if (((Width == 0 && paramsUpdated && Sps != null) || (_sizeFromSps && frameHasSps))
                 && H26x.TryGetDimensions(frame.Codec, Sps, out var w, out var h))
             {
+                if (_sizeFromSps && (w != Width || h != Height))
+                    Log.Info($"{Name}: video size now {w}x{h} (was {Width}x{Height})");
                 Width = w;
                 Height = h;
+                _sizeFromSps = true;
             }
         }
 
@@ -282,6 +303,7 @@ public sealed class StreamHub : IStreamHub, IMediaSink
                 _gop.Clear();
                 _gopBytes = 0;
                 _gopOpen = true;
+                _live = true;
             }
             if (_gopOpen)
             {
@@ -326,6 +348,7 @@ public sealed class StreamHub : IStreamHub, IMediaSink
             _gop.Clear();
             _gopBytes = 0;
             _gopOpen = false;
+            _live = false;
         }
     }
 

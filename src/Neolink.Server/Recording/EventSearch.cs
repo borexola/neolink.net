@@ -793,12 +793,33 @@ public static class EventSearch
         if (e.AiDescription is { } d)
             words = new HashSet<string>(
                 Regex.Split(d.ToLowerInvariant(), "[^a-z0-9]+").Select(Spelling), StringComparer.Ordinal);
+        // The model's object inventory, whole entries and their words alike, so
+        // "white van" is findable as the phrase and as either half of it.
+        HashSet<string>? objects = null;
+        if (e.AiObjects is { Count: > 0 })
+        {
+            objects = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var o in e.AiObjects)
+            {
+                objects.Add(Spelling(o.ToLowerInvariant()));
+                foreach (var part in Regex.Split(o.ToLowerInvariant(), "[^a-z0-9]+"))
+                    if (part.Length > 0) objects.Add(Spelling(part));
+            }
+        }
         int s = 0;
         hit = 0;
         foreach (var k0 in keywords)
         {
             bool found = false;
             var k = Spelling(k0);
+            // An inventory entry outweighs the same word in prose: the model put it
+            // there because the thing was IN the frames, not because a sentence
+            // happened to mention it.
+            if (objects != null && (objects.Contains(k) || WordIn(objects, k) || JoinedIn(objects, k)))
+            {
+                s += 3;
+                found = true;
+            }
             if (words != null && (WordIn(words, k) || JoinedIn(words, k)))
             {
                 s += 2;
@@ -938,7 +959,8 @@ public static class EventSearch
     public static List<EventRecord> JudgePool(EventQuery q, EventStore store)
     {
         var structural = Execute(q.StructuralOnly(), store, 10_000)
-            .Where(e => !string.IsNullOrWhiteSpace(e.AiDescription)).ToList();
+            .Where(e => !string.IsNullOrWhiteSpace(e.AiDescription) || e.AiObjects is { Count: > 0 })
+            .ToList();
         var hit = structural.Where(e => Score(e, q.Keywords) > 0).Take(200).ToList();
         var ids = new HashSet<string>(hit.Select(e => e.Id), StringComparer.Ordinal);
         return hit.Concat(structural.Where(e => !ids.Contains(e.Id))).Take(300).ToList();
@@ -966,7 +988,12 @@ public static class EventSearch
         {
             var d = (chunk[i].AiDescription ?? "").Replace('\n', ' ').Trim();
             if (d.Length > 400) d = d[..400];
-            sb.Append(i + 1).Append(". ").Append(d).Append('\n');
+            sb.Append(i + 1).Append(". ");
+            // What the model listed as visible, ahead of the prose: it is the part
+            // of the record that names things plainly.
+            if (chunk[i].AiObjects is { Count: > 0 } objs)
+                sb.Append('[').Append(string.Join(", ", objs.Take(10))).Append("] ");
+            sb.Append(d).Append('\n');
         }
         return sb.ToString();
     }

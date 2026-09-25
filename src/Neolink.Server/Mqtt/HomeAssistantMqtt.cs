@@ -616,6 +616,9 @@ internal sealed class CameraBridge
     private readonly HashSet<string> _sensorOn = new();
 
     private bool _featuresAnnounced;
+    /// <summary>What the last announcement assumed about this camera's ability to
+    /// detect anything, so a change can be noticed and re-announced.</summary>
+    private bool _announcedEvents;
     private bool _doorbellAnnounced;
     private DateTime _lastDoorbellPress = DateTime.MinValue;
 
@@ -784,18 +787,37 @@ internal sealed class CameraBridge
             await PublishContinuousStateAsync(ct).ConfigureAwait(false);
         }
 
-        if (!_cam.SupportsEvents)
-        {
-            // Generic RTSP camera: no detection pushes and no Baichuan commands —
-            // motion sensors and a reboot button would be dead weight in HA. A
-            // connectivity sensor is the honest surface (and gives the device an
-            // entity, so it actually shows up).
+        // A non-Reolink camera gets a connectivity sensor whether or not it has
+        // detections: it is the one entity that always means something, and without
+        // it a camera with no events at all would not appear in HA as a device.
+        if (_control.OnvifOnly)
             await AnnounceEntityAsync("binary_sensor", "status", ConnectivityConfig(), ct).ConfigureAwait(false);
+
+        // Only where a reboot can actually be commanded: Baichuan always, a
+        // non-Reolink camera only through ONVIF. Independent of whether it can detect.
+        if (_control.CanReboot)
+            await AnnounceEntityAsync("button", "reboot", ButtonConfig("Reboot", "reboot", "restart"), ct).ConfigureAwait(false);
+
+        if (!_cam.EventsAvailableNow)
+        {
+            // No way to detect anything — a generic RTSP camera with no ONVIF event
+            // service, or none reachable. Motion sensors would be dead weight, but
+            // an on-demand clip needs no detection at all, and the web UI offers one.
+            if (_cam.EventRecorder is { } onDemand)
+            {
+                await AnnounceEntityAsync("switch", "record", RecordSwitchConfig(), ct).ConfigureAwait(false);
+                await _hub.PublishAsync(StateTopic("record"), onDemand.OnDemand != null ? "ON" : "OFF", ct)
+                    .ConfigureAwait(false);
+            }
             if (HasRecordingSensor) // continuous (24/7) recording can still run here
             {
                 await AnnounceEntityAsync("binary_sensor", "recording", RecordingSensorConfig(), ct).ConfigureAwait(false);
                 await PublishRecordingStateAsync(force: true).ConfigureAwait(false);
             }
+            // A camera without a working event service still has a picture, sliders,
+            // PTZ and presets: those are announced regardless.
+            if (_featuresAnnounced)
+                await AnnounceFeaturesAsync(ct).ConfigureAwait(false);
             return;
         }
 
@@ -805,7 +827,6 @@ internal sealed class CameraBridge
         var labels = HomeAssistantMqtt.DetectionLabels;
         foreach (var label in labels)
             await AnnounceEntityAsync("binary_sensor", label, BinarySensorConfig(label), ct).ConfigureAwait(false);
-        await AnnounceEntityAsync("button", "reboot", ButtonConfig("Reboot", "reboot", "restart"), ct).ConfigureAwait(false);
 
         // The Record switch: capture one clip on demand from HA — no camera
         // detection involved ("record while the door is open").
@@ -1208,8 +1229,12 @@ internal sealed class CameraBridge
     {
         identifiers = new[] { $"neolink_{Id}" },
         name = _cam.Name,
-        manufacturer = _cam.SupportsEvents ? "Reolink (via Neolink.NET)" : "Neolink.NET",
-        model = !_cam.SupportsEvents ? "Generic RTSP camera"
+        // Which KIND of camera this is, which is not the same question as whether it
+        // can detect anything: a non-Reolink camera with a working ONVIF event
+        // service has detections and is still not a Reolink.
+        manufacturer = _control.OnvifOnly ? "Neolink.NET" : "Reolink (via Neolink.NET)",
+        model = _control.OnvifOnly
+            ? string.IsNullOrEmpty(_model) ? "Generic RTSP camera" : $"{_model} (ONVIF)"
             : string.IsNullOrEmpty(_model) ? "Baichuan camera" : _model,
         sw_version = _hub.Version,
     };
@@ -1866,12 +1891,35 @@ internal sealed class CameraBridge
         // a camera can go offline mid-event and the OFF still has to land.
         await PublishRecordingStateAsync(force: false).ConfigureAwait(false);
         if (!_control.Online) return;
+        // A generic camera's reads go over ONVIF, which can be slow: they run beside the loop,
+        // one at a time, so the cameras after it (a Reolink's motion-off) are not held up.
+        if (_control is GenericCameraControl)
+        {
+            if (Interlocked.Exchange(ref _cameraRefreshing, 1) == 0)
+                _ = Task.Run(async () =>
+                {
+                    try { await RefreshFromCameraAsync(ct).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { }
+                    catch (Exception ex) { Log.Debug($"MQTT: refresh for '{Id}' failed: {Log.Flatten(ex)}"); }
+                    finally { Volatile.Write(ref _cameraRefreshing, 0); }
+                }, CancellationToken.None);
+            return;
+        }
+        await RefreshFromCameraAsync(ct).ConfigureAwait(false);
+    }
 
+    private int _cameraRefreshing;
+
+    /// <summary>The part of the refresh that asks the camera itself.</summary>
+    private async Task RefreshFromCameraAsync(CancellationToken ct)
+    {
         // First time online: probe capabilities, then announce the feature entities.
         if (!_featuresAnnounced)
         {
             var caps = await TryGetCapabilitiesAsync(ct).ConfigureAwait(false);
-            if (caps?.Features is { } f)
+            // A provisional answer (ONVIF not reached yet) must not be settled on: it
+            // would announce a camera with no picture, pan/tilt or sliders for good.
+            if (caps?.Features is { } f && !caps.Provisional)
             {
                 _model = caps.Version?.Model;
                 if (f.Led) await ProbeLedAsync(ct).ConfigureAwait(false);
@@ -1883,9 +1931,21 @@ internal sealed class CameraBridge
                 // volume/auto-track/preset/picture/quick-reply entities exist here.
                 await ProbeHttpExtrasAsync(f, ct).ConfigureAwait(false);
                 _featuresAnnounced = true;
+                _announcedEvents = _cam.EventsAvailableNow;
                 await AnnounceAsync(ct).ConfigureAwait(false);
                 await PublishHttpExtrasAsync(ct).ConfigureAwait(false);
             }
+        }
+        // A non-Reolink camera's detections are only known to exist once its ONVIF
+        // event subscription lands, which can be a moment AFTER it first came online
+        // and was announced. Without this the motion sensors would be missing until
+        // the next restart of the server.
+        else if (_announcedEvents != _cam.EventsAvailableNow)
+        {
+            _announcedEvents = _cam.EventsAvailableNow;
+            Log.Info($"{_cam.Name}: detections became {(_announcedEvents ? "available" : "unavailable")} — " +
+                     "re-announcing its Home Assistant entities");
+            await AnnounceAsync(ct).ConfigureAwait(false);
         }
 
         var caps2 = await TryGetCapabilitiesAsync(ct).ConfigureAwait(false);

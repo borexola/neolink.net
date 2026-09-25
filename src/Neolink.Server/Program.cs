@@ -272,12 +272,15 @@ var users = config.Users.ToDictionary(u => u.Name, u => u.Pass);
 if (users.Count > 0)
     Log.Warn("RTSP is unencrypted: usernames and passwords are exchanged in plaintext.");
 
-var server = new RtspServer(users);
+var viewers = new ViewerRegistry();
+var server = new RtspServer(users) { Viewers = viewers };
 var tasks = new List<Task>();
 var webCameras = new List<WebCameraInfo>();
 // Router wake hints (wake_hints.syslog_port) route to each camera's wake-probe
 // owner by source IP; populated as the cameras are built below.
 var wakeHintTargets = new List<CameraService>();
+// Cameras whose PTZ is offered on the shared ONVIF port (ptz_share); the port starts after the loop.
+var sharedPtzCameras = new List<Neolink.Onvif.OnvifPtzCamera>();
 
 // MQTT / Home Assistant bridge is created after the cameras are built (below) so
 // it can reference their controls; declared here so motion wiring can reach it.
@@ -370,6 +373,24 @@ var emergency = new Neolink.Notifications.EmergencyMode(emergencyStore,
         PrivacyOn = c.PrivacyOn,
         SetHoldAwake = c.SetHoldAwake,
     }).ToList());
+// Live object boxes (preview): the detector itself runs in the browser, so the
+// server only stores the switch and keeps the files the page loads.
+var detectStore = new Neolink.Detect.DetectStore(stateDir);
+var detectAssets = new Neolink.Detect.DetectAssets(stateDir);
+// Housekeeping, on the hour like the recordings' own: a feature switched off
+// should not go on holding 35 MB of state dir. Not done the moment it is switched
+// off — turning it off and straight back on is a normal thing to do, and that
+// would cost the download twice.
+tasks.Add(Task.Run(async () =>
+{
+    while (!shutdown.IsCancellationRequested)
+    {
+        try { await Task.Delay(TimeSpan.FromHours(1), shutdown.Token).ConfigureAwait(false); }
+        catch (OperationCanceledException) { return; }
+        try { detectAssets.Tidy(detectStore.Snapshot()); }
+        catch (Exception ex) { Log.Warn($"Live object boxes: tidy pass failed: {Log.Flatten(ex)}"); }
+    }
+}));
 var recordingHealth = new Neolink.Recording.RecordingHealth();
 tasks.Add(Task.Run(() => notifier.RunAsync(shutdown.Token)));
 
@@ -438,6 +459,10 @@ if (config.Recording != null)
 // Motion pushes fan out to the recorder and/or the MQTT bridge; wired after both
 // exist (the bridge needs the camera list, built below).
 var motionTargets = new List<(IReadOnlyList<CameraService> Services, string Name, Action<MotionPush>? RecorderSink)>();
+// The same, for non-Reolink cameras whose detections arrive over ONVIF's event
+// service. Wired in the same place and for the same reason: the MQTT bridge does
+// not exist until the camera list is built.
+var onvifEventTargets = new List<(OnvifEventService Events, string Name, Action<MotionPush>? RecorderSink)>();
 
 // Per-camera runtime state that survives restarts (today: the SUSPEND flag —
 // Neolink holds no connection to the camera, so it can't be viewed or recorded).
@@ -471,6 +496,9 @@ foreach (var cam in config.Cameras)
     CameraService? primaryService = null;
     var camServices = new List<CameraService>();
     var pullServices = new List<RtspCameraService>();
+    // Detections from a non-Reolink camera, over ONVIF's event service. Null for a
+    // Baichuan camera, whose alarms ride the connection it already holds.
+    OnvifEventService? onvifEvents = null;
     var demoServices = new List<Neolink.Demo.DemoCameraService>();
 
     if (cam.Demo)
@@ -510,7 +538,34 @@ foreach (var cam in config.Cameras)
         }
         if (cam.RtspMain != null) AddRtsp(cam.RtspMain, "mainStream", alsoRoot: true);
         if (cam.RtspSub != null) AddRtsp(cam.RtspSub, "subStream", alsoRoot: cam.RtspMain == null);
-        control = new GenericCameraControl(cam.Name, pullServices);
+        // ONVIF is where ALL of a non-Reolink camera's settings come from: device
+        // identity, encoder profiles, picture, PTZ, overlays, reboot. It is found on
+        // the stream URL's own host unless onvif_address says otherwise, and it
+        // signs in with the login that URL carries (onvif_address can carry its own
+        // when the camera keeps separate accounts). A camera with ONVIF switched off
+        // is unaffected: it streams and records exactly as before.
+        var rtspUrls = new List<(string Kind, string Url)>();
+        if (cam.RtspMain != null) rtspUrls.Add(("mainStream", cam.RtspMain));
+        if (cam.RtspSub != null) rtspUrls.Add(("subStream", cam.RtspSub));
+        // The same construction the camera editor's test probe uses, so the two
+        // agree on the ports tried and the login used.
+        var genericOnvif = OnvifClient.ForGenericCamera(cam.OnvifAddress, rtspUrls.FirstOrDefault().Url, cam.Name);
+        var genericControl = new GenericCameraControl(cam.Name, pullServices, genericOnvif, rtspUrls);
+        control = genericControl;
+        // Detections. A Reolink camera pushes its alarms down the Baichuan
+        // connection; the open standard has no equivalent, so this holds a
+        // pull-point subscription and long-polls it. A camera whose ONVIF has no
+        // event service (or none reachable) simply never subscribes, and everything
+        // that depends on detections stays off for it exactly as it was before.
+        // Only when something will consume them: a subscription is one of the few standing
+        // connections the camera may have room for, so a relay-only setup holds none.
+        if (genericOnvif != null && ((eventStore != null && recordingSettings != null) || config.Mqtt != null))
+        {
+            onvifEvents = new OnvifEventService(cam.Name, genericOnvif, genericControl.OtherChannelTokensAsync);
+            onvifEvents.SetSuspended(cameraState.Suspended(cam.Name));
+            var events = onvifEvents;
+            tasks.Add(Task.Run(() => events.RunAsync(shutdown.Token)));
+        }
     }
     else
     {
@@ -528,7 +583,8 @@ foreach (var cam in config.Cameras)
             if (alsoRoot)
                 camMounts.Add(Mount($"/{cam.Name}", hub));
             webStreams.Add(new WebStreamInfo(suffix, $"/{cam.Name}/{suffix}", hub));
-            var service = new CameraService(cam, kind, hub, TimeSpan.FromSeconds(2 * streamIndex++));
+            var service = new CameraService(cam, kind, hub, TimeSpan.FromSeconds(2 * streamIndex++),
+                TimeSpan.FromHours(config.WakeHints?.TrustHours ?? WakeHintConfig.DefaultTrustHours));
             service.SetSuspended(cameraState.Suspended(cam.Name)); // restore persisted suspend
             primaryService ??= service;
             camServices.Add(service);
@@ -597,23 +653,36 @@ foreach (var cam in config.Cameras)
         }
         else
         {
-            // Generic RTSP cameras have no detection pushes, so event recording can
-            // never trigger — only continuous (24/7) applies to them.
-            recordingSettings.Seed(cam.Name, eventsDefault: cam.Record && !cam.IsGenericRtsp);
+            // A camera with no way to detect anything can never trigger an event
+            // clip — only continuous (24/7) applies to it. A non-Reolink camera CAN
+            // detect, through its ONVIF event service, so it is seeded like any
+            // other; if it turns out to have none, the switch simply never fires.
+            recordingSettings.Seed(cam.Name,
+                eventsDefault: cam.Record && (!cam.IsGenericRtsp || onvifEvents != null));
+            // A stored Detection events = off on a generic camera predates ONVIF detections
+            // and was never the user's choice, so it is reset to the new default exactly once.
+            if (cam.IsGenericRtsp && onvifEvents != null && cam.Record
+                && recordingSettings.MigrationDue(RecordingSettings.OnvifEventsMigration))
+                recordingSettings.ResetEvents(cam.Name, eventsDefault: true);
             // The user can retarget recording to another served stream at runtime
             // (per camera, from the web UI); the config stream stays the default.
             var hubsByKind = webStreams.ToDictionary(s => s.Kind, s => s.Hub, StringComparer.Ordinal);
-            if (!cam.IsGenericRtsp)
+            // Anything that can produce a detection gets an event recorder: Baichuan
+            // always, a non-Reolink camera once ONVIF events are in play.
+            if (!cam.IsGenericRtsp || onvifEvents != null)
             {
                 // Strip previews are cut from the sub stream when it is served and
                 // differs from the recording stream (no point recording twice).
                 var previewStream = webStreams.FirstOrDefault(s => s.Kind == "subStream");
                 if (previewStream == recordStream) previewStream = null;
+                var events = onvifEvents;
                 var recorder = new EventRecorder(cam.Name, recordStream.Hub, control, eventStore,
                     config.Recording, recordingSettings, previewStream?.Hub, hubsByKind,
                     hasRoom: storage == null ? null : () => storage.HasRoom(StorageRole.Clips),
                     onWriteError: recordingHealth.MarkWriteError,
-                    ai: aiDescriber);
+                    ai: aiDescriber,
+                    // A generic camera buffers no pre-roll until its ONVIF events are known to work.
+                    prerollWanted: cam.IsGenericRtsp && events != null ? () => events.EverSubscribed : null);
                 eventEmailer ??= new Neolink.Notifications.EventEmailer(
                     notificationStore, notifier, recordingSettings, eventStore)
                 {
@@ -707,6 +776,10 @@ foreach (var cam in config.Cameras)
         foreach (var s in camServices) s.SetSuspended(v);
         foreach (var s in pullServices) s.SetSuspended(v);
         foreach (var s in demoServices) s.SetSuspended(v);
+        // Suspended means Neolink holds no connection to the camera, and an event
+        // subscription is a connection: leaving it up would keep polling a camera
+        // the user has told us to leave alone.
+        onvifEvents?.SetSuspended(v);
         cameraState.SetSuspended(cam.Name, v);
     }
     bool IsCamSuspended() =>
@@ -714,9 +787,12 @@ foreach (var cam in config.Cameras)
         || (pullServices.Count > 0 && pullServices.All(s => s.Suspended))
         || (demoServices.Count > 0 && demoServices.All(s => s.Suspended));
     // Configured address for the settings identity strip: host, plus :port when
-    // the camera is on a non-default Baichuan port. Generic RTSP cameras keep
-    // their address in the stream URL, so leave theirs unset.
-    var camAddress = cam.IsGenericRtsp || string.IsNullOrWhiteSpace(cam.Host) ? null
+    // the camera is on a non-default Baichuan port. A generic RTSP camera keeps its
+    // address inside the stream URL, so the host is lifted out of that (never the
+    // login, which is not the strip's business).
+    var camAddress = cam.IsGenericRtsp
+        ? NetUtil.SplitRtspUrl(cam.RtspMain ?? cam.RtspSub).Display
+        : string.IsNullOrWhiteSpace(cam.Host) ? null
         : cam.Port is 9000 or 0 ? cam.Host : $"{cam.Host}:{cam.Port}";
     webCameras.Add(new WebCameraInfo(cam.Name, webStreams, control, permitted,
         ContinuousActive: continuousRecorder == null ? null : () => continuousRecorder.IsWriting,
@@ -757,6 +833,9 @@ foreach (var cam in config.Cameras)
         // on-demand recording session per camera (UI button ≡ HA Record switch).
         {
             EventRecorder = eventRecorder, Address = camAddress, Udp = cam.Udp,
+            // A non-Reolink camera's detections depend on an ONVIF event service
+            // that has to be asked, so its answer is a probe rather than a constant.
+            EventsProbe = onvifEvents == null ? null : () => onvifEvents.EverSubscribed,
             // External wake hints (the wake-hint API endpoint) land on the same
             // probe-owner path the syslog listener feeds.
             WakeHint = camServices.Count == 0 ? null : detail =>
@@ -776,6 +855,21 @@ foreach (var cam in config.Cameras)
     if (primaryService != null)
         motionTargets.Add((camServices, cam.Name, recorderSink));
 
+    // Wired after the loop, where the MQTT bridge exists (see onvifEventTargets).
+    if (onvifEvents != null)
+        onvifEventTargets.Add((onvifEvents, cam.Name, recorderSink));
+
+    // PTZ for Frigate over ONVIF (ptz_share / ptz_port), started after the loop. Validation has
+    // already turned it off (PtzOff) where it cannot work.
+    if (cam.PtzMode != "off" && cam.PtzOff == null && primaryService != null)
+    {
+        var mainHub = (webStreams.FirstOrDefault(s => s.Kind == "mainStream") ?? webStreams.FirstOrDefault())?.Hub;
+        var ptzCam = new Neolink.Onvif.OnvifPtzCamera(cam.Name, control, permitted,
+            mainHub == null ? null : () => (mainHub.Width, mainHub.Height));
+        if (cam.PtzMode == "own") StartPtzEndpoint($"{cam.Name}: ONVIF PTZ", cam.PtzPort!.Value, new[] { ptzCam });
+        else sharedPtzCameras.Add(ptzCam);
+    }
+
     // Demo cameras have no camera to push detections, so a pulse task plays the
     // camera's part: a labelled push every minute or three, straight into the
     // same recorder sink a Baichuan push lands in. 24/7 recording defaults ON —
@@ -789,6 +883,22 @@ foreach (var cam in config.Cameras)
             tasks.Add(Task.Run(() => Neolink.Demo.DemoRig.RunPulsesAsync(cam.Name, source, demoSink, shutdown.Token)));
         }
     }
+}
+// The generic cameras' Detection events switch has been brought up to the new
+// default where it was never a choice (see the seed above); from now on it is.
+recordingSettings?.CompleteMigration(RecordingSettings.OnvifEventsMigration);
+
+// One port for every camera sharing it, each an ONVIF profile named after the camera (Frigate's onvif.profile).
+if (sharedPtzCameras.Count > 0)
+    StartPtzEndpoint($"ONVIF PTZ (shared port {config.PtzPort})", config.PtzPort, sharedPtzCameras);
+
+void StartPtzEndpoint(string tag, int port, IReadOnlyList<Neolink.Onvif.OnvifPtzCamera> ptzCameras)
+{
+    var endpoint = new Neolink.Onvif.OnvifPtzServer(tag, users, ptzCameras);
+    var bind = config.PtzBind ?? config.BindAddr;
+    tasks.Add(Task.Run(() => RunListenerAsync(ct => endpoint.RunAsync(bind, port, ct),
+        ex => $"{tag} cannot listen on tcp:{port} ({ex.Message}); retrying every minute. The cameras are unaffected.",
+        TimeSpan.FromMinutes(1), shutdown.Token)));
 }
 
 // Router wake hints: instant, event-grade wake signals for battery cameras from
@@ -822,41 +932,19 @@ if (config.WakeHints is { } wakeHintCfg &&
     {
         var hintListener = new WakeHintListener(
             wakeHintCfg.SyslogPort, wakeHintCfg.Bind ?? config.BindAddr, dispatchHint);
-        tasks.Add(Task.Run(async () =>
-        {
-            while (!shutdown.Token.IsCancellationRequested)
-            {
-                try { await hintListener.RunAsync(shutdown.Token); return; }
-                catch (OperationCanceledException) { return; }
-                catch (Exception e)
-                {
-                    Log.Error($"Wake hints: listener failed ({e.Message}); retrying in 30s. " +
-                              $"If another service owns udp:{wakeHintCfg.SyslogPort}, change wake_hints.syslog_port.");
-                    try { await Task.Delay(TimeSpan.FromSeconds(30), shutdown.Token); }
-                    catch (OperationCanceledException) { return; }
-                }
-            }
-        }));
+        tasks.Add(Task.Run(() => RunListenerAsync(hintListener.RunAsync,
+            e => $"Wake hints: listener failed ({e.Message}); retrying in 30s. " +
+                 $"If another service owns udp:{wakeHintCfg.SyslogPort}, change wake_hints.syslog_port.",
+            TimeSpan.FromSeconds(30), shutdown.Token)));
     }
     var pushPorts = wakeHintCfg.PushPorts.Where(p => p is > 0 and < 65536).Distinct().ToList();
     if (pushPorts.Count > 0)
     {
         var pushSink = new PushSinkListener(pushPorts, wakeHintCfg.Bind ?? config.BindAddr, dispatchHint);
-        tasks.Add(Task.Run(async () =>
-        {
-            while (!shutdown.Token.IsCancellationRequested)
-            {
-                try { await pushSink.RunAsync(shutdown.Token); return; }
-                catch (OperationCanceledException) { return; }
-                catch (Exception e)
-                {
-                    Log.Error($"Wake hints: push decoy failed ({e.Message}); retrying in 30s. " +
-                              "If another service owns the port(s), change wake_hints.push_ports.");
-                    try { await Task.Delay(TimeSpan.FromSeconds(30), shutdown.Token); }
-                    catch (OperationCanceledException) { return; }
-                }
-            }
-        }));
+        tasks.Add(Task.Run(() => RunListenerAsync(pushSink.RunAsync,
+            e => $"Wake hints: push decoy failed ({e.Message}); retrying in 30s. " +
+                 "If another service owns the port(s), change wake_hints.push_ports.",
+            TimeSpan.FromSeconds(30), shutdown.Token)));
     }
 }
 
@@ -924,6 +1012,22 @@ if (config.Mqtt is { } mqttCfg)
     var bridge = mqtt;
     emergency.Changed += bridge.RepublishEmergencyAsync;
 }
+foreach (var (events, name, recorderSink) in onvifEventTargets)
+{
+    var bridge = mqtt;
+    if (recorderSink == null && bridge == null) continue;
+    // One subscription per camera, so there are no cross-session duplicates to
+    // suppress — the de-duplication below exists for Baichuan cameras that push the
+    // same alarm on every live session, which has no ONVIF equivalent.
+    events.MotionSink = push =>
+    {
+        recorderSink?.Invoke(push);
+        bridge?.OnMotion(name, push);
+    };
+    // The motion sensors themselves appear once the first subscription lands: the
+    // bridge's refresh tick notices EventsAvailableNow change and re-announces.
+}
+
 foreach (var (services, name, recorderSink) in motionTargets)
 {
     var bridge = mqtt;
@@ -1015,10 +1119,12 @@ if (config.WebPort > 0)
         Demo = demoMode,
         Updates = updates,
         Monitor = monitor,
+        Viewers = viewers,
         RecordingHealth = recordingHealth,
         Notifier = notifier,
         Ai = aiStore,
         Emergency = emergency,
+        Detect = (detectStore, detectAssets),
         AiPending = aiDescriber != null ? aiDescriber.IsPending : null,
         Logs = logBuffer,
         // Graceful shutdown; docker's restart policy (systemd, or the HA
@@ -1081,6 +1187,29 @@ return exitCode;
 
 // Safety net around one camera stream: a crash in CameraService must never take
 // the process (and the other cameras) down. Log it and start the service again.
+// Runs a listener until shutdown, restarting it after a failure so a port freed elsewhere needs no
+// restart. The first failure is an error; its repeats are logged quietly.
+static async Task RunListenerAsync(Func<CancellationToken, Task> run, Func<Exception, string> failed,
+    TimeSpan retry, CancellationToken ct)
+{
+    for (bool first = true; !ct.IsCancellationRequested; first = false)
+    {
+        try
+        {
+            await run(ct);
+            return;
+        }
+        catch (OperationCanceledException) { return; }
+        catch (Exception ex)
+        {
+            if (first) Log.Error(failed(ex));
+            else Log.Debug(failed(ex));
+        }
+        try { await Task.Delay(retry, ct); }
+        catch (OperationCanceledException) { return; }
+    }
+}
+
 static async Task RunCameraGuardedAsync(CameraService service, string tag, CancellationToken ct)
 {
     while (!ct.IsCancellationRequested)

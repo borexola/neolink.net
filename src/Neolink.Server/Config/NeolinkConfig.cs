@@ -24,6 +24,11 @@ public sealed class NeolinkConfig
     public MqttConfig? Mqtt { get; set; }
     /// <summary>Router wake hints ("wake_hints" section); null = disabled.</summary>
     public WakeHintConfig? WakeHints { get; set; }
+    /// <summary>The shared ONVIF PTZ port: every camera with ptz_share is a profile on it. 0 = off.</summary>
+    public int PtzPort { get; set; } = DefaultPtzPort;
+    public const int DefaultPtzPort = 8656;
+    /// <summary>Bind address for the ONVIF PTZ ports; defaults to the RTSP bind address.</summary>
+    public string? PtzBind { get; set; }
     /// <summary>Recovery switch (legacy top-level spelling; "ui.reset_admin_password" preferred).</summary>
     public bool ResetAdminPassword { get; set; }
 
@@ -45,20 +50,26 @@ public sealed class NeolinkConfig
     /// Loads a config file. JSON (recommended) and TOML (compatible with the
     /// original Rust neolink) are both supported; the format is detected from
     /// the file extension or content.
+    ///
+    /// A camera entry the loader cannot use is dropped with an error, so the
+    /// rest still start. Pass <paramref name="strict"/> when validating a config
+    /// the user is in the middle of SAVING (see <see cref="ConfigEditor.Apply"/>):
+    /// there the same entry must be refused to their face, not accepted and then
+    /// silently discarded at the next boot.
     /// </summary>
-    public static NeolinkConfig Load(string path)
+    public static NeolinkConfig Load(string path, bool strict = false)
     {
         var text = File.ReadAllText(path);
         bool isJson = path.EndsWith(".json", StringComparison.OrdinalIgnoreCase)
                       || text.TrimStart().StartsWith('{');
-        var config = isJson ? LoadJson(text) : LoadToml(text);
-        config.Validate();
+        var config = isJson ? LoadJson(text, strict) : LoadToml(text, strict);
+        config.Validate(strict);
         return config;
     }
 
     // ------------------------------------------------------------------ JSON
 
-    private static NeolinkConfig LoadJson(string text)
+    private static NeolinkConfig LoadJson(string text, bool strict)
     {
         var options = new JsonDocumentOptions
         {
@@ -113,13 +124,22 @@ public sealed class NeolinkConfig
                 case "wakehints":
                     config.WakeHints = ParseJsonWakeHints(prop.Value);
                     break;
+                case "ptzport":
+                    config.PtzPort = prop.Value.GetInt32();
+                    break;
+                case "ptzbind":
+                    config.PtzBind = prop.Value.GetString();
+                    break;
                 case "users":
                     foreach (var u in prop.Value.EnumerateArray())
                         config.Users.Add(ParseJsonUser(u));
                     break;
                 case "cameras":
                     foreach (var c in prop.Value.EnumerateArray())
-                        config.Cameras.Add(ParseJsonCamera(c));
+                    {
+                        try { config.Cameras.Add(ParseJsonCamera(c)); }
+                        catch (Exception ex) when (!strict && IsBadEntry(ex)) { DropCamera(JsonCameraLabel(c), ex.Message); }
+                    }
                     break;
                 default:
                     Log.Warn($"Config: ignoring unknown option '{prop.Name}'");
@@ -151,8 +171,12 @@ public sealed class NeolinkConfig
     {
         string? name = null, username = null, password = null, address = null, uid = null, httpAddress = null;
         string? onvifAddress = null;
+        int? ptzPort = null;
+        bool ptzShare = false;
         string? rtspMain = null, rtspSub = null;
         string? audioTranscode = null;
+        string? maxEncryption = null;
+        bool legacyLogin = false;
         string stream = "both";
         byte channelId = 0;
         bool record = true;
@@ -173,6 +197,17 @@ public sealed class NeolinkConfig
                 case "address": address = prop.Value.GetString(); break;
                 case "httpaddress": httpAddress = prop.Value.GetString(); break;
                 case "onvifaddress": onvifAddress = prop.Value.GetString(); break;
+                // Judged in ValidatePtz, which turns off only the PTZ endpoint, never the camera.
+                case "ptzport":
+                    ptzPort = prop.Value.ValueKind == JsonValueKind.Null ? null
+                        : prop.Value.ValueKind == JsonValueKind.Number && prop.Value.TryGetInt32(out var pp) ? pp
+                        : CameraConfig.NotAPort;
+                    break;
+                case "ptzshare":
+                    ptzShare = prop.Value.ValueKind == JsonValueKind.True;
+                    if (prop.Value.ValueKind is not (JsonValueKind.True or JsonValueKind.False or JsonValueKind.Null))
+                        Log.Warn($"Camera \"{name ?? "?"}\": ptz_share must be true or false (got {prop.Value.GetRawText()}), so it is off");
+                    break;
                 case "uid": uid = prop.Value.GetString(); break;
                 case "stream": stream = prop.Value.GetString() ?? "both"; break;
                 case "channelid":
@@ -191,6 +226,8 @@ public sealed class NeolinkConfig
                 case "wakecapture": wakeCapture = prop.Value.GetBoolean(); break;
                 case "keepalivehours": keepAliveHours = Math.Clamp(prop.Value.GetDouble(), 0, 24); break;
                 case "audiotranscode": audioTranscode = prop.Value.GetString(); break;
+                case "maxencryption": maxEncryption = prop.Value.GetString(); break;
+                case "legacylogin": legacyLogin = prop.Value.GetBoolean(); break;
                 // Generic (non-Reolink) camera: pull these RTSP URLs directly.
                 case "rtsp" or "rtspmain": rtspMain = prop.Value.GetString(); break;
                 case "rtspsub": rtspSub = prop.Value.GetString(); break;
@@ -208,7 +245,7 @@ public sealed class NeolinkConfig
 
         return BuildCamera(name, username, password, address, uid, stream, channelId, permitted, httpAddress,
             record, rtspMain, rtspSub, alwaysOn, udpProbe, udp, wakeCapture, onvifAddress,
-            keepAliveHours, audioTranscode);
+            keepAliveHours, audioTranscode, maxEncryption, legacyLogin, ptzShare, ptzPort);
     }
 
     private static RecordingConfig ParseJsonRecording(JsonElement el)
@@ -277,6 +314,11 @@ public sealed class NeolinkConfig
         {
             switch (Key(prop.Name))
             {
+                case "trusthours":
+                    if (prop.Value.ValueKind != JsonValueKind.Number || !prop.Value.TryGetDouble(out var hours))
+                        throw new FormatException("wake_hints.trust_hours must be a number");
+                    wh.TrustHours = hours;
+                    break;
                 case "syslogport" or "port": wh.SyslogPort = prop.Value.GetInt32(); break;
                 case "pushports" or "pushport":
                     // A list or a single number, whichever the user reached for.
@@ -324,7 +366,7 @@ public sealed class NeolinkConfig
 
     // ------------------------------------------------------------------ TOML (legacy)
 
-    private static NeolinkConfig LoadToml(string text)
+    private static NeolinkConfig LoadToml(string text, bool strict)
     {
         var root = MiniToml.Parse(text);
         var config = new NeolinkConfig
@@ -333,6 +375,8 @@ public sealed class NeolinkConfig
             BindPort = (int)(MiniToml.GetInt(root, "bind_port") ?? 8654),
             WebPort = (int)(MiniToml.GetInt(root, "web_port") ?? 8655),
             WebBind = MiniToml.GetString(root, "web_bind"),
+            PtzPort = (int)(MiniToml.GetInt(root, "ptz_port") ?? DefaultPtzPort),
+            PtzBind = MiniToml.GetString(root, "ptz_bind"),
             WebUi = MiniToml.GetBool(root, "web_ui") ?? MiniToml.GetBool(root, "webui") ?? true,
             ResetAdminPassword = MiniToml.GetBool(root, "reset_admin_password") ?? false,
         };
@@ -346,6 +390,10 @@ public sealed class NeolinkConfig
             {
                 SyslogPort = (int)(MiniToml.GetInt(wh, "syslog_port") ?? MiniToml.GetInt(wh, "port") ?? 5140),
                 Bind = MiniToml.GetString(wh, "bind"),
+                TrustHours = wh.ContainsKey("trust_hours")
+                    ? MiniToml.GetDouble(wh, "trust_hours")
+                        ?? throw new FormatException("wake_hints.trust_hours must be a number")
+                    : WakeHintConfig.DefaultTrustHours,
             };
             foreach (var p in MiniToml.GetStringList(wh, "push_ports") ?? new List<string>())
                 if (int.TryParse(p, out var port)) config.WakeHints.PushPorts.Add(port);
@@ -419,31 +467,69 @@ public sealed class NeolinkConfig
         {
             if (MiniToml.GetString(c, "format") != null)
                 Log.Warn("The 'format' option was removed in favour of auto detection.");
-            config.Cameras.Add(BuildCamera(
-                MiniToml.GetString(c, "name"),
-                MiniToml.GetString(c, "username"),
-                MiniToml.GetString(c, "password"),
-                MiniToml.GetString(c, "address"),
-                MiniToml.GetString(c, "uid"),
-                MiniToml.GetString(c, "stream") ?? "both",
-                (byte)(MiniToml.GetInt(c, "channel_id") ?? 0),
-                MiniToml.GetStringList(c, "permitted_users"),
-                MiniToml.GetString(c, "http_address"),
-                MiniToml.GetBool(c, "record") ?? true,
-                MiniToml.GetString(c, "rtsp_main") ?? MiniToml.GetString(c, "rtsp"),
-                MiniToml.GetString(c, "rtsp_sub"),
-                MiniToml.GetBool(c, "always_on"),
-                MiniToml.GetBool(c, "udp_probe") ?? false,
-                MiniToml.GetBool(c, "udp") ?? false,
-                MiniToml.GetBool(c, "wake_capture") ?? false,
-                MiniToml.GetString(c, "onvif_address"),
-                Math.Clamp(MiniToml.GetDouble(c, "keep_alive_hours") ?? 0, 0, 24),
-                MiniToml.GetString(c, "audio_transcode")));
+            try
+            {
+                config.Cameras.Add(BuildCamera(
+                    MiniToml.GetString(c, "name"),
+                    MiniToml.GetString(c, "username"),
+                    MiniToml.GetString(c, "password"),
+                    MiniToml.GetString(c, "address"),
+                    MiniToml.GetString(c, "uid"),
+                    MiniToml.GetString(c, "stream") ?? "both",
+                    (byte)(MiniToml.GetInt(c, "channel_id") ?? 0),
+                    MiniToml.GetStringList(c, "permitted_users"),
+                    MiniToml.GetString(c, "http_address"),
+                    MiniToml.GetBool(c, "record") ?? true,
+                    MiniToml.GetString(c, "rtsp_main") ?? MiniToml.GetString(c, "rtsp"),
+                    MiniToml.GetString(c, "rtsp_sub"),
+                    MiniToml.GetBool(c, "always_on"),
+                    MiniToml.GetBool(c, "udp_probe") ?? false,
+                    MiniToml.GetBool(c, "udp") ?? false,
+                    MiniToml.GetBool(c, "wake_capture") ?? false,
+                    MiniToml.GetString(c, "onvif_address"),
+                    Math.Clamp(MiniToml.GetDouble(c, "keep_alive_hours") ?? 0, 0, 24),
+                    MiniToml.GetString(c, "audio_transcode"),
+                    MiniToml.GetString(c, "max_encryption"),
+                    MiniToml.GetBool(c, "legacy_login") ?? false,
+                    MiniToml.GetBool(c, "ptz_share") ?? false,
+                    MiniToml.GetInt(c, "ptz_port") is { } ptzPort
+                        ? ptzPort is >= 0 and <= 65535 ? (int)ptzPort : CameraConfig.NotAPort : null));
+            }
+            catch (Exception ex) when (!strict && IsBadEntry(ex))
+            {
+                var name = MiniToml.GetString(c, "name");
+                DropCamera(string.IsNullOrWhiteSpace(name) ? "(unnamed)" : $"\"{name}\"", ex.Message);
+            }
         }
         return config;
     }
 
     // ------------------------------------------------------------------ shared
+
+    /// <summary>
+    /// A camera entry the loader cannot use is dropped, never fatal. The Home
+    /// Assistant add-on merges its options INTO config.json and only ever adds
+    /// (see neolink-addon/run.sh), so it can write an entry its own Options page
+    /// is then unable to un-write — one of those used to take every other camera
+    /// down with it, recoverable only by hand-editing config.json.
+    /// </summary>
+    private static void DropCamera(string label, string why) =>
+        Log.Error($"Config: skipping camera {label} — {why}. Every other camera still starts. " +
+                  "A skipped camera is not listed in the web UI, so fix or remove this entry in the " +
+                  "config file itself (under the Home Assistant add-on, check its Options too).");
+
+    private static bool IsBadEntry(Exception ex) =>
+        ex is FormatException or InvalidOperationException or JsonException or OverflowException;
+
+    /// <summary>Best-effort name for an entry that failed before it became a camera.</summary>
+    private static string JsonCameraLabel(JsonElement el)
+    {
+        if (el.ValueKind == JsonValueKind.Object)
+            foreach (var p in el.EnumerateObject())
+                if (Key(p.Name) == "name" && p.Value.ValueKind == JsonValueKind.String)
+                    return $"\"{p.Value.GetString()}\"";
+        return "(unnamed)";
+    }
 
     private static void WarnTls() =>
         Log.Warn("TLS (certificate) is not supported by Neolink.NET yet; serving plain RTSP. " +
@@ -454,10 +540,18 @@ public sealed class NeolinkConfig
         string? httpAddress = null, bool record = true, string? rtspMain = null, string? rtspSub = null,
         bool? alwaysOn = null, bool udpProbe = false, bool udp = false, bool wakeCapture = false,
         string? onvifAddress = null, double keepAliveHours = 0,
-        string? audioTranscode = null)
+        string? audioTranscode = null, string? maxEncryption = null, bool legacyLogin = false,
+        bool ptzShare = false, int? ptzPort = null)
     {
         if (name == null) throw new FormatException("camera entry missing \"name\"");
         audioTranscode = NormalizeAudioTranscode(name, audioTranscode);
+        // Rejected by name rather than defaulted: a typo here would leave the camera
+        // on the framing the user is trying to move it off, with nothing to show why.
+        if (Bc.BcConstants.ParseMaxEncryption(maxEncryption) == null)
+            throw new FormatException(
+                $"Camera \"{name}\": invalid max_encryption \"{maxEncryption}\" " +
+                $"(expected one of: {string.Join(", ", Bc.BcConstants.MaxEncryptionNames)})");
+        maxEncryption = string.IsNullOrWhiteSpace(maxEncryption) ? null : maxEncryption.Trim().ToLowerInvariant();
 
         // Generic (non-Reolink) camera: RTSP URLs stand in for address/credentials
         // (put the login inside the URL: rtsp://user:pass@host/path).
@@ -481,6 +575,11 @@ public sealed class NeolinkConfig
                 PermittedUsers = permitted,
                 Record = record,
                 AudioTranscode = audioTranscode,
+                // A non-Reolink camera's settings all come over ONVIF, which is
+                // found on the stream URL's own host unless this says otherwise.
+                OnvifAddress = string.IsNullOrWhiteSpace(onvifAddress) ? null : onvifAddress.Trim(),
+                PtzShare = ptzShare, // refused in ValidatePtz, which says why
+                PtzPort = ptzPort,
             };
         }
 
@@ -511,6 +610,8 @@ public sealed class NeolinkConfig
             PermittedUsers = permitted,
             HttpAddress = string.IsNullOrWhiteSpace(httpAddress) ? null : httpAddress.Trim(),
             OnvifAddress = string.IsNullOrWhiteSpace(onvifAddress) ? null : onvifAddress.Trim(),
+            PtzShare = ptzShare,
+            PtzPort = ptzPort,
             Record = record,
             AlwaysOn = alwaysOn,
             Uid = string.IsNullOrWhiteSpace(uid) ? null : uid.Trim(),
@@ -519,6 +620,8 @@ public sealed class NeolinkConfig
             WakeCapture = wakeCapture,
             KeepAliveHours = keepAliveHours,
             AudioTranscode = audioTranscode,
+            MaxEncryption = maxEncryption,
+            LegacyLogin = legacyLogin,
         };
     }
 
@@ -534,8 +637,15 @@ public sealed class NeolinkConfig
         return null;
     }
 
-    private void Validate()
+    private void Validate(bool strict)
     {
+        void Drop(CameraConfig cam, string why)
+        {
+            if (strict) throw new FormatException($"Camera \"{cam.Name}\": {why}");
+            Cameras.Remove(cam);
+            DropCamera($"\"{cam.Name}\"", why);
+        }
+
         if (BindPort is < 0 or > 65535)
             throw new FormatException($"Invalid bind_port {BindPort}");
         if (WebPort is < 0 or > 65535)
@@ -547,6 +657,32 @@ public sealed class NeolinkConfig
                 throw new FormatException($"Invalid or reserved username \"{u.Name}\"");
         }
 
+        foreach (var cam in Cameras.ToList())
+        {
+            if (!ValidStreams.Contains(cam.Stream))
+                Drop(cam, $"invalid stream \"{cam.Stream}\" (expected one of: {string.Join(", ", ValidStreams)})");
+        }
+
+        // A second entry under the same name is unreachable anyway — the app matches
+        // cameras by name, case-insensitively — so the first one wins.
+        foreach (var g in Cameras.GroupBy(c => c.Name, StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1).ToList())
+        {
+            foreach (var dupe in g.Skip(1).ToList())
+                Drop(dupe, "a camera of that name is already configured");
+        }
+
+        // An unknown permitted_users entry drops the CAMERA, never just the entry:
+        // a camera with no permitted_users is open to everyone, so pruning the list
+        // would quietly widen access instead of removing it.
+        foreach (var cam in Cameras.ToList())
+        {
+            var unknown = (cam.PermittedUsers ?? new List<string>())
+                .Where(p => p is not ("anyone" or "anonymous") && Users.All(u => u.Name != p))
+                .Distinct().ToList();
+            if (unknown.Count > 0)
+                Drop(cam, $"permitted_users references undefined user(s): {string.Join(", ", unknown)}");
+        }
+
         // Zero cameras is allowed, not fatal: a fresh install boots to the web UI
         // (empty wall) so the user can set up and add cameras to the config,
         // rather than the process crash-looping on a first-run config.
@@ -554,19 +690,6 @@ public sealed class NeolinkConfig
             Log.Warn("No cameras configured yet — the web UI will run but show no cameras. " +
                      "Add your first under Server settings (the gear icon) in the web UI " +
                      "and restart when it prompts you — or edit the config file directly.");
-
-        foreach (var cam in Cameras)
-        {
-            if (!ValidStreams.Contains(cam.Stream))
-                throw new FormatException(
-                    $"Camera \"{cam.Name}\": invalid stream \"{cam.Stream}\" " +
-                    $"(expected one of: {string.Join(", ", ValidStreams)})");
-        }
-
-        var dupes = Cameras.GroupBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
-            .Where(g => g.Count() > 1).ToList();
-        if (dupes.Count > 0)
-            throw new FormatException($"Duplicate camera names: {string.Join(", ", dupes.Select(g => g.Key))}");
 
         // A camera name also becomes a Home Assistant object id and a recordings
         // folder name — by DIFFERENT reductions (HA lowercases and collapses
@@ -587,13 +710,6 @@ public sealed class NeolinkConfig
                      .Where(g => g.Count() > 1))
             Log.Warn($"Camera names {string.Join(" and ", g.Select(c => $"\"{c.Name}\""))} map to the same " +
                      $"recordings folder \"{g.Key}\": their footage will interleave. Rename one.");
-
-        var missing = Cameras
-            .SelectMany(c => c.PermittedUsers ?? new List<string>())
-            .Where(p => p is not ("anyone" or "anonymous") && Users.All(u => u.Name != p))
-            .Distinct().ToList();
-        if (missing.Count > 0)
-            throw new FormatException($"permitted_users reference undefined users: {string.Join(", ", missing)}");
 
         if (Recording != null)
         {
@@ -642,6 +758,11 @@ public sealed class NeolinkConfig
 
         if (WakeHints != null)
         {
+            // Reject non-finite, non-positive and overflowing durations at load time.
+            if (!double.IsFinite(WakeHints.TrustHours) || WakeHints.TrustHours <= 0
+                || WakeHints.TrustHours >= TimeSpan.MaxValue.TotalHours
+                || TimeSpan.FromHours(WakeHints.TrustHours) == TimeSpan.Zero)
+                throw new FormatException("wake_hints.trust_hours must be positive, finite and representable as a TimeSpan");
             if (WakeHints.SyslogPort is < 0 or > 65535)
                 throw new FormatException("wake_hints.syslog_port must be 0 (off) .. 65535");
             foreach (var p in WakeHints.PushPorts)
@@ -652,6 +773,54 @@ public sealed class NeolinkConfig
             // The listeners do IPAddress.Parse on this — fail at load, not at runtime.
             if (WakeHints.Bind is { } whb && !System.Net.IPAddress.TryParse(whb, out _))
                 throw new FormatException($"wake_hints.bind must be an IP address, not \"{whb}\"");
+        }
+
+        if (PtzPort is < 0 or > 65535)
+            throw new FormatException($"Invalid ptz_port {PtzPort} (1-65535, or 0 for no shared PTZ port)");
+        if (PtzBind is { } pb && !System.Net.IPAddress.TryParse(pb, out _))
+            throw new FormatException($"ptz_bind must be an IP address, not \"{pb}\"");
+        ValidatePtz(strict);
+    }
+
+    /// <summary>Turns off a camera's PTZ endpoint that cannot work, recording why in PtzOff; the camera
+    /// itself still starts. A save is refused instead.</summary>
+    private void ValidatePtz(bool strict)
+    {
+        var taken = new Dictionary<int, string> { [BindPort] = "the RTSP port (bind_port)" };
+        if (WebPort > 0) taken.TryAdd(WebPort, "the web port (web_port)");
+        foreach (var p in WakeHints?.PushPorts ?? new List<int>())
+            taken.TryAdd(p, "a wake_hints push port");
+        // The shared port only has to be free for the cameras that use it.
+        string? sharedWhy = PtzPort == 0 ? "the shared PTZ port is off (ptz_port is 0)"
+            : taken.TryGetValue(PtzPort, out var sharedOwner)
+                ? $"the shared PTZ port {PtzPort} is already {sharedOwner}: set ptz_port to a free one"
+            : null;
+        if (PtzPort > 0) taken.TryAdd(PtzPort, "the shared PTZ port (ptz_port)");
+        // Moving a camera must not be open to the network: with no login, only loopback will do.
+        bool loopback = System.Net.IPAddress.TryParse(PtzBind ?? BindAddr, out var bindIp)
+                        && System.Net.IPAddress.IsLoopback(bindIp);
+        foreach (var cam in Cameras)
+        {
+            var mode = cam.PtzMode;
+            if (mode == "off") continue;
+            string? why = cam.IsGenericRtsp
+                ? "a non-Reolink camera has ONVIF of its own: point Frigate at the camera itself"
+                : PermittedUsersFor(cam) == null && !loopback
+                    ? "with no RTSP users applying to this camera there is no login, and anyone who can reach the " +
+                      "port could move it: add users (Frigate signs in as one), or set ptz_bind to 127.0.0.1 " +
+                      "when Frigate runs on this host"
+                : mode == "shared" ? sharedWhy
+                : cam.PtzPort is not (>= 1 and <= 65535) ? "its own port must be a port number (1-65535)"
+                : taken.TryGetValue(cam.PtzPort.Value, out var owner) ? $"port {cam.PtzPort} is already {owner}"
+                : null;
+            if (why == null)
+            {
+                if (mode == "own") taken[cam.PtzPort!.Value] = $"camera \"{cam.Name}\"'s own PTZ port";
+                continue;
+            }
+            if (strict) throw new FormatException($"Camera \"{cam.Name}\": PTZ for Frigate — {why}");
+            Log.Error($"Camera \"{cam.Name}\": PTZ for Frigate is off — {why}. The camera itself still starts.");
+            cam.PtzOff = why;
         }
     }
 
@@ -756,6 +925,10 @@ public sealed class MqttConfig
 /// for both recipes.</summary>
 public sealed class WakeHintConfig
 {
+    public const double DefaultTrustHours = 2;
+    /// <summary>Hours to trust each camera's last wake hint before scan-only
+    /// connects resume. Positive fractional hours are supported.</summary>
+    public double TrustHours { get; set; } = DefaultTrustHours;
     /// <summary>UDP port to receive the router's remote syslog (filterlog) on.
     /// 5140 by convention — 514 needs elevated privileges on most systems.
     /// 0 turns the syslog listener off (push_ports may still run).</summary>
@@ -848,10 +1021,25 @@ public sealed class CameraConfig
     public string? HttpAddress { get; init; }
 
     /// <summary>Optional override for the camera's ONVIF device-service endpoint
-    /// (host, host:port, or a full URL). Defaults to the Baichuan host on the
-    /// standard /onvif/device_service path. Only used as a picture-settings fallback
-    /// for models with no Reolink HTTP CGI API.</summary>
+    /// (host, host:port, or a full URL — a full URL may carry "user:pass@" when the
+    /// ONVIF account differs from the streaming one). Defaults to the Baichuan host,
+    /// or a generic camera's stream-URL host, on the standard /onvif/device_service
+    /// path. On a Reolink it is the picture-settings fallback for models with no
+    /// HTTP CGI API; on a non-Reolink camera it is where ALL its settings come from.</summary>
     public string? OnvifAddress { get; init; }
+    /// <summary>Opt-in: Neolink answers ONVIF for this camera's PTZ on the shared ptz_port, as a profile
+    /// named after the camera (Frigate 0.18+ picks it with onvif.profile). Reolink cameras only.</summary>
+    public bool PtzShare { get; init; }
+    /// <summary>Opt-in: this camera's own ONVIF PTZ port, for Frigate before 0.18 (no onvif.profile).
+    /// Takes precedence over <see cref="PtzShare"/>; null or 0 = none.</summary>
+    public int? PtzPort { get; init; }
+    /// <summary>A ptz_port value that is not a number, kept for validation to report.</summary>
+    internal const int NotAPort = -1;
+    /// <summary>Why this camera's PTZ endpoint is off although configured; null when it works.</summary>
+    public string? PtzOff { get; set; }
+
+    /// <summary>"off", "shared" (a profile on the shared port) or "own" (its own port), as configured.</summary>
+    public string PtzMode => PtzPort is not (null or 0) ? "own" : PtzShare ? "shared" : "off";
     /// <summary>Record detection events for this camera (when recording is configured).</summary>
     public bool Record { get; init; } = true;
     /// <summary>
@@ -886,6 +1074,14 @@ public sealed class CameraConfig
     /// forever. Only meaningful when the camera is sleep-friendly (battery, no
     /// always_on); ignored otherwise.</summary>
     public double KeepAliveHours { get; init; }
+    /// <summary>Diagnostic (opt-in): cap the encryption this camera's login
+    /// advertises — "none", "bcencrypt", "aes" or "fullaes" (the default). Only for
+    /// firmware that will not answer the default; see docs/troubleshooting.md.</summary>
+    public string? MaxEncryption { get; init; }
+    /// <summary>Diagnostic (opt-in): open the login with the older framing — the
+    /// 32-byte MD5 credential fields — instead of the header-only upgrade. Pairs
+    /// with <see cref="MaxEncryption"/>; see docs/troubleshooting.md.</summary>
+    public bool LegacyLogin { get; init; }
     /// <summary>Transcode this camera's audio for RTSP clients: "opus" (needs
     /// ffmpeg with libopus; WebRTC ecosystems take Opus natively) or null =
     /// serve the camera's original audio. Recordings, the web player and

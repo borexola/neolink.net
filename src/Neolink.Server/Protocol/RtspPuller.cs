@@ -22,10 +22,17 @@ namespace Neolink.Protocol;
 public sealed class RtspPuller
 {
     private static readonly TimeSpan KeepAliveEvery = TimeSpan.FromSeconds(25);
-    private const int MaxMessage = 1 << 20;   // sanity cap for RTSP replies and RTP frames
+    private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(10);
+    // A reply, and the video once playing, must keep coming; an on-demand relay (MediaMTX)
+    // may take its own 10 s to start the source before it answers DESCRIBE.
+    private static readonly TimeSpan ReplyTimeout = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan IdleTimeout = TimeSpan.FromSeconds(20);
+    private const int MaxMessage = 1 << 20;   // sanity cap for RTSP replies
+    private const int MaxNal = 8 << 20;       // a 4K IDR slice can pass 1 MiB
+    private const int MaxRedirects = 3;
 
     private readonly string _tag;
-    private readonly Uri _url;
+    private Uri _url;
     private readonly string? _user;
     private readonly string? _pass;
     private readonly IMediaSink _sink;
@@ -36,6 +43,10 @@ public sealed class RtspPuller
     private string? _session;
     private string? _authHeader;        // computed after a 401 challenge, reused afterwards
     private string? _digestRealm, _digestNonce;
+    private int _videoChannel;          // the interleaved channel the camera chose in its SETUP reply
+    private TimeSpan _keepAlive = KeepAliveEvery;
+    private string _keepAliveMethod = "GET_PARAMETER";
+    private int _keepAliveCseq = -1;
 
     private static readonly byte[] StartCode = { 0, 0, 0, 1 };
 
@@ -49,115 +60,300 @@ public sealed class RtspPuller
     private byte[] _pkt = new byte[2048];
     private uint _auTimestamp;
     private bool _haveAuTs;
+    private ushort _lastSeq;
+    private bool _haveSeq;
+    private bool _lastMarker;           // the previous packet ended an access unit
+    private bool _auBroken;             // a packet of this access unit was lost: it is dropped, not published
+    private readonly MemoryStream _paramsAhead = new(); // parameter sets sent as a "frame" of their own
+    private bool _paramsAheadHasSps;
     private byte[]? _spropNals;         // SPS/PPS(/VPS) from the SDP, injected before the first keyframe
     private bool _spropInjected;
+
+    /// <summary>When video first reached the hub on this connection; null until then.</summary>
+    public DateTime? StreamingSince { get; private set; }
 
     /// <param name="url">rtsp://[user:pass@]host[:port]/path — credentials may ride the URL.</param>
     public RtspPuller(string tag, string url, IMediaSink sink)
     {
         _tag = tag;
-        _url = new Uri(url);
         _sink = sink;
-        if (_url.UserInfo.Length > 0)
+        // The login is read as the config's mask reads it: a raw '@', '/', '?' or '#' in the
+        // password is common, and System.Uri would take it for a fragment or a bad port.
+        var (bare, user, pass) = OnvifClient.SplitCredentials(url);
+        _url = new Uri(bare);
+        _user = user;
+        _pass = user == null ? null : pass ?? "";
+    }
+
+    private int Port => _url.Port > 0 ? _url.Port : 554;
+
+    /// <summary>URL without credentials, safe for request lines and logs.</summary>
+    internal string BareUrl => $"rtsp://{_url.Host}:{Port}{_url.PathAndQuery}";
+
+    /// <summary>Connects, negotiates and pumps RTP until cancelled or the peer drops.
+    /// Follows a DESCRIBE redirect, as go2rtc and ffmpeg do.</summary>
+    public async Task RunAsync(CancellationToken ct)
+    {
+        for (int hop = 0; ; hop++)
         {
-            var parts = _url.UserInfo.Split(':', 2);
-            _user = Uri.UnescapeDataString(parts[0]);
-            _pass = parts.Length > 1 ? Uri.UnescapeDataString(parts[1]) : "";
+            try
+            {
+                await SessionAsync(ct).ConfigureAwait(false);
+                return;
+            }
+            catch (RedirectException r) when (hop < MaxRedirects)
+            {
+                Log.Info($"{_tag}: RTSP redirected to rtsp://{r.Location.Host}:{(r.Location.Port > 0 ? r.Location.Port : 554)}{r.Location.PathAndQuery}");
+                _url = r.Location;
+                _session = null;
+                _authHeader = null;
+                _digestNonce = null;
+            }
         }
     }
 
-    /// <summary>URL without credentials, safe for request lines and logs.</summary>
-    private string BareUrl =>
-        $"rtsp://{_url.Host}:{(_url.Port > 0 ? _url.Port : 554)}{_url.PathAndQuery}";
-
-    /// <summary>Connects, negotiates and pumps RTP until cancelled or the peer drops.</summary>
-    public async Task RunAsync(CancellationToken ct)
+    private async Task SessionAsync(CancellationToken ct)
     {
         using var tcp = new TcpClient();
-        using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        connectCts.CancelAfter(TimeSpan.FromSeconds(10));
-        await tcp.ConnectAsync(_url.Host, _url.Port > 0 ? _url.Port : 554, connectCts.Token).ConfigureAwait(false);
+        using (var connect = CancellationTokenSource.CreateLinkedTokenSource(ct))
+        {
+            connect.CancelAfter(ConnectTimeout);
+            try
+            {
+                await tcp.ConnectAsync(_url.DnsSafeHost, Port, connect.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                throw new IOException($"no connection to {_url.Host}:{Port} within {ConnectTimeout.TotalSeconds:0}s");
+            }
+        }
         tcp.NoDelay = true;
         _net = tcp.GetStream();
         // Reads are buffered (the pump otherwise costs 3 recv syscalls per RTP
         // packet, and the header scan one per byte — see BcConnection, which got
         // the same treatment); writes stay on the raw stream so requests flush.
         _read = new BufferedStream(_net, 64 * 1024);
-
-        var (sdp, contentBase) = await DescribeAsync(ct).ConfigureAwait(false);
-        var track = ParseSdpVideo(sdp, contentBase);
-        _codec = track.Codec;
-        _spropNals = track.SpropNals;
-        Log.Info($"{_tag}: RTSP video track {track.Codec} ({track.Control})");
-
-        var setup = await RequestAsync("SETUP", track.Control,
-            "Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n", ct).ConfigureAwait(false);
-        _session = (HeaderOf(setup.Headers, "Session") ?? "").Split(';')[0].Trim();
-        if (_session.Length == 0) throw new IOException("RTSP SETUP returned no session");
-
-        await RequestAsync("PLAY", BareUrl, "Range: npt=0.000-\r\n", ct).ConfigureAwait(false);
-
-        var lastKeepAlive = DateTime.UtcNow;
-        var buf4 = new byte[4];
-        while (!ct.IsCancellationRequested)
+        try
         {
-            // Keep-alives ride the same socket; the reply is consumed inline below.
-            if (DateTime.UtcNow - lastKeepAlive > KeepAliveEvery)
-            {
-                lastKeepAlive = DateTime.UtcNow;
-                await SendRequestAsync("GET_PARAMETER", BareUrl, "", ct).ConfigureAwait(false);
-            }
+            var describe = await RequestAsync("DESCRIBE", BareUrl, "Accept: application/sdp\r\n", ct).ConfigureAwait(false);
+            var track = ParseSdpVideo(describe.Body, describe.Headers);
+            _codec = track.Codec;
+            _spropNals = track.SpropNals;
+            Log.Info($"{_tag}: RTSP video track {track.Codec} ({track.Control})");
 
-            await ReadExactAsync(buf4, 1, ct).ConfigureAwait(false);
-            if (buf4[0] == (byte)'$')
+            var setup = await RequestAsync("SETUP", track.Control,
+                "Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n", ct).ConfigureAwait(false);
+            ReadSession(HeaderOf(setup.Headers, "Session"));
+            if (string.IsNullOrEmpty(_session)) throw new IOException("RTSP SETUP returned no session");
+            // The camera may answer with other channels than the ones asked for (go2rtc).
+            _videoChannel = InterleavedChannel(HeaderOf(setup.Headers, "Transport")) ?? 0;
+
+            await RequestAsync("PLAY", BareUrl, "Range: npt=0.000-\r\n", ct).ConfigureAwait(false);
+            await PumpAsync(ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            await TeardownAsync().ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>Reads interleaved RTP until cancelled, the peer drops, or the video stops.</summary>
+    private async Task PumpAsync(CancellationToken ct)
+    {
+        // Re-armed by video packets only: RTCP or keep-alive replies alone mean the picture has stopped.
+        using var idle = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        idle.CancelAfter(IdleTimeout);
+        long armedAt = Environment.TickCount64;
+        var lastKeepAlive = DateTime.UtcNow;
+        var head = new byte[4];
+        try
+        {
+            while (true)
             {
+                // Keep-alives ride the same socket; the reply is consumed inline below.
+                if (DateTime.UtcNow - lastKeepAlive > _keepAlive)
+                {
+                    lastKeepAlive = DateTime.UtcNow;
+                    _keepAliveCseq = _cseq + 1;
+                    await SendRequestAsync(_keepAliveMethod, BareUrl, "", idle.Token).ConfigureAwait(false);
+                }
+
+                await ReadExactAsync(head, 1, idle.Token).ConfigureAwait(false);
+                if (head[0] is >= (byte)'A' and <= (byte)'Z')
+                {
+                    // An inline RTSP message (keep-alive reply or a server request).
+                    var (headers, _) = await ReadMessageTailAsync(head[0], idle.Token).ConfigureAwait(false);
+                    await OnInlineMessageAsync(headers, idle.Token).ConfigureAwait(false);
+                    continue;
+                }
+                if (head[0] != (byte)'$')
+                    await SkipToFrameAsync(idle.Token).ConfigureAwait(false);
+
                 // Interleaved binary: channel byte + big-endian length + payload.
-                await ReadExactAsync(buf4.AsMemory(1, 3), ct).ConfigureAwait(false);
-                int channel = buf4[1];
-                int len = (buf4[2] << 8) | buf4[3];
+                await ReadExactAsync(head.AsMemory(1, 3), idle.Token).ConfigureAwait(false);
+                int channel = head[1];
+                int len = (head[2] << 8) | head[3];
                 if (_pkt.Length < len) _pkt = new byte[Math.Max(len, _pkt.Length * 2)];
-                await ReadExactAsync(_pkt.AsMemory(0, len), ct).ConfigureAwait(false);
-                if (channel == 0)
-                    OnRtp(_pkt.AsSpan(0, len));
-                // channel 1 = RTCP sender reports — nothing we need
+                await ReadExactAsync(_pkt.AsMemory(0, len), idle.Token).ConfigureAwait(false);
+                if (channel != _videoChannel) continue; // RTCP sender reports — nothing we need
+                OnRtp(_pkt.AsSpan(0, len));
+                if (Environment.TickCount64 - armedAt > 1000)
+                {
+                    idle.CancelAfter(IdleTimeout);
+                    armedAt = Environment.TickCount64;
+                }
             }
-            else
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new IOException($"no video from the camera for {IdleTimeout.TotalSeconds:0}s");
+        }
+    }
+
+    /// <summary>Skips stray bytes up to the next '$' frame marker (go2rtc resyncs the same way).</summary>
+    private async Task SkipToFrameAsync(CancellationToken ct)
+    {
+        var one = new byte[1];
+        for (int skipped = 1; ; skipped++)
+        {
+            if (skipped > MaxMessage) throw new IOException("RTSP stream lost its framing");
+            await ReadExactAsync(one, ct).ConfigureAwait(false);
+            if (one[0] == (byte)'$')
             {
-                // An inline RTSP message (keep-alive reply or a server request):
-                // consume it whole so framing stays intact.
-                await ReadMessageTailAsync(buf4[0], ct).ConfigureAwait(false);
+                Log.Debug($"{_tag}: skipped {skipped} stray byte(s) in the RTSP stream");
+                return;
             }
         }
     }
 
-    // ------------------------------------------------------------------ RTSP plumbing
-
-    private async Task<(string Body, List<string> Headers)> DescribeAsync(CancellationToken ct)
+    /// <summary>A keep-alive reply or a request from the camera, while streaming.</summary>
+    private async Task OnInlineMessageAsync(List<string> headers, CancellationToken ct)
     {
-        var res = await RequestAsync("DESCRIBE", BareUrl, "Accept: application/sdp\r\n", ct).ConfigureAwait(false);
-        return (res.Body, res.Headers);
+        if (headers.Count == 0) return;
+        var first = headers[0];
+        if (first.StartsWith("RTSP/", StringComparison.Ordinal))
+        {
+            if (!int.TryParse(HeaderOf(headers, "CSeq"), out var cseq) || cseq != _keepAliveCseq) return;
+            int status = Status(first);
+            // A Digest nonce gone stale mid-session: the next keep-alive signs with the fresh one.
+            if (status == 401 && _user != null && _digestNonce != null)
+            {
+                try { BuildAuth(headers, _keepAliveMethod, BareUrl); }
+                catch (IOException) { /* no usable challenge; the session will say so */ }
+                return;
+            }
+            // GET_PARAMETER is optional in RTSP; a camera that lacks it gets OPTIONS, which every server must answer.
+            if (_keepAliveMethod == "GET_PARAMETER" && status is 400 or 405 or 501 or 551)
+            {
+                Log.Debug($"{_tag}: camera refused GET_PARAMETER ({first}); keeping the session alive with OPTIONS");
+                _keepAliveMethod = "OPTIONS";
+            }
+            return;
+        }
+        await AnswerServerRequestAsync(headers, ct).ConfigureAwait(false);
     }
+
+    /// <summary>Answers a camera's OPTIONS ping, which some servers need to keep the session.</summary>
+    private async Task AnswerServerRequestAsync(List<string> headers, CancellationToken ct)
+    {
+        if (!headers[0].StartsWith("OPTIONS ", StringComparison.Ordinal)) return;
+        var reply = new StringBuilder("RTSP/1.0 200 OK\r\n");
+        if (HeaderOf(headers, "CSeq") is { } cseq) reply.Append("CSeq: ").Append(cseq).Append("\r\n");
+        if (_session != null) reply.Append("Session: ").Append(_session).Append("\r\n");
+        reply.Append("\r\n");
+        await _net.WriteAsync(Encoding.UTF8.GetBytes(reply.ToString()), ct).ConfigureAwait(false);
+    }
+
+    /// <summary>Best-effort TEARDOWN, so a camera with few stream slots frees ours now rather than at its timeout.</summary>
+    private async Task TeardownAsync()
+    {
+        if (_session == null) return;
+        try
+        {
+            using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+            await _net.WriteAsync(BuildRequest("TEARDOWN", BareUrl, ""), limit.Token).ConfigureAwait(false);
+        }
+        catch { /* the connection is going anyway */ }
+    }
+
+    private void ReadSession(string? header)
+    {
+        // Session: 216525287999;timeout=60
+        if (header == null) return;
+        var parts = header.Split(';');
+        _session = parts[0].Trim();
+        foreach (var p in parts.Skip(1))
+        {
+            var kv = p.Split('=', 2);
+            if (kv.Length == 2 && kv[0].Trim().Equals("timeout", StringComparison.OrdinalIgnoreCase)
+                && int.TryParse(kv[1].Trim(), out var seconds) && seconds > 0)
+                _keepAlive = TimeSpan.FromSeconds(Math.Clamp(seconds / 2, 1, (int)KeepAliveEvery.TotalSeconds));
+        }
+    }
+
+    internal static int? InterleavedChannel(string? transport)
+    {
+        // Transport: RTP/AVP/TCP;unicast;interleaved=10-11;ssrc=10117CB7
+        if (transport == null) return null;
+        foreach (var p in transport.Split(';'))
+        {
+            var kv = p.Trim();
+            if (!kv.StartsWith("interleaved=", StringComparison.OrdinalIgnoreCase)) continue;
+            var first = kv["interleaved=".Length..].Split('-')[0];
+            return int.TryParse(first, out var ch) && ch is >= 0 and <= 255 ? ch : null;
+        }
+        return null;
+    }
+
+    private static int Status(string statusLine)
+    {
+        var parts = statusLine.Split(' ', 3);
+        return parts.Length > 1 && int.TryParse(parts[1], out var s) ? s : 0;
+    }
+
+    private sealed class RedirectException(Uri location) : Exception("RTSP redirect")
+    {
+        public Uri Location { get; } = location;
+    }
+
+    // ------------------------------------------------------------------ RTSP plumbing
 
     /// <summary>Sends a request and reads its response, retrying once with credentials on 401.</summary>
     private async Task<(int Status, List<string> Headers, string Body)> RequestAsync(
         string method, string url, string extraHeaders, CancellationToken ct)
     {
-        for (int attempt = 0; ; attempt++)
+        using var reply = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        reply.CancelAfter(ReplyTimeout);
+        try
         {
-            await SendRequestAsync(method, url, extraHeaders, ct).ConfigureAwait(false);
-            var res = await ReadResponseAsync(ct).ConfigureAwait(false);
-            if (res.Status == 401 && attempt == 0 && _user != null)
+            for (int attempt = 0; ; attempt++)
             {
-                BuildAuth(res.Headers, method, url);
-                continue;
+                await SendRequestAsync(method, url, extraHeaders, reply.Token).ConfigureAwait(false);
+                var res = await ReadResponseAsync(reply.Token).ConfigureAwait(false);
+                if (res.Status == 401 && attempt == 0 && _user != null)
+                {
+                    BuildAuth(res.Headers, method, url);
+                    continue;
+                }
+                if (res.Status is 301 or 302 && method == "DESCRIBE"
+                    && Uri.TryCreate(HeaderOf(res.Headers, "Location"), UriKind.Absolute, out var to)
+                    && to.Scheme.Equals("rtsp", StringComparison.OrdinalIgnoreCase))
+                    throw new RedirectException(to);
+                if (res.Status is not (200 or 0))
+                    throw new IOException($"RTSP {method} failed: {res.Headers[0].Split(' ', 2).ElementAtOrDefault(1) ?? res.Status.ToString()}");
+                return res;
             }
-            if (res.Status is not (200 or 0))
-                throw new IOException($"RTSP {method} failed: {res.Status}");
-            return res;
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new IOException($"no reply to RTSP {method} within {ReplyTimeout.TotalSeconds:0}s");
         }
     }
 
-    private async Task SendRequestAsync(string method, string url, string extraHeaders, CancellationToken ct)
+    private async Task SendRequestAsync(string method, string url, string extraHeaders, CancellationToken ct) =>
+        await _net.WriteAsync(BuildRequest(method, url, extraHeaders), ct).ConfigureAwait(false);
+
+    private byte[] BuildRequest(string method, string url, string extraHeaders)
     {
         // Digest responses are per-method/URI: refresh before every request.
         if (_digestNonce != null && _user != null)
@@ -169,8 +365,7 @@ public sealed class RtspPuller
         if (_session != null) req.Append("Session: ").Append(_session).Append("\r\n");
         if (_authHeader != null) req.Append(_authHeader).Append("\r\n");
         req.Append(extraHeaders).Append("\r\n");
-        var bytes = Encoding.UTF8.GetBytes(req.ToString());
-        await _net.WriteAsync(bytes, ct).ConfigureAwait(false);
+        return Encoding.UTF8.GetBytes(req.ToString());
     }
 
     /// <summary>Reads one RTSP response, skipping any interleaved RTP that arrives first.</summary>
@@ -186,19 +381,15 @@ public sealed class RtspPuller
                 int len = (one[2] << 8) | one[3];
                 if (_pkt.Length < len) _pkt = new byte[Math.Max(len, _pkt.Length * 2)];
                 await ReadExactAsync(_pkt.AsMemory(0, len), ct).ConfigureAwait(false);
-                if (one[1] == 0) OnRtp(_pkt.AsSpan(0, len));
+                if (one[1] == _videoChannel) OnRtp(_pkt.AsSpan(0, len));
                 continue;
             }
             var (headers, body) = await ReadMessageTailAsync(one[0], ct).ConfigureAwait(false);
             if (headers.Count == 0) continue;
             var first = headers[0];
             if (first.StartsWith("RTSP/", StringComparison.Ordinal))
-            {
-                var parts = first.Split(' ');
-                int status = parts.Length > 1 && int.TryParse(parts[1], out var s) ? s : 0;
-                return (status, headers, body);
-            }
-            // A server-initiated request (e.g. OPTIONS ping) — ignored; loop on.
+                return (Status(first), headers, body);
+            await AnswerServerRequestAsync(headers, ct).ConfigureAwait(false);
         }
     }
 
@@ -208,20 +399,20 @@ public sealed class RtspPuller
         var raw = new MemoryStream();
         raw.WriteByte(firstByte);
         var one = new byte[1];
-        // Header section ends at CRLFCRLF.
+        // The header section ends at a blank line: CRLFCRLF, or LFLF from servers that skip the CR.
         while (true)
         {
             await ReadExactAsync(one, ct).ConfigureAwait(false);
             raw.WriteByte(one[0]);
             if (raw.Length > MaxMessage) throw new IOException("RTSP message too large");
             var b = raw.GetBuffer();
-            if (raw.Length >= 4
-                && b[raw.Length - 4] == '\r' && b[raw.Length - 3] == '\n'
-                && b[raw.Length - 2] == '\r' && b[raw.Length - 1] == '\n')
+            long n = raw.Length;
+            if (n >= 2 && b[n - 1] == '\n'
+                && (b[n - 2] == '\n' || (n >= 3 && b[n - 2] == '\r' && b[n - 3] == '\n')))
                 break;
         }
         var headText = Encoding.UTF8.GetString(raw.GetBuffer(), 0, (int)raw.Length);
-        var headers = headText.Split("\r\n", StringSplitOptions.RemoveEmptyEntries).ToList();
+        var headers = headText.Split('\n').Select(l => l.TrimEnd('\r')).Where(l => l.Length > 0).ToList();
         int contentLength = int.TryParse(HeaderOf(headers, "Content-Length"), out var cl) ? cl : 0;
         if (contentLength is < 0 or > MaxMessage) throw new IOException("bad RTSP Content-Length");
         var bodyBytes = new byte[contentLength];
@@ -289,18 +480,22 @@ public sealed class RtspPuller
 
     // ------------------------------------------------------------------ SDP
 
-    private sealed record VideoTrack(VideoCodec Codec, string Control, byte[]? SpropNals);
+    internal sealed record VideoTrack(VideoCodec Codec, string Control, byte[]? SpropNals);
+
+    private VideoTrack ParseSdpVideo(string sdp, List<string> describeHeaders) =>
+        ParseSdpVideo(sdp, HeaderOf(describeHeaders, "Content-Base")
+                           ?? HeaderOf(describeHeaders, "Content-Location") ?? BareUrl);
 
     /// <summary>Finds the H.264/H.265 video media section and its control URL + sprop parameter sets.</summary>
-    private VideoTrack ParseSdpVideo(string sdp, List<string> describeHeaders)
+    internal static VideoTrack ParseSdpVideo(string sdp, string baseUrl)
     {
-        string baseUrl = HeaderOf(describeHeaders, "Content-Base")
-            ?? HeaderOf(describeHeaders, "Content-Location") ?? BareUrl;
+        // Seen without its scheme ("192.168.253.220:1935/", go2rtc#1852).
+        if (!baseUrl.Contains("://", StringComparison.Ordinal)) baseUrl = "rtsp://" + baseUrl;
 
         var lines = sdp.Split('\n').Select(l => l.TrimEnd('\r')).ToList();
         bool inVideo = false;
         VideoCodec? codec = null;
-        string? control = null;
+        string? control = null, payloadType = null;
         byte[]? sprop = null;
 
         foreach (var line in lines)
@@ -315,9 +510,15 @@ public sealed class RtspPuller
 
             if (line.StartsWith("a=rtpmap:", StringComparison.Ordinal))
             {
-                if (line.Contains("H264", StringComparison.OrdinalIgnoreCase)) codec = VideoCodec.H264;
-                else if (line.Contains("H265", StringComparison.OrdinalIgnoreCase)
-                         || line.Contains("HEVC", StringComparison.OrdinalIgnoreCase)) codec = VideoCodec.H265;
+                VideoCodec? found = line.Contains("H264", StringComparison.OrdinalIgnoreCase) ? VideoCodec.H264
+                    : line.Contains("H265", StringComparison.OrdinalIgnoreCase)
+                      || line.Contains("HEVC", StringComparison.OrdinalIgnoreCase) ? VideoCodec.H265
+                    : null;
+                if (found != null)
+                {
+                    codec = found;
+                    payloadType = line["a=rtpmap:".Length..].Split(' ')[0].Trim();
+                }
             }
             else if (line.StartsWith("a=control:", StringComparison.Ordinal))
             {
@@ -331,13 +532,18 @@ public sealed class RtspPuller
 
         if (codec == null)
             throw new IOException("no H.264/H.265 video track in the RTSP DESCRIBE");
+        // Some cameras file the video's fmtp under another m= section (go2rtc: WebRTC#419).
+        if (sprop == null && payloadType != null)
+            sprop = lines.Where(l => l.StartsWith($"a=fmtp:{payloadType} ", StringComparison.Ordinal))
+                .Select(ParseSprop).FirstOrDefault(s => s != null);
 
-        // Control may be absolute, relative, or "*" (use the base).
+        // Control may be absolute, relative, or "*" (use the base). A leading '/' must not
+        // double the slash (Verint Nextiva answers "//media/1/video/1" with 404, go2rtc#1236).
         string trackUrl = control == null || control == "*"
             ? baseUrl
             : control.StartsWith("rtsp://", StringComparison.OrdinalIgnoreCase)
                 ? control
-                : baseUrl.TrimEnd('/') + "/" + control;
+                : baseUrl.TrimEnd('/') + (control.StartsWith('/') ? "" : "/") + control;
         return new VideoTrack(codec.Value, trackUrl, sprop);
     }
 
@@ -371,6 +577,20 @@ public sealed class RtspPuller
     {
         if (pkt.Length < 12 || (pkt[0] >> 6) != 2) return; // not RTP v2
         bool marker = (pkt[1] & 0x80) != 0;
+        bool prevMarker = _lastMarker;
+        _lastMarker = marker;
+        ushort seq = BinaryPrimitives.ReadUInt16BigEndian(pkt[2..]);
+        // A frame with a hole (packets drop even over TCP) is dropped, not published damaged, as go2rtc
+        // and Frigate do. Only a jump forward is a loss: a number repeated or behind (never advanced) is not.
+        int ahead = (ushort)(seq - _lastSeq);
+        bool lost = _haveSeq && ahead is > 1 and < 0x8000;
+        if (!_haveSeq || ahead is > 0 and < 0x8000) _lastSeq = seq;
+        _haveSeq = true;
+        if (lost)
+        {
+            _fu.SetLength(0);
+            _auBroken = true;
+        }
         uint ts = BinaryPrimitives.ReadUInt32BigEndian(pkt[4..]);
         int headerLen = 12 + (pkt[0] & 0x0F) * 4;          // CSRC list
         if ((pkt[0] & 0x10) != 0)                          // extension header
@@ -385,7 +605,11 @@ public sealed class RtspPuller
 
         // A new RTP timestamp means a new access unit — flush what we hold.
         if (_haveAuTs && ts != _auTimestamp)
+        {
             EmitAccessUnit();
+            // The loss opened this one when the last frame had ended, or when more than one packet went.
+            if (lost && (prevMarker || ahead > 2)) _auBroken = true;
+        }
         _auTimestamp = ts;
         _haveAuTs = true;
 
@@ -401,8 +625,8 @@ public sealed class RtspPuller
         int type = p[0] & 0x1F;
         switch (type)
         {
-            case >= 1 and <= 23:                       // single NAL unit
-                _auNals.Add(p.ToArray());
+            case >= 0 and <= 23:                       // single NAL unit (0: starts with a start code)
+                AddNal(p);
                 break;
             case 24:                                   // STAP-A: (len,nal)*
                 for (int i = 1; i + 2 <= p.Length;)
@@ -410,7 +634,7 @@ public sealed class RtspPuller
                     int len = BinaryPrimitives.ReadUInt16BigEndian(p[i..]);
                     i += 2;
                     if (len <= 0 || i + len > p.Length) break;
-                    _auNals.Add(p.Slice(i, len).ToArray());
+                    AddNal(p.Slice(i, len));
                     i += len;
                 }
                 break;
@@ -422,15 +646,41 @@ public sealed class RtspPuller
                     _fu.SetLength(0);
                     _fu.WriteByte((byte)((p[0] & 0xE0) | (p[1] & 0x1F))); // rebuilt NAL header
                 }
-                if (_fu.Length > 0 && _fu.Length + p.Length < MaxMessage)
-                    _fu.Write(p[2..]);
-                if (end && _fu.Length > 0)
-                {
-                    _auNals.Add(_fu.ToArray());
-                    _fu.SetLength(0);
-                }
+                AppendFragment(p[2..], end);
                 break;
         }
+    }
+
+    /// <summary>Adds a fragment to the NAL being reassembled, finishing it on the end bit.
+    /// One past the cap is dropped whole: a truncated NAL decodes as garbage.</summary>
+    private void AppendFragment(ReadOnlySpan<byte> part, bool end)
+    {
+        if (_fu.Length == 0) return; // its start fragment was lost
+        if (_fu.Length + part.Length > MaxNal)
+        {
+            _fu.SetLength(0);
+            _auBroken = true;
+            return;
+        }
+        _fu.Write(part);
+        if (!end) return;
+        AddNal(_fu.GetBuffer().AsSpan(0, (int)_fu.Length));
+        _fu.SetLength(0);
+    }
+
+    private static readonly byte[] StartCode3 = { 0, 0, 1 };
+
+    /// <summary>Adds a NAL — or each of several that a buggy camera packed into one payload behind
+    /// start codes (go2rtc: "SPS+PPS+IFrame separated by 00 00 00 01"). A real NAL never contains 00 00 01.</summary>
+    private void AddNal(ReadOnlySpan<byte> nal)
+    {
+        if (nal.IndexOf(StartCode3) < 0)
+        {
+            _auNals.Add(nal.ToArray());
+            return;
+        }
+        foreach (var unit in H26x.SplitNals((byte[])[.. StartCode, .. nal]))
+            if (unit.Length > 0) _auNals.Add(unit.ToArray());
     }
 
     private void DepacketizeH265(ReadOnlySpan<byte> p)
@@ -445,7 +695,7 @@ public sealed class RtspPuller
                     int len = BinaryPrimitives.ReadUInt16BigEndian(p[i..]);
                     i += 2;
                     if (len <= 0 || i + len > p.Length) break;
-                    _auNals.Add(p.Slice(i, len).ToArray());
+                    AddNal(p.Slice(i, len));
                     i += len;
                 }
                 break;
@@ -459,37 +709,65 @@ public sealed class RtspPuller
                     _fu.WriteByte((byte)((p[0] & 0x81) | (nalType << 1)));
                     _fu.WriteByte(p[1]);
                 }
-                if (_fu.Length > 0 && _fu.Length + p.Length < MaxMessage)
-                    _fu.Write(p[3..]);
-                if (end && _fu.Length > 0)
-                {
-                    _auNals.Add(_fu.ToArray());
-                    _fu.SetLength(0);
-                }
+                AppendFragment(p[3..], end);
                 break;
             default:                                   // single NAL unit
-                _auNals.Add(p.ToArray());
+                AddNal(p);
                 break;
         }
     }
 
     private void EmitAccessUnit()
     {
+        if (_auBroken)
+        {
+            _auNals.Clear();
+            _auBroken = false;
+            return;
+        }
         if (_auNals.Count == 0) return;
-        bool keyframe = _auNals.Any(n => _codec == VideoCodec.H264
-            ? H26x.H264NalType(n) == H26x.H264Idr
-            : H26x.H265NalType(n) is >= 16 and <= 21); // BLA/IDR/CRA (IRAP)
-        bool hasParams = _auNals.Any(n => _codec == VideoCodec.H264
-            ? H26x.H264NalType(n) == H26x.H264Sps
-            : H26x.H265NalType(n) == H26x.H265Sps);
+        bool h264 = _codec == VideoCodec.H264;
+        bool keyframe = false, hasSps = false, hasPicture = false;
+        foreach (var nal in _auNals)
+        {
+            int t = h264 ? H26x.H264NalType(nal) : H26x.H265NalType(nal);
+            keyframe |= h264 ? t == H26x.H264Idr : t is >= 16 and <= 21; // H.265: BLA/IDR/CRA (IRAP)
+            hasSps |= t == (h264 ? H26x.H264Sps : H26x.H265Sps);
+            hasPicture |= h264 ? t is >= 1 and <= 5 : t is >= 0 and <= 31;
+        }
+        if (!hasPicture)
+        {
+            // Parameter sets sent as a frame of their own (marker bit on SPS/PPS: Tapo TC70,
+            // Reolink Duo 2, per go2rtc) lead the next picture instead.
+            foreach (var nal in _auNals)
+            {
+                _paramsAhead.Write(StartCode);
+                _paramsAhead.Write(nal);
+            }
+            _paramsAheadHasSps |= hasSps;
+            _auNals.Clear();
+            if (_paramsAhead.Length > MaxMessage)
+            {
+                _paramsAhead.SetLength(0);
+                _paramsAheadHasSps = false;
+            }
+            return;
+        }
+        hasSps |= _paramsAheadHasSps;
 
         _au.SetLength(0);
         // Some cameras never repeat SPS/PPS in-band: seed them from the SDP so the
         // hub can answer DESCRIBE/init. Once injected, in-band sets take over.
-        if (keyframe && !hasParams && _spropNals != null && !_spropInjected)
+        if (keyframe && !hasSps && _spropNals != null && !_spropInjected)
         {
             _au.Write(_spropNals);
             _spropInjected = true;
+        }
+        if (_paramsAhead.Length > 0)
+        {
+            _au.Write(_paramsAhead.GetBuffer(), 0, (int)_paramsAhead.Length);
+            _paramsAhead.SetLength(0);
+            _paramsAheadHasSps = false;
         }
         foreach (var nal in _auNals)
         {
@@ -500,6 +778,10 @@ public sealed class RtspPuller
 
         // RTP timestamps are 90 kHz; the hub wants a wrapping microsecond counter.
         uint microseconds = unchecked((uint)(_auTimestamp * 100UL / 9));
+        StreamingSince ??= DateTime.UtcNow;
         _sink.PublishVideo(new VideoFrame(_codec, keyframe, microseconds, null, _au.ToArray()));
     }
+
+    /// <summary>Test seam: one RTP packet from the video channel.</summary>
+    internal void FeedRtpForTest(byte[] pkt) => OnRtp(pkt);
 }

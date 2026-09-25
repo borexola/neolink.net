@@ -21,7 +21,7 @@ public sealed class BcProtocolException : Exception
 /// Wire codec for BC messages.
 ///
 /// Header layout (little endian):
-///   u32 magic (0x0abcdef0)
+///   u32 magic (0x0abcdef0, or 0x0fedcba0 from older firmware)
 ///   u32 msg_id
 ///   u32 body_len
 ///   u8  channel_id
@@ -39,7 +39,7 @@ public static class BcCodec
         await stream.ReadExactlyAsync(head, ct).ConfigureAwait(false);
 
         uint magic = BinaryPrimitives.ReadUInt32LittleEndian(head.AsSpan(0));
-        if (magic != BcConstants.MagicHeader)
+        if (magic != BcConstants.MagicHeader && magic != BcConstants.MagicHeaderRev)
             // The whole mis-read header goes into the message: when this fires the
             // bytes themselves are the only evidence of WHERE the stream slipped.
             throw new BcProtocolException($"Invalid magic header 0x{magic:x8} (stream desynchronized; " +
@@ -113,9 +113,14 @@ public static class BcCodec
                 : EncryptionKind.BcEncrypt);
         }
 
-        uint extLen = payloadOffset ?? 0;
-        if (extLen > bodyLen)
-            throw new BcProtocolException($"payload offset {extLen} exceeds body length {bodyLen}");
+        // Old OEM firmware (Reolink IPC_36S8M) refuses a command by echoing the
+        // request header back, payload_offset included, with body_len=0. body_len
+        // framed the bytes on the wire, so it wins.
+        uint claimedExt = payloadOffset ?? 0;
+        uint extLen = Math.Min(claimedExt, bodyLen);
+        if (extLen != claimedExt)
+            Log.Debug($"BC msg {msgId}/{msgNum}: payload offset {claimedExt} past body length {bodyLen}; " +
+                      "reading the reply as empty");
 
         // Extension XML (always encrypted with the negotiated protocol)
         if (extLen > 0)

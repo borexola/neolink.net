@@ -48,6 +48,54 @@ public static class Ffmpeg
         return null;
     }
 
+    /// <summary>Runs ffmpeg with stdin fed from <paramref name="stdinChunks"/> and
+    /// stdout collected whole; the process is killed at <paramref name="deadline"/>
+    /// (a wedged ffmpeg must not stall its caller). stderr rides along for
+    /// diagnostics — callers decide what a failure means.</summary>
+    internal static async Task<(byte[] Out, string Err)> RunAsync(string ffmpeg,
+        IReadOnlyList<string> args, IReadOnlyList<byte[]> stdinChunks,
+        TimeSpan deadline, CancellationToken ct)
+    {
+        var psi = new ProcessStartInfo(ffmpeg)
+        {
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        using var proc = Process.Start(psi)
+                         ?? throw new InvalidOperationException("ffmpeg would not start");
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        limit.CancelAfter(deadline);
+        try
+        {
+            var stdin = proc.StandardInput.BaseStream;
+            var feed = Task.Run(async () =>
+            {
+                foreach (var chunk in stdinChunks)
+                    await stdin.WriteAsync(chunk, limit.Token).ConfigureAwait(false);
+                stdin.Close(); // EOF flushes whatever the codec still buffers
+            }, limit.Token);
+            using var outBuf = new MemoryStream();
+            // Both pipes drain at once: finishing one while the other fills its buffer deadlocks.
+            var err = proc.StandardError.ReadToEndAsync(limit.Token);
+            _ = err.ContinueWith(static t => _ = t.Exception, TaskContinuationOptions.OnlyOnFaulted);
+            await proc.StandardOutput.BaseStream.CopyToAsync(outBuf, limit.Token).ConfigureAwait(false);
+            try { await feed.ConfigureAwait(false); }
+            catch (Exception) { /* stdin may close early if ffmpeg bailed; stdout decides */ }
+            var stderr = await err.ConfigureAwait(false);
+            await proc.WaitForExitAsync(limit.Token).ConfigureAwait(false);
+            return (outBuf.ToArray(), stderr);
+        }
+        finally
+        {
+            try { if (!proc.HasExited) proc.Kill(entireProcessTree: true); }
+            catch { /* already gone */ }
+        }
+    }
+
     private static readonly Lazy<bool> OpusLazy = new(ProbeOpusEncoder);
 
     /// <summary>True when the located ffmpeg carries the libopus encoder. The

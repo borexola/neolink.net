@@ -197,7 +197,7 @@ public sealed class CameraService : ILiveCameraSource
     /// silently broken pipe can never blind the scan: no hint for this long and
     /// scan-only connects resume exactly as before. Hints refresh it; housekeeping
     /// wakes (no push) do not.</summary>
-    private static readonly TimeSpan HintTrustWindow = TimeSpan.FromHours(2);
+    private readonly TimeSpan _hintTrustWindow;
     private double _lastProbeMs;
     private bool _wakeClipStarted; // one wake clip per session, on the first keyframe
     // "Held awake by …" reporting: when it was last said, and when the current
@@ -217,13 +217,15 @@ public sealed class CameraService : ILiveCameraSource
     private static readonly TimeSpan ProbeEvery = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan ProbeWindow = TimeSpan.FromMinutes(15);
 
-    public CameraService(CameraConfig config, StreamKind kind, IMediaSink hub, TimeSpan startupDelay)
+    public CameraService(CameraConfig config, StreamKind kind, IMediaSink hub, TimeSpan startupDelay,
+        TimeSpan? hintTrustWindow = null)
     {
         _config = config;
         _kind = kind;
         _hub = hub;
         _demandHub = hub as IStreamHub;
         _startupDelay = startupDelay;
+        _hintTrustWindow = hintTrustWindow ?? TimeSpan.FromHours(WakeHintConfig.DefaultTrustHours);
     }
 
     public string Name => _config.Name;
@@ -414,9 +416,16 @@ public sealed class CameraService : ILiveCameraSource
         DateTime.UtcNow.Ticks - Interlocked.Read(ref _lastMotionActiveTicks) < MotionDemandHold.Ticks;
 
     // The router has recently proven it reports this camera's event pushes
-    // (see HintTrustWindow) — scan edges without a hint are then housekeeping.
-    private bool HintsLive =>
-        DateTime.UtcNow.Ticks - Interlocked.Read(ref _hintTicks) < HintTrustWindow.Ticks;
+    // (see _hintTrustWindow) — scan edges without a hint are then housekeeping.
+    private bool HintsLive => IsHintTrusted(Interlocked.Read(ref _hintTicks), DateTime.UtcNow.Ticks);
+
+    internal bool IsHintTrusted(long hintTicks, long nowTicks) =>
+        hintTicks != 0 && nowTicks - hintTicks < _hintTrustWindow.Ticks;
+
+    // Log wording for the hint age and trust window: minutes read best up to two
+    // hours, but a 72 h window as "4320 min" does not.
+    internal static string Span(TimeSpan t) =>
+        t.TotalHours < 2 ? $"{t.TotalMinutes:0} min" : $"{t.TotalHours:0.#} h";
 
     // A wake-opened session waiting for its detection (see WakeSessionLinger).
     // Anchored to the LATER of connect time and the last router hint: the camera
@@ -674,10 +683,10 @@ public sealed class CameraService : ILiveCameraSource
                                     var hintAge = DateTime.UtcNow -
                                         new DateTime(System.Threading.Interlocked.Read(ref _hintTicks), DateTimeKind.Utc);
                                     Log.Info($"{Tag}: ping went flat (a scan-only build would call this a wake) " +
-                                             $"but the router — which reported an event push {hintAge.TotalMinutes:0} min " +
+                                             $"but the router — which reported an event push {Span(hintAge)} " +
                                              "ago — saw no push now: treating it as the camera's housekeeping wake and " +
                                              "staying parked; a wake hint connects us the moment a real event fires " +
-                                             $"(scan-only connects resume if no hint arrives for {HintTrustWindow.TotalMinutes:0} min)");
+                                             $"(scan-only connects resume if no hint arrives for {Span(_hintTrustWindow)})");
                                     rtt = new WakeRttDetector { ArmThreshold = rtt.ArmThreshold };
                                     continue;
                                 }
@@ -1013,7 +1022,8 @@ public sealed class CameraService : ILiveCameraSource
         if (camera.RemoteIp is { } ip) _lastCameraIp = ip;
 
         Note($"{Tag}: logging in as '{_config.Username}'");
-        await camera.LoginAsync(_config.Username, _config.Password, ct).ConfigureAwait(false);
+        await camera.LoginAsync(_config.Username, _config.Password, ct,
+            BcLoginMode.From(_config.MaxEncryption, _config.LegacyLogin)).ConfigureAwait(false);
         var res = camera.DeviceInfo;
         Note($"{Tag}: logged in{(res != null && res.Width > 0 ? $", camera reports {res.Width}x{res.Height}" : "")}");
 

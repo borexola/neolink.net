@@ -29,3 +29,8 @@ address = "192.168.1.187:9000"
 
 # When connecting through a Reolink NVR, select the camera channel (0-based):
 # channel_id = 0
+
+# Optional wake hints (see docs/battery-cameras.md).
+# [wake_hints]
+# syslog_port = 5140
+# trust_hours = 2 # default; use 72 for infrequent events (fractional hours allowed)

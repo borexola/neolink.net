@@ -80,8 +80,14 @@
                         <span class="mon-card-sub">@T["footage on disk"]@(Last is { DTot: > 0 } sp ? " · " + T.F("{0}% of the volume", $"{sp.Rec * 100.0 / sp.DTot:0.#}") : "")</span>
                     </div>
                 }
-                <div class="mon-card">
-                    <span class="mon-card-label">@T["VIEWERS"]</span>
+                @* Admins click through to who is watching what; for others the card is inert. *@
+                <div class="mon-card" role="@(_admin ? "button" : null)" tabindex="@(_admin ? "0" : null)"
+                     aria-expanded="@(_admin ? (_viewersOpen ? "true" : "false") : null)"
+                     title="@(!_admin ? null : _viewersOpen ? T["Hide who is watching"] : T["Show who is watching"])"
+                     style="@(!_admin ? null : "cursor:pointer" + (_viewersOpen ? "; border-color: var(--accent)" : ""))"
+                     @onclick="ToggleViewersAsync"
+                     @onkeydown="@(e => e.Key == "Enter" ? ToggleViewersAsync() : Task.CompletedTask)">
+                    <span class="mon-card-label">@T["VIEWERS"]@(_admin ? (_viewersOpen ? " ▾" : " ▸") : "")</span>
                     <span class="mon-card-value">@(Last?.View.ToString() ?? "—")</span>
                     <span class="mon-card-sub">@T["watching live (RTSP + web) — recorders not counted"]</span>
                 </div>
@@ -101,6 +107,46 @@
                     <span class="mon-card-sub">@(_info?.Runtime ?? "")</span>
                 </div>
             </div>
+
+            @if (_admin && _viewersOpen)
+            {
+                <div class="mon-section">
+                    <span class="mon-section-title">@T["VIEWERS"]</span>
+                    <span class="mon-section-sub">@T["who is watching live right now"]</span>
+                </div>
+                @if (_viewersUnsupported)
+                {
+                    <div class="mon-avail-sub" style="margin: 0 2px 18px">@T["This server does not list viewers — update the Neolink.NET server."]</div>
+                }
+                else if (_viewers == null)
+                {
+                    <div class="mon-avail-sub" style="margin: 0 2px 18px">—</div>
+                }
+                else if (_viewers.Count == 0)
+                {
+                    <div class="mon-avail-sub" style="margin: 0 2px 18px">@T["Nobody is watching right now."]</div>
+                }
+                else
+                {
+                    <div class="mon-avail-grid">
+                        @foreach (var v in _viewers)
+                        {
+                            <div class="mon-avail-card">
+                                <div class="mon-avail-head">
+                                    <span class="mon-avail-dot up"></span>
+                                    <span class="mon-avail-name" title="@v.Camera">@v.Camera</span>
+                                    <span class="mon-avail-grade good">@v.Via</span>
+                                    <span class="mon-avail-pct">@v.Stream</span>
+                                </div>
+                                <div class="mon-avail-sub">
+                                    <span>@(v.From ?? T["unknown address"])@(v.User != null ? " · " + v.User : "")</span>
+                                    <span>@T.F("watching for {0}", Dur(NowMs() - v.Since))</span>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+            }
 
             <div class="mon-grid">
                 <MonChart Title="@T["CPU"]" Unit="%" FixedMax="100" WindowSec="_windowSec"
@@ -291,8 +337,11 @@
     private PeriodicTimer? _timer;
     private bool _perfStarted;
 
-    // Admin session? Gates the toolbar link to the logs page.
+    // Admin session? Gates the toolbar link to the logs page and the viewer list.
     private bool _admin;
+    private bool _viewersOpen;
+    private List<ApiViewer>? _viewers; // null until the first fetch answers
+    private bool _viewersUnsupported;   // the server has no viewer list
 
     private sealed record BrowserSample(long T, double HeapMb, double Fps, double LatencyMs, int DomNodes);
     private sealed record JsPerf(long Heap, long HeapLimit, double Fps, int DomNodes);
@@ -394,6 +443,46 @@
             _error = _samples.Count == 0 ? T.F("Cannot reach {0}: {1}", ApiBase, ex.Message) : _error;
         }
         await FetchStorageAsync();
+        await FetchViewersAsync();
+    }
+
+    private async Task ToggleViewersAsync()
+    {
+        if (!_admin) return;
+        _viewersOpen = !_viewersOpen;
+        _viewers = null; // never reopen on a stale list
+        await FetchViewersAsync();
+    }
+
+    /// <summary>Who is watching, refreshed each poll while the list is open (admin only).</summary>
+    private async Task FetchViewersAsync()
+    {
+        if (!_admin || !_viewersOpen) return;
+        try
+        {
+            var req = new HttpRequestMessage(HttpMethod.Get, $"{ApiBase}/api/system/viewers");
+            if (!string.IsNullOrEmpty(_token))
+                req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _token);
+            using var res = await Http.SendAsync(req);
+            if (res.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                _viewersUnsupported = true;
+                _viewers = null;
+                return;
+            }
+            if (res.StatusCode is System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden)
+            {
+                // No longer an admin session: close the list rather than let it go stale.
+                _admin = false;
+                _viewersOpen = false;
+                _viewers = null;
+                return;
+            }
+            if (!res.IsSuccessStatusCode) return;
+            _viewersUnsupported = false;
+            _viewers = await res.Content.ReadFromJsonAsync<List<ApiViewer>>() ?? new();
+        }
+        catch { /* keep the last list; the next poll retries */ }
     }
 
     /// <summary>Storage-tier capacities (only rendered when split storage is

@@ -15,6 +15,50 @@ python3 tools/fake_camera.py /path/to/rust-repo/crates/core/src/bcmedia/samples 
 ffprobe -rtsp_transport tcp rtsp://127.0.0.1:8654/testcam
 ```
 
+## Testing the ONVIF side without a third-party camera
+
+`tools/fake_onvif.js` is the same idea for the settings surface of a non-Reolink
+camera: a Node script that answers enough ONVIF (device information, media
+profiles and their encoder options, stream URIs, imaging, PTZ with presets and
+an absolute zoom, OSDs, the analytics cell motion grid, events, stills, reboot)
+for the whole Camera settings panel to render and every write to land. It keeps the settings you write, prints every operation it is asked for
+and the body of every `Set*`, and serves its current state as JSON at
+`/__state` so a test can assert on it:
+
+```bash
+node tools/fake_onvif.js 8010 &
+```
+
+Two optional arguments shape the camera it pretends to be: a clock skew in
+seconds (it then refuses any request not stamped in its own, drifted time), and
+a comma-separated list of modes — `media2` (it speaks only Media2, and every
+ver10 media call faults), `zoomonly` (a motorised lens with no pan or tilt),
+`nocells` (no analytics service, so no motion grid of its own):
+
+```bash
+node tools/fake_onvif.js 8010 47 media2,zoomonly &
+```
+
+`/__state` shows the motion grid as rows of `0`/`1`, so a zone written from the
+editor can be checked cell by cell.
+
+Then add a generic camera pointed at any RTSP source, with its ONVIF address
+aimed at the fake (the credentials in the URL are what it signs in with — the
+fake accepts any):
+
+```json
+{ "name": "fakecam",
+  "rtsp_main": "rtsp://127.0.0.1:8654/some-stream",
+  "onvif_address": "http://admin:secret@127.0.0.1:8010/onvif/device_service" }
+```
+
+An easy way to have an RTSP source at hand is a second Neolink in `--demo`
+mode: its synthetic cameras serve on `rtsp://127.0.0.1:8654/<name>`, which also
+exercises the frame grab that gives a camera with no snapshot command its still.
+
+It is a test double, not a conformant device — it is there to catch envelope,
+namespace and field-name mistakes that unit tests on the parsers cannot.
+
 ## Testing uncommitted changes on a real server (local Docker image)
 
 To try work-in-progress on a production-like box **without pushing anything to

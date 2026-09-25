@@ -34,6 +34,17 @@ public interface IStreamHub
 
     /// <summary>True once codec parameters have been learned (DESCRIBE/init can be answered).</summary>
     bool VideoReady { get; }
+
+    /// <summary>Whether a decodable group of pictures is buffered RIGHT NOW — i.e. a
+    /// publisher is live and a keyframe has been seen since it started. Unlike
+    /// <see cref="VideoReady"/>, which stays true for the rest of the run once codec
+    /// parameters are known, this goes false the moment the source stops. Anything
+    /// that wants a frame without waiting asks this first.</summary>
+    bool HasBufferedGop => false;
+
+    /// <summary>A publisher is sending video now (a keyframe seen since it started), even while its
+    /// group of pictures is too big to buffer; a frame from it means waiting for the next keyframe.</summary>
+    bool LiveVideo => HasBufferedGop;
     VideoCodec? Codec { get; }
     byte[]? Sps { get; }
     byte[]? Pps { get; }

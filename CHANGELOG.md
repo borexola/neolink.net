@@ -4,21 +4,56 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
+## Unreleased
+
+### Added
+
+- **Non-Reolink cameras get detections** over ONVIF (motion, and person, vehicle or animal where the camera classifies them), recorded, notified and sent to Home Assistant like a Reolink's. Nothing to configure.
+- **Settings for non-Reolink cameras, over ONVIF:** identity, stream settings, picture and day/night, pan/tilt and presets, zoom, overlays and reboot, each shown only if the camera offers it. ONVIF is found on the stream URL's host and login (`onvif_address` overrides both), and **Test connection** reports whether it answered.
+- **A detection zone on every camera:** written to the camera's own grid where its ONVIF runs cell motion detection, otherwise kept by Neolink, where it limits only the live object boxes. Reolink cameras with their own grid are unchanged.
+- **Stills for cameras without a snapshot command**, from the camera's ONVIF snapshot or a frame of its video (needs ffmpeg). Reolink snapshots are unchanged.
+- ONVIF requests are stamped in the camera's own clock, and the login is offered over HTTP authentication as well as WS-Security.
+- **PTZ in Frigate for Reolink cameras without ONVIF** (pan/tilt, the camera's presets and zoom), switched on per camera under **External connection** in the camera editor: one shared port with a profile per camera (Frigate 0.18+), or a port of the camera's own for older Frigate. Frigate signs in as one of the RTSP users (thanks to @mzspicoli for the prototype).
+- **See who is watching:** on the Monitor page, the admin can click the Viewers card to list each live viewer's camera and stream, RTSP or web, address, user and how long they've been watching.
+
+### Changed
+
+- The Camera settings tab no longer disappears on cameras without controls; the Ports tab is Reolink-only.
+- Generic RTSP cameras show their address on the settings panel's identity strip (never the login).
+- **Existing generic cameras get Detection events switched on, once.** Turning it off afterwards sticks.
+- **The wake-hint trust window is configurable** (`wake_hints.trust_hours`, thanks to @dragners, #57), also under **Server settings → General → Wake hints**. The default stays 2 hours; past 24 hours the UI warns that a broken hint source goes unnoticed for longer.
+- **Router wake hints can reach the Home Assistant add-on** (experimental): `5140/udp` (syslog) and `8443/tcp` (push decoy) are declared, both off until you map a host port. The beta add-on still publishes no ports.
+
+### Fixed
+
+- **A raw `#` or `?` in an RTSP password now works**, in the stream URL and the settings page alike.
+- **An RTSP camera's live view no longer fails for good** when its first parameter set was bad (for example as its RTSP service starts): the video size now follows each new SPS, including after a resolution change.
+- **Generic RTSP cameras recover on their own.** A camera that stops sending video, or never answers, is reconnected after 20 s instead of freezing until a restart, and a drop after a healthy stream retries at once instead of after the longest backoff.
+- **More RTSP cameras stream correctly**, handling the connection quirks go2rtc (the engine Frigate uses) handles: cameras that pick their own interleaved channel, send LF-only replies, redirect, lack GET_PARAMETER, or send parameter sets and large frames unusually. A frame with a lost packet is dropped rather than shown damaged.
+- **The timeline panel no longer collapses when no camera is selected.** It keeps its height and stays empty until you pick one.
+
 ## 1.0.9
 
 ### Added
 
 - **Emergency mode (beta).** One switch for when something is actually happening. Arm it and every camera's detections go out through whichever channels you have set up, ignoring the per-camera notification switches and the cooldown that normally spaces alerts out. The cameras you pick sound their siren and turn their lights on the moment you arm it, and hold them until you switch it off. It lives under Server settings → Experimental, tells you exactly what is about to happen before it arms, and shows up in Home Assistant as an "Emergency mode" switch on the Neolink.NET Server device, so an automation or a dashboard button can arm it too. While it is armed the whole system is brought live: a camera you had suspended reconnects, one sitting in privacy mode starts seeing again, and battery cameras stop dozing (which uses their charge faster) — all of it put back exactly as it was when you switch emergency mode off. The toolbar pulses red while it is armed and carries its own off switch. It only forwards detections from cameras that record events. Nothing is written to your cameras' own settings: switch it off and sirens stop and lights go back to how they were (after a server restart while armed, lights are switched off rather than restored, since the earlier state is no longer known).
+- **A way in for cameras that hang up the moment Neolink says hello.** A few models — so far all of them cameras sold bundled with an NVR — accept the connection and then drop it before answering, so they never appear at all. The opening message has two parts that other Reolink software fills in differently, and which one a camera will accept is only discoverable by trying, so two new per-camera settings let you try them: `max_encryption` and `legacy_login`. Troubleshooting has a short table to work down, and the camera's Test button re-reads the file on every click so you can find the answer without restarting each time. Cameras that already work are completely untouched — the opening message is byte-for-byte what it was unless you set one of these yourself. If you find a combination that works, please report it with your model and firmware so it can become automatic.
 - **Camera-offline alerts can carry what the camera last saw.** Turn it on under Notifications and the alert arrives with snapshots from the last detection before the camera stopped answering, so a cut feed still tells you what was there. Off by default, and you choose how many images and how recent that detection has to be.
 
 ### Changed
 
+- **Flat icons for events and object boxes.** The coloured emoji on event rows, titles, thumbnails and type filters — the little standing figure, the red car, the paw — are replaced by plain line icons in the same style as the rest of the toolbar, so they look the same on every device and sit quietly beside the text. The live object boxes use the same icons: a figure for a person, a car, a truck, a bus, a bicycle, and a paw for any animal; anything less familiar keeps its word, and the confidence stays beside it.
 - **The event player fits a phone.** Playback speed and recording quality now share one row at every screen width, separated by a thin divider instead of the SPEED and QUALITY headings that pushed them onto two lines; the chips say what they are, and a tooltip names the group.
 - **Search as you type.** The Search button under AI Search is gone: the box searches by itself a second after you stop typing, or the moment you press Enter, and Escape clears it. A single letter never fires a search. The BETA badge has come off, and on a phone the heading steps aside so the field gets the whole row.
 - **Small tidy-ups.** The NEW badges on Detection zone, Notifications and Webhook settings have come off. The Events page stops polling while its browser tab is hidden and catches up the moment you look again.
 
 ### Fixed
 
+- **The Monitor page no longer jumps.** The memory chart's legend could break onto a second line and back again as the figures ticked over, re-laying the whole page several times a second. The legend now keeps each item on one line and reserves room for the widest figure, so nothing shifts as values change.
+- **The desktop app recovers from a frozen page by itself.** When the web page inside the window stopped responding, nothing brought it back: clicks, F5 and Reload all waited on the stuck page, and quitting and reopening the app was the only way out. The app now notices within about half a minute, restarts just the page and reloads it, with the window and notifications carrying on as they were.
+- **The event player fits a short window.** On a browser window that was not tall enough, the bottom of the player — the play button, the seek bar and the Older/Newer buttons — sat below the edge of the screen. The video now shrinks to leave room for them.
+- **One unusable camera no longer takes every other camera down with it.** A single entry Neolink could not make sense of used to stop the whole config from loading, so all your cameras went dark over one — and the only way back was to open the config file and edit it by hand. It now skips just that entry, names it in the log along with what is wrong, and starts everything else. Adding or editing a camera in the web UI is checked exactly as strictly as before, so a mistake is still caught while you are making it rather than quietly dropped at the next start.
+- **The Home Assistant add-on repairs a setting it had no way to take back.** Turning a camera's UDP switch on without giving it a UID wrote something the Options page could not switch off again, and that one camera stopped the add-on for all of them. It is now cleared at start-up, with a line in the log telling you to add the UID if you want UDP.
 - **A siren that could not be silenced no longer lets its camera doze.** When switching emergency mode off failed to reach a battery camera, the camera was allowed back to sleep with its siren still latched, where the retry could not reach it. It now stays awake until the siren is confirmed off.
 - **Search fixes.** "before Tuesday" reaches all the way back instead of stopping 31 days earlier, and words with a hyphen or an apostrophe ("high-vis", "o'clock") find their matches.
 - **The threat filter no longer hides events that have no AI rating**, so it cannot strand you on "No events match the threat filter." after AI descriptions are switched off.

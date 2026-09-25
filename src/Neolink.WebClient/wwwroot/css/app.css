@@ -797,6 +797,32 @@ html, body {
     user-select: none;
 }
 
+/* Live object boxes: a canvas laid exactly over the <video>, so the detector can
+   draw in the element's own pixels and let digital zoom (a transform on the
+   video, mirrored onto this) carry the boxes along with the picture. */
+.tile-detect {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+}
+
+.tile-detect-badge {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.55);
+    border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+    color: var(--muted);
+    font-size: 10px;
+    letter-spacing: 0.4px;
+    pointer-events: none;
+    user-select: none;
+}
+
 .tile-status {
     position: absolute;
     inset: 0;
@@ -2885,7 +2911,7 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     pointer-events: none; /* clicks land on the card (open player) */
 }
 
-.event-thumb-icon { font-size: 30px; opacity: 0.8; }
+.event-thumb-icon { display: inline-flex; opacity: 0.8; }
 
 .event-live {
     position: absolute;
@@ -2959,6 +2985,26 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 
 /* The description banner in the event players (Events page + quick view):
    a quiet card with the verdict chip leading the sentence. */
+/* What the model listed as visible, above its prose: a row of small words, each
+   one a search for itself. Deliberately quieter than the description — an
+   inventory is for scanning and for clicking, not for reading. */
+.event-objects {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin: 6px 0 0;
+}
+
+.event-object {
+    padding: 1px 8px;
+    font-size: 11px;
+    letter-spacing: 0.2px;
+    color: var(--muted);
+    text-transform: lowercase;
+}
+
+.event-object:hover { color: var(--accent); border-color: var(--accent); }
+
 .event-ai {
     display: flex;
     align-items: flex-start;
@@ -3184,6 +3230,7 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     width: min(1440px, calc(100vw - 32px));
     height: fit-content;
     max-height: calc(100vh - 32px);
+    max-height: calc(100dvh - 32px);
     background: var(--panel);
     border: 1px solid var(--line);
     border-radius: 12px;
@@ -3243,7 +3290,9 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 .event-player-media {
     position: relative;
     width: 100%;
-    max-height: calc(100vh - 180px);
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0;
     background: #000;
     border-radius: 8px;
     overflow: hidden;
@@ -3273,7 +3322,9 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     display: block;
     width: 100%;
     aspect-ratio: 16 / 9; /* stable modal size while media loads */
-    max-height: calc(100vh - 180px);
+    min-height: 0;
+    max-height: 100%;
+    object-fit: contain;
     background: #000;
     outline: none;
 }
@@ -3815,6 +3866,21 @@ button.ev-switch-opt {
     will-change: transform;
 }
 
+/* A player handed fullscreen (see detect.js: the native button fullscreens the
+   bare <video>, which would leave the boxes behind on the page) has to fill the
+   screen — its normal height cap is sized for sitting inside a dialog. */
+.event-player-media:fullscreen {
+    max-height: none;
+    height: 100%;
+    border-radius: 0;
+}
+
+.event-player-media:fullscreen video {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
 .zoom-badge {
     font-size: 10px;
     font-weight: 700;
@@ -3833,6 +3899,7 @@ button.ev-switch-opt {
     font-weight: 700;
     letter-spacing: 0.5px;
 }
+
 
 /* While zoomed the frame pans with a drag */
 .zoomed video { cursor: grab; }
@@ -4574,6 +4641,9 @@ body.tl-colresizing, body.tl-colresizing * { cursor: col-resize !important; user
     align-content: stretch;
 }
 
+/* No camera picked: the hint sits centered where the monitors go. */
+.tl-grid > .notice { margin: auto; text-align: center; }
+
 .tl-tile {
     position: relative;
     background: #000;
@@ -4706,6 +4776,16 @@ body.tl-colresizing, body.tl-colresizing * { cursor: col-resize !important; user
    camera is unmuted, so which monitor you are hearing is visible at a glance. */
 .tl-audio { right: 40px; }
 .tl-audio.on { opacity: 1; color: var(--accent); background: rgba(0, 0, 0, 0.78); }
+
+/* Object boxes get the live view's on-video pill rather than a fourth flat
+   button: it is the same control in the same clothes, and it is lit on the one
+   monitor carrying them — only one can, so it doubles as the answer to "which".
+   It hangs just under the zoom pill exactly as it does on a camera's own view —
+   until the monitor is too short for that, when it stops at the foot instead of
+   sliding off the bottom (a board can show eight cameras at once). */
+.tl-tile .cam-rail { top: min(calc(50% + 88px), calc(100% - 54px)); }
+
+.tl-tile-rail .cam-rail { display: none; } /* thumbnails: too small, focus first */
 
 /* ---------------------------------------------------------------- bookmarks
    Gold ribbons in the ruler's empty top band (ticks start at 8px, so the
@@ -5134,12 +5214,18 @@ body.tl-colresizing, body.tl-colresizing * { cursor: col-resize !important; user
     padding: 10px 12px 8px;
 }
 
+/* Items move to the next line whole, never break inside, and a value keeps the
+   width of its widest reading: a legend that re-wrapped as the numbers ticked
+   over made the whole page jump several times a second. */
 .mon-chart-head {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 10px;
+    gap: 2px 10px;
     margin-bottom: 6px;
 }
+
+.mon-chart-title, .mon-leg, .mon-chart-max { white-space: nowrap; }
 
 .mon-chart-title {
     font-size: 12px;
@@ -5164,6 +5250,7 @@ body.tl-colresizing, body.tl-colresizing * { cursor: col-resize !important; user
     color: var(--text);
     font-weight: 600;
     font-variant-numeric: tabular-nums;
+    min-width: 7ch;
 }
 
 /* Y-axis ceiling, right-aligned over the plot */
@@ -5679,6 +5766,13 @@ select.input-pending {
 }
 
 /* ---------- detection-zone editor ---------- */
+/* Where a zone is KEPT changes what editing it means, so the note that says so is
+   set apart from the ordinary help text below it rather than reading as more of it. */
+.zone-local {
+    border-left: 2px solid #5b9dff;
+    padding-left: 8px;
+}
+
 .zone-editor {
     position: fixed;
     inset: 0;

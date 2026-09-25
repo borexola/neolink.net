@@ -190,6 +190,14 @@ The trade-off is that detection quality and available classes are whatever your
 camera model provides (rather than a tunable server-side model like Frigate's);
 in exchange you get an integration light enough to leave running forever.
 
+One preview feature adds boxes to that picture without changing any of it: **live
+object boxes** (Server settings → Experimental) outlines people, vehicles and
+animals while you watch a single camera. The camera tells you *what* it saw but
+never *where*, so the outlining is done by your BROWSER, on the frames it is
+already decoding to show you — the server still never looks at a video frame, and
+nothing is sent anywhere. It is a second opinion for the person watching:
+recording, notifications and Home Assistant continue to follow the camera.
+
 ## Features
 
 **RTSP bridge**
@@ -210,7 +218,12 @@ in exchange you get an integration light enough to leave running forever.
   infrared brightness — plus, over the HTTP API (beta), picture settings, HDR,
   volume, OSD, PTZ presets, quick replies and a firmware-update badge. Changes stage and are
   sent only on "Apply to camera"; a **PORTS tab** can enable the camera's own
-  HTTP/ONVIF services right from Neolink
+  HTTP/ONVIF services right from Neolink. [Non-Reolink
+  cameras](#non-reolink-cameras-generic-rtsp) get the same panel over **ONVIF**:
+  identity, stream profiles, picture, pan/tilt with presets, overlay placement
+  and reboot
+- A **detection zone** on every camera — kept on the camera where it can hold
+  one, kept on Neolink where it cannot, and the editor says which
 - **Events** review strip and deep-linkable events page, a synced
   multi-camera **Timeline** with footage export, and **camera SD-card
   playback** (preview)
@@ -224,6 +237,11 @@ in exchange you get an integration light enough to leave running forever.
 - **AI Search (BETA)**: search events in plain language ("people wearing
   something red last week"). Structured filters parse instantly, the LLM
   matches descriptions; see [AI Search](docs/ai-descriptions.md#ai-search-beta)
+- **Live object boxes (PREVIEW)**: while you watch one camera full-size, the
+  people, vehicles and animals in frame are outlined as you look at them.
+  The outlining runs in your browser, on frames it has already decoded — the
+  server adds nothing and no frame leaves the device. Switch it on under
+  Server settings → Experimental
 - **Battery cameras** (BETA) auto-detected and sleep-friendly — see
   [Battery cameras](#battery-cameras-argus-etc--beta)
 - **Tiered storage** (SSD clips tier + cold archive, capacity watching and
@@ -342,6 +360,8 @@ the original Rust neolink are also accepted.
 | `web_port` | `8655` | Web UI + HTTP/WS API port; `0` disables both |
 | `webui` | `true` | Serve the browser UI on `web_port`; `false` = API only |
 | `web_bind` | = `bind` | Separate bind address for the web port |
+| `ptz_port` | `8656` | Shared ONVIF PTZ port for Frigate ([PTZ buttons in Frigate](#ptz-buttons-in-frigate)); `0` = off |
+| `ptz_bind` | = `bind` | Bind address for the PTZ ports |
 | `users` | *(none)* | **RTSP** Basic-auth users: `{ "name", "pass" }`. Omit for open access. Separate from web-UI accounts! |
 | `recording` | *(none)* | Event recording (see below). Omit to disable |
 | `mqtt` | *(none)* | MQTT / Home Assistant integration (see below). Omit to disable |
@@ -435,7 +455,11 @@ warnings with fill-date forecasts, and AES-256-GCM footage encryption.
 | `stream` | `both` | `mainStream`, `subStream`, `externStream`, `both`, or `all` |
 | `channel_id` | `0` | Channel when connecting through a Reolink NVR (0-based) |
 | `permitted_users` | all users | Restrict this camera's mounts to specific `users` |
+| `ptz_share` | `false` | Offer this camera's PTZ to Frigate on the shared port ([PTZ buttons in Frigate](#ptz-buttons-in-frigate)) |
+| `ptz_port` | *(none)* | Give this camera's PTZ its own port instead (Frigate 0.17 and older) |
 | `record` | `true` | Initial default for this camera's "Detection events" switch (changeable in the web UI) |
+| `max_encryption` | `fullaes` | **Diagnostic.** Caps the encryption the login advertises: `none`, `bcencrypt`, `aes`, `fullaes`. Only for firmware that will not answer the default — see [troubleshooting](docs/troubleshooting.md) |
+| `legacy_login` | `false` | **Diagnostic.** Opens the login with the older credential framing instead of the header-only one. Pairs with `max_encryption` — see [troubleshooting](docs/troubleshooting.md) |
 
 > **Keep camera passwords alphanumeric.** Reolink's HTTP API — the one behind
 > `http_address`, picture settings, volume, PTZ presets and scaled snapshots —
@@ -478,6 +502,123 @@ camera's own IP automatically.
 
 Neither interface weakens LAN security beyond what the Reolink app already
 uses (same camera login), and neither is required for core video or recording.
+
+### Non-Reolink cameras (generic RTSP)
+
+Any camera that serves RTSP can be added alongside the Reolink ones. Instead of
+`address`/`username`, give it the stream URLs — credentials go inside the URL:
+
+```json
+{
+  "name": "front_gate",
+  "rtsp_main": "rtsp://admin:pass@192.168.1.50:554/Streaming/Channels/101",
+  "rtsp_sub":  "rtsp://admin:pass@192.168.1.50:554/Streaming/Channels/102"
+}
+```
+
+Neolink pulls those streams and re-serves them on its own RTSP port, records
+them, and shows them in the web UI.
+
+**Detections come over ONVIF's event service.** Neolink subscribes to the
+camera's own analytics — motion, and person/vehicle/animal where the camera
+classifies what it saw — so a non-Reolink camera gets the same treatment as a
+Reolink one: event clips with thumbnails, the events page and timeline,
+e-mail/webhook notifications, AI descriptions, and motion sensors in Home
+Assistant. A camera whose ONVIF has no event service (or none reachable) still
+streams and records around the clock; it simply produces no events, and the
+switches that depend on them stay out of the way.
+
+**Settings come over ONVIF**, the standard nearly every IP camera speaks. Turn
+it on in the camera's own web page and the ⚙ panel fills in with whatever its
+ONVIF services actually answer for:
+
+| Section | ONVIF service |
+|---|---|
+| Model / firmware / serial on the identity strip | Device |
+| **Streams** — resolution, framerate, bitrate per profile, editable | Media or Media2 (video encoder configuration) |
+| **Picture** — brightness, contrast, saturation, sharpness, day/night | Imaging |
+| **Pan / tilt** and saved **presets** | PTZ (only when the head actually pans and tilts) |
+| **Zoom** — the lens's optical zoom, as a slider | PTZ (`GetStatus` / `AbsoluteMove`) |
+| **On-screen display** — where the name and timestamp sit | Media or Media2 (OSD) |
+| **Detections** — motion and, where the camera classifies, person/vehicle/animal | Events (pull-point) |
+| **Reboot** | Device |
+| Stills, for thumbnails and posters | Media (`GetSnapshotUri`) |
+| **Detection zone** — the camera's own motion grid | Analytics (cell motion detector); Neolink keeps it otherwise, see below |
+
+A camera that answers none of this still streams and records exactly as
+before; the panel simply shows less. What ONVIF cannot do is left out rather
+than offered and refused: there is no way to switch an overlay off (only to
+move it), and hue, anti-flicker, flip/mirror and HDR have no ONVIF equivalent.
+Focus is not offered either: ONVIF moves it through the imaging service in ways
+too different from one camera to the next to present as a single slider.
+
+Newer cameras speak **Media2**, the successor to ONVIF's media service, and some
+speak only that. Neolink asks the older one first — every Reolink answers it —
+and moves to Media2 only when it gets nothing, so the streams, stills and
+overlays come through either way.
+
+Two interoperability details are handled for you, because between them they
+account for most "ONVIF is enabled but Neolink shows nothing" reports: requests
+are stamped in **the camera's own clock** (read from it first, unauthenticated
+— a camera drifting from your server by more than a few seconds rejects every
+request otherwise, which looks exactly like a wrong password), and the camera's
+login is offered over **HTTP authentication as well as WS-Security**, since
+which of the two a given firmware insists on is not something you can tell from
+the outside.
+
+ONVIF is looked for on the stream URL's own host — port 80 first, then 8000,
+2020 (TP-Link Tapo) and 8899 — and signs in with the login that URL carries.
+`onvif_address` overrides both: give it `host`, `host:port`, or a full URL, and a
+full URL may carry its own `user:pass@` when the camera keeps separate accounts
+for streaming and management (an `@` or `/` inside the password may be written
+as-is there; in a stream URL they must still be percent-encoded, `%40` and
+`%2F`). **Test connection** in the Cameras editor says whether ONVIF answered —
+and whether it rejected the login — before you save the entry.
+
+A device that carries several video channels (an NVR, a multi-sensor camera) can
+be added once per channel, each with that channel's stream URLs: the settings,
+stills, pan/tilt, zone and detections of each entry follow the channel its stream
+URLs name, not the device's first.
+
+| Option | Default | Description |
+|---|---|---|
+| `rtsp_main` | *one of these is required* | Main-stream RTSP URL (`rtsp://user:pass@host:554/path`) |
+| `rtsp_sub` | *optional* | Sub-stream RTSP URL |
+| `onvif_address` | *the stream URL's host* | Where the camera's ONVIF device service lives; may be a full URL with its own login |
+| `name`, `permitted_users`, `audio_transcode` | | As for a Reolink camera |
+| `record` | `true` | Seeds this camera's "Detection events" switch, as for a Reolink camera. Only meaningful when its ONVIF event service answers |
+
+### Detection zones
+
+Every camera has one, under camera ⚙ → **Camera settings** → **Detection zone**.
+Drag boxes over the camera's own picture to mark what is worth watching.
+
+Where the zone is KEPT depends on the camera, and the editor says which:
+
+- **On the camera**, for a Reolink with its HTTP API. It is the same grid the
+  Reolink app edits, at whatever dimensions that model reports, and it governs
+  the camera's own motion and AI alarms — so it changes its app notifications
+  and this server's event recording alike.
+- **On the camera**, for a non-Reolink camera whose ONVIF analytics runs a
+  **cell motion detector** — Hikvision, Dahua, Axis and many others do. The grid
+  has the camera's own dimensions, and it decides where the camera's *motion*
+  alarms fire; any other analytics rules it runs (line crossing, intrusion…)
+  keep their own areas, and the rule's other settings (how many cells must
+  move, the alarm delays) are left exactly as they were.
+- **On Neolink**, for every camera that keeps no zone of its own: a generic
+  RTSP camera with no such detector (or no reachable ONVIF), and Reolink models
+  whose firmware carries no grid. Nothing is
+  written to the camera and its own alerts are unchanged; the zone governs what
+  *Neolink* watches, which today is the live object boxes. It is stored in
+  `camera-state.json` alongside the other per-camera settings and survives
+  restarts.
+
+The editor draws the grid over the camera's latest still. A generic RTSP
+camera with no ONVIF snapshot, or whose ONVIF snapshot fails, gets that still
+from the stream Neolink is already carrying, decoded with ffmpeg — without
+ffmpeg the grid is drawn over an empty frame instead. A Reolink camera is
+untouched by this: when its snapshot fails, the answer is the last frame,
+honestly labelled, or nothing.
 
 ## Behind a reverse proxy (HAProxy / nginx / Caddy)
 
@@ -614,6 +755,33 @@ Neolink.NET keeps exactly one connection per camera stream regardless of how man
 Frigate roles/consumers attach, and hands stalled ffmpeg processes a hard disconnect
 within 10 s so Frigate's watchdog recovers quickly. For headless Frigate boxes set
 `"webui": false` (or `"web_port": 0`).
+
+### PTZ buttons in Frigate
+
+Frigate drives PTZ only over ONVIF, which many Reolink models lack. Neolink.NET
+can answer it for them: pan/tilt, the camera's presets, and zoom on zoom lenses.
+Turn it on per camera under **Cameras → Edit → External connection**, which also
+shows the Frigate config to paste.
+
+- **Shared port** (Frigate 0.18+): `"ptz_share": true`. Each such camera is a
+  profile on `ptz_port` (8656), named after the camera, which Frigate's
+  `onvif.profile` picks.
+- **Own port** (older Frigate): `"ptz_port": 8657` on the camera.
+
+```yaml
+onvif:
+  host: <neolink-host>
+  port: 8656
+  user: <RTSP user permitted on the camera>
+  password: <its password>
+  profile: office
+```
+
+- Frigate signs in as an RTSP user. With no users, PTZ only listens on a
+  loopback `ptz_bind`.
+- Presets need the camera's HTTP API. Zoom is untested on a real zoom camera.
+  Click-to-move and autotracking aren't offered.
+- Video stays on RTSP. In Docker, publish the PTZ port or use host networking.
 
 ## Battery cameras (Argus etc.) — BETA
 
