@@ -3346,7 +3346,13 @@ public static class SelfTest
                 store.Add("viewer2", "viewerpass", admin: false);
                 store.SetSettings("viewer2", "{\"mode\":\"grid\"}");
                 store.SetPageSettings("viewer2", "timeline", "{\"studio\":true}");
+                Assert(!store.SetCameras("admin", new() { "front" }), "the admin is never limited to cameras");
+                Assert(store.SetCameras("viewer2", new() { "front", "FRONT", "back" }), "a normal user can be limited");
+                store.RenameCamera("front", "porch");
+                store.RenameCamera("back", null); // deleted: a later camera of that name is not granted
                 var reloaded = new Web.UserStore(dir);
+                AssertEq(string.Join(",", reloaded.List().First(u => u.Name == "viewer2").Cameras!), "porch");
+                Assert(reloaded.List().First(u => u.Name == "admin").Cameras == null, "no limit reads as null");
                 Assert(reloaded.Enabled, "accounts persist across restart");
                 Assert(reloaded.Verify("admin", "new password!") != null, "password persists");
                 Assert(reloaded.GetSettings("viewer2").Contains("grid"), "per-user settings persist");
@@ -4020,6 +4026,16 @@ public static class SelfTest
             Assert(Streaming.CameraControl.DayNightToIrCut("Color") == "ON"
                    && Streaming.CameraControl.DayNightToIrCut("Black&White") == "OFF"
                    && Streaming.CameraControl.DayNightToIrCut("Auto") == "AUTO", "day/night → IR-cut");
+
+            // A confirmed IR-cut write stands while the camera keeps echoing the old value.
+            string? written = "ON", stale = null;
+            AssertEq(Protocol.OnvifClient.ReconcileIrCut("AUTO", ref written, ref stale), "ON");
+            AssertEq(Protocol.OnvifClient.ReconcileIrCut("AUTO", ref written, ref stale), "ON");
+            AssertEq(Protocol.OnvifClient.ReconcileIrCut("OFF", ref written, ref stale), "OFF");
+            Assert(written == null && stale == null, "a moved echo ends the override");
+            written = "ON";
+            AssertEq(Protocol.OnvifClient.ReconcileIrCut("ON", ref written, ref stale), "ON");
+            Assert(written == null, "an agreeing echo ends the override");
 
             // Endpoint candidates: a bare host tries Reolink's ONVIF port 8000 first,
             // then 80; an explicit port or full URL is taken verbatim.
@@ -9450,6 +9466,105 @@ public static class SelfTest
                     .GetProperty("token").GetString()!;
                 AssertEq((int)http.GetAsync($"/api/background?token={Uri.EscapeDataString(viewerTok)}").Result.StatusCode, 403);
                 AssertEq((int)http.GetAsync($"/api/background{tokenQ}").Result.StatusCode, 200);
+
+                // RTSP users from the Users tab: listed by name only, saved to config.json, and refused
+                // wherever the file would not load (or would drop a camera) at the next start.
+                var viewerQ = $"?token={Uri.EscapeDataString(viewerTok)}";
+                HttpResponseMessage Send(HttpMethod m, string path, string? json = null)
+                {
+                    using var req = new HttpRequestMessage(m, path);
+                    if (json != null) req.Content = new StringContent(json, Encoding.UTF8, "application/json");
+                    return http.Send(req);
+                }
+                string Reply(HttpResponseMessage res) { using (res) return $"{(int)res.StatusCode} {res.Content.ReadAsStringAsync().Result}"; }
+                const string rtspUsers = "/api/admin/rtsp-users";
+                Assert(Reply(Send(HttpMethod.Get, rtspUsers + viewerQ)).StartsWith("403"), "RTSP users are admin only");
+                Assert(Reply(Send(HttpMethod.Post, rtspUsers + tokenQ, """{"username":"frigate","password":"s3cret pw"}""")).StartsWith("200"),
+                    "an RTSP user is added");
+                var rtspListed = Reply(Send(HttpMethod.Get, rtspUsers + tokenQ));
+                Assert(rtspListed.Contains("\"frigate\"") && !rtspListed.Contains("s3cret") && rtspListed.Contains("\"restartNeeded\":true"),
+                    "listed by name only, pending a restart: " + rtspListed);
+                Assert(File.ReadAllText(configPath).Contains("\"pass\": \"s3cret pw\""), "saved to config.json");
+                Assert(Reply(Send(HttpMethod.Post, rtspUsers + tokenQ, """{"username":"FRIGATE","password":"x"}""")).Contains("already exists"),
+                    "a name differing only in case is refused");
+                Assert(Reply(Send(HttpMethod.Post, rtspUsers + tokenQ, """{"username":"a:b","password":"x"}""")).StartsWith("400"),
+                    "a name Basic auth cannot carry is refused");
+                Assert(Reply(Send(HttpMethod.Post, rtspUsers + tokenQ, """{"username":"anyone","password":"x"}""")).StartsWith("400"),
+                    "a reserved name is refused");
+                Assert(Reply(Send(HttpMethod.Put, $"{rtspUsers}/frigate{tokenQ}", """{"password":"new pw"}""")).StartsWith("200"),
+                    "an RTSP password is changed");
+                saved = File.ReadAllText(configPath);
+                Assert(saved.Contains("\"pass\": \"new pw\"") && !saved.Contains("s3cret"), "the new password replaces the old");
+                Assert(Reply(Send(HttpMethod.Put, $"{rtspUsers}/nobody{tokenQ}", """{"password":"x"}""")).StartsWith("400"), "unknown RTSP user");
+                File.WriteAllText(configPath, saved.Replace("\"name\": \"storedcam\"", "\"name\": \"storedcam\", \"permitted_users\": [ \"frigate\" ]"));
+                Assert(Reply(Send(HttpMethod.Delete, $"{rtspUsers}/frigate{tokenQ}")).Contains("permitted_users of storedcam"),
+                    "a user a camera names cannot be deleted");
+                File.WriteAllText(configPath, saved);
+                Assert(Reply(Send(HttpMethod.Delete, $"{rtspUsers}/frigate{tokenQ}")).StartsWith("200"), "an RTSP user is deleted");
+                Assert(!File.ReadAllText(configPath).Contains("frigate"), "and is gone from config.json");
+                File.WriteAllText(configPath, configBefore);
+
+                // Camera access per account: a limited account sees only its cameras, every route to
+                // another answers as if it did not exist, and the admin is never limited.
+                string viewerCams(string json) => Reply(Send(HttpMethod.Put, $"/api/users/viewer/cameras{tokenQ}", json));
+                Assert(Reply(Send(HttpMethod.Put, $"/api/users/viewer/cameras{viewerQ}", """{"cameras":[]}""")).StartsWith("403"),
+                    "only the admin sets camera access");
+                Assert(viewerCams("""{"cameras":["nope"]}""").StartsWith("400"), "an unknown camera is refused");
+                Assert(Reply(Send(HttpMethod.Put, $"/api/users/admin/cameras{tokenQ}", """{"cameras":["snapcam"]}""")).StartsWith("400"),
+                    "the admin cannot be limited");
+                Assert(viewerCams("""{"cameras":["SNAPCAM"]}""").StartsWith("200"), "a normal account is limited");
+                var limited = GetJson(http, $"/api/cameras{viewerQ}");
+                Assert(limited.GetArrayLength() == 1 && limited[0].GetProperty("name").GetString() == "snapcam",
+                    "a limited account lists only its cameras");
+                AssertEq(GetJson(http, $"/api/cameras{tokenQ}").GetArrayLength(), 2);
+                Assert(GetJson(http, $"/api/users{tokenQ}").EnumerateArray().Any(u => u.GetProperty("name").GetString() == "viewer"
+                        && u.GetProperty("cameras")[0].GetString() == "snapcam"), "stored in the configured spelling");
+                var evPath = $"/api/events/{Uri.EscapeDataString(evId)}";
+                foreach (var hidden in new[] { "/api/cameras/apicam/recording", "/API/Cameras/apicam/recording", evPath, evPath + "/thumb" })
+                {
+                    var asAdmin = (int)http.GetAsync(hidden + tokenQ).Result.StatusCode;
+                    var asViewer = (int)http.GetAsync(hidden + viewerQ).Result.StatusCode;
+                    Assert(asAdmin == 200 && asViewer == 404, $"{hidden}: admin {asAdmin}, limited viewer {asViewer}");
+                }
+                AssertEq((int)http.GetAsync($"/api/recordings/apicam{viewerQ}").Result.StatusCode, 404);
+                using (var req = new HttpRequestMessage(HttpMethod.Post, $"{evPath}/review{viewerQ}")
+                       { Content = new StringContent("""{"reviewed":true}""", Encoding.UTF8, "application/json") })
+                    AssertEq((int)http.Send(req).StatusCode, 404);
+                AssertEq(GetJson(http, $"/api/events{viewerQ}").GetArrayLength(), 0);
+                AssertEq(GetJson(http, $"/api/events{viewerQ}&camera=apicam").GetArrayLength(), 0);
+                AssertEq(GetJson(http, $"/api/events/days{viewerQ}").GetArrayLength(), 0);
+                AssertEq(GetJson(http, $"/api/events/search{viewerQ}&q=person").GetProperty("events").GetArrayLength(), 0);
+                AssertEq(GetJson(http, $"/api/events/search{tokenQ}&q=person").GetProperty("events").GetArrayLength(), 1);
+                Assert(GetJson(http, $"/api/events/days{tokenQ}").GetArrayLength() > 0, "the admin still sees every day");
+                using (var ws = new System.Net.WebSockets.ClientWebSocket())
+                {
+                    bool opened;
+                    try
+                    {
+                        ws.ConnectAsync(new Uri($"ws://127.0.0.1:{port}/api/stream?path=/apicam/mainStream&token={Uri.EscapeDataString(viewerTok)}"),
+                            CancellationToken.None).Wait(TimeSpan.FromSeconds(10));
+                        opened = ws.State == System.Net.WebSockets.WebSocketState.Open;
+                    }
+                    catch (AggregateException) { opened = false; }
+                    Assert(!opened, "a limited account cannot open another camera's live stream");
+                }
+                // A live stream open when its camera is taken away ends within seconds (the hub has no
+                // video yet, so without that it would wait out the 15 s describe timeout).
+                Assert(viewerCams("""{"cameras":["apicam"]}""").StartsWith("200"), "limited to the streamed camera");
+                using (var live = new System.Net.WebSockets.ClientWebSocket())
+                {
+                    live.ConnectAsync(new Uri($"ws://127.0.0.1:{port}/api/stream?path=/apicam/mainStream&token={Uri.EscapeDataString(viewerTok)}"),
+                        CancellationToken.None).Wait(TimeSpan.FromSeconds(10));
+                    Assert(live.State == System.Net.WebSockets.WebSocketState.Open, "a permitted camera's live stream opens");
+                    Assert(viewerCams("""{"cameras":["snapcam"]}""").StartsWith("200"), "the camera is taken away");
+                    var took = System.Diagnostics.Stopwatch.StartNew();
+                    try { live.ReceiveAsync(new byte[4096], CancellationToken.None).Wait(TimeSpan.FromSeconds(14)); }
+                    catch (AggregateException) { /* aborted by the server: ended */ }
+                    Assert(took.Elapsed < TimeSpan.FromSeconds(11) && live.State != System.Net.WebSockets.WebSocketState.Open,
+                        $"the open stream ends ({took.Elapsed.TotalSeconds:0.0}s, {live.State})");
+                }
+                Assert(viewerCams("""{"cameras":null}""").StartsWith("200"), "the limit is lifted");
+                AssertEq(GetJson(http, $"/api/cameras{viewerQ}").GetArrayLength(), 2);
 
                 // Per-camera recording switches round-trip through the API.
                 using (var req = new HttpRequestMessage(HttpMethod.Post, $"/api/cameras/apicam/recording{tokenQ}")

@@ -366,6 +366,7 @@ public static class WebApi
         }
     }
     private sealed record PasswordRequest(string? Password);
+    private sealed record UserCamerasRequest(List<string>? Cameras);
     private sealed record AdminUiSettings(double? TrickleSpeed, string? StateDir, bool? ResetAdminPassword,
         bool? Talk = null, bool? ShowBackgroundTasks = null);
     private sealed record AdminRecordingSettings(string? Path, int? RetentionDays, int? PreSeconds,
@@ -503,12 +504,38 @@ public static class WebApi
                     return;
                 }
                 ctx.Items["authUser"] = user;
+                // A camera outside the account's limit answers as if it did not exist.
+                if (CameraOfPath(ctx.Request.Path) is { } target && !CanSee(ctx, target))
+                {
+                    ctx.Response.StatusCode = 404;
+                    await ctx.Response.WriteAsJsonAsync(new { error = "unknown camera" });
+                    return;
+                }
             }
             await next();
         });
 
         bool IsAdmin(HttpContext ctx) => ctx.Items["authUser"] is UserRecord { Admin: true };
         string? SessionName(HttpContext ctx) => (ctx.Items["authUser"] as UserRecord)?.Name;
+        // The cameras a signed-in normal account is limited to; null = no limit.
+        static HashSet<string>? LimitOf(UserRecord? user) =>
+            user is { Admin: false, Cameras: { } only } ? new HashSet<string>(only, StringComparer.OrdinalIgnoreCase) : null;
+        static bool Sees(UserRecord? user, string? camera) =>
+            LimitOf(user) is not { } only || (camera != null && only.Contains(camera));
+        HashSet<string>? CameraLimit(HttpContext ctx) => LimitOf(ctx.Items["authUser"] as UserRecord);
+        bool CanSee(HttpContext ctx, string? camera) => Sees(ctx.Items["authUser"] as UserRecord, camera);
+
+        // Cancels a long-lived socket within seconds of its camera leaving the account's limit.
+        static async Task WhileVisibleAsync(UserRecord? user, string camera, CancellationTokenSource session)
+        {
+            using var tick = new PeriodicTimer(TimeSpan.FromSeconds(5));
+            try
+            {
+                while (await tick.WaitForNextTickAsync(session.Token))
+                    if (!Sees(user, camera)) session.Cancel();
+            }
+            catch (OperationCanceledException) { }
+        }
 
         app.MapGet("/api/auth/status", (HttpContext ctx) =>
         {
@@ -697,7 +724,25 @@ public static class WebApi
         app.MapGet("/api/users", (HttpContext ctx) =>
             !IsAdmin(ctx)
                 ? Results.Json(new { error = "admin only" }, statusCode: 403)
-                : Results.Json(userStore.List().Select(u => new { name = u.Name, admin = u.Admin })));
+                : Results.Json(userStore.List().Select(u => new { name = u.Name, admin = u.Admin, cameras = u.Cameras })));
+
+        // Which cameras a normal account may see: null = all, a list = only those.
+        app.MapPut("/api/users/{name}/cameras", (string name, UserCamerasRequest req, HttpContext ctx) =>
+        {
+            if (!IsAdmin(ctx))
+                return Results.Json(new { error = "admin only" }, statusCode: 403);
+            if (req.Cameras?.FirstOrDefault(c => !cameras.Any(k => string.Equals(k.Name, c, StringComparison.OrdinalIgnoreCase)))
+                is { } unknown)
+                return Results.Json(new { error = $"unknown camera \"{unknown}\"" }, statusCode: 400);
+            // Stored in the configured spelling, which is what the camera list compares against.
+            var list = req.Cameras?.Select(c => cameras.First(k =>
+                string.Equals(k.Name, c, StringComparison.OrdinalIgnoreCase)).Name).ToList();
+            if (!userStore.SetCameras(name, list))
+                return Results.Json(new { error = "unknown user (the admin always sees every camera)" }, statusCode: 400);
+            Log.Info($"Web user '{name}' camera access set by '{SessionName(ctx)}': " +
+                     (list == null ? "all cameras" : list.Count == 0 ? "none" : string.Join(", ", list)));
+            return Results.Json(new { ok = true });
+        });
 
         app.MapPost("/api/users", (CredentialsRequest req, HttpContext ctx) =>
         {
@@ -1181,7 +1226,10 @@ public static class WebApi
                 });
                 // The detection zone Neolink keeps is keyed by name, so it follows a rename (only the zone).
                 if (req.OriginalName is { Length: > 0 } was)
+                {
                     o.CameraState?.Rename(was, name);
+                    userStore.RenameCamera(was, name);
+                }
                 Log.Warn($"config.json cameras updated via the web UI by '{SessionName(ctx)}' " +
                          $"({(req.OriginalName == null ? "added" : "edited")} \"{name}\") — restart to apply");
                 return Results.Json(new { ok = true, requiresRestart = true });
@@ -1210,6 +1258,7 @@ public static class WebApi
                 });
                 // Its stored detection zone goes too, so a new camera of the same name does not inherit it.
                 o.CameraState?.Forget(name);
+                userStore.RenameCamera(name, null);
                 Log.Warn($"config.json camera \"{name}\" deleted via the web UI by '{SessionName(ctx)}' — restart to apply");
                 return Results.Json(new { ok = true, requiresRestart = true });
             }
@@ -1221,6 +1270,101 @@ public static class WebApi
             {
                 return Results.Json(new { error = $"config.json is not writable: {ex.Message}" }, statusCode: 409);
             }
+        });
+
+        // -------------------------------------------------- admin: RTSP users
+        // The config.json "users" list. Passwords are write-only; changes apply on the next restart.
+
+        IResult EditRtspUsers(HttpContext ctx, string what, Action<JsonArray> mutate)
+        {
+            try
+            {
+                ConfigEditor.Apply(o.ConfigPath, root => mutate(ConfigEditor.RtspUsers(root)));
+                Log.Warn($"config.json RTSP user {what} via the web UI by '{SessionName(ctx)}' — restart to apply");
+                return Results.Json(new { ok = true, requiresRestart = true });
+            }
+            catch (FormatException ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: 400);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return Results.Json(new { error = $"config.json is not writable: {ex.Message}" }, statusCode: 409);
+            }
+        }
+
+        app.MapGet("/api/admin/rtsp-users", (HttpContext ctx) =>
+        {
+            if (AdminOnly(ctx) is { } denied) return denied;
+            try
+            {
+                var cfg = NeolinkConfig.Load(o.ConfigPath);
+                return Results.Json(new
+                {
+                    writable = ConfigEditor.IsWritable(o.ConfigPath),
+                    // The file differs from what the running RTSP server checks logins against.
+                    restartNeeded = cfg.Users.Count != users.Count
+                        || cfg.Users.Any(u => !users.TryGetValue(u.Name, out var live) || live != u.Pass),
+                    users = cfg.Users.Select(u => u.Name).ToList(),
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: 500);
+            }
+        });
+
+        app.MapPost("/api/admin/rtsp-users", (CredentialsRequest req, HttpContext ctx) =>
+        {
+            if (AdminOnly(ctx) is { } denied) return denied;
+            var name = (req.Username ?? "").Trim();
+            if (ConfigEditor.RtspUserNameError(name) is { } nameErr)
+                return Results.Json(new { error = nameErr }, statusCode: 400);
+            if (string.IsNullOrEmpty(req.Password))
+                return Results.Json(new { error = "provide a password" }, statusCode: 400);
+            return EditRtspUsers(ctx, $"\"{name}\" added", list =>
+            {
+                // Names match case-sensitively at login; two differing only in case would just confuse.
+                if (list.OfType<JsonObject>().Any(u => string.Equals(
+                        ConfigEditor.GetString(u, "name") ?? ConfigEditor.GetString(u, "username"), name,
+                        StringComparison.OrdinalIgnoreCase)))
+                    throw new FormatException($"an RTSP user named \"{name}\" already exists");
+                list.Add(new JsonObject { ["name"] = name, ["pass"] = req.Password });
+            });
+        });
+
+        app.MapPut("/api/admin/rtsp-users/{name}", (string name, PasswordRequest req, HttpContext ctx) =>
+        {
+            if (AdminOnly(ctx) is { } denied) return denied;
+            if (string.IsNullOrEmpty(req.Password))
+                return Results.Json(new { error = "provide a password" }, statusCode: 400);
+            return EditRtspUsers(ctx, $"\"{name}\" password changed", list =>
+                ConfigEditor.SetRtspPassword(ConfigEditor.FindRtspUser(list, name)
+                    ?? throw new FormatException($"unknown RTSP user \"{name}\""), req.Password));
+        });
+
+        app.MapDelete("/api/admin/rtsp-users/{name}", (string name, HttpContext ctx) =>
+        {
+            if (AdminOnly(ctx) is { } denied) return denied;
+            // A camera naming a missing user is dropped at boot, so refuse rather than lose it.
+            List<string> listedOn;
+            try
+            {
+                listedOn = NeolinkConfig.Load(o.ConfigPath).Cameras
+                    .Where(c => c.PermittedUsers?.Contains(name) == true).Select(c => c.Name).ToList();
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: 500);
+            }
+            if (listedOn.Count > 0)
+                return Results.Json(new
+                {
+                    error = $"\"{name}\" is in permitted_users of {string.Join(", ", listedOn)} — remove it there first",
+                }, statusCode: 400);
+            return EditRtspUsers(ctx, $"\"{name}\" deleted", list =>
+                list.Remove(ConfigEditor.FindRtspUser(list, name)
+                    ?? throw new FormatException($"unknown RTSP user \"{name}\"")));
         });
 
         // Connectivity test WITHOUT saving. Reolink: full Baichuan connect + login
@@ -1964,7 +2108,7 @@ public static class WebApi
                     };
                 })));
 
-        app.MapGet("/api/cameras", () =>
+        app.MapGet("/api/cameras", (HttpContext ctx) =>
         {
             // How this camera is attached to the network, for the sidebar icon:
             // { kind: "wifi", level 0-4, label } or { kind: "wired" }. Null only when
@@ -1996,7 +2140,7 @@ public static class WebApi
                 return wired ? new { kind = "wired", level = 0, label = "Wired (Ethernet)" } : null;
             }
 
-            var payload = cameras.Select(c => new
+            var payload = cameras.Where(c => CanSee(ctx, c.Name)).Select(c => new
             {
                 name = c.Name,
                 online = c.Control.Online,
@@ -3313,8 +3457,11 @@ public static class WebApi
 
             // date alone is one day; date+to is an inclusive range; to alone is
             // everything up to that day.
-            app.MapGet("/api/events", (string? camera, bool? reviewed, int? limit, string? date, string? to) =>
+            app.MapGet("/api/events", (string? camera, bool? reviewed, int? limit, string? date, string? to,
+                HttpContext ctx) =>
             {
+                if (camera != null && !CanSee(ctx, camera))
+                    return Results.Json(Array.Empty<object>());
                 DateTime? day = null, until = null;
                 foreach (var (raw, name) in new[] { (date, "date"), (to, "to") })
                 {
@@ -3331,20 +3478,22 @@ public static class WebApi
                 // by older versions. Excluded inside the store, before the limit,
                 // so they cannot eat list slots on a busy day.
                 return Results.Json(events
-                    .List(camera, reviewed, limit ?? 200, day, excludeWakeOnly: true, localTo: until)
+                    .List(camera, reviewed, limit ?? 200, day, excludeWakeOnly: true, localTo: until,
+                        onlyCameras: CameraLimit(ctx))
                     .Select(Shape));
             });
 
             // Days that hold any footage (events or continuous) — the timeline's
             // calendar highlights these. Literal "days" beats the {id} routes.
-            app.MapGet("/api/events/days", () => Results.Json(events.ListContentDays()));
+            app.MapGet("/api/events/days", (HttpContext ctx) =>
+                Results.Json(events.ListContentDays(CameraLimit(ctx))));
 
             // Natural-language search. Deterministic first (labels, camera names,
             // date phrases parse locally; leftover words match the stored AI
             // descriptions); only a query with leftovers spends ONE LLM call, and
             // solely to translate the phrase into the same structured plan.
             // Without q this reports AI availability (the search bar's icon).
-            app.MapGet("/api/events/search", async (string? q, int? limit, CancellationToken ct) =>
+            app.MapGet("/api/events/search", async (string? q, int? limit, HttpContext ctx, CancellationToken ct) =>
             {
                 bool aiAvailable = o.Ai?.Enabled == true;
                 if (string.IsNullOrWhiteSpace(q))
@@ -3352,7 +3501,8 @@ public static class WebApi
                 try
                 {
                 int cap = Math.Clamp(limit ?? 200, 1, 1000);
-                var names = cameras.Select(c => c.Name).ToList();
+                var only = CameraLimit(ctx);
+                var names = cameras.Select(c => c.Name).Where(n => only == null || only.Contains(n)).ToList();
                 var plan = Neolink.Recording.EventSearch.Parse(q, names, DateTime.Now);
                 bool usedAi = false;
                 if ((!plan.Structured || plan.StrayDigits) && aiAvailable)
@@ -3368,11 +3518,13 @@ public static class WebApi
                 // Descriptive queries with AI: the model reads the candidates'
                 // actual descriptions and picks the matches — keyword scoring is
                 // only the fallback (no AI, or the model's reply was unusable).
-                List<Neolink.Recording.EventRecord>? hits = null;
+                // A limited account searches its own cameras only; the plan stays as understood.
+                var scope = only == null ? plan : plan.ScopedTo(only);
+                List<Neolink.Recording.EventRecord>? hits = only != null && scope.Cameras.Count == 0 ? new() : null;
                 bool kwMatched = true, kwPartial = false, judged = false;
-                if (plan.Keywords.Count > 0 && aiAvailable)
+                if (hits == null && scope.Keywords.Count > 0 && aiAvailable)
                 {
-                    var pool = Neolink.Recording.EventSearch.JudgePool(plan, events);
+                    var pool = Neolink.Recording.EventSearch.JudgePool(scope, events);
                     if (pool.Count > 0)
                     {
                         // Bounded below the client's 90s budget: a slow model falls
@@ -3402,11 +3554,11 @@ public static class WebApi
                             // page is never silently empty — the note explains.
                             hits = picked.Count > 0
                                 ? picked.OrderByDescending(e => e.StartUtc).Take(cap).ToList()
-                                : Neolink.Recording.EventSearch.Execute(plan.StructuralOnly(), events, cap);
+                                : Neolink.Recording.EventSearch.Execute(scope.StructuralOnly(), events, cap);
                         }
                     }
                 }
-                hits ??= Neolink.Recording.EventSearch.Execute(plan, events, out kwMatched, out kwPartial, cap);
+                hits ??= Neolink.Recording.EventSearch.Execute(scope, events, out kwMatched, out kwPartial, cap);
                 return Results.Json(new
                 {
                     aiAvailable,
@@ -3435,10 +3587,10 @@ public static class WebApi
 
             // Single-event lookup: notification deep links (/events?event={id})
             // resolve the exact event even after it ages out of the 24h list.
-            app.MapGet("/api/events/{id}", (string id) =>
+            app.MapGet("/api/events/{id}", (string id, HttpContext ctx) =>
             {
                 var rec = events.Find(id);
-                return rec == null
+                return rec == null || !CanSee(ctx, rec.Camera)
                     ? Results.Json(new { error = "unknown event" }, statusCode: 404)
                     : Results.Json(Shape(rec));
             });
@@ -3451,8 +3603,12 @@ public static class WebApi
             // (same rule as the review endpoint). The JSON endpoints stay session-only.
             IResult? EventMediaAuth(HttpContext ctx, string id)
             {
-                if (!userStore.Enabled || ctx.Items.ContainsKey("authUser"))
+                if (!userStore.Enabled)
                     return null;
+                if (ctx.Items.ContainsKey("authUser"))
+                    return CanSee(ctx, events.Find(id)?.Camera)
+                        ? null
+                        : Results.Json(new { error = "unknown event" }, statusCode: 404);
                 var creds = NetUtil.DecodeBasicAuth(ctx.Request.Headers.Authorization);
                 if (creds != null
                     && users.TryGetValue(creds.Value.User, out var expected)
@@ -3508,7 +3664,7 @@ public static class WebApi
             app.MapPost("/api/events/{id}/review", (string id, ReviewRequest req, HttpContext ctx) =>
             {
                 var rec = events.Find(id);
-                if (rec == null)
+                if (rec == null || !CanSee(ctx, rec.Camera))
                     return Results.Json(new { error = "unknown event" }, statusCode: 404);
                 // Same rules as camera control: reviewing an event needs control rights
                 // on its camera. Web-UI sessions (validated by the middleware) always
@@ -4029,7 +4185,7 @@ public static class WebApi
         {
             // Incremental polling: ?after=<unix ms> returns only newer samples, so
             // the 2s poll ships a couple hundred bytes, not the whole hour.
-            app.MapGet("/api/system/stats", (long? after) => Results.Json(new
+            app.MapGet("/api/system/stats", (long? after, HttpContext ctx) => Results.Json(new
             {
                 info = monitor.Info(),
                 samples = monitor.Since(after ?? 0).Select(s => new
@@ -4053,6 +4209,7 @@ public static class WebApi
                 // healthy camera is one run), so ship the full picture each poll.
                 avail = monitor.Availability
                     .Snapshots(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
+                    .Where(a => CanSee(ctx, a.Camera))
                     .Select(a => new
                     {
                         cam = a.Camera,
@@ -4127,7 +4284,8 @@ public static class WebApi
             }
             string? path = ctx.Request.Query["path"];
             var hub = FindHub(cameras, path);
-            if (hub == null)
+            var camName = cameras.FirstOrDefault(c => c.Streams.Any(s => s.Hub == hub))?.Name;
+            if (hub == null || camName == null || !CanSee(ctx, camName))
             {
                 ctx.Response.StatusCode = 404;
                 return;
@@ -4135,13 +4293,24 @@ public static class WebApi
             var from = LoginGuard.ClientAddress(ctx.Connection.RemoteIpAddress, ctx.Request.Headers["X-Forwarded-For"]);
             var user = SessionName(ctx);
             using var ws = await ctx.WebSockets.AcceptWebSocketAsync();
+            using var session = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            var access = WhileVisibleAsync(ctx.Items["authUser"] as UserRecord, camName, session);
             try
             {
-                await StreamToWebSocketAsync(ws, hub, ct, o.Viewers, from, user).ConfigureAwait(false);
+                await StreamToWebSocketAsync(ws, hub, session.Token, o.Viewers, from, user).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                // The account lost this camera mid-stream.
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 Log.Debug($"{hub.Name}: web stream ended: {Log.Flatten(ex)}");
+            }
+            finally
+            {
+                session.Cancel();
+                await access;
             }
         });
 
@@ -4166,7 +4335,7 @@ public static class WebApi
             }
             string? name = ctx.Request.Query["camera"];
             var cam = cameras.FirstOrDefault(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase));
-            if (cam == null)
+            if (cam == null || !CanSee(ctx, cam.Name))
             {
                 ctx.Response.StatusCode = 404;
                 return;
@@ -4302,6 +4471,22 @@ public static class WebApi
         path.StartsWithSegments("/api/cameras")
         && (path.Value!.EndsWith("/snapshot.jpg", StringComparison.OrdinalIgnoreCase)
             || path.Value.EndsWith("/snapshot", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>The camera named by /api/cameras/{name}/… or /api/recordings/{camera}/…; null for other paths.</summary>
+    internal static string? CameraOfPath(PathString path)
+    {
+        // Routing ignores case, so this must too, or /API/Cameras/… would slip past.
+        foreach (var prefix in new[] { "/api/cameras", "/api/recordings" })
+        {
+            if (path.StartsWithSegments(prefix, StringComparison.OrdinalIgnoreCase, out var rest)
+                && rest.Value is { Length: > 1 } r)
+            {
+                var name = r[1..].Split('/')[0];
+                return name.Length > 0 ? name : null;
+            }
+        }
+        return null;
+    }
 
     /// <summary>True for /api/events/{id}/clip|thumb|preview — event footage, whose
     /// auth (like snapshots') additionally accepts RTSP Basic credentials.</summary>

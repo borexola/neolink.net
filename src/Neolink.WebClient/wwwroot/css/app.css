@@ -5626,6 +5626,17 @@ body.tl-colresizing, body.tl-colresizing * { cursor: col-resize !important; user
     max-width: 160px;
 }
 
+/* Per-account camera picker, opened under its user row. */
+.user-cams-edit { padding: 2px 0 8px 18px; }
+.user-cams { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.user-cams-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
 /* ------------------------------------------------------------ stream chips */
 
 .stream-chip { cursor: default; }

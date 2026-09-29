@@ -398,7 +398,9 @@ HMAC-signed tokens that expire after 30 days and are invalidated the moment a
 password changes.
 
 The admin manages accounts from ⚙ → Users…: add normal users, change any
-password, delete users (the admin itself can't be deleted). **Every account
+password, delete users (the admin itself can't be deleted). **cameras…** limits
+a normal user to chosen cameras; the rest vanish from their wall, events,
+timeline and search, and the server refuses them. **Every account
 keeps its own UI settings** — layout, tiles, review-strip filters — stored
 server-side, so people don't fight over one shared view. Forgot the admin
 password? Set `"reset_admin_password": true` in the config, restart, use
@@ -407,8 +409,8 @@ password? Set `"reset_admin_password": true` in the config, restart, use
 
 The admin also gets ⚙ → **Server settings…**: a form that edits most of
 `config.json` (network ports, web UI, recording) and writes it back to the file
-(atomically, keeping a `.bak`; comments are not preserved, and RTSP users still
-need a text editor). The **Cameras** tab adds, edits and deletes cameras
+(atomically, keeping a `.bak`; comments are not preserved). The **Users** tab
+also edits the RTSP `users` (passwords write-only). The **Cameras** tab adds, edits and deletes cameras
 from the same panel — Reolink and generic RTSP alike — with live validation, a
 **Test connection** button (a real Baichuan login for Reolink; an RTSP
 round-trip for generic URLs), and write-only passwords: a stored password is

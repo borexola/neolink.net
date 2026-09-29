@@ -298,7 +298,8 @@ public sealed class EventStore
     /// Date-scoped queries allow a far higher cap: the day itself bounds the
     /// reply, and the day views must show a busy day whole.</summary>
     public List<EventRecord> List(string? camera = null, bool? reviewed = null, int limit = 200,
-        DateTime? localDate = null, bool excludeWakeOnly = false, DateTime? localTo = null)
+        DateTime? localDate = null, bool excludeWakeOnly = false, DateTime? localTo = null,
+        IReadOnlySet<string>? onlyCameras = null)
     {
         limit = Math.Clamp(limit, 1, 100_000);
         // A lone date is a one-day range, which is what every existing caller asks
@@ -314,6 +315,7 @@ public sealed class EventStore
             {
                 var r = _byStart[i];
                 if (camera != null && !string.Equals(r.Camera, camera, StringComparison.OrdinalIgnoreCase)) continue;
+                if (onlyCameras != null && !onlyCameras.Contains(r.Camera)) continue;
                 if (reviewed != null && r.Reviewed != reviewed) continue;
                 if (excludeWakeOnly && r.Labels is ["wake"]) continue;
                 if (from != null || to != null)
@@ -342,25 +344,32 @@ public sealed class EventStore
     private readonly Dictionary<string, (List<string> Days, DateTime At)> _continuousDays =
         new(StringComparer.OrdinalIgnoreCase);
 
-    public List<string> ListContentDays()
+    /// <param name="onlyCameras">Just these cameras' days (an account's limit); not cached.</param>
+    public List<string> ListContentDays(IReadOnlyCollection<string>? onlyCameras = null)
     {
-        lock (_daysGate)
-            if (_contentDays is { } c && DateTime.UtcNow - c.At < DaysCacheTtl)
-                return c.Days;
+        if (onlyCameras == null)
+            lock (_daysGate)
+                if (_contentDays is { } c && DateTime.UtcNow - c.At < DaysCacheTtl)
+                    return c.Days;
 
+        var dirs = onlyCameras?.Select(SafeName).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var days = new HashSet<string>(StringComparer.Ordinal);
         foreach (var root in Roots)
         {
             if (!Directory.Exists(root)) continue;
             foreach (var camDir in Directory.EnumerateDirectories(root))
+            {
+                if (dirs != null && !dirs.Contains(Path.GetFileName(camDir))) continue;
                 foreach (var dayDir in Directory.EnumerateDirectories(camDir))
                 {
                     var name = Path.GetFileName(dayDir)!;
                     if (IsDayName(name)) days.Add(name);
                 }
+            }
         }
         var result = days.OrderByDescending(d => d).ToList();
-        lock (_daysGate) _contentDays = (result, DateTime.UtcNow);
+        if (onlyCameras == null)
+            lock (_daysGate) _contentDays = (result, DateTime.UtcNow);
         return result;
     }
 

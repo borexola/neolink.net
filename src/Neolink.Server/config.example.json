@@ -119,6 +119,7 @@
 
   // Optional: password-protect the RTSP server. Remove entries for open access.
   // Connect with e.g. rtsp://me:mepass@192.168.1.100:8654/driveway
+  // Also editable in the web UI under Server settings → Users.
   "users": [
     // { "name": "me", "pass": "mepass" }
   ],

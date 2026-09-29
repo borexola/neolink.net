@@ -88,6 +88,8 @@ public sealed partial class OnvifClient : IDisposable
     private string? _videoSourceToken;
     private OnvifImagingRanges? _ranges;
     private bool _hasImaging;
+    // A confirmed IR-cut write, and the different value the camera reported after it.
+    private string? _irCutWritten, _irCutStaleEcho;
     /// <summary>The camera's clock minus ours, learned from GetSystemDateAndTime
     /// (the one ONVIF call that needs no authentication, precisely so it can be
     /// asked before the clocks are known to agree). Zero until discovery runs.</summary>
@@ -256,7 +258,12 @@ public sealed partial class OnvifClient : IDisposable
                 .ConfigureAwait(false);
             if (xml == null) return null;
             _hasImaging = true; // a real answer: now it is confirmed
-            return ParseImaging(xml, _ranges);
+            var imaging = ParseImaging(xml, _ranges);
+            bool awaitingEcho = _irCutWritten != null && _irCutStaleEcho == null;
+            var irCut = ReconcileIrCut(imaging.IrCutFilter, ref _irCutWritten, ref _irCutStaleEcho);
+            if (awaitingEcho && _irCutStaleEcho != null)
+                Log.Info($"{_tag}: ONVIF still reports IR-cut {_irCutStaleEcho} after a confirmed write of {_irCutWritten} — showing the written value");
+            return imaging with { IrCutFilter = irCut };
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
@@ -285,6 +292,8 @@ public sealed partial class OnvifClient : IDisposable
             var xml = await CallAsync(_imagingUrl!, NsImaging, "SetImagingSettings", body, ct).ConfigureAwait(false);
             if (xml == null)
                 throw new IOException("the camera did not confirm the ONVIF imaging change");
+            if (irCutFilter is { Length: > 0 })
+                (_irCutWritten, _irCutStaleEcho) = (irCutFilter, null);
         }
         finally { _gate.Release(); }
     }
@@ -1096,6 +1105,20 @@ public sealed partial class OnvifClient : IDisposable
         }
         return new OnvifImagingRanges(Range("Brightness"), Range("Contrast"),
             Range("ColorSaturation"), Range("Sharpness"));
+    }
+
+    /// <summary>The IR-cut value to report: a confirmed write stands until the camera's
+    /// echo agrees with it or moves again (some firmwares keep echoing the old value).</summary>
+    internal static string? ReconcileIrCut(string? echo, ref string? written, ref string? staleEcho)
+    {
+        if (written == null || echo == null) return echo;
+        if (!echo.Equals(written, StringComparison.OrdinalIgnoreCase))
+        {
+            staleEcho ??= echo;
+            if (echo.Equals(staleEcho, StringComparison.OrdinalIgnoreCase)) return written;
+        }
+        written = staleEcho = null;
+        return echo;
     }
 
     // ------------------------------------------------------------ scaling

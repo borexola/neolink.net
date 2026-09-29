@@ -4,6 +4,17 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
+## Unreleased
+
+### Added
+
+- **RTSP users in the web UI:** under **Server settings → Users**, the admin can add RTSP users, change their passwords and delete them. Passwords are never shown, and changes apply after a restart.
+- **Limit a web account to chosen cameras:** **cameras…** beside a normal user picks the cameras that account may see. The other cameras disappear from its live view, events, timeline and search, and the server refuses them. The change applies at once.
+
+### Fixed
+
+- **Day / night mode set over ONVIF** keeps showing the mode you applied, where the camera went on reporting the old one.
+
 ## 1.1.0
 
 ### Added

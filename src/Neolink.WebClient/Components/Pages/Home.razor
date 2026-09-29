@@ -1314,7 +1314,13 @@
                             @foreach (var u in _uiUsers)
                             {
                                 <div class="control-row user-row" @key="u.Name">
-                                    <span>@UiIcon.Render(u.Admin ? "shield" : "user", 12) @u.Name@(u.Admin ? " · " + T["admin"] : "")</span>
+                                    <span>
+                                        @UiIcon.Render(u.Admin ? "shield" : "user", 12) @u.Name@(u.Admin ? " · " + T["admin"] : "")
+                                        @if (!u.Admin)
+                                        {
+                                            <span class="event-sub"> · @UserCamerasSummary(u)</span>
+                                        }
+                                    </span>
                                     <span class="row-actions">
                                         @if (_pwEditUser == u.Name)
                                         {
@@ -1325,7 +1331,12 @@
                                         }
                                         else
                                         {
-                                            <button class="chip" @onclick="() => { _pwEditUser = u.Name; _pwEditPass = string.Empty; }">@T["password…"]</button>
+                                            @if (!u.Admin)
+                                            {
+                                                <button class="chip @(_camsEditUser == u.Name ? "chip-active" : "")"
+                                                        @onclick="() => EditUserCameras(u)">@T["cameras…"]</button>
+                                            }
+                                            <button class="chip" @onclick="() => { _pwEditUser = u.Name; _pwEditPass = string.Empty; _camsEditUser = null; }">@T["password…"]</button>
                                             @if (!u.Admin)
                                             {
                                                 <button class="chip chip-danger" @onclick="() => DeleteUserAsync(u.Name)">@T["delete"]</button>
@@ -1333,6 +1344,36 @@
                                         }
                                     </span>
                                 </div>
+                                @if (_camsEditUser == u.Name)
+                                {
+                                    <div class="user-cams-edit" @key="@("cams:" + u.Name)">
+                                        <div class="user-cams">
+                                            <button class="chip @(_camsEditAll ? "chip-active" : "")" aria-pressed="@_camsEditAll"
+                                                    @onclick="() => _camsEditAll = !_camsEditAll">@T["All cameras"]</button>
+                                            @if (!_camsEditAll)
+                                            {
+                                                @foreach (var cam in _cameras)
+                                                {
+                                                    var camName = cam.Name;
+                                                    bool on = _camsEditSel.Contains(camName);
+                                                    <button class="chip @(on ? "chip-active" : "")" aria-pressed="@on"
+                                                            @onclick="() => { if (!_camsEditSel.Remove(camName)) _camsEditSel.Add(camName); }">@camName</button>
+                                                }
+                                            }
+                                        </div>
+                                        <div class="user-cams-foot">
+                                            <span class="event-sub">
+                                                @(_camsEditAll
+                                                    ? T["Sees every camera, including ones added later."]
+                                                    : T["Sees only the cameras picked here — on the wall, in events, the timeline and search. Applies immediately."])
+                                            </span>
+                                            <span class="row-actions">
+                                                <button class="chip" @onclick="() => SaveUserCamerasAsync(u.Name)">@T["save"]</button>
+                                                <button class="chip chip-off" @onclick="() => _camsEditUser = null">@T["cancel"]</button>
+                                            </span>
+                                        </div>
+                                    </div>
+                                }
                             }
                             <div class="campanel-divider"></div>
                             <div class="campanel-subtitle">@T["ADD USER"]</div>
@@ -1392,6 +1433,75 @@
                                 @if (_securityStatus != null)
                                 {
                                     <div class="notice small">@_securityStatus</div>
+                                }
+                            }
+                        </div>
+                        <div class="campanel-section">
+                            <div class="campanel-section-title">@UiIcon.Render("lan", 13) @T["RTSP USERS"]</div>
+                            <div class="notice small">
+                                @((MarkupString)T["Logins for the RTSP streams (VLC, Frigate, Home Assistant…) — the <code>\"users\"</code> list in config.json. Passwords are never shown. Changes apply after a restart."])
+                            </div>
+                            @if (_rtspError != null)
+                            {
+                                <div class="notice error">@_rtspError</div>
+                            }
+                            @if (_rtspUsers == null)
+                            {
+                                <div class="notice small">@T["Loading…"]</div>
+                            }
+                            else
+                            {
+                                bool rtspLocked = !_rtspUsers.Writable || _rtspBusy;
+                                @foreach (var name in _rtspUsers.Users)
+                                {
+                                    <div class="control-row user-row" @key="@("rtsp:" + name)">
+                                        <span>@UiIcon.Render("user", 12) @name</span>
+                                        <span class="row-actions">
+                                            @if (_rtspPwEdit == name)
+                                            {
+                                                <input class="user-pass-input" type="password" placeholder="@T["new password"]"
+                                                       @bind="_rtspPwEditPass" autocomplete="new-password" />
+                                                <button class="chip" disabled="@rtspLocked"
+                                                        @onclick="() => SetRtspPasswordAsync(name)">@T["save"]</button>
+                                                <button class="chip chip-off" @onclick="() => _rtspPwEdit = null">@T["cancel"]</button>
+                                            }
+                                            else if (_rtspDeleteConfirm == name)
+                                            {
+                                                <button class="chip chip-danger" disabled="@rtspLocked"
+                                                        @onclick="() => DeleteRtspUserAsync(name)">@T["Confirm delete"]</button>
+                                                <button class="chip" @onclick="() => _rtspDeleteConfirm = null">@T["Cancel"]</button>
+                                            }
+                                            else
+                                            {
+                                                <button class="chip" disabled="@rtspLocked"
+                                                        @onclick="() => { _rtspPwEdit = name; _rtspPwEditPass = string.Empty; _rtspDeleteConfirm = null; }">@T["password…"]</button>
+                                                <button class="chip chip-danger" disabled="@rtspLocked"
+                                                        @onclick="() => { _rtspDeleteConfirm = name; _rtspPwEdit = null; }">@T["delete"]</button>
+                                            }
+                                        </span>
+                                    </div>
+                                }
+                                @if (_rtspUsers.Users.Count == 0)
+                                {
+                                    <div class="notice small">@T["No RTSP users: every stream is open to anyone who can reach the RTSP port. Adding the first one makes every stream require a login."]</div>
+                                }
+                                <div class="campanel-divider"></div>
+                                <div class="campanel-subtitle">@T["ADD RTSP USER"]</div>
+                                <div class="user-add-row">
+                                    <input class="user-pass-input" placeholder="@T["username"]" @bind="_newRtspName" autocomplete="off" />
+                                    <input class="user-pass-input" type="password" placeholder="@T["password"]"
+                                           @bind="_newRtspPass" autocomplete="new-password" />
+                                    <button class="chip" disabled="@rtspLocked" @onclick="AddRtspUserAsync">@T["add"]</button>
+                                </div>
+                                @if (!_rtspUsers.Writable)
+                                {
+                                    <div class="notice small error">@T["config.json is read-only here, so RTSP users can only be changed in the file itself."]</div>
+                                }
+                                @if (_rtspUsers.RestartNeeded)
+                                {
+                                    <div class="notice warn small">
+                                        @((MarkupString)T["RTSP users are saved to <code>config.json</code> — <b>restart the service</b> (button below) to apply them."])
+                                    </div>
                                 }
                             }
                         </div>
@@ -2776,10 +2886,14 @@
                                     "connection" => T["Saved instantly — these settings live in this browser only."],
                                     "alerts" => T["Saved instantly to your account — no config.json, no restart."],
                                     "language" => T["Saved instantly — the whole UI follows the moment you pick."],
-                                    _ => T["User changes apply immediately; no restart needed."],
+                                    _ => T["Web-UI account changes apply immediately; RTSP users after a restart."],
                                 })
                             </span>
                             <span class="tile-spacer"></span>
+                            @if (_settingsTab == "users" && _rtspUsers?.RestartNeeded == true)
+                            {
+                                @RestartButtons
+                            }
                             @if (_authUser != null)
                             {
                                 <button class="chip chip-off" @onclick="LogoutAsync">@T["Sign out"]</button>
@@ -2849,19 +2963,7 @@
                                 }
                             }
                             <span class="tile-spacer"></span>
-                            @if (!_confirmRestart)
-                            {
-                                <button class="chip chip-danger"
-                                        title="@(AdminPendingCount > 0
-                                            ? T["Save the staged changes to config.json, then stop the service so the restart policy brings it back with them applied"]
-                                            : T["Stop the service so the restart policy brings it back — needed to apply saved changes"])"
-                                        @onclick="() => _confirmRestart = true">@(AdminPendingCount > 0 ? T["Save & restart…"] : T["Restart service…"])</button>
-                            }
-                            else
-                            {
-                                <button class="chip chip-danger" @onclick="RestartServiceAsync">@(AdminPendingCount > 0 ? T["Confirm save & restart"] : T["Confirm restart"])</button>
-                                <button class="chip" @onclick="() => _confirmRestart = false">@T["Cancel"]</button>
-                            }
+                            @RestartButtons
                         </div>
                     }
                 </div>
@@ -4051,6 +4153,20 @@
     private string? _usersError;
     private string? _pwEditUser;
     private string _pwEditPass = "";
+    // Per-account camera access being edited (All = no limit)
+    private string? _camsEditUser;
+    private bool _camsEditAll;
+    private HashSet<string> _camsEditSel = new(StringComparer.OrdinalIgnoreCase);
+
+    // RTSP users (config.json "users"), same tab; passwords are write-only
+    private ApiRtspUsers? _rtspUsers;
+    private string? _rtspError;
+    private string _newRtspName = "";
+    private string _newRtspPass = "";
+    private string? _rtspPwEdit;
+    private string _rtspPwEditPass = "";
+    private string? _rtspDeleteConfirm;
+    private bool _rtspBusy;
 
     // Review-strip filters (persisted with the view settings, per user when logged in)
     private static readonly string[] StripTypes =
@@ -4769,9 +4885,66 @@
     private async Task SelectUsersTabAsync()
     {
         _settingsTab = "users";
-        _pwEditUser = null;
+        _pwEditUser = _camsEditUser = null;
+        _rtspPwEdit = _rtspDeleteConfirm = _rtspError = null;
         await LoadUsersAsync();
+        await LoadRtspUsersAsync();
     }
+
+    private async Task LoadRtspUsersAsync()
+    {
+        try
+        {
+            using var res = await Http.SendAsync(ApiRequest(HttpMethod.Get, "/api/admin/rtsp-users"));
+            if (res.IsSuccessStatusCode)
+                _rtspUsers = await res.Content.ReadFromJsonAsync<ApiRtspUsers>();
+            else
+                _rtspError = await ApiErrorAsync(res) ?? T.F("Cannot load settings ({0})", (int)res.StatusCode);
+        }
+        catch (Exception ex)
+        {
+            _rtspError = ex.Message;
+        }
+    }
+
+    /// <summary>Sends one RTSP-user edit; on success clears the forms and reloads the list.</summary>
+    private async Task RtspEditAsync(HttpMethod method, string path, object? body)
+    {
+        if (_rtspBusy) return;
+        _rtspBusy = true;
+        _rtspError = null;
+        try
+        {
+            var req = ApiRequest(method, path);
+            if (body != null) req.Content = JsonContent.Create(body);
+            using var res = await Http.SendAsync(req);
+            if (!res.IsSuccessStatusCode)
+            {
+                _rtspError = await ApiErrorAsync(res) ?? T.F("Save failed ({0})", (int)res.StatusCode);
+                return;
+            }
+            _newRtspName = _newRtspPass = _rtspPwEditPass = "";
+            _rtspPwEdit = _rtspDeleteConfirm = null;
+            await LoadRtspUsersAsync();
+        }
+        catch (Exception ex)
+        {
+            _rtspError = ex.Message;
+        }
+        finally
+        {
+            _rtspBusy = false;
+        }
+    }
+
+    private Task AddRtspUserAsync() => RtspEditAsync(HttpMethod.Post, "/api/admin/rtsp-users",
+        new { username = _newRtspName.Trim(), password = _newRtspPass });
+
+    private Task SetRtspPasswordAsync(string name) => RtspEditAsync(HttpMethod.Put,
+        $"/api/admin/rtsp-users/{Uri.EscapeDataString(name)}", new { password = _rtspPwEditPass });
+
+    private Task DeleteRtspUserAsync(string name) => RtspEditAsync(HttpMethod.Delete,
+        $"/api/admin/rtsp-users/{Uri.EscapeDataString(name)}", null);
 
     private async Task LoadUsersAsync()
     {
@@ -4818,6 +4991,40 @@
             _pwEditUser = null;
             _pwEditPass = "";
         }
+    }
+
+    private string UserCamerasSummary(ApiUserInfo u) => u.Cameras switch
+    {
+        null => T["all cameras"],
+        { Count: 0 } => T["no cameras"],
+        var only => T.F("{0} of {1} cameras", only.Count, _cameras.Count),
+    };
+
+    private void EditUserCameras(ApiUserInfo u)
+    {
+        _pwEditUser = null;
+        _camsEditUser = _camsEditUser == u.Name ? null : u.Name;
+        _camsEditAll = u.Cameras == null;
+        _camsEditSel = new HashSet<string>(u.Cameras ?? new List<string>(), StringComparer.OrdinalIgnoreCase);
+    }
+
+    private async Task SaveUserCamerasAsync(string name)
+    {
+        _usersError = null;
+        var req = ApiRequest(HttpMethod.Put, $"/api/users/{Uri.EscapeDataString(name)}/cameras");
+        // Wall order, so the stored list reads like the sidebar.
+        req.Content = JsonContent.Create(new
+        {
+            cameras = _camsEditAll ? null : _cameras.Select(c => c.Name).Where(_camsEditSel.Contains).ToList(),
+        });
+        using var res = await Http.SendAsync(req);
+        if (!res.IsSuccessStatusCode)
+        {
+            _usersError = await ApiErrorAsync(res) ?? T["cannot change camera access"];
+            return;
+        }
+        _camsEditUser = null;
+        await LoadUsersAsync();
     }
 
     private async Task DeleteUserAsync(string name)
@@ -5801,6 +6008,23 @@
         _adminError = null;
         _adminStatus = T["Changes discarded."];
     }
+
+    /// <summary>Restart with its confirm step; staged setting edits are saved first.</summary>
+    private RenderFragment RestartButtons => @<text>
+        @if (!_confirmRestart)
+        {
+            <button class="chip chip-danger"
+                    title="@(AdminPendingCount > 0
+                        ? T["Save the staged changes to config.json, then stop the service so the restart policy brings it back with them applied"]
+                        : T["Stop the service so the restart policy brings it back — needed to apply saved changes"])"
+                    @onclick="() => _confirmRestart = true">@(AdminPendingCount > 0 ? T["Save & restart…"] : T["Restart service…"])</button>
+        }
+        else
+        {
+            <button class="chip chip-danger" @onclick="RestartServiceAsync">@(AdminPendingCount > 0 ? T["Confirm save & restart"] : T["Confirm restart"])</button>
+            <button class="chip" @onclick="() => _confirmRestart = false">@T["Cancel"]</button>
+        }
+    </text>;
 
     private async Task RestartServiceAsync()
     {
