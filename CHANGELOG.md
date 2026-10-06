@@ -14,6 +14,7 @@ in the README). Paste the matching section below into the GitHub release.
 ### Fixed
 
 - **Day / night mode set over ONVIF** keeps showing the mode you applied, where the camera went on reporting the old one.
+- **A non-Reolink camera's detection no longer sticks on** when its end was lost in a dropped ONVIF poll, which recorded back-to-back max-length events of nothing. Neolink asks the camera to restate a detection that has been quiet for 2 minutes, and the log says when the camera itself keeps reporting one.
 
 ## 1.1.0
 

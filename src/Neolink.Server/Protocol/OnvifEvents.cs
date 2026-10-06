@@ -217,6 +217,7 @@ public sealed partial class OnvifClient
     private const string ActPull = "http://www.onvif.org/ver10/events/wsdl/PullPointSubscription/PullMessagesRequest";
     private const string ActRenew = "http://docs.oasis-open.org/wsn/bw-2/SubscriptionManager/RenewRequest";
     private const string ActUnsubscribe = "http://docs.oasis-open.org/wsn/bw-2/SubscriptionManager/UnsubscribeRequest";
+    private const string ActSync = "http://www.onvif.org/ver10/events/wsdl/PullPointSubscription/SetSynchronizationPointRequest";
 
     private string? _eventsUrl;
 
@@ -344,6 +345,16 @@ public sealed partial class OnvifClient
             null, ActRenew, extraHeaders: subscription.Headers).ConfigureAwait(false);
         if (reply.Root != null) return (GrantedPeriod(reply.Root, DateTime.UtcNow + _clockSkew) ?? termination, false);
         return (null, reply.Fault != null || IsLastingRefusal(reply.Status, reply.Fault));
+    }
+
+    /// <summary>Asks the camera to restate every property as Initialized on the next poll
+    /// (Refused: it said no, so asking again is pointless on this subscription).</summary>
+    public async Task<(bool Done, bool Refused)> SetSynchronizationPointAsync(PullPointSubscription subscription,
+        CancellationToken ct)
+    {
+        var reply = await SendAsync(subscription.Address, NsEvents, "SetSynchronizationPoint", "", ct,
+            null, ActSync, extraHeaders: subscription.Headers).ConfigureAwait(false);
+        return (reply.Root != null, reply.Root == null && (reply.Fault != null || IsLastingRefusal(reply.Status, reply.Fault)));
     }
 
     /// <summary>Best-effort tidy-up. A camera holds a dropped subscription until it

@@ -5026,6 +5026,42 @@ public static class SelfTest
             svc.AgeForTest(TimeSpan.FromMinutes(5));
             svc.ExpireOneShots();
             Assert(svc.ActiveLabels.Contains("motion"), "a one-shot re-report does not demote a stateful label");
+
+            // An end lost with a failed poll: asked to restate, the camera leaves it out, and it ends.
+            svc.Handle(N("tns1:RuleEngine/CellMotionDetector/Motion", false));
+            const string people = "tns1:RuleEngine/MyRuleDetector/PeopleDetect";
+            static Protocol.OnvifNotification Restated(string topic, bool active) =>
+                new(topic, active, new Dictionary<string, string>(), null, "Initialized");
+            svc.Handle(N(people, true));
+            Assert(!svc.NeedsReconfirm(), "a fresh detection is not questioned");
+            svc.AgeForTest(TimeSpan.FromMinutes(3));
+            Assert(svc.NeedsReconfirm(), "one quiet for minutes is");
+            var asked = DateTime.UtcNow;
+            svc.Handle(Restated("tns1:RuleEngine/CellMotionDetector/Motion", false));
+            svc.EndUnconfirmed(asked);
+            Assert(!svc.ActiveLabels.Contains("person") && !pushes[^1].Active,
+                "a detection the camera no longer restates ends, with an all-clear");
+
+            // One it restates stays, and an unbroken long run is said once.
+            var said = new List<string>();
+            var tap = Log.Tap;
+            Log.Tap = (_, m) => { if (m.Contains("still reports")) lock (said) said.Add(m); };
+            try
+            {
+                svc.Handle(N(people, true));
+                for (int i = 0; i < 2; i++)
+                {
+                    svc.AgeForTest(TimeSpan.FromMinutes(11));
+                    asked = DateTime.UtcNow;
+                    svc.Handle(Restated(people, true));
+                    svc.EndUnconfirmed(asked);
+                }
+            }
+            finally { Log.Tap = tap; }
+            Assert(svc.ActiveLabels.Contains("person") && !svc.NeedsReconfirm(), "a restated detection stays, confirmed");
+            Assert(said.Count == 1 && said[0].Contains("PeopleDetect"), $"the long run is logged once ({said.Count})");
+            svc.Handle(N(people, false));
+            Assert(!pushes[^1].Active, "and its own end still ends it");
         });
 
         Test("credentials: the mask and the parser agree on where a password ends", () =>

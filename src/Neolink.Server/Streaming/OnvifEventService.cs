@@ -51,6 +51,13 @@ public sealed class OnvifEventService
     /// does. Well inside the bridge's 20s sensor drop and the recorder's clip cap.</summary>
     private static readonly TimeSpan Repush = TimeSpan.FromSeconds(5);
 
+    /// <summary>How long a stateful detection may stand with no word from the camera before it is
+    /// asked to restate it: an end lost with a failed poll is never sent again.</summary>
+    private static readonly TimeSpan Reconfirm = TimeSpan.FromMinutes(2);
+
+    /// <summary>How long an unbroken detection runs before the camera restating it is worth an Info line.</summary>
+    private static readonly TimeSpan LongHold = TimeSpan.FromMinutes(10);
+
     /// <summary>How long to wait before asking a camera whose ONVIF answered with no
     /// event service at all. A lasting answer, re-checked occasionally only because
     /// someone may turn the service on in the camera's own settings.</summary>
@@ -63,8 +70,11 @@ public sealed class OnvifEventService
 
     /// <summary>One active detection per speaker (<see cref="OnvifNotification.Key"/>), so
     /// one rule ending cannot end another's; one-shots lapse after <see cref="OneShotHold"/>.</summary>
-    private readonly Dictionary<string, (IReadOnlyList<string> Labels, bool Stateful, DateTime LastReport, string? Source)>
-        _active = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Held> _active = new(StringComparer.Ordinal);
+
+    /// <summary>One active detection. Since: when it began; Told: its long run has been logged.</summary>
+    private readonly record struct Held(IReadOnlyList<string> Labels, bool Stateful, DateTime LastReport,
+        string? Source, DateTime Since, bool Told = false);
 
     /// <summary>How long a subscription may give nothing but hang-ups before it is asked to renew,
     /// and replaced if it will not: a camera that rebooted hangs up on one it no longer has.</summary>
@@ -206,6 +216,11 @@ public sealed class OnvifEventService
         var answeredAt = DateTime.UtcNow; // the camera's last real reply on this subscription
         int failures = 0;
         bool delivered = false;
+        // Restating (SetSynchronizationPoint): asked at syncAt and awaited for a few polls; missed = due now.
+        var syncAt = DateTime.MinValue;
+        var nextSync = DateTime.MinValue;
+        int syncPolls = 0;
+        bool syncRefused = false, missed = false;
         // The poll is cancellable on its own, so a suspend cuts it short without
         // ending the service.
         using var poll = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -214,6 +229,21 @@ public sealed class OnvifEventService
         {
             while (!ct.IsCancellationRequested && !Suspended)
             {
+                if (!syncRefused && syncAt == DateTime.MinValue
+                    && (missed || (DateTime.UtcNow >= nextSync && NeedsReconfirm())))
+                {
+                    missed = false;
+                    var asked = DateTime.UtcNow;
+                    nextSync = asked + Reconfirm;
+                    var (done, refused) = await _onvif.SetSynchronizationPointAsync(subscription, poll.Token)
+                        .ConfigureAwait(false);
+                    if (done) (syncAt, syncPolls) = (asked, 0);
+                    else if (refused)
+                    {
+                        syncRefused = true;
+                        Log.Debug($"{_camera}: the camera will not restate its ONVIF event states");
+                    }
+                }
                 var started = DateTime.UtcNow;
                 var pulled = await _onvif.PullMessagesAsync(subscription, Hold, poll.Token).ConfigureAwait(false);
                 if (pulled.Messages is not { } messages)
@@ -221,8 +251,9 @@ public sealed class OnvifEventService
                     // Gone by the camera's word: re-subscribe. A timeout or a refused connection is retried
                     // on this subscription instead — making new ones often is what upsets some cameras.
                     if (pulled.SubscriptionLost || ++failures > MaxPollFailures) return (delivered, false);
-                    // What it reported stands: the subscription is intact, so its ends still come (ONVIF
-                    // never repeats a state), and one that lapsed meanwhile faults the next poll.
+                    // The lost reply may have carried an end, which ONVIF never repeats: the camera is
+                    // asked to restate its states before the next poll. One that lapsed faults that poll.
+                    (missed, syncAt) = (true, DateTime.MinValue);
                     await Task.Delay(TimeSpan.FromSeconds(Math.Min(60, 2 << failures)), poll.Token).ConfigureAwait(false);
                     continue;
                 }
@@ -241,6 +272,21 @@ public sealed class OnvifEventService
                 }
                 await FilterSourcesAsync(ct).ConfigureAwait(false);
                 foreach (var m in messages) Handle(m);
+                if (syncAt != DateTime.MinValue)
+                {
+                    if (messages.Any(m => string.Equals(m.Operation, "Initialized", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        EndUnconfirmed(syncAt);
+                        syncAt = DateTime.MinValue;
+                    }
+                    else if (++syncPolls >= 3)
+                    {
+                        // Accepted, but nothing came: ending detections on that silence would be a guess.
+                        syncAt = DateTime.MinValue;
+                        syncRefused = true;
+                        Log.Debug($"{_camera}: the camera accepted SetSynchronizationPoint but restated nothing");
+                    }
+                }
                 ExpireOneShots();
                 // A camera is ASKED to hold the poll open until it has something to say,
                 // but not all of them do — some answer "nothing" at once, and polling
@@ -364,26 +410,65 @@ public sealed class OnvifEventService
         bool replay = string.Equals(n.Operation, "Initialized", StringComparison.OrdinalIgnoreCase);
         if (n.Active == null && replay) return;
         if (n.Active == false) End(n.Key);
-        else if (!other) Start(n.Key, n.Labels, stateful: n.Active == true, n.SourceToken, ring: !replay);
+        else if (!other) Start(n.Key, n.Labels, stateful: n.Active == true, n.SourceToken, replay);
     }
 
-    private void Start(string key, IReadOnlyList<string> labels, bool stateful, string? source = null, bool ring = true)
+    private void Start(string key, IReadOnlyList<string> labels, bool stateful, string? source = null, bool replay = false)
     {
         bool changed;
+        TimeSpan? unbroken = null;
         lock (_gate)
         {
-            changed = !_active.ContainsKey(key);
+            var now = DateTime.UtcNow;
+            changed = !_active.TryGetValue(key, out var prior);
             // Once a speaker has been reported with state it stays stateful until it ends:
             // a one-shot for the same thing must not turn it into one that lapses by itself.
-            var wasStateful = _active.TryGetValue(key, out var prior) && prior.Stateful;
-            _active[key] = (labels, stateful || wasStateful, DateTime.UtcNow, source);
+            var held = changed ? new Held(labels, stateful, now, source, now)
+                : prior with { Labels = labels, Stateful = stateful || prior.Stateful, LastReport = now, Source = source };
+            if (replay && held.Stateful && !held.Told && now - held.Since >= LongHold)
+            {
+                held = held with { Told = true };
+                unbroken = now - held.Since;
+            }
+            _active[key] = held;
         }
         // Emitted even when nothing changed: a re-report is harmless to the recorder
         // (labels accumulate, nothing restarts) and is what re-opens an event that
         // had gone quiet and was sitting in its post-roll.
-        Emit(ring: ring && changed && labels.Contains("visitor"));
+        Emit(ring: !replay && changed && labels.Contains("visitor"));
         if (changed)
-            Log.Debug($"{_camera}: ONVIF detection started ({string.Join("+", labels)}{(stateful ? "" : ", one-shot")})");
+            Log.Debug($"{_camera}: ONVIF detection started ({string.Join("+", labels)}{(stateful ? "" : ", one-shot")}) " +
+                      $"[{TopicOf(key)}]");
+        if (unbroken is { } u)
+            Log.Info($"{_camera}: the camera still reports {string.Join("+", labels)} after {u.TotalMinutes:0} min " +
+                     $"without a break ({TopicOf(key)}) — if nothing is there, its own detection is misfiring");
+    }
+
+    /// <summary>The topic a detection key starts with.</summary>
+    private static string TopicOf(string key) => key.Split('|', 2)[0];
+
+    /// <summary>Whether a stateful detection has stood for <see cref="Reconfirm"/> with no word from the camera.</summary>
+    internal bool NeedsReconfirm()
+    {
+        var cutoff = DateTime.UtcNow - Reconfirm;
+        lock (_gate) return _active.Values.Any(v => v.Stateful && v.LastReport < cutoff);
+    }
+
+    /// <summary>Ends the stateful detections the camera did not restate after <paramref name="asked"/>:
+    /// their end was lost, and ONVIF never sends it again.</summary>
+    internal void EndUnconfirmed(DateTime asked)
+    {
+        List<KeyValuePair<string, Held>> gone;
+        lock (_gate)
+        {
+            gone = _active.Where(kv => kv.Value.Stateful && kv.Value.LastReport < asked).ToList();
+            foreach (var kv in gone) _active.Remove(kv.Key);
+        }
+        if (gone.Count == 0) return;
+        foreach (var (key, held) in gone)
+            Log.Info($"{_camera}: the camera no longer reports {string.Join("+", held.Labels)} ({TopicOf(key)}) — " +
+                     "its end was missed, so the detection ends now");
+        Emit();
     }
 
     private void End(string key)
@@ -394,7 +479,7 @@ public sealed class OnvifEventService
             if (!_active.Remove(key, out var was)) return;
             labels = was.Labels;
         }
-        Log.Debug($"{_camera}: ONVIF detection ended ({string.Join("+", labels)})");
+        Log.Debug($"{_camera}: ONVIF detection ended ({string.Join("+", labels)}) [{TopicOf(key)}]");
         Emit();
     }
 
@@ -491,7 +576,7 @@ public sealed class OnvifEventService
     {
         lock (_gate)
             foreach (var k in _active.Keys.ToList())
-                _active[k] = _active[k] with { LastReport = _active[k].LastReport - by };
+                _active[k] = _active[k] with { LastReport = _active[k].LastReport - by, Since = _active[k].Since - by };
     }
 
     /// <summary>Test seam: one re-push, as the loop would send it.</summary>
