@@ -7,7 +7,7 @@ namespace Neolink.Web;
 
 /// <summary>
 /// Per-camera runtime state the user toggles and that must survive a restart
-/// (camera-state.json in the UI state directory). Today that is one flag: whether
+/// (camera-state.json in the UI state directory), including wake-hint trust and whether
 /// the camera is SUSPENDED — Neolink holds no connection to it, so it can't be
 /// viewed or recorded here, without editing the config or restarting. Nothing
 /// here is secret, so it is plain JSON like settings.json.
@@ -19,6 +19,9 @@ public sealed class CameraStateStore
     private readonly string _path;
     private readonly object _gate = new();
     private readonly Dictionary<string, CameraState> _state;
+    // The UI applies camera edits on restart. Until then, callbacks from a live
+    // service still use its startup name: redirect renamed cameras, drop deleted ones.
+    private readonly Dictionary<string, string?> _wakeHintNames = new(StringComparer.OrdinalIgnoreCase);
 
     public sealed class CameraState
     {
@@ -39,9 +42,12 @@ public sealed class CameraStateStore
         /// firmware carries no grid. See <see cref="StoredZone"/>.</summary>
         public Dictionary<string, StoredZone>? Zones { get; set; }
 
+        /// <summary>Absolute UTC time of the last received wake hint; never reset on restart.</summary>
+        public DateTime? LastWakeHintUtc { get; set; }
+
         [System.Text.Json.Serialization.JsonIgnore]
         public bool IsDefault => !Suspended && AiTypes == null && Doorbell == null
-                                 && Zones is not { Count: > 0 };
+                                 && Zones is not { Count: > 0 } && LastWakeHintUtc == null;
     }
 
     /// <summary>One locally-kept detection zone: Table is Cols*Rows characters, row
@@ -102,6 +108,38 @@ public sealed class CameraStateStore
             Log.Warn($"camera-state.json unreadable ({ex.Message}); camera runtime state reset");
         }
         return new Dictionary<string, CameraState>(StringComparer.OrdinalIgnoreCase);
+    }
+
+    public DateTime? LastWakeHintUtc(string camera)
+    {
+        lock (_gate)
+        {
+            // Only an explicitly UTC timestamp is safe to restore. In particular,
+            // a hand-edited time without an offset must not depend on server locale.
+            return _state.TryGetValue(camera, out var s) && s.LastWakeHintUtc is { Kind: DateTimeKind.Utc } hint
+                ? hint : null;
+        }
+    }
+
+    public void SetLastWakeHintUtc(string camera, DateTime utc)
+    {
+        if (utc.Kind != DateTimeKind.Utc)
+            throw new ArgumentException("Wake hint timestamp must be UTC", nameof(utc));
+        lock (_gate)
+        {
+            if (_wakeHintNames.TryGetValue(camera, out var current))
+            {
+                if (current == null) return;
+                camera = current;
+            }
+            if (!_state.TryGetValue(camera, out var s))
+                _state[camera] = s = new CameraState();
+            // Concurrent hint callbacks can reach disk out of order. Keep the newest.
+            if (s.LastWakeHintUtc is { Kind: DateTimeKind.Utc } previous
+                && previous <= DateTime.UtcNow && previous >= utc) return;
+            s.LastWakeHintUtc = utc;
+            Save();
+        }
     }
 
     public bool Suspended(string camera)
@@ -220,37 +258,58 @@ public sealed class CameraStateStore
         }
     }
 
-    /// <summary>Drops the zones kept for a camera that has been deleted, so a new
-    /// camera given the same name does not inherit a grid drawn for another view.
-    /// Only the zones: every other value is left exactly as it always was.</summary>
+    /// <summary>Clears zones and wake trust on deletion, so a new camera with
+    /// the same name cannot inherit them. Other cached state keeps its existing behavior.</summary>
     public void Forget(string camera)
     {
         lock (_gate)
         {
-            if (!_state.TryGetValue(camera, out var s) || s.Zones == null) return;
+            foreach (var alias in _wakeHintNames.Where(p => string.Equals(p.Value, camera,
+                         StringComparison.OrdinalIgnoreCase)).Select(p => p.Key).ToArray())
+                _wakeHintNames[alias] = null;
+            _wakeHintNames.TryAdd(camera, null);
+            if (!_state.TryGetValue(camera, out var s)
+                || (s.Zones == null && s.LastWakeHintUtc == null)) return;
             s.Zones = null;
+            s.LastWakeHintUtc = null;
             if (s.IsDefault) _state.Remove(camera);
             Save();
         }
     }
 
-    /// <summary>Follows a camera that was renamed in the web UI with the zones
-    /// Neolink keeps for it — the grid someone drew is worth keeping. ONLY the
-    /// zones move: the suspend flag and cached capabilities behave exactly as they
-    /// always have on a rename (they stay under the old name), so a rename does
-    /// nothing new to a camera that has no stored zone, which is every Reolink
-    /// that keeps its own.</summary>
+    /// <summary>Moves zones and wake trust on rename. Suspend and capability
+    /// state retain their existing behavior under the old name.</summary>
     public void Rename(string from, string to)
     {
         if (string.Equals(from, to, StringComparison.OrdinalIgnoreCase)) return;
         lock (_gate)
         {
-            if (!_state.TryGetValue(from, out var s) || s.Zones is not { Count: > 0 } zones) return;
+            foreach (var alias in _wakeHintNames.Where(p => string.Equals(p.Value, from,
+                         StringComparison.OrdinalIgnoreCase)).Select(p => p.Key).ToArray())
+                _wakeHintNames[alias] = to;
+            _wakeHintNames.TryAdd(from, to);
+            if (!_state.TryGetValue(from, out var s)
+                || (s.Zones is not { Count: > 0 } && s.LastWakeHintUtc == null))
+            {
+                // Even an unhinted source must not inherit a stale destination hint.
+                if (_state.TryGetValue(to, out var stale) && stale.LastWakeHintUtc != null)
+                {
+                    stale.LastWakeHintUtc = null;
+                    if (stale.IsDefault) _state.Remove(to);
+                    Save();
+                }
+                return;
+            }
+            var zones = s.Zones;
+            var hint = s.LastWakeHintUtc;
             s.Zones = null;
+            s.LastWakeHintUtc = null;
             if (s.IsDefault) _state.Remove(from);
             if (!_state.TryGetValue(to, out var dest))
                 _state[to] = dest = new CameraState();
-            dest.Zones = zones;
+            if (zones is { Count: > 0 }) dest.Zones = zones;
+            // Trust belongs to the renamed camera, not a previous camera at the destination.
+            dest.LastWakeHintUtc = hint;
             Save();
         }
     }

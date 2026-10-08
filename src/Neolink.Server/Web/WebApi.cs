@@ -1224,7 +1224,7 @@ public static class WebApi
                     if (req.Record is { } record)
                         ConfigEditor.Set(cam, "record", record ? null : false);
                 });
-                // The detection zone Neolink keeps is keyed by name, so it follows a rename (only the zone).
+                // Stored detection zones and wake-hint trust follow a camera rename.
                 if (req.OriginalName is { Length: > 0 } was)
                 {
                     o.CameraState?.Rename(was, name);
@@ -1256,7 +1256,7 @@ public static class WebApi
                         ?? throw new FormatException($"unknown camera \"{name}\"");
                     cams.Remove(cam);
                 });
-                // Its stored detection zone goes too, so a new camera of the same name does not inherit it.
+                // Clear stored zones and wake-hint trust before the name can be reused.
                 o.CameraState?.Forget(name);
                 userStore.RenameCamera(name, null);
                 Log.Warn($"config.json camera \"{name}\" deleted via the web UI by '{SessionName(ctx)}' — restart to apply");
