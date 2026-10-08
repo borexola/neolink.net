@@ -267,7 +267,7 @@ public sealed class CameraStateStore
             foreach (var alias in _wakeHintNames.Where(p => string.Equals(p.Value, camera,
                          StringComparison.OrdinalIgnoreCase)).Select(p => p.Key).ToArray())
                 _wakeHintNames[alias] = null;
-            _wakeHintNames[camera] = null;
+            _wakeHintNames.TryAdd(camera, null);
             if (!_state.TryGetValue(camera, out var s)
                 || (s.Zones == null && s.LastWakeHintUtc == null)) return;
             s.Zones = null;
@@ -287,8 +287,7 @@ public sealed class CameraStateStore
             foreach (var alias in _wakeHintNames.Where(p => string.Equals(p.Value, from,
                          StringComparison.OrdinalIgnoreCase)).Select(p => p.Key).ToArray())
                 _wakeHintNames[alias] = to;
-            _wakeHintNames[from] = to;
-            _wakeHintNames.Remove(to);
+            _wakeHintNames.TryAdd(from, to);
             if (!_state.TryGetValue(from, out var s)
                 || (s.Zones is not { Count: > 0 } && s.LastWakeHintUtc == null))
             {
