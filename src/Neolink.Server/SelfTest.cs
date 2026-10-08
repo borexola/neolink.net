@@ -552,6 +552,142 @@ public static class SelfTest
             Assert(!defaultService.IsHintTrusted(t0, t0 + TimeSpan.FromHours(2).Ticks), "default expires at 2 h");
         });
 
+        Test("wake hints: persisted trust survives restart with the original expiry", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-hint-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var t0 = DateTime.UtcNow.AddHours(-1);
+                var window = TimeSpan.FromHours(72);
+                var store = new Web.CameraStateStore(dir);
+                store.SetLastWakeHintUtc("Parking", t0);
+                // A hint-only entry must survive unrelated state updates.
+                store.SetSuspended("Parking", false);
+                var reloaded = new Web.CameraStateStore(dir);
+                AssertEq(reloaded.LastWakeHintUtc("parking"), (DateTime?)t0);
+                Streaming.CameraService Service(DateTime? hint) => new(
+                    new CameraConfig { Name = "Parking", Username = "admin" },
+                    Protocol.StreamKind.Main, new Streaming.StreamHub("Parking"), TimeSpan.Zero,
+                    window, hint);
+                var service = Service(reloaded.LastWakeHintUtc("Parking"));
+                var expiry = t0.Add(window).Ticks;
+                Assert(service.HintsLiveAt(expiry - 1), "restart preserves trust until the last tick");
+                Assert(!service.HintsLiveAt(expiry), "restart does not extend exact expiry");
+                Assert(!service.HintsLiveAt(expiry + 1), "expired state falls back to scan-only");
+                Assert(!service.HintsLiveAt(t0.Ticks - 1), "clock moving backwards cannot trust a future hint");
+                Assert(!Service(t0.AddHours(-72)).HintsLiveAt(DateTime.UtcNow.Ticks), "already expired at restart");
+                var future = DateTime.UtcNow.AddHours(1);
+                store.SetLastWakeHintUtc("Future", future);
+                var futureService = Service(new Web.CameraStateStore(dir).LastWakeHintUtc("Future"));
+                Assert(!futureService.HintsLiveAt(DateTime.UtcNow.Ticks), "future state is untrusted");
+                Assert(!futureService.HintsLiveAt(future.Ticks), "rejected future state cannot later become trusted");
+                var fresh = DateTime.UtcNow;
+                store.SetLastWakeHintUtc("Future", fresh);
+                AssertEq(new Web.CameraStateStore(dir).LastWakeHintUtc("Future"), (DateTime?)fresh);
+                Assert(!Service(null).HintsLiveAt(DateTime.UtcNow.Ticks), "missing state is scan-only");
+                Assert(!Service(DateTime.SpecifyKind(t0, DateTimeKind.Unspecified)).HintsLiveAt(t0.Ticks),
+                    "ambiguous timestamp is untrusted");
+                File.WriteAllText(Path.Combine(dir, "camera-state.json"),
+                    """{"Legacy":{"Suspended":true},"Ambiguous":{"LastWakeHintUtc":"2026-01-01T00:00:00"}}""");
+                var legacy = new Web.CameraStateStore(dir);
+                Assert(legacy.Suspended("Legacy"), "old state remains compatible");
+                AssertEq(legacy.LastWakeHintUtc("Legacy"), (DateTime?)null);
+                AssertEq(legacy.LastWakeHintUtc("Ambiguous"), (DateTime?)null);
+            }
+            finally { Directory.Delete(dir, recursive: true); }
+        });
+
+        Test("wake hints: refresh applies in memory before persistence; write failure is non-fatal", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-hint-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var store = new Web.CameraStateStore(dir);
+                var old = DateTime.UtcNow.AddHours(-3);
+                store.SetLastWakeHintUtc("Parking", old);
+                Streaming.CameraService? service = null;
+                DateTime? received = null;
+                service = new Streaming.CameraService(
+                    new CameraConfig { Name = "Parking", Username = "admin" },
+                    Protocol.StreamKind.Main, new Streaming.StreamHub("Parking"), TimeSpan.Zero,
+                    TimeSpan.FromHours(2), old, utc =>
+                    {
+                        Assert(service!.HintsLiveAt(utc.Ticks), "memory updated before disk callback");
+                        received = utc;
+                        store.SetLastWakeHintUtc("Parking", utc);
+                    });
+                Assert(!service.HintsLiveAt(DateTime.UtcNow.Ticks), "old hint expired");
+                service.NotifyWakeHint("test");
+                Assert(received.HasValue, "callback received a timestamp");
+                AssertEq(new Web.CameraStateStore(dir).LastWakeHintUtc("Parking"), received);
+                Assert(service.HintsLiveAt(received!.Value.AddHours(2).Ticks - 1), "refresh starts a new window");
+                Assert(!service.HintsLiveAt(received.Value.AddHours(2).Ticks), "refresh expires exactly");
+                store.SetLastWakeHintUtc("Parking", old);
+                AssertEq(new Web.CameraStateStore(dir).LastWakeHintUtc("Parking"), received);
+                // Deterministic real filesystem failure: the atomic-write path is a directory.
+                Directory.CreateDirectory(Path.Combine(dir, "camera-state.json.tmp"));
+                service.NotifyWakeHint("disk failure");
+                Assert(service.HintsLiveAt(received.Value.Ticks), "failed write leaves fresh memory hint live");
+                AssertEq(store.LastWakeHintUtc("Parking"), received);
+                Assert(new Web.CameraStateStore(dir).LastWakeHintUtc("Parking") < received,
+                    "failed refresh did not reach disk");
+            }
+            finally { Directory.Delete(dir, recursive: true); }
+        });
+
+        Test("wake hints: rename moves trust and delete prevents name reuse", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-hint-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var store = new Web.CameraStateStore(dir);
+                var hint = DateTime.UtcNow.AddHours(-1);
+                store.SetLastWakeHintUtc("Stale", hint);
+                store.Rename("Unhinted", "Stale");
+                AssertEq(new Web.CameraStateStore(dir).LastWakeHintUtc("Stale"), (DateTime?)null);
+                store.SetLastWakeHintUtc("Old", hint);
+                store.SetSuspended("Old", true);
+                store.SetDetectionCaps("Old", new[] { "person" }, true);
+                store.SetLastWakeHintUtc("New", hint.AddMinutes(1));
+                store.SetZone("New", "md", 1, 1, "1");
+                store.Rename("Old", "New");
+                var renamed = new Web.CameraStateStore(dir);
+                AssertEq(renamed.LastWakeHintUtc("Old"), (DateTime?)null);
+                AssertEq(renamed.LastWakeHintUtc("New"), (DateTime?)hint);
+                Assert(renamed.Suspended("Old"), "existing suspend semantics preserved");
+                AssertEq(renamed.DetectionCaps("Old").Doorbell, (bool?)true);
+                Assert(renamed.Zone("New", "md") != null, "hint-only rename preserves destination zones");
+                renamed.Rename("New", "NEW");
+                AssertEq(renamed.LastWakeHintUtc("new"), (DateTime?)hint);
+                // The still-running service uses its original name until restart.
+                var refresh = hint.AddMinutes(2);
+                store.SetLastWakeHintUtc("Old", refresh);
+                AssertEq(new Web.CameraStateStore(dir).LastWakeHintUtc("Old"), (DateTime?)null);
+                AssertEq(new Web.CameraStateStore(dir).LastWakeHintUtc("New"), (DateTime?)refresh);
+                store.Rename("New", "Third");
+                store.SetLastWakeHintUtc("Old", refresh.AddMinutes(1));
+                AssertEq(new Web.CameraStateStore(dir).LastWakeHintUtc("Third"), (DateTime?)refresh.AddMinutes(1));
+                store.Forget("Third");
+                store.SetLastWakeHintUtc("Old", DateTime.UtcNow);
+                AssertEq(new Web.CameraStateStore(dir).LastWakeHintUtc("Third"), (DateTime?)null);
+                renamed.Forget("NEW");
+                var deleted = new Web.CameraStateStore(dir);
+                AssertEq(deleted.LastWakeHintUtc("New"), (DateTime?)null);
+                Assert(deleted.Zone("New", "md") == null, "delete clears zones too");
+                deleted.SetLastWakeHintUtc("HintOnly", hint);
+                deleted.Forget("HintOnly");
+                deleted.SetLastWakeHintUtc("HintOnly", DateTime.UtcNow);
+                deleted.Forget("NeverHinted");
+                deleted.SetLastWakeHintUtc("NeverHinted", DateTime.UtcNow);
+                AssertEq(new Web.CameraStateStore(dir).LastWakeHintUtc("NeverHinted"), (DateTime?)null);
+                AssertEq(new Web.CameraStateStore(dir).LastWakeHintUtc("HintOnly"), (DateTime?)null);
+            }
+            finally { Directory.Delete(dir, recursive: true); }
+        });
+
         Test("wake hints: a section left with only trust_hours counts as empty; log spans read in hours", () =>
         {
             System.Text.Json.Nodes.JsonObject Obj(string json) =>

@@ -301,8 +301,15 @@ trust_hours = 72
 
 Keep your existing listener settings; for API-only hints, set `syslog_port = 0`.
 The window is global, but each camera's last hint starts/refreshes its own timer.
-Trust is not persisted: after restart, scan-only behavior continues until the
-first hint arrives. Restart Neolink after changing the configuration.
+The last wake hint's UTC timestamp is persisted per camera in `camera-state.json`
+in the UI state directory. Keep that directory across container restarts to retain
+trust. Restarting restores the original timestamp: a still-valid trust window
+continues, without resetting or extending `trust_hours`. Missing, expired, future,
+or ambiguous timestamps start in scan-only mode. A new hint updates memory before
+saving; a write failure is logged and does not invalidate the live hint, but that
+refresh cannot survive a restart. Renaming a camera moves its timestamp; deleting
+it clears the timestamp so a new camera with the same name cannot inherit trust.
+Restart Neolink after changing the configuration.
 
 The web UI sets it too: **Server settings → General → Wake hints (battery
 cameras) → Hint trust window**. Leave it blank for the 2-hour default. It needs

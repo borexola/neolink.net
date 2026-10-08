@@ -13,6 +13,8 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Fixed
 
+- **Wake-hint trust survives restarts.** Each camera's last wake-hint UTC timestamp is kept in `camera-state.json`, preserving the original `wake_hints.trust_hours` expiry. Missing, expired or future hints fall back to scan-only; renaming carries the timestamp and deleting clears it. A state-write failure leaves the live hint working.
+
 - **Day / night mode set over ONVIF** keeps showing the mode you applied, where the camera went on reporting the old one.
 - **A non-Reolink camera's detection no longer sticks on** when its end was lost in a dropped ONVIF poll, which recorded back-to-back max-length events of nothing. Neolink asks the camera to restate a detection that has been quiet for 2 minutes, and the log says when the camera itself keeps reporting one.
 
