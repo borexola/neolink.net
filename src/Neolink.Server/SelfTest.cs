@@ -595,7 +595,7 @@ public static class SelfTest
                 AssertEq(legacy.LastWakeHintUtc("Legacy"), (DateTime?)null);
                 AssertEq(legacy.LastWakeHintUtc("Ambiguous"), (DateTime?)null);
             }
-            finally { Directory.Delete(dir, recursive: true); }
+            finally { try { Directory.Delete(dir, recursive: true); } catch { } }
         });
 
         Test("wake hints: refresh applies in memory before persistence; write failure is non-fatal", () =>
@@ -626,15 +626,22 @@ public static class SelfTest
                 Assert(!service.HintsLiveAt(received.Value.AddHours(2).Ticks), "refresh expires exactly");
                 store.SetLastWakeHintUtc("Parking", old);
                 AssertEq(new Web.CameraStateStore(dir).LastWakeHintUtc("Parking"), received);
+                // A second hint within a minute is the same event: nothing is rewritten.
+                var first = received;
+                service.NotifyWakeHint("same event");
+                AssertEq(store.LastWakeHintUtc("Parking"), first);
+                AssertEq(new Web.CameraStateStore(dir).LastWakeHintUtc("Parking"), first);
                 // Deterministic real filesystem failure: the atomic-write path is a directory.
+                File.WriteAllText(Path.Combine(dir, "camera-state.json"),
+                    System.Text.Json.JsonSerializer.Serialize(new { Parking = new { LastWakeHintUtc = old } }));
+                store = new Web.CameraStateStore(dir);
                 Directory.CreateDirectory(Path.Combine(dir, "camera-state.json.tmp"));
                 service.NotifyWakeHint("disk failure");
-                Assert(service.HintsLiveAt(received.Value.Ticks), "failed write leaves fresh memory hint live");
+                Assert(service.HintsLiveAt(received!.Value.Ticks), "failed write leaves fresh memory hint live");
                 AssertEq(store.LastWakeHintUtc("Parking"), received);
-                Assert(new Web.CameraStateStore(dir).LastWakeHintUtc("Parking") < received,
-                    "failed refresh did not reach disk");
+                AssertEq(new Web.CameraStateStore(dir).LastWakeHintUtc("Parking"), (DateTime?)old);
             }
-            finally { Directory.Delete(dir, recursive: true); }
+            finally { try { Directory.Delete(dir, recursive: true); } catch { } }
         });
 
         Test("wake hints: rename moves trust and delete prevents name reuse", () =>
@@ -685,7 +692,46 @@ public static class SelfTest
                 AssertEq(new Web.CameraStateStore(dir).LastWakeHintUtc("NeverHinted"), (DateTime?)null);
                 AssertEq(new Web.CameraStateStore(dir).LastWakeHintUtc("HintOnly"), (DateTime?)null);
             }
-            finally { Directory.Delete(dir, recursive: true); }
+            finally { try { Directory.Delete(dir, recursive: true); } catch { } }
+        });
+
+        Test("wake hints: live callbacks follow swaps and never revive a deleted camera", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-hint-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var hint = DateTime.UtcNow.AddMinutes(-1);
+                DateTime? Disk(string camera) => new Web.CameraStateStore(dir).LastWakeHintUtc(camera);
+
+                // Two mislabelled cameras swapped: each live service still reports under its startup name.
+                var store = new Web.CameraStateStore(dir);
+                store.Rename("Front", "tmp");
+                store.Rename("Back", "Front");
+                store.Rename("tmp", "Back");
+                store.SetLastWakeHintUtc("Front", hint);
+                AssertEq(Disk("Back"), (DateTime?)hint);
+                AssertEq(Disk("Front"), (DateTime?)null);
+
+                // A name freed by a delete: the deleted service's hints stay dropped.
+                store.Forget("X");
+                store.Rename("Y", "X");
+                store.SetLastWakeHintUtc("X", hint);
+                AssertEq(Disk("X"), (DateTime?)null);
+
+                // The deleted name re-added and renamed: still the deleted service, still dropped.
+                store.Forget("P");
+                store.Rename("P", "Q");
+                store.SetLastWakeHintUtc("P", hint);
+                AssertEq(Disk("Q"), (DateTime?)null);
+
+                // Deleting a re-added name must not silence the service renamed away from it.
+                store.Rename("Shed", "Garage");
+                store.Forget("Shed");
+                store.SetLastWakeHintUtc("Shed", hint);
+                AssertEq(Disk("Garage"), (DateTime?)hint);
+            }
+            finally { try { Directory.Delete(dir, recursive: true); } catch { } }
         });
 
         Test("wake hints: a section left with only trust_hours counts as empty; log spans read in hours", () =>
@@ -1242,6 +1288,11 @@ public static class SelfTest
         Test("bcudp transport: handshake + reliable out-of-order reassembly", () =>
         {
             RunBcUdpTransport().GetAwaiter().GetResult();
+        });
+
+        Test("bc connection: a dead connection is reported and fails fast", () =>
+        {
+            RunBcConnectionClosed().GetAwaiter().GetResult();
         });
 
         Test("bcudp wake-capture liveness probe (reachable vs silent)", () =>
@@ -11363,6 +11414,45 @@ public static class SelfTest
             Console.WriteLine($"FAIL: {name}: {ex.Message}");
             _failed++;
         }
+    }
+
+    /// <summary>A closed peer must complete <see cref="BcConnection.Closed"/>, fault live
+    /// subscriptions, and make later subscribe/send fail at once instead of timing out.</summary>
+    private static async Task RunBcConnectionClosed()
+    {
+        var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            int port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+            var accept = listener.AcceptTcpClientAsync();
+            await using var conn = await BcConnection.ConnectAsync("127.0.0.1", port, TimeSpan.FromSeconds(5), CancellationToken.None);
+            using var peer = await accept;
+            Assert(!conn.Closed.IsCompleted, "a live connection is not closed");
+            using var live = conn.Subscribe(1);
+            peer.Close();
+            await conn.Closed.WaitAsync(TimeSpan.FromSeconds(5));
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            bool failed = false;
+            try { await live.ReceiveAsync(TimeSpan.FromSeconds(10), CancellationToken.None); }
+            catch (IOException) { failed = true; }
+            Assert(failed, "a live subscription is faulted by the close");
+            using var late = conn.Subscribe(2);
+            failed = false;
+            try { await late.ReceiveAsync(TimeSpan.FromSeconds(10), CancellationToken.None); }
+            catch (IOException) { failed = true; }
+            Assert(failed, "a subscription taken after the close fails too");
+            failed = false;
+            try
+            {
+                await conn.SendAsync(BcMessage.HeaderOnly(new BcMeta
+                    { MsgId = BcConstants.MsgIdPing, Class = BcConstants.ClassModern }), CancellationToken.None);
+            }
+            catch (IOException) { failed = true; }
+            Assert(failed, "sending on a closed connection fails");
+            Assert(sw.Elapsed < TimeSpan.FromSeconds(2), "all of it fails fast, not on the 10 s timeout");
+        }
+        finally { listener.Stop(); }
     }
 
     /// <summary>End-to-end transport test: a loopback "camera" performs the UDP

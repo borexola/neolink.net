@@ -15,12 +15,13 @@ namespace Neolink.Web;
 public sealed class CameraStateStore
 {
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
+    private static readonly TimeSpan WakeHintSaveInterval = TimeSpan.FromMinutes(1);
 
     private readonly string _path;
     private readonly object _gate = new();
     private readonly Dictionary<string, CameraState> _state;
-    // The UI applies camera edits on restart. Until then, callbacks from a live
-    // service still use its startup name: redirect renamed cameras, drop deleted ones.
+    // Camera edits apply on restart; until then a live service reports under its startup name.
+    // Keys are those names, redirected (renamed) or dropped (deleted), and never overwritten.
     private readonly Dictionary<string, string?> _wakeHintNames = new(StringComparer.OrdinalIgnoreCase);
 
     public sealed class CameraState
@@ -134,9 +135,9 @@ public sealed class CameraStateStore
             }
             if (!_state.TryGetValue(camera, out var s))
                 _state[camera] = s = new CameraState();
-            // Concurrent hint callbacks can reach disk out of order. Keep the newest.
+            // Keep the newest, and rewrite the file at most once a minute: an event is several hints.
             if (s.LastWakeHintUtc is { Kind: DateTimeKind.Utc } previous
-                && previous <= DateTime.UtcNow && previous >= utc) return;
+                && previous <= DateTime.UtcNow && utc - previous < WakeHintSaveInterval) return;
             s.LastWakeHintUtc = utc;
             Save();
         }

@@ -1224,11 +1224,11 @@ public static class WebApi
                     if (req.Record is { } record)
                         ConfigEditor.Set(cam, "record", record ? null : false);
                 });
-                // Stored detection zones and wake-hint trust follow a camera rename.
+                // Account camera lists first (they gate access), then stored zones and wake-hint trust.
                 if (req.OriginalName is { Length: > 0 } was)
                 {
-                    o.CameraState?.Rename(was, name);
                     userStore.RenameCamera(was, name);
+                    o.CameraState?.Rename(was, name);
                 }
                 Log.Warn($"config.json cameras updated via the web UI by '{SessionName(ctx)}' " +
                          $"({(req.OriginalName == null ? "added" : "edited")} \"{name}\") — restart to apply");
@@ -1256,9 +1256,9 @@ public static class WebApi
                         ?? throw new FormatException($"unknown camera \"{name}\"");
                     cams.Remove(cam);
                 });
-                // Clear stored zones and wake-hint trust before the name can be reused.
-                o.CameraState?.Forget(name);
+                // Account camera lists first (they gate access), then stored zones and wake-hint trust.
                 userStore.RenameCamera(name, null);
+                o.CameraState?.Forget(name);
                 Log.Warn($"config.json camera \"{name}\" deleted via the web UI by '{SessionName(ctx)}' — restart to apply");
                 return Results.Json(new { ok = true, requiresRestart = true });
             }
