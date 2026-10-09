@@ -1972,7 +1972,7 @@
                             }
                             @if (_camTestResult != null && _camEdit == null)
                             {
-                                <div class="notice small @(_camTestOk ? "" : "error")">@_camTestResult</div>
+                                <div class="notice small @(_camTestOk ? "ok" : "fail")">@_camTestResult</div>
                             }
                             @if (_camsNeedRestart && _camEdit == null)
                             {
@@ -2907,7 +2907,7 @@
                            where Save should be invited the wrong click. *@
                         @if (_camTestResult != null)
                         {
-                            <div class="notice small @(_camTestOk ? "" : "error")">@_camTestResult</div>
+                            <div class="notice small @(_camTestOk ? "ok" : "fail")">@_camTestResult</div>
                         }
                         <div class="settings-foot-btns">
                             @* The test dials whichever transport this camera uses, so a

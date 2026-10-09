@@ -13,6 +13,7 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Fixed
 
+- **A camera idling on on-demand video that lost its connection** (reboot, Wi-Fi drop) reconnects within a minute, instead of answering every stream request with "stream not ready" until Neolink was restarted (#62).
 - **Wake-hint trust survives a restart.** The trust window carries on from the last hint instead of dropping back to scan-only until the next one (thanks to @dragners, #63).
 - **Day / night mode set over ONVIF** keeps showing the mode you applied, where the camera went on reporting the old one.
 - **A non-Reolink camera's detection no longer sticks on** when its end was lost in a dropped ONVIF poll, which recorded back-to-back max-length events of nothing. Neolink asks the camera to restate a detection that has been quiet for 2 minutes, and the log says when the camera itself keeps reporting one.

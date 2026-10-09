@@ -2542,6 +2542,7 @@ public static class WebApi
                         : "camera offline (reconnecting)";
                 }
                 catch (TimeoutException) { unavailable = "camera did not reply"; }
+                catch (IOException ex) { unavailable = $"camera connection error: {ex.Message}"; }
                 catch (CameraCommandException ex) { unavailable = ex.Message; }
                 if (jpeg != null && !IsJpeg(jpeg))
                     unavailable ??= "camera returned an invalid snapshot";
