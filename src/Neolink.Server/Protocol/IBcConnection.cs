@@ -20,6 +20,9 @@ public interface IBcConnection : IAsyncDisposable
     BcSubscription Subscribe(uint msgId);
     Task SendAsync(BcMessage msg, CancellationToken ct);
 
+    /// <summary>Completes when the transport is dead (with the reason); later subscriptions fail at once.</summary>
+    Task<string> Closed { get; }
+
     /// <summary>The camera's resolved IP once connected — used for the non-waking
     /// liveness scan (ICMP), which a UID-only camera has no address for otherwise.
     /// Null before the endpoint is known.</summary>

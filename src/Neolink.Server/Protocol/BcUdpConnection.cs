@@ -60,6 +60,9 @@ public sealed class BcUdpConnection : IBcConnection
     private readonly Dictionary<uint, Channel<BcMessage>> _subscribers = new();
     private readonly HashSet<uint> _reportedUnhandled = new();
     private readonly object _subGate = new();
+    private readonly TaskCompletionSource<string> _closed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private Exception? _closeFault; // set under _subGate once the read loop has ended
+    public Task<string> Closed => _closed.Task;
 
     private readonly CancellationTokenSource _cts;
     // A generous pause threshold so the receive loop's writes complete synchronously
@@ -192,6 +195,8 @@ public sealed class BcUdpConnection : IBcConnection
         {
             if (!_subscribers.TryAdd(msgId, channel))
                 throw new InvalidOperationException($"Simultaneous subscription to message ID {msgId}");
+            // Subscribed after the read loop died: fail at once rather than on a reply timeout.
+            if (_closeFault != null) channel.Writer.TryComplete(_closeFault);
         }
         return new BcSubscription(msgId, channel.Reader, () => Unsubscribe(msgId));
     }
@@ -697,12 +702,15 @@ public sealed class BcUdpConnection : IBcConnection
         }
         finally
         {
+            var reason = fault ?? new EndOfStreamException("UDP connection closed");
             lock (_subGate)
             {
+                _closeFault = reason;
                 foreach (var ch in _subscribers.Values)
-                    ch.Writer.TryComplete(fault ?? new EndOfStreamException("UDP connection closed"));
+                    ch.Writer.TryComplete(reason);
                 _subscribers.Clear();
             }
+            _closed.TrySetResult(reason.Message);
         }
     }
 

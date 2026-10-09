@@ -1148,7 +1148,16 @@ public sealed class CameraService : ILiveCameraSource
                 Log.Info($"{Tag}: idle — nothing recording and nobody watching; holding a control-only " +
                          "connection (sensors and controls stay live, video starts when someone watches)");
                 while (!MediaWanted)
-                    await Task.Delay(250, linked.Token).ConfigureAwait(false);
+                {
+                    // No video stream here to notice a dead connection: watch for it directly (issue #62).
+                    await Task.WhenAny(Task.Delay(250, linked.Token), camera.Closed, pingTask ?? camera.Closed)
+                        .ConfigureAwait(false);
+                    linked.Token.ThrowIfCancellationRequested();
+                    if (camera.Closed.IsCompleted)
+                        throw new IOException($"connection lost while idle ({camera.Closed.Result})");
+                    if (pingTask is { IsCompleted: true })
+                        throw new IOException("the camera stopped answering pings while idle");
+                }
                 Log.Info($"{Tag}: {(DemandNow ? "viewer asked" : "recording switched on")} — starting the video stream");
             }
 
@@ -1461,13 +1470,14 @@ public sealed class CameraService : ILiveCameraSource
         }
     }
 
-    /// <summary>Session-activity ping for UDP cameras: msg 93 every 5 s, like the
-    /// official client. An unanswered ping is logged once and pinging continues —
-    /// the request is what proves the client alive; a dead connection is noticed
-    /// by the video stream, which tears the session down.</summary>
+    private const int MaxMissedPings = 3;
+
+    /// <summary>Session-activity ping (msg 93 every 5 s, like the official client). A firmware that never
+    /// answers is tolerated; over TCP, one that answered and then misses three in a row ends the loop (issue #62).</summary>
     private async Task PingLoopAsync(IBcCamera camera, CancellationToken ct)
     {
-        bool quiet = false;
+        bool quiet = false, answered = false;
+        int missed = 0;
         while (!ct.IsCancellationRequested)
         {
             try { await Task.Delay(TimeSpan.FromSeconds(5), ct).ConfigureAwait(false); }
@@ -1475,10 +1485,17 @@ public sealed class CameraService : ILiveCameraSource
             try
             {
                 await camera.PingAsync(ct).ConfigureAwait(false);
+                answered = true;
+                missed = 0;
             }
             catch (OperationCanceledException) { return; }
             catch (Exception ex)
             {
+                if (answered && !_config.Udp && ++missed >= MaxMissedPings)
+                {
+                    Log.Debug($"{Tag}: {missed} pings unanswered in a row ({ex.Message}) — giving up on pings");
+                    return;
+                }
                 if (!quiet)
                 {
                     quiet = true;

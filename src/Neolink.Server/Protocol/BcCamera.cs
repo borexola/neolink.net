@@ -62,6 +62,7 @@ public sealed class BcCamera : IBcCamera
     public byte ChannelId => _channelId;
     public DeviceInfoXml? DeviceInfo { get; private set; }
     public System.Net.IPAddress? RemoteIp => _conn.RemoteEndpoint?.Address;
+    public Task<string> Closed => _conn.Closed;
 
     // Log tag: with several cameras every one is usually channel 0, so a bare
     // "ch0" is ambiguous in captures — callers pass the camera name instead.
