@@ -552,6 +552,188 @@ public static class SelfTest
             Assert(!defaultService.IsHintTrusted(t0, t0 + TimeSpan.FromHours(2).Ticks), "default expires at 2 h");
         });
 
+        Test("wake hints: persisted trust survives restart with the original expiry", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-hint-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var t0 = DateTime.UtcNow.AddHours(-1);
+                var window = TimeSpan.FromHours(72);
+                var store = new Web.CameraStateStore(dir);
+                store.SetLastWakeHintUtc("Parking", t0);
+                // A hint-only entry must survive unrelated state updates.
+                store.SetSuspended("Parking", false);
+                var reloaded = new Web.CameraStateStore(dir);
+                AssertEq(reloaded.LastWakeHintUtc("parking"), (DateTime?)t0);
+                Streaming.CameraService Service(DateTime? hint) => new(
+                    new CameraConfig { Name = "Parking", Username = "admin" },
+                    Protocol.StreamKind.Main, new Streaming.StreamHub("Parking"), TimeSpan.Zero,
+                    window, hint);
+                var service = Service(reloaded.LastWakeHintUtc("Parking"));
+                var expiry = t0.Add(window).Ticks;
+                Assert(service.HintsLiveAt(expiry - 1), "restart preserves trust until the last tick");
+                Assert(!service.HintsLiveAt(expiry), "restart does not extend exact expiry");
+                Assert(!service.HintsLiveAt(expiry + 1), "expired state falls back to scan-only");
+                Assert(!service.HintsLiveAt(t0.Ticks - 1), "clock moving backwards cannot trust a future hint");
+                Assert(!Service(t0.AddHours(-72)).HintsLiveAt(DateTime.UtcNow.Ticks), "already expired at restart");
+                var future = DateTime.UtcNow.AddHours(1);
+                store.SetLastWakeHintUtc("Future", future);
+                var futureService = Service(new Web.CameraStateStore(dir).LastWakeHintUtc("Future"));
+                Assert(!futureService.HintsLiveAt(DateTime.UtcNow.Ticks), "future state is untrusted");
+                Assert(!futureService.HintsLiveAt(future.Ticks), "rejected future state cannot later become trusted");
+                var fresh = DateTime.UtcNow;
+                store.SetLastWakeHintUtc("Future", fresh);
+                AssertEq(new Web.CameraStateStore(dir).LastWakeHintUtc("Future"), (DateTime?)fresh);
+                Assert(!Service(null).HintsLiveAt(DateTime.UtcNow.Ticks), "missing state is scan-only");
+                Assert(!Service(DateTime.SpecifyKind(t0, DateTimeKind.Unspecified)).HintsLiveAt(t0.Ticks),
+                    "ambiguous timestamp is untrusted");
+                File.WriteAllText(Path.Combine(dir, "camera-state.json"),
+                    """{"Legacy":{"Suspended":true},"Ambiguous":{"LastWakeHintUtc":"2026-01-01T00:00:00"}}""");
+                var legacy = new Web.CameraStateStore(dir);
+                Assert(legacy.Suspended("Legacy"), "old state remains compatible");
+                AssertEq(legacy.LastWakeHintUtc("Legacy"), (DateTime?)null);
+                AssertEq(legacy.LastWakeHintUtc("Ambiguous"), (DateTime?)null);
+            }
+            finally { try { Directory.Delete(dir, recursive: true); } catch { } }
+        });
+
+        Test("wake hints: refresh applies in memory before persistence; write failure is non-fatal", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-hint-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var store = new Web.CameraStateStore(dir);
+                var old = DateTime.UtcNow.AddHours(-3);
+                store.SetLastWakeHintUtc("Parking", old);
+                Streaming.CameraService? service = null;
+                DateTime? received = null;
+                service = new Streaming.CameraService(
+                    new CameraConfig { Name = "Parking", Username = "admin" },
+                    Protocol.StreamKind.Main, new Streaming.StreamHub("Parking"), TimeSpan.Zero,
+                    TimeSpan.FromHours(2), old, utc =>
+                    {
+                        Assert(service!.HintsLiveAt(utc.Ticks), "memory updated before disk callback");
+                        received = utc;
+                        store.SetLastWakeHintUtc("Parking", utc);
+                    });
+                Assert(!service.HintsLiveAt(DateTime.UtcNow.Ticks), "old hint expired");
+                service.NotifyWakeHint("test");
+                Assert(received.HasValue, "callback received a timestamp");
+                AssertEq(new Web.CameraStateStore(dir).LastWakeHintUtc("Parking"), received);
+                Assert(service.HintsLiveAt(received!.Value.AddHours(2).Ticks - 1), "refresh starts a new window");
+                Assert(!service.HintsLiveAt(received.Value.AddHours(2).Ticks), "refresh expires exactly");
+                store.SetLastWakeHintUtc("Parking", old);
+                AssertEq(new Web.CameraStateStore(dir).LastWakeHintUtc("Parking"), received);
+                // A second hint within a minute is the same event: nothing is rewritten.
+                var first = received;
+                service.NotifyWakeHint("same event");
+                AssertEq(store.LastWakeHintUtc("Parking"), first);
+                AssertEq(new Web.CameraStateStore(dir).LastWakeHintUtc("Parking"), first);
+                // Deterministic real filesystem failure: the atomic-write path is a directory.
+                File.WriteAllText(Path.Combine(dir, "camera-state.json"),
+                    System.Text.Json.JsonSerializer.Serialize(new { Parking = new { LastWakeHintUtc = old } }));
+                store = new Web.CameraStateStore(dir);
+                Directory.CreateDirectory(Path.Combine(dir, "camera-state.json.tmp"));
+                service.NotifyWakeHint("disk failure");
+                Assert(service.HintsLiveAt(received!.Value.Ticks), "failed write leaves fresh memory hint live");
+                AssertEq(store.LastWakeHintUtc("Parking"), received);
+                AssertEq(new Web.CameraStateStore(dir).LastWakeHintUtc("Parking"), (DateTime?)old);
+            }
+            finally { try { Directory.Delete(dir, recursive: true); } catch { } }
+        });
+
+        Test("wake hints: rename moves trust and delete prevents name reuse", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-hint-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var store = new Web.CameraStateStore(dir);
+                var hint = DateTime.UtcNow.AddHours(-1);
+                store.SetLastWakeHintUtc("Stale", hint);
+                store.Rename("Unhinted", "Stale");
+                AssertEq(new Web.CameraStateStore(dir).LastWakeHintUtc("Stale"), (DateTime?)null);
+                store.SetLastWakeHintUtc("Old", hint);
+                store.SetSuspended("Old", true);
+                store.SetDetectionCaps("Old", new[] { "person" }, true);
+                store.SetLastWakeHintUtc("New", hint.AddMinutes(1));
+                store.SetZone("New", "md", 1, 1, "1");
+                store.Rename("Old", "New");
+                var renamed = new Web.CameraStateStore(dir);
+                AssertEq(renamed.LastWakeHintUtc("Old"), (DateTime?)null);
+                AssertEq(renamed.LastWakeHintUtc("New"), (DateTime?)hint);
+                Assert(renamed.Suspended("Old"), "existing suspend semantics preserved");
+                AssertEq(renamed.DetectionCaps("Old").Doorbell, (bool?)true);
+                Assert(renamed.Zone("New", "md") != null, "hint-only rename preserves destination zones");
+                renamed.Rename("New", "NEW");
+                AssertEq(renamed.LastWakeHintUtc("new"), (DateTime?)hint);
+                // The still-running service uses its original name until restart.
+                var refresh = hint.AddMinutes(2);
+                store.SetLastWakeHintUtc("Old", refresh);
+                AssertEq(new Web.CameraStateStore(dir).LastWakeHintUtc("Old"), (DateTime?)null);
+                AssertEq(new Web.CameraStateStore(dir).LastWakeHintUtc("New"), (DateTime?)refresh);
+                store.Rename("New", "Third");
+                store.SetLastWakeHintUtc("Old", refresh.AddMinutes(1));
+                AssertEq(new Web.CameraStateStore(dir).LastWakeHintUtc("Third"), (DateTime?)refresh.AddMinutes(1));
+                store.Forget("Third");
+                store.SetLastWakeHintUtc("Old", DateTime.UtcNow);
+                AssertEq(new Web.CameraStateStore(dir).LastWakeHintUtc("Third"), (DateTime?)null);
+                renamed.Forget("NEW");
+                var deleted = new Web.CameraStateStore(dir);
+                AssertEq(deleted.LastWakeHintUtc("New"), (DateTime?)null);
+                Assert(deleted.Zone("New", "md") == null, "delete clears zones too");
+                deleted.SetLastWakeHintUtc("HintOnly", hint);
+                deleted.Forget("HintOnly");
+                deleted.SetLastWakeHintUtc("HintOnly", DateTime.UtcNow);
+                deleted.Forget("NeverHinted");
+                deleted.SetLastWakeHintUtc("NeverHinted", DateTime.UtcNow);
+                AssertEq(new Web.CameraStateStore(dir).LastWakeHintUtc("NeverHinted"), (DateTime?)null);
+                AssertEq(new Web.CameraStateStore(dir).LastWakeHintUtc("HintOnly"), (DateTime?)null);
+            }
+            finally { try { Directory.Delete(dir, recursive: true); } catch { } }
+        });
+
+        Test("wake hints: live callbacks follow swaps and never revive a deleted camera", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-hint-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var hint = DateTime.UtcNow.AddMinutes(-1);
+                DateTime? Disk(string camera) => new Web.CameraStateStore(dir).LastWakeHintUtc(camera);
+
+                // Two mislabelled cameras swapped: each live service still reports under its startup name.
+                var store = new Web.CameraStateStore(dir);
+                store.Rename("Front", "tmp");
+                store.Rename("Back", "Front");
+                store.Rename("tmp", "Back");
+                store.SetLastWakeHintUtc("Front", hint);
+                AssertEq(Disk("Back"), (DateTime?)hint);
+                AssertEq(Disk("Front"), (DateTime?)null);
+
+                // A name freed by a delete: the deleted service's hints stay dropped.
+                store.Forget("X");
+                store.Rename("Y", "X");
+                store.SetLastWakeHintUtc("X", hint);
+                AssertEq(Disk("X"), (DateTime?)null);
+
+                // The deleted name re-added and renamed: still the deleted service, still dropped.
+                store.Forget("P");
+                store.Rename("P", "Q");
+                store.SetLastWakeHintUtc("P", hint);
+                AssertEq(Disk("Q"), (DateTime?)null);
+
+                // Deleting a re-added name must not silence the service renamed away from it.
+                store.Rename("Shed", "Garage");
+                store.Forget("Shed");
+                store.SetLastWakeHintUtc("Shed", hint);
+                AssertEq(Disk("Garage"), (DateTime?)hint);
+            }
+            finally { try { Directory.Delete(dir, recursive: true); } catch { } }
+        });
+
         Test("wake hints: a section left with only trust_hours counts as empty; log spans read in hours", () =>
         {
             System.Text.Json.Nodes.JsonObject Obj(string json) =>
@@ -1106,6 +1288,11 @@ public static class SelfTest
         Test("bcudp transport: handshake + reliable out-of-order reassembly", () =>
         {
             RunBcUdpTransport().GetAwaiter().GetResult();
+        });
+
+        Test("bc connection: a dead connection is reported and fails fast", () =>
+        {
+            RunBcConnectionClosed().GetAwaiter().GetResult();
         });
 
         Test("bcudp wake-capture liveness probe (reachable vs silent)", () =>
@@ -3346,7 +3533,13 @@ public static class SelfTest
                 store.Add("viewer2", "viewerpass", admin: false);
                 store.SetSettings("viewer2", "{\"mode\":\"grid\"}");
                 store.SetPageSettings("viewer2", "timeline", "{\"studio\":true}");
+                Assert(!store.SetCameras("admin", new() { "front" }), "the admin is never limited to cameras");
+                Assert(store.SetCameras("viewer2", new() { "front", "FRONT", "back" }), "a normal user can be limited");
+                store.RenameCamera("front", "porch");
+                store.RenameCamera("back", null); // deleted: a later camera of that name is not granted
                 var reloaded = new Web.UserStore(dir);
+                AssertEq(string.Join(",", reloaded.List().First(u => u.Name == "viewer2").Cameras!), "porch");
+                Assert(reloaded.List().First(u => u.Name == "admin").Cameras == null, "no limit reads as null");
                 Assert(reloaded.Enabled, "accounts persist across restart");
                 Assert(reloaded.Verify("admin", "new password!") != null, "password persists");
                 Assert(reloaded.GetSettings("viewer2").Contains("grid"), "per-user settings persist");
@@ -4020,6 +4213,16 @@ public static class SelfTest
             Assert(Streaming.CameraControl.DayNightToIrCut("Color") == "ON"
                    && Streaming.CameraControl.DayNightToIrCut("Black&White") == "OFF"
                    && Streaming.CameraControl.DayNightToIrCut("Auto") == "AUTO", "day/night → IR-cut");
+
+            // A confirmed IR-cut write stands while the camera keeps echoing the old value.
+            string? written = "ON", stale = null;
+            AssertEq(Protocol.OnvifClient.ReconcileIrCut("AUTO", ref written, ref stale), "ON");
+            AssertEq(Protocol.OnvifClient.ReconcileIrCut("AUTO", ref written, ref stale), "ON");
+            AssertEq(Protocol.OnvifClient.ReconcileIrCut("OFF", ref written, ref stale), "OFF");
+            Assert(written == null && stale == null, "a moved echo ends the override");
+            written = "ON";
+            AssertEq(Protocol.OnvifClient.ReconcileIrCut("ON", ref written, ref stale), "ON");
+            Assert(written == null, "an agreeing echo ends the override");
 
             // Endpoint candidates: a bare host tries Reolink's ONVIF port 8000 first,
             // then 80; an explicit port or full URL is taken verbatim.
@@ -5010,6 +5213,42 @@ public static class SelfTest
             svc.AgeForTest(TimeSpan.FromMinutes(5));
             svc.ExpireOneShots();
             Assert(svc.ActiveLabels.Contains("motion"), "a one-shot re-report does not demote a stateful label");
+
+            // An end lost with a failed poll: asked to restate, the camera leaves it out, and it ends.
+            svc.Handle(N("tns1:RuleEngine/CellMotionDetector/Motion", false));
+            const string people = "tns1:RuleEngine/MyRuleDetector/PeopleDetect";
+            static Protocol.OnvifNotification Restated(string topic, bool active) =>
+                new(topic, active, new Dictionary<string, string>(), null, "Initialized");
+            svc.Handle(N(people, true));
+            Assert(!svc.NeedsReconfirm(), "a fresh detection is not questioned");
+            svc.AgeForTest(TimeSpan.FromMinutes(3));
+            Assert(svc.NeedsReconfirm(), "one quiet for minutes is");
+            var asked = DateTime.UtcNow;
+            svc.Handle(Restated("tns1:RuleEngine/CellMotionDetector/Motion", false));
+            svc.EndUnconfirmed(asked);
+            Assert(!svc.ActiveLabels.Contains("person") && !pushes[^1].Active,
+                "a detection the camera no longer restates ends, with an all-clear");
+
+            // One it restates stays, and an unbroken long run is said once.
+            var said = new List<string>();
+            var tap = Log.Tap;
+            Log.Tap = (_, m) => { if (m.Contains("still reports")) lock (said) said.Add(m); };
+            try
+            {
+                svc.Handle(N(people, true));
+                for (int i = 0; i < 2; i++)
+                {
+                    svc.AgeForTest(TimeSpan.FromMinutes(11));
+                    asked = DateTime.UtcNow;
+                    svc.Handle(Restated(people, true));
+                    svc.EndUnconfirmed(asked);
+                }
+            }
+            finally { Log.Tap = tap; }
+            Assert(svc.ActiveLabels.Contains("person") && !svc.NeedsReconfirm(), "a restated detection stays, confirmed");
+            Assert(said.Count == 1 && said[0].Contains("PeopleDetect"), $"the long run is logged once ({said.Count})");
+            svc.Handle(N(people, false));
+            Assert(!pushes[^1].Active, "and its own end still ends it");
         });
 
         Test("credentials: the mask and the parser agree on where a password ends", () =>
@@ -9451,6 +9690,105 @@ public static class SelfTest
                 AssertEq((int)http.GetAsync($"/api/background?token={Uri.EscapeDataString(viewerTok)}").Result.StatusCode, 403);
                 AssertEq((int)http.GetAsync($"/api/background{tokenQ}").Result.StatusCode, 200);
 
+                // RTSP users from the Users tab: listed by name only, saved to config.json, and refused
+                // wherever the file would not load (or would drop a camera) at the next start.
+                var viewerQ = $"?token={Uri.EscapeDataString(viewerTok)}";
+                HttpResponseMessage Send(HttpMethod m, string path, string? json = null)
+                {
+                    using var req = new HttpRequestMessage(m, path);
+                    if (json != null) req.Content = new StringContent(json, Encoding.UTF8, "application/json");
+                    return http.Send(req);
+                }
+                string Reply(HttpResponseMessage res) { using (res) return $"{(int)res.StatusCode} {res.Content.ReadAsStringAsync().Result}"; }
+                const string rtspUsers = "/api/admin/rtsp-users";
+                Assert(Reply(Send(HttpMethod.Get, rtspUsers + viewerQ)).StartsWith("403"), "RTSP users are admin only");
+                Assert(Reply(Send(HttpMethod.Post, rtspUsers + tokenQ, """{"username":"frigate","password":"s3cret pw"}""")).StartsWith("200"),
+                    "an RTSP user is added");
+                var rtspListed = Reply(Send(HttpMethod.Get, rtspUsers + tokenQ));
+                Assert(rtspListed.Contains("\"frigate\"") && !rtspListed.Contains("s3cret") && rtspListed.Contains("\"restartNeeded\":true"),
+                    "listed by name only, pending a restart: " + rtspListed);
+                Assert(File.ReadAllText(configPath).Contains("\"pass\": \"s3cret pw\""), "saved to config.json");
+                Assert(Reply(Send(HttpMethod.Post, rtspUsers + tokenQ, """{"username":"FRIGATE","password":"x"}""")).Contains("already exists"),
+                    "a name differing only in case is refused");
+                Assert(Reply(Send(HttpMethod.Post, rtspUsers + tokenQ, """{"username":"a:b","password":"x"}""")).StartsWith("400"),
+                    "a name Basic auth cannot carry is refused");
+                Assert(Reply(Send(HttpMethod.Post, rtspUsers + tokenQ, """{"username":"anyone","password":"x"}""")).StartsWith("400"),
+                    "a reserved name is refused");
+                Assert(Reply(Send(HttpMethod.Put, $"{rtspUsers}/frigate{tokenQ}", """{"password":"new pw"}""")).StartsWith("200"),
+                    "an RTSP password is changed");
+                saved = File.ReadAllText(configPath);
+                Assert(saved.Contains("\"pass\": \"new pw\"") && !saved.Contains("s3cret"), "the new password replaces the old");
+                Assert(Reply(Send(HttpMethod.Put, $"{rtspUsers}/nobody{tokenQ}", """{"password":"x"}""")).StartsWith("400"), "unknown RTSP user");
+                File.WriteAllText(configPath, saved.Replace("\"name\": \"storedcam\"", "\"name\": \"storedcam\", \"permitted_users\": [ \"frigate\" ]"));
+                Assert(Reply(Send(HttpMethod.Delete, $"{rtspUsers}/frigate{tokenQ}")).Contains("permitted_users of storedcam"),
+                    "a user a camera names cannot be deleted");
+                File.WriteAllText(configPath, saved);
+                Assert(Reply(Send(HttpMethod.Delete, $"{rtspUsers}/frigate{tokenQ}")).StartsWith("200"), "an RTSP user is deleted");
+                Assert(!File.ReadAllText(configPath).Contains("frigate"), "and is gone from config.json");
+                File.WriteAllText(configPath, configBefore);
+
+                // Camera access per account: a limited account sees only its cameras, every route to
+                // another answers as if it did not exist, and the admin is never limited.
+                string viewerCams(string json) => Reply(Send(HttpMethod.Put, $"/api/users/viewer/cameras{tokenQ}", json));
+                Assert(Reply(Send(HttpMethod.Put, $"/api/users/viewer/cameras{viewerQ}", """{"cameras":[]}""")).StartsWith("403"),
+                    "only the admin sets camera access");
+                Assert(viewerCams("""{"cameras":["nope"]}""").StartsWith("400"), "an unknown camera is refused");
+                Assert(Reply(Send(HttpMethod.Put, $"/api/users/admin/cameras{tokenQ}", """{"cameras":["snapcam"]}""")).StartsWith("400"),
+                    "the admin cannot be limited");
+                Assert(viewerCams("""{"cameras":["SNAPCAM"]}""").StartsWith("200"), "a normal account is limited");
+                var limited = GetJson(http, $"/api/cameras{viewerQ}");
+                Assert(limited.GetArrayLength() == 1 && limited[0].GetProperty("name").GetString() == "snapcam",
+                    "a limited account lists only its cameras");
+                AssertEq(GetJson(http, $"/api/cameras{tokenQ}").GetArrayLength(), 2);
+                Assert(GetJson(http, $"/api/users{tokenQ}").EnumerateArray().Any(u => u.GetProperty("name").GetString() == "viewer"
+                        && u.GetProperty("cameras")[0].GetString() == "snapcam"), "stored in the configured spelling");
+                var evPath = $"/api/events/{Uri.EscapeDataString(evId)}";
+                foreach (var hidden in new[] { "/api/cameras/apicam/recording", "/API/Cameras/apicam/recording", evPath, evPath + "/thumb" })
+                {
+                    var asAdmin = (int)http.GetAsync(hidden + tokenQ).Result.StatusCode;
+                    var asViewer = (int)http.GetAsync(hidden + viewerQ).Result.StatusCode;
+                    Assert(asAdmin == 200 && asViewer == 404, $"{hidden}: admin {asAdmin}, limited viewer {asViewer}");
+                }
+                AssertEq((int)http.GetAsync($"/api/recordings/apicam{viewerQ}").Result.StatusCode, 404);
+                using (var req = new HttpRequestMessage(HttpMethod.Post, $"{evPath}/review{viewerQ}")
+                       { Content = new StringContent("""{"reviewed":true}""", Encoding.UTF8, "application/json") })
+                    AssertEq((int)http.Send(req).StatusCode, 404);
+                AssertEq(GetJson(http, $"/api/events{viewerQ}").GetArrayLength(), 0);
+                AssertEq(GetJson(http, $"/api/events{viewerQ}&camera=apicam").GetArrayLength(), 0);
+                AssertEq(GetJson(http, $"/api/events/days{viewerQ}").GetArrayLength(), 0);
+                AssertEq(GetJson(http, $"/api/events/search{viewerQ}&q=person").GetProperty("events").GetArrayLength(), 0);
+                AssertEq(GetJson(http, $"/api/events/search{tokenQ}&q=person").GetProperty("events").GetArrayLength(), 1);
+                Assert(GetJson(http, $"/api/events/days{tokenQ}").GetArrayLength() > 0, "the admin still sees every day");
+                using (var ws = new System.Net.WebSockets.ClientWebSocket())
+                {
+                    bool opened;
+                    try
+                    {
+                        ws.ConnectAsync(new Uri($"ws://127.0.0.1:{port}/api/stream?path=/apicam/mainStream&token={Uri.EscapeDataString(viewerTok)}"),
+                            CancellationToken.None).Wait(TimeSpan.FromSeconds(10));
+                        opened = ws.State == System.Net.WebSockets.WebSocketState.Open;
+                    }
+                    catch (AggregateException) { opened = false; }
+                    Assert(!opened, "a limited account cannot open another camera's live stream");
+                }
+                // A live stream open when its camera is taken away ends within seconds (the hub has no
+                // video yet, so without that it would wait out the 15 s describe timeout).
+                Assert(viewerCams("""{"cameras":["apicam"]}""").StartsWith("200"), "limited to the streamed camera");
+                using (var live = new System.Net.WebSockets.ClientWebSocket())
+                {
+                    live.ConnectAsync(new Uri($"ws://127.0.0.1:{port}/api/stream?path=/apicam/mainStream&token={Uri.EscapeDataString(viewerTok)}"),
+                        CancellationToken.None).Wait(TimeSpan.FromSeconds(10));
+                    Assert(live.State == System.Net.WebSockets.WebSocketState.Open, "a permitted camera's live stream opens");
+                    Assert(viewerCams("""{"cameras":["snapcam"]}""").StartsWith("200"), "the camera is taken away");
+                    var took = System.Diagnostics.Stopwatch.StartNew();
+                    try { live.ReceiveAsync(new byte[4096], CancellationToken.None).Wait(TimeSpan.FromSeconds(14)); }
+                    catch (AggregateException) { /* aborted by the server: ended */ }
+                    Assert(took.Elapsed < TimeSpan.FromSeconds(11) && live.State != System.Net.WebSockets.WebSocketState.Open,
+                        $"the open stream ends ({took.Elapsed.TotalSeconds:0.0}s, {live.State})");
+                }
+                Assert(viewerCams("""{"cameras":null}""").StartsWith("200"), "the limit is lifted");
+                AssertEq(GetJson(http, $"/api/cameras{viewerQ}").GetArrayLength(), 2);
+
                 // Per-camera recording switches round-trip through the API.
                 using (var req = new HttpRequestMessage(HttpMethod.Post, $"/api/cameras/apicam/recording{tokenQ}")
                        { Content = new StringContent("""{"events":true}""", Encoding.UTF8, "application/json") })
@@ -11076,6 +11414,45 @@ public static class SelfTest
             Console.WriteLine($"FAIL: {name}: {ex.Message}");
             _failed++;
         }
+    }
+
+    /// <summary>A closed peer must complete <see cref="BcConnection.Closed"/>, fault live
+    /// subscriptions, and make later subscribe/send fail at once instead of timing out.</summary>
+    private static async Task RunBcConnectionClosed()
+    {
+        var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            int port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+            var accept = listener.AcceptTcpClientAsync();
+            await using var conn = await BcConnection.ConnectAsync("127.0.0.1", port, TimeSpan.FromSeconds(5), CancellationToken.None);
+            using var peer = await accept;
+            Assert(!conn.Closed.IsCompleted, "a live connection is not closed");
+            using var live = conn.Subscribe(1);
+            peer.Close();
+            await conn.Closed.WaitAsync(TimeSpan.FromSeconds(5));
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            bool failed = false;
+            try { await live.ReceiveAsync(TimeSpan.FromSeconds(10), CancellationToken.None); }
+            catch (IOException) { failed = true; }
+            Assert(failed, "a live subscription is faulted by the close");
+            using var late = conn.Subscribe(2);
+            failed = false;
+            try { await late.ReceiveAsync(TimeSpan.FromSeconds(10), CancellationToken.None); }
+            catch (IOException) { failed = true; }
+            Assert(failed, "a subscription taken after the close fails too");
+            failed = false;
+            try
+            {
+                await conn.SendAsync(BcMessage.HeaderOnly(new BcMeta
+                    { MsgId = BcConstants.MsgIdPing, Class = BcConstants.ClassModern }), CancellationToken.None);
+            }
+            catch (IOException) { failed = true; }
+            Assert(failed, "sending on a closed connection fails");
+            Assert(sw.Elapsed < TimeSpan.FromSeconds(2), "all of it fails fast, not on the 10 s timeout");
+        }
+        finally { listener.Stop(); }
     }
 
     /// <summary>End-to-end transport test: a loopback "camera" performs the UDP

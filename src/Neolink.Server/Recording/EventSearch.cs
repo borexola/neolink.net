@@ -33,6 +33,19 @@ public sealed class EventQuery
         q.Cameras.AddRange(Cameras);
         return q;
     }
+
+    /// <summary>This query over the allowed cameras only (an account's limit). Empty
+    /// Cameras on the result means nothing is left to search, not "every camera".</summary>
+    public EventQuery ScopedTo(IReadOnlySet<string> allowed)
+    {
+        var q = new EventQuery { FromLocal = FromLocal, ToLocal = ToLocal, StrayDigits = StrayDigits, TimeOnly = TimeOnly };
+        q.Labels.AddRange(Labels);
+        q.NotLabels.AddRange(NotLabels);
+        q.Keywords.AddRange(Keywords);
+        q.Cameras.AddRange(Cameras.Count > 0 ? Cameras.Where(allowed.Contains) : allowed);
+        return q;
+    }
+
     public bool Structured => Keywords.Count == 0;
     public bool HasStructure =>
         Labels.Count > 0 || NotLabels.Count > 0 || Cameras.Count > 0 || FromLocal != null || ToLocal != null;

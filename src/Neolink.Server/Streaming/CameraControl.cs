@@ -1369,6 +1369,25 @@ public sealed class CameraControl : ICameraControl
         // camera has no HTTP API OR its HTTP API isn't answering imaging (the Lumus
         // has a dead HTTP API derived from its host) — provided ONVIF is available.
         bool useOnvif = _onvif != null && (_httpApi == null || _httpImagingWorks == false);
+        // The write is CONFIRMED — fold it into the cache: flip/mirror restart
+        // the camera's video pipeline, and a re-read racing that restart can
+        // still echo the OLD value; the cache must not resurrect pre-write state
+        // when the next sweep's fresh read fails.
+        void FoldIntoCache()
+        {
+            if (_httpFeaturesCache?.Image is { } ci)
+                _httpFeaturesCache = _httpFeaturesCache with
+                {
+                    Image = ci with
+                    {
+                        Bright = bright ?? ci.Bright, Contrast = contrast ?? ci.Contrast,
+                        Saturation = saturation ?? ci.Saturation, Hue = hue ?? ci.Hue,
+                        Sharpen = sharpen ?? ci.Sharpen,
+                        DayNight = dayNight ?? ci.DayNight, AntiFlicker = antiFlicker ?? ci.AntiFlicker,
+                        Flip = flip ?? ci.Flip, Mirror = mirror ?? ci.Mirror,
+                    },
+                };
+        }
         if (useOnvif)
         {
             // ONVIF covers brightness/contrast/saturation/sharpness + day/night; the
@@ -1379,6 +1398,7 @@ public sealed class CameraControl : ICameraControl
                     $"{CameraName} exposes picture settings over ONVIF, which can't set hue, anti-flicker or flip/mirror");
             await _onvif!.SetImagingAsync(bright, contrast, saturation, sharpen,
                 DayNightToIrCut(dayNight), wideDynamicRange: null, ct).ConfigureAwait(false);
+            FoldIntoCache();
             Log.Info($"{CameraName}: picture settings changed over ONVIF");
             return;
         }
@@ -1404,22 +1424,7 @@ public sealed class CameraControl : ICameraControl
             if (mirror is { } mi) isp["mirroring"] = mi ? 1 : 0;
             await _httpApi.SetIspAsync(isp, ct).ConfigureAwait(false);
         }
-        // The write is CONFIRMED — fold it into the cache: flip/mirror restart
-        // the camera's video pipeline, and a re-read racing that restart can
-        // still echo the OLD value; the cache must not resurrect pre-write state
-        // when the next sweep's fresh read fails.
-        if (_httpFeaturesCache?.Image is { } ci)
-            _httpFeaturesCache = _httpFeaturesCache with
-            {
-                Image = ci with
-                {
-                    Bright = bright ?? ci.Bright, Contrast = contrast ?? ci.Contrast,
-                    Saturation = saturation ?? ci.Saturation, Hue = hue ?? ci.Hue,
-                    Sharpen = sharpen ?? ci.Sharpen,
-                    DayNight = dayNight ?? ci.DayNight, AntiFlicker = antiFlicker ?? ci.AntiFlicker,
-                    Flip = flip ?? ci.Flip, Mirror = mirror ?? ci.Mirror,
-                },
-            };
+        FoldIntoCache();
         Log.Info($"{CameraName}: picture settings changed" +
                  $"{(flip != null || mirror != null ? " (flip/mirror restarts the video stream)" : "")}");
     }

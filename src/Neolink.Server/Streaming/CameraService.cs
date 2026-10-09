@@ -180,6 +180,7 @@ public sealed class CameraService : ILiveCameraSource
     // blind window right after a wake, where the ping scan is structurally deaf).
     // Ticks + detail are written from listener threads; the park loop consumes.
     private long _hintTicks;
+    private readonly Action<DateTime>? _persistWakeHint;
     private volatile string? _hintDetail;
     private DateTime _lastHintFire;
     /// <summary>Floor between hint-triggered connects. Scaled up by the fruitless-
@@ -218,7 +219,8 @@ public sealed class CameraService : ILiveCameraSource
     private static readonly TimeSpan ProbeWindow = TimeSpan.FromMinutes(15);
 
     public CameraService(CameraConfig config, StreamKind kind, IMediaSink hub, TimeSpan startupDelay,
-        TimeSpan? hintTrustWindow = null)
+        TimeSpan? hintTrustWindow = null, DateTime? lastWakeHintUtc = null,
+        Action<DateTime>? persistWakeHint = null)
     {
         _config = config;
         _kind = kind;
@@ -226,6 +228,10 @@ public sealed class CameraService : ILiveCameraSource
         _demandHub = hub as IStreamHub;
         _startupDelay = startupDelay;
         _hintTrustWindow = hintTrustWindow ?? TimeSpan.FromHours(WakeHintConfig.DefaultTrustHours);
+        _persistWakeHint = persistWakeHint;
+        // Restore trust only, not a fresh wake event (_hintDetail remains absent).
+        if (lastWakeHintUtc is { Kind: DateTimeKind.Utc } hint && hint <= DateTime.UtcNow)
+            _hintTicks = hint.Ticks;
     }
 
     public string Name => _config.Name;
@@ -289,7 +295,13 @@ public sealed class CameraService : ILiveCameraSource
     public void NotifyWakeHint(string source)
     {
         _hintDetail = source;
-        System.Threading.Interlocked.Exchange(ref _hintTicks, DateTime.UtcNow.Ticks);
+        var now = DateTime.UtcNow;
+        System.Threading.Interlocked.Exchange(ref _hintTicks, now.Ticks);
+        try { _persistWakeHint?.Invoke(now); }
+        catch (Exception ex)
+        {
+            Log.Warn($"{Tag}: could not persist wake hint timestamp ({ex.Message})");
+        }
     }
 
     /// <summary>True when the address is this camera — the configured host, or the
@@ -417,10 +429,12 @@ public sealed class CameraService : ILiveCameraSource
 
     // The router has recently proven it reports this camera's event pushes
     // (see _hintTrustWindow) — scan edges without a hint are then housekeeping.
-    private bool HintsLive => IsHintTrusted(Interlocked.Read(ref _hintTicks), DateTime.UtcNow.Ticks);
+    private bool HintsLive => HintsLiveAt(DateTime.UtcNow.Ticks);
+
+    internal bool HintsLiveAt(long nowTicks) => IsHintTrusted(Interlocked.Read(ref _hintTicks), nowTicks);
 
     internal bool IsHintTrusted(long hintTicks, long nowTicks) =>
-        hintTicks != 0 && nowTicks - hintTicks < _hintTrustWindow.Ticks;
+        hintTicks > 0 && nowTicks >= hintTicks && nowTicks - hintTicks < _hintTrustWindow.Ticks;
 
     // Log wording for the hint age and trust window: minutes read best up to two
     // hours, but a 72 h window as "4320 min" does not.
@@ -1134,7 +1148,16 @@ public sealed class CameraService : ILiveCameraSource
                 Log.Info($"{Tag}: idle — nothing recording and nobody watching; holding a control-only " +
                          "connection (sensors and controls stay live, video starts when someone watches)");
                 while (!MediaWanted)
-                    await Task.Delay(250, linked.Token).ConfigureAwait(false);
+                {
+                    // No video stream here to notice a dead connection: watch for it directly (issue #62).
+                    await Task.WhenAny(Task.Delay(250, linked.Token), camera.Closed, pingTask ?? camera.Closed)
+                        .ConfigureAwait(false);
+                    linked.Token.ThrowIfCancellationRequested();
+                    if (camera.Closed.IsCompleted)
+                        throw new IOException($"connection lost while idle ({camera.Closed.Result})");
+                    if (pingTask is { IsCompleted: true })
+                        throw new IOException("the camera stopped answering pings while idle");
+                }
                 Log.Info($"{Tag}: {(DemandNow ? "viewer asked" : "recording switched on")} — starting the video stream");
             }
 
@@ -1447,13 +1470,14 @@ public sealed class CameraService : ILiveCameraSource
         }
     }
 
-    /// <summary>Session-activity ping for UDP cameras: msg 93 every 5 s, like the
-    /// official client. An unanswered ping is logged once and pinging continues —
-    /// the request is what proves the client alive; a dead connection is noticed
-    /// by the video stream, which tears the session down.</summary>
+    private const int MaxMissedPings = 3;
+
+    /// <summary>Session-activity ping (msg 93 every 5 s, like the official client). A firmware that never
+    /// answers is tolerated; over TCP, one that answered and then misses three in a row ends the loop (issue #62).</summary>
     private async Task PingLoopAsync(IBcCamera camera, CancellationToken ct)
     {
-        bool quiet = false;
+        bool quiet = false, answered = false;
+        int missed = 0;
         while (!ct.IsCancellationRequested)
         {
             try { await Task.Delay(TimeSpan.FromSeconds(5), ct).ConfigureAwait(false); }
@@ -1461,10 +1485,17 @@ public sealed class CameraService : ILiveCameraSource
             try
             {
                 await camera.PingAsync(ct).ConfigureAwait(false);
+                answered = true;
+                missed = 0;
             }
             catch (OperationCanceledException) { return; }
             catch (Exception ex)
             {
+                if (answered && !_config.Udp && ++missed >= MaxMissedPings)
+                {
+                    Log.Debug($"{Tag}: {missed} pings unanswered in a row ({ex.Message}) — giving up on pings");
+                    return;
+                }
                 if (!quiet)
                 {
                     quiet = true;

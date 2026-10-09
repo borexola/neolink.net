@@ -2192,6 +2192,7 @@
         _applying = true;
         var applied = new List<string>();
         bool? appliedFlip = null, appliedMirror = null;
+        string? appliedDayNight = null;
         try
         {
             if (_pendingIr is { } ir && await PostAsync("led", new { state = ir }))
@@ -2254,6 +2255,7 @@
                 }))
             {
                 _pendingBright = _pendingContrast = _pendingSaturation = _pendingHue = _pendingSharpen = null;
+                appliedDayNight = _pendingDayNight;
                 _pendingDayNight = _pendingAntiFlicker = null;
                 (appliedFlip, appliedMirror) = (_pendingFlip, _pendingMirror);
                 _pendingFlip = _pendingMirror = null;
@@ -2346,14 +2348,17 @@
             if (_caps?.Features?.StreamSettings == true) _encCurrent = await GetAsync<List<ApiStreamEnc>?>("settings/stream");
             if (_http != null && await GetAsync<ApiHttpFeatures?>("httpfeatures") is { } freshHttp)
                 _http = MergeHttp(freshHttp, _http);
-            // A CONFIRMED flip/mirror write outranks the camera's echo for this
-            // refresh: the camera applies these by restarting its video pipeline
-            // and can still report the pre-write value while it does — the panel
-            // then looked like the toggle didn't take.
-            if ((appliedFlip != null || appliedMirror != null) && _http?.Image is { } img)
+            // A CONFIRMED flip/mirror/day-night write outranks the camera's echo
+            // for this refresh: the camera can still report the pre-write value
+            // while it applies — the panel then looked like the change didn't take.
+            if ((appliedFlip != null || appliedMirror != null || appliedDayNight != null) && _http?.Image is { } img)
                 _http = _http with
                 {
-                    Image = img with { Flip = appliedFlip ?? img.Flip, Mirror = appliedMirror ?? img.Mirror },
+                    Image = img with
+                    {
+                        Flip = appliedFlip ?? img.Flip, Mirror = appliedMirror ?? img.Mirror,
+                        DayNight = appliedDayNight ?? img.DayNight,
+                    },
                 };
         }
         finally

@@ -338,8 +338,11 @@ public sealed record ApiAuthStatus(bool Enabled, bool SetupRequired, bool ResetA
 /// <summary>POST /api/auth/login|setup reply.</summary>
 public sealed record ApiAuthToken(string Token, string User, bool Admin);
 
-/// <summary>GET /api/users — one account row.</summary>
-public sealed record ApiUserInfo(string Name, bool Admin);
+/// <summary>GET /api/users — one account row. Cameras: the only ones it may see; null = all.</summary>
+public sealed record ApiUserInfo(string Name, bool Admin, List<string>? Cameras = null);
+
+/// <summary>GET /api/admin/rtsp-users — the config.json "users" names (passwords never leave the server).</summary>
+public sealed record ApiRtspUsers(bool Writable, bool RestartNeeded, List<string> Users);
 
 /// <summary>GET/POST /api/cameras/{name}/recording — runtime recording switches.
 /// The capture schedule arrives in effective form: ScheduleDays is the full day

@@ -13,9 +13,8 @@ namespace Neolink.Config;
 /// candidate is validated through the normal <see cref="NeolinkConfig.Load"/>
 /// before it replaces the file (atomically, keeping a .bak of the previous
 /// version). Comments do NOT survive a rewrite — the UI says so.
-/// RTSP users are deliberately not editable here (credentials in a list deserve
-/// a text editor); cameras ARE editable via the camera helpers below, with
-/// passwords handled write-only by the API layer.
+/// Cameras and RTSP users are editable via the helpers below; their passwords
+/// are handled write-only by the API layer.
 /// </summary>
 public static class ConfigEditor
 {
@@ -270,20 +269,48 @@ public static class ConfigEditor
         return null;
     }
 
+    // ------------------------------------------------------------------ RTSP users
+
+    /// <summary>The top-level RTSP "users" array (any key spelling), created on demand.</summary>
+    public static JsonArray RtspUsers(JsonObject root) => TopLevelArray(root, "users");
+
+    /// <summary>One RTSP user entry by exact name; the loader reads "name" or "username".</summary>
+    public static JsonObject? FindRtspUser(JsonArray users, string name) =>
+        users.OfType<JsonObject>().FirstOrDefault(u => (GetString(u, "name") ?? GetString(u, "username")) == name);
+
+    /// <summary>Stores the password as "pass", dropping the "password" spelling the loader also reads.</summary>
+    public static void SetRtspPassword(JsonObject user, string password)
+    {
+        Set(user, "password", null);
+        Set(user, "pass", password);
+    }
+
+    /// <summary>Why a new RTSP username is unusable in a login or an rtsp:// URL; null when fine.</summary>
+    public static string? RtspUserNameError(string name)
+    {
+        if (name.Length is 0 or > 64) return "username is required (max 64 characters)";
+        if (name.Any(ch => char.IsWhiteSpace(ch) || char.IsControl(ch) || ":@/\\".Contains(ch)))
+            return "username must not contain spaces or : @ / \\";
+        return null;
+    }
+
     // ------------------------------------------------------------------ cameras
 
     /// <summary>The cameras array (any key spelling), created on demand.</summary>
-    public static JsonArray Cameras(JsonObject root)
+    public static JsonArray Cameras(JsonObject root) => TopLevelArray(root, "cameras");
+
+    /// <summary>A top-level array (any key spelling), created on demand.</summary>
+    private static JsonArray TopLevelArray(JsonObject root, string key)
     {
         string Normalized(string k) => k.Replace("_", "").Replace("-", "").ToLowerInvariant();
         foreach (var kv in root)
         {
-            if (Normalized(kv.Key) == "cameras" && kv.Value is JsonArray existing)
+            if (Normalized(kv.Key) == key && kv.Value is JsonArray existing)
                 return existing;
         }
-        var cams = new JsonArray();
-        root["cameras"] = cams;
-        return cams;
+        var array = new JsonArray();
+        root[key] = array;
+        return array;
     }
 
     /// <summary>One camera entry by name (case-insensitive, any key spelling).</summary>

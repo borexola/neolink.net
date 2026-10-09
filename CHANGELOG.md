@@ -4,6 +4,20 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
+## Unreleased
+
+### Added
+
+- **RTSP users in the web UI:** under **Server settings → Users**, the admin can add RTSP users, change their passwords and delete them. Passwords are never shown, and changes apply after a restart.
+- **Limit a web account to chosen cameras:** **cameras…** beside a normal user picks the cameras that account may see. The other cameras disappear from its live view, events, timeline and search, and the server refuses them. The change applies at once.
+
+### Fixed
+
+- **A camera idling on on-demand video that lost its connection** (reboot, Wi-Fi drop) reconnects within a minute, instead of answering every stream request with "stream not ready" until Neolink was restarted (#62).
+- **Wake-hint trust survives a restart.** The trust window carries on from the last hint instead of dropping back to scan-only until the next one (thanks to @dragners, #63).
+- **Day / night mode set over ONVIF** keeps showing the mode you applied, where the camera went on reporting the old one.
+- **A non-Reolink camera's detection no longer sticks on** when its end was lost in a dropped ONVIF poll, which recorded back-to-back max-length events of nothing. Neolink asks the camera to restate a detection that has been quiet for 2 minutes, and the log says when the camera itself keeps reporting one.
+
 ## 1.1.0
 
 ### Added

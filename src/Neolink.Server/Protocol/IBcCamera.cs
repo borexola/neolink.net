@@ -29,6 +29,9 @@ public interface IBcCamera : IAsyncDisposable
     /// UID-only battery camera can be liveness-scanned by ping without waking it.</summary>
     System.Net.IPAddress? RemoteIp { get; }
 
+    /// <summary>Completes when the connection is dead (with the reason); any further request fails at once.</summary>
+    Task<string> Closed { get; }
+
     Task LoginAsync(string username, string? password, CancellationToken ct, BcLoginMode? mode = null);
 
     /// <summary>

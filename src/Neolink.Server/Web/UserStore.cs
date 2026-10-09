@@ -20,6 +20,8 @@ public sealed class UserRecord
     /// <summary>Additional per-page settings blobs (raw JSON), keyed by page name
     /// (e.g. "timeline") — so each page owns its state without racing the main blob.</summary>
     public Dictionary<string, string>? Pages { get; set; }
+    /// <summary>The only cameras a normal user may see; null = all of them. Admins always see all.</summary>
+    public List<string>? Cameras { get; set; }
 }
 
 /// <summary>
@@ -287,9 +289,43 @@ public sealed class UserStore
         }
     }
 
-    public List<(string Name, bool Admin)> List()
+    public List<(string Name, bool Admin, List<string>? Cameras)> List()
     {
-        lock (_gate) return _users.Select(u => (u.Name, u.Admin)).ToList();
+        lock (_gate) return _users.Select(u => (u.Name, u.Admin, u.Cameras)).ToList();
+    }
+
+    /// <summary>Limits a normal user to these cameras (null = all); their open sessions follow at once.</summary>
+    public bool SetCameras(string name, List<string>? cameras)
+    {
+        lock (_gate)
+        {
+            var user = Find(name);
+            if (user == null || user.Admin) return false;
+            // A fresh list, never mutated after: requests read it without the lock.
+            user.Cameras = cameras?.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            SaveLocked();
+            return true;
+        }
+    }
+
+    /// <summary>Follows a camera rename (or a deletion, with null) in every account's camera list,
+    /// so a later camera of the old name is never granted by accident.</summary>
+    public void RenameCamera(string from, string? to)
+    {
+        if (from == to) return;
+        lock (_gate)
+        {
+            bool changed = false;
+            foreach (var u in _users)
+            {
+                if (u.Cameras?.Any(c => string.Equals(c, from, StringComparison.OrdinalIgnoreCase)) != true) continue;
+                var next = u.Cameras.Where(c => !string.Equals(c, from, StringComparison.OrdinalIgnoreCase)).ToList();
+                if (to != null) next.Add(to);
+                u.Cameras = next.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                changed = true;
+            }
+            if (changed) SaveLocked();
+        }
     }
 
     /// <summary>The admin account (the first user ever created).</summary>

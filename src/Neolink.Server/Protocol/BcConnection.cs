@@ -29,8 +29,11 @@ public sealed class BcConnection : IBcConnection
     private readonly SemaphoreSlim _sendLock = new(1, 1);
     private readonly CancellationTokenSource _cts;
     private readonly Task _readLoop;
+    private readonly TaskCompletionSource<string> _closed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private Exception? _closeFault; // set under _subGate once the read loop has ended
 
     public EncryptionState Encryption { get; } = new();
+    public Task<string> Closed => _closed.Task;
     public System.Net.IPEndPoint? RemoteEndpoint => _tcp.Client?.RemoteEndPoint as System.Net.IPEndPoint;
     private readonly BcContext _context;
 
@@ -122,12 +125,15 @@ public sealed class BcConnection : IBcConnection
         }
         finally
         {
+            var reason = fault ?? new EndOfStreamException("connection closed");
             lock (_subGate)
             {
+                _closeFault = reason;
                 foreach (var ch in _subscribers.Values)
-                    ch.Writer.TryComplete(fault ?? new EndOfStreamException("connection closed"));
+                    ch.Writer.TryComplete(reason);
                 _subscribers.Clear();
             }
+            _closed.TrySetResult(reason.Message);
         }
     }
 
@@ -151,6 +157,8 @@ public sealed class BcConnection : IBcConnection
         {
             if (!_subscribers.TryAdd(msgId, channel))
                 throw new InvalidOperationException($"Simultaneous subscription to message ID {msgId}");
+            // Subscribed after the read loop died: fail at once rather than on a reply timeout.
+            if (_closeFault != null) channel.Writer.TryComplete(_closeFault);
         }
         return new BcSubscription(msgId, channel.Reader, () => Unsubscribe(msgId));
     }
@@ -162,6 +170,7 @@ public sealed class BcConnection : IBcConnection
 
     public async Task SendAsync(BcMessage msg, CancellationToken ct)
     {
+        lock (_subGate) { if (_closeFault != null) throw new IOException("Connection closed", _closeFault); }
         var packet = BcCodec.Serialize(msg, Encryption);
         // Guarded like the read loop: talk audio sends ~30 messages/s.
         if (Log.Level <= LogLevel.Debug)
