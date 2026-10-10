@@ -843,6 +843,8 @@ public sealed class EventRecorder
         // nothing about what landed).
         if (closingWriter is { } cw && cw.Completion.IsCompletedSuccessfully && !cw.WroteVideo)
             rec.HasClip = false;
+        else if (closingWriter is { WroteVideo: true } done)
+            rec.ClipSeconds = Math.Round(done.DurationSeconds, 1);
         if (closingPreview is { } cp && cp.Completion.IsCompletedSuccessfully && !cp.WroteVideo)
             rec.HasPreview = false;
         rec.Ongoing = false;

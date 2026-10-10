@@ -84,6 +84,8 @@ public sealed record WebCameraInfo(string Name, List<WebStreamInfo> Streams, ICa
     /// it marks them, bounds how long a tile streams, and offers a keep-awake
     /// override. Null/false = stream it around the clock, as before.</summary>
     public Func<bool>? SleepFriendly { get; init; }
+    /// <summary>Holds a battery camera awake for a while (SD-card browsing), reconnecting a parked one.</summary>
+    public Action<TimeSpan>? HoldAwake { get; init; }
 }
 
 /// <summary>Everything the web API needs from the host.</summary>
@@ -290,7 +292,7 @@ public static class WebApi
         bool? ScheduleEnabled = null,
         bool? ArchiveEvents = null, bool? ArchiveContinuous = null, int? ArchiveRetentionDays = null,
         bool? WakeTimeline = null, bool? AiDescribe = null, string? AiContext = null,
-        bool? EmailEvents = null, bool? WebhookEvents = null);
+        bool? EmailEvents = null, bool? WebhookEvents = null, bool? SdFill = null);
     /// <summary>AI-description settings update. ApiKey is WRITE-ONLY: null keeps the
     /// stored one, "" clears it, a value sets it. It is never returned by GET.</summary>
     private sealed record AiSettingsRequest(bool? Enabled, string? Provider,
@@ -2292,6 +2294,23 @@ public static class WebApi
         // No-op when MQTT isn't configured; a failed publish heals on the next refresh.
         void NudgeHa(string cameraName) => _ = o.OnCameraChanged?.Invoke(cameraName);
 
+        // SD-card browsing counts as watching: a battery camera is held for a few minutes
+        // and a parked session is reconnected first (the camera itself must be awake).
+        // Wakes a sleeping battery camera for its card and waits up to a minute for it; false = still asleep.
+        async Task<bool> SdHoldAsync(string name, ICameraControl control, CancellationToken ct)
+        {
+            var cam = cameras.FirstOrDefault(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase));
+            if (cam?.SleepFriendly?.Invoke() != true) return true;
+            cam.HoldAwake?.Invoke(TimeSpan.FromMinutes(3));
+            if (control.Online) return true;
+            Log.Info($"{name}: waking the camera for its SD card");
+            for (int i = 0; i < 120 && !control.Online; i++)
+                await Task.Delay(500, ct);
+            if (!control.Online) Log.Warn($"{name}: the camera did not wake within a minute for its SD card");
+            return control.Online;
+        }
+        const string Asleep = "the camera is asleep and did not wake within a minute; try again";
+
         app.MapGet("/api/cameras/{name}/capabilities", (string name, HttpContext ctx) =>
             ExecAsync(name, ctx, mutating: false, async (control, reqCt) =>
             {
@@ -3467,6 +3486,8 @@ public static class WebApi
             {
                 if (year is not { } y || y is < 2000 or > 2100 || month is not { } m || m is < 1 or > 12)
                     return Results.Json(new { error = "provide year and month" }, statusCode: 400);
+                if (!await SdHoldAsync(name, control, reqCt))
+                    return Results.Json(new { error = Asleep }, statusCode: 503);
                 var days = await control.GetSdRecordingDaysAsync(y, m, reqCt);
                 if (days == null)
                     return Results.Json(new { error = control.SdFailure ?? "this camera's SD card cannot be searched" },
@@ -3475,19 +3496,48 @@ public static class WebApi
             }));
 
         // The recordings of one (camera-local) day.
-        app.MapGet("/api/cameras/{name}/sdcard/recordings", (string name, string? date, string? stream, HttpContext ctx) =>
+        // quiet=1 (the timeline's card strip): never wakes a sleeping camera, answers from a
+        // 5-minute cache, and says so when the camera is offline instead of failing.
+        var sdListCache = new System.Collections.Concurrent.ConcurrentDictionary<string, (DateTime At, object Body)>();
+        app.MapGet("/api/cameras/{name}/sdcard/recordings", (string name, string? date, string? stream, string? quiet, HttpContext ctx) =>
             ExecAsync(name, ctx, mutating: false, async (control, reqCt) =>
             {
                 if (!DateOnly.TryParseExact(date, "yyyy-MM-dd", out var day))
                     return Results.Json(new { error = "provide date: yyyy-MM-dd" }, statusCode: 400);
                 if (stream is not (null or "main" or "sub"))
                     return Results.Json(new { error = "stream must be main or sub" }, statusCode: 400);
-                var files = await control.GetSdRecordingsAsync(day, reqCt, stream);
+                bool isQuiet = quiet == "1";
+                var cacheKey = $"{name}|{day:yyyy-MM-dd}|{stream}";
+                if (isQuiet && sdListCache.TryGetValue(cacheKey, out var hit) && DateTime.UtcNow - hit.At < TimeSpan.FromMinutes(5))
+                    return Results.Json(hit.Body);
+                if (isQuiet && !control.Online)
+                {
+                    // Asleep: the last listing anyone fetched (a fill, the SD view) stands in.
+                    var last = control.LastSdRecordings(day, stream);
+                    return Results.Json(new
+                    {
+                        date = day.ToString("yyyy-MM-dd"),
+                        offline = true,
+                        asOf = last?.At,
+                        recordings = (last?.List ?? Array.Empty<SdRecording>()).Select(f => new
+                        {
+                            file = f.Name, start = f.Start, end = f.End, sizeBytes = f.SizeBytes, streamType = f.StreamType,
+                        }).ToList(),
+                    });
+                }
+                if (!isQuiet && !await SdHoldAsync(name, control, reqCt))
+                    return Results.Json(new { error = Asleep }, statusCode: 503);
+                IReadOnlyList<SdRecording>? files = null;
+                try { files = await control.GetSdRecordingsAsync(day, reqCt, stream, preempt: !isQuiet); }
+                catch (Exception ex) when (isQuiet && ex is not OperationCanceledException) { Log.Debug($"{name}: quiet card listing failed: {ex.Message}"); }
+                if (files == null && isQuiet && control.LastSdRecordings(day, stream) is { } stale)
+                    files = stale.List; // the camera is up but busy: the last listing stands in
                 if (files == null)
-                    return Results.Json(new { error = "this camera's SD card cannot be searched" }, statusCode: 404);
-                return Results.Json(new
+                    return Results.Json(new { error = control.SdFailure ?? "this camera's SD card cannot be searched" }, statusCode: 404);
+                var body = new
                 {
                     date = day.ToString("yyyy-MM-dd"),
+                    offline = false,
                     recordings = files.Select(f => new
                     {
                         file = f.Name,
@@ -3495,8 +3545,15 @@ public static class WebApi
                         end = f.End,
                         sizeBytes = f.SizeBytes,
                         streamType = f.StreamType,
-                    }),
-                });
+                    }).ToList(),
+                };
+                if (isQuiet)
+                {
+                    sdListCache[cacheKey] = (DateTime.UtcNow, body);
+                    foreach (var (k, v) in sdListCache)
+                        if (DateTime.UtcNow - v.At > TimeSpan.FromMinutes(5)) sdListCache.TryRemove(k, out _);
+                }
+                return Results.Json(body);
             }));
 
         // Streams one recording straight off the camera (no server-side copy).
@@ -3505,12 +3562,15 @@ public static class WebApi
         // "dl" binds as a STRING on purpose: the UI sends ?dl=1, and ASP.NET's
         // bool binding rejects "1" with an empty 400 BEFORE the handler runs —
         // invisible in our logs (field report: every SD download failed 400).
-        app.MapGet("/api/cameras/{name}/sdcard/download", (string name, string? file, string? dl, string? probe, string? repair, HttpContext ctx) =>
+        app.MapGet("/api/cameras/{name}/sdcard/download", (string name, string? file, string? dl, string? probe, string? repair, string? status, HttpContext ctx) =>
             ExecAsync(name, ctx, mutating: false, async (control, reqCt) =>
             {
                 var fileName = (file ?? "").Trim();
                 if (fileName.Length is 0 or > 255 || fileName.Any(char.IsControl))
                     return Results.Json(new { error = "provide file: a name from /sdcard/recordings" }, statusCode: 400);
+                // status=1: whether the whole clip is in (a clip still arriving plays at 1x only).
+                if (status == "1") // a recording streamed straight from the camera has no spool: nothing is arriving
+                    return Results.Json(new { complete = !SdSpool.IsSpooling(name, fileName) });
                 // The player asks why its last attempt failed; a <video> can't read the error body.
                 if (probe == "1")
                     return SdSpool.RecentFailure(name, fileName) is { } why
@@ -3529,17 +3589,43 @@ public static class WebApi
                 // repair=1: the browser could not decode the clip (damaged as recorded); serve a
                 // re-encode with the damage concealed, the way VLC and the Reolink app play it.
                 bool repairing = repair == "1";
+                // A <video> asks for its file twice at once (a probe, then ranges): the second
+                // request must find the first's spool, not start a second camera transfer.
+                using var opening = await SdSpool.OpeningAsync(name, fileName, reqCt);
                 if (await SdSpool.TryGetAsync(name, fileName, reqCt) is { } cached)
                     return Results.File(repairing ? await SdSpool.RepairAsync(name, fileName, cached, reqCt) : cached,
                         contentType, fileDownloadName: downloadName, enableRangeProcessing: true);
                 try
                 {
+                    var clock = System.Diagnostics.Stopwatch.StartNew();
+                    if (!await SdHoldAsync(name, control, reqCt)) throw new InvalidOperationException(Asleep);
+                    var held = clock.Elapsed;
                     var download = await control.OpenSdRecordingAsync(fileName, reqCt);
+                    var opened = clock.Elapsed;
                     // FLV and Baichuan transfers are only playable once spooled (remuxed/checked).
                     if (download.NeedsSpool || download.Length is { } len && len <= SdSpool.MaxBytes)
                     {
-                        var spooled = await SdSpool.SpoolAsync(name, fileName, download, reqCt);
-                        if (repairing) spooled = await SdSpool.RepairAsync(name, fileName, spooled, reqCt);
+                        string spooled;
+                        if (repairing)
+                            spooled = await SdSpool.RepairAsync(name, fileName,
+                                await SdSpool.SpoolAsync(name, fileName, download, reqCt), reqCt);
+                        else
+                        {
+                            // A slow camera's clip plays while it still arrives, once its index is in.
+                            var (ready, growing) = await SdSpool.ServeAsync(name, fileName, download, reqCt);
+                            if (growing != null)
+                            {
+                                Log.Info($"{name}: SD recording '{Path.GetFileName(fileName)}' playing after {clock.Elapsed.TotalSeconds:0.0} s " +
+                                         "while the rest arrives");
+                                ctx.Response.Headers.AcceptRanges = "none";
+                                ctx.Response.RegisterForDispose(growing);
+                                return Results.Stream(growing, contentType, fileDownloadName: downloadName);
+                            }
+                            spooled = ready!;
+                        }
+                        Log.Info($"{name}: SD recording '{Path.GetFileName(fileName)}' ready after {clock.Elapsed.TotalSeconds:0.0} s " +
+                                 $"(session {held.TotalSeconds:0.0} s, open {(opened - held).TotalSeconds:0.0} s, " +
+                                 $"fetch and prepare {(clock.Elapsed - opened).TotalSeconds:0.0} s)");
                         return Results.File(spooled, contentType, fileDownloadName: downloadName,
                             enableRangeProcessing: true);
                     }
@@ -3604,6 +3690,10 @@ public static class WebApi
                 hasClip = r.HasClip,
                 hasThumb = r.HasThumb,
                 hasPreview = r.HasPreview,
+                hasCameraClip = r.HasCameraClip,
+                cameraClipStart = r.CameraClipStartUtc,
+                cameraClipSeconds = r.CameraClipSeconds,
+                clipSeconds = r.ClipSeconds,
                 aiDescription = r.AiDescription,
                 aiObjects = r.AiObjects,
                 aiLevel = r.AiLevel,
@@ -3792,6 +3882,23 @@ public static class WebApi
                     name = rec != null
                         ? $"{Neolink.Recording.EventStore.SafeName(rec.Camera)} {rec.StartUtc.ToLocalTime():yyyy-MM-dd HHmmss}.mp4"
                         : $"{id}.mp4";
+                return ServeMp4(ctx, path, name);
+            });
+
+            // The camera's own recording of the event, fetched from its SD card (SdFill).
+            app.MapGet("/api/events/{id}/camera", (string id, HttpContext ctx) =>
+            {
+                if (EventMediaAuth(ctx, id) is { } denied) return denied;
+                var path = events.ArtifactPath(id, "camera.mp4");
+                if (path == null)
+                    return Results.Json(new { error = "no camera copy for this event" }, statusCode: 404);
+                var rec = events.Find(id);
+                SetArtifactCaching(ctx, rec);
+                string? name = null;
+                if (ctx.Request.Query["dl"] == "1")
+                    name = rec != null
+                        ? $"{Neolink.Recording.EventStore.SafeName(rec.Camera)} {rec.StartUtc.ToLocalTime():yyyy-MM-dd HHmmss} camera.mp4"
+                        : $"{id} camera.mp4";
                 return ServeMp4(ctx, path, name);
             });
 
@@ -3998,6 +4105,10 @@ public static class WebApi
                     // The passive wake tap that replaces 24/7 on those cameras —
                     // self-wake footage lands on the timeline at zero battery cost.
                     wakeTimeline = s.WakeTimeline,
+                    // The camera's own copy of each event from its SD card: on by
+                    // default for battery cameras; the panel offers it to those only.
+                    sdFillAvailable = cam.SleepFriendly?.Invoke() == true || s.SdFill == true,
+                    sdFill = s.SdFill ?? (cam.SleepFriendly?.Invoke() == true),
                     // Always the EFFECTIVE list (never null): unset means the default
                     // set, which excludes the opt-in perimeter labels — the UI chips
                     // must show those as off until the user ticks them.
@@ -4170,6 +4281,7 @@ public static class WebApi
                     archiveRetentionDays: Retention(req.ArchiveRetentionDays),
                     setArchiveRetention: req.ArchiveRetentionDays != null,
                     wakeTimeline: req.WakeTimeline,
+                    sdFill: req.SdFill, setSdFill: req.SdFill != null,
                     aiDescribe: req.AiDescribe,
                     // Scene notes ride the prompt on every event — bound them so a
                     // paste-happy admin can't balloon each request. "" clears.

@@ -323,17 +323,23 @@
                         <span class="player-group" title="@T["Playback speed"]">
                             @foreach (var s in Speeds)
                             {
-                                <button class="chip @(_speed == s ? "chip-active" : "")" @onclick="() => SetSpeedAsync(s)">@FormatSpeed(s)</button>
+                                <button class="chip @(_speed == s ? "chip-active" : "")" disabled="@(_sdPartial && s > 1)"
+                                        title="@(_sdPartial && s > 1 ? T["Faster playback once the whole clip has arrived"] : "")"
+                                        @onclick="() => SetSpeedAsync(s)">@FormatSpeed(s)</button>
                             }
                         </span>
-                        <span class="player-div" aria-hidden="true">|</span>
-                        <span class="player-group" title="@T["Recording quality"]">
-                            <button class="chip @(_sdSub ? "" : "chip-active")" title="@T["Full-quality main-stream recording"]"
-                                    @onclick="() => SetSdQualityAsync(sub: false)">HD</button>
-                            <button class="chip @(_sdSub ? "chip-active" : "")"
-                                    title="@T["Low-res sub-stream recording from the card, when the camera kept one"]"
-                                    @onclick="() => SetSdQualityAsync(sub: true)">SD</button>
-                        </span>
+                        @* Hidden once a day's search shows the camera keeps no copy in the other quality. *@
+                        @if (!SdOtherQualityAbsent(sr))
+                        {
+                            <span class="player-div" aria-hidden="true">|</span>
+                            <span class="player-group" title="@T["Recording quality"]">
+                                <button class="chip @(_sdSub ? "" : "chip-active")" title="@T["Full-quality main-stream recording"]"
+                                        @onclick="() => SetSdQualityAsync(sub: false)">HD</button>
+                                <button class="chip @(_sdSub ? "chip-active" : "")"
+                                        title="@T["Low-res sub-stream recording from the card, when the camera kept one"]"
+                                        @onclick="() => SetSdQualityAsync(sub: true)">SD</button>
+                            </span>
+                        }
                     </div>
                     @if (_sdNote != null)
                     {
@@ -484,9 +490,10 @@
                                 }
                             </span>
                         </div>
-                        @if (sel.HasClip && !sel.Ongoing)
+                        @if ((sel.HasClip || sel.HasCameraClip) && !sel.Ongoing)
                         {
-                            <a class="chip" href="@(Artifact(sel, "clip") + "&dl=1")"
+                            @* Saves whichever copy is playing: the camera's own, or Neolink's. *@
+                            <a class="chip" href="@(Artifact(sel, sel.HasCameraClip && _cameraCopy ? "camera" : "clip") + "&dl=1")"
                                title="@T["Save this recording as a file"]">
                                 @UiIcon.Render("download", 13) @T["Download"]
                             </a>
@@ -536,7 +543,7 @@
                             <span class="event-ai-text event-ai-pending">🧠 @T["AI is describing this event; refresh in a moment to see the text…"]</span>
                         </div>
                     }
-                    @if (sel.HasClip)
+                    @if (sel.HasClip || sel.HasCameraClip)
                     {
                         @* zoom-on: the recorded clip gets the same digital zoom as live
                            views — wheel/pinch to zoom, drag to pan, HUD buttons at the side. *@
@@ -568,18 +575,35 @@
                                     <button class="chip @(_speed == s ? "chip-active" : "")" @onclick="() => SetSpeedAsync(s)">@FormatSpeed(s)</button>
                                 }
                             </span>
-                            @if (sel.HasPreview)
+                            @if (sel.HasCameraClip || sel.HasPreview)
                             {
                                 <span class="player-div" aria-hidden="true">|</span>
                                 <span class="player-group" title="@T["Recording quality"]">
-                                    <button class="chip @(_sd ? "" : "chip-active")" title="@T["Full-quality main-stream recording"]"
-                                            @onclick="() => SetStreamAsync(sd: false)">HD</button>
-                                    <button class="chip @(_sd ? "chip-active" : "")"
-                                            title="@T["Low-res sub-stream recording: smoother fast-forward on slow storage"]"
-                                            @onclick="() => SetStreamAsync(sd: true)">SD</button>
+                                    @if (sel.HasCameraClip)
+                                    {
+                                        <button class="chip @(_cameraCopy ? "chip-active" : "")"
+                                                title="@T["The camera's own recording, fetched from its SD card; it starts at the camera's trigger"]"
+                                                @onclick="() => SetCameraCopyAsync(true)">@T["Camera"]</button>
+                                    }
+                                    <button class="chip @(!_cameraCopy && !_sd ? "chip-active" : "")" title="@T["Full-quality main-stream recording"]"
+                                            @onclick="async () => { _cameraCopy = false; await SetStreamAsync(sd: false); }">HD</button>
+                                    @if (sel.HasPreview)
+                                    {
+                                        <button class="chip @(!_cameraCopy && _sd ? "chip-active" : "")"
+                                                title="@T["Low-res sub-stream recording: smoother fast-forward on slow storage"]"
+                                                @onclick="async () => { _cameraCopy = false; await SetStreamAsync(sd: true); }">SD</button>
+                                    }
                                 </span>
                             }
                         </div>
+                        @if (sel.HasCameraClip && _cameraCopy && sel.CameraClipStart is { } camStart)
+                        {
+                            var lead = (sel.Start - camStart).TotalSeconds;
+                            <div class="event-sub">
+                                @(lead >= 1 ? T.F("The camera's own recording, from its SD card; it starts {0} s before Neolink's.", Math.Round(lead))
+                                            : T["The camera's own recording, from its SD card."])
+                            </div>
+                        }
                     }
                     else
                     {
@@ -841,7 +865,7 @@
         if (_pendingVideoUrl is { } url)
         {
             _pendingVideoUrl = null;
-            await JS.InvokeVoidAsync("neolink.eventPlayer", "ev-video", url, _speed,
+            await JS.InvokeVoidAsync("neolink.eventPlayer", "ev-video", url, _sdMode && _sdPartial ? 1 : _speed,
                 _selected is { } fb ? PlayerFallback(fb) : null, _autoplay, _selected?.Ongoing == true);
         }
 
@@ -1346,7 +1370,7 @@
                 $"/api/cameras/{cam}/sdcard/days?year={_sdDate.Year}&month={_sdDate.Month}",
                 timeoutSeconds: 30);
             var daysError = days == null ? _lastApiError : null;
-            _sdDays = days?.Days ?? new List<int>();
+            _sdDays = (days?.Days ?? new List<int>()).OrderByDescending(d => d).ToList(); // newest first
             var recs = await GetJsonAsync<ApiSdRecordings>(
                 $"/api/cameras/{cam}/sdcard/recordings?date={_sdDate:yyyy-MM-dd}",
                 timeoutSeconds: 95);
@@ -1364,7 +1388,7 @@
                 // hid real failures behind an innocent-looking message.
                 _sdError = T["The camera answered the calendar but not the file search; it may be busy streaming. Hit refresh to retry; the server log has details."];
             }
-            _sdRecs = recs?.Recordings ?? new List<ApiSdRecording>();
+            _sdRecs = (recs?.Recordings ?? new List<ApiSdRecording>()).OrderByDescending(r => r.Start).ToList();
         }
         catch (OperationCanceledException)
         {
@@ -1398,7 +1422,40 @@
         _sdSelected = r;
         _sdNote = null;
         _sdPlaying = await SdTwinAsync(r, _sdSub) ?? r;
+        _sdPartial = true; // 1x until the whole clip is in
         _pendingVideoUrl = SdUrl(_sdPlaying); // attach after the <video> renders
+        _ = PollSdStatusAsync(_sdPlaying);
+    }
+
+    /// <summary>True while the selected clip is still arriving from the camera: it plays at 1x only.</summary>
+    private bool _sdPartial;
+    private int _sdPollSeq;
+
+    private async Task PollSdStatusAsync(ApiSdRecording r)
+    {
+        int seq = ++_sdPollSeq;
+        var cam = Uri.EscapeDataString(_sdCamera);
+        for (int i = 0; i < 150 && seq == _sdPollSeq; i++)
+        {
+            await Task.Delay(i == 0 ? 500 : 2000);
+            if (seq != _sdPollSeq) return;
+            try
+            {
+                using var res = await Http.SendAsync(Req(HttpMethod.Get,
+                    $"/api/cameras/{cam}/sdcard/download?file={Uri.EscapeDataString(r.File)}&status=1"));
+                if (!res.IsSuccessStatusCode) continue;
+                var j = await res.Content.ReadFromJsonAsync<JsonElement>();
+                if (j.TryGetProperty("complete", out var c) && c.GetBoolean())
+                {
+                    _sdPartial = false;
+                    StateHasChanged();
+                    if (_speed != 1)
+                        await JS.InvokeVoidAsync("neolink.eventPlayer", "ev-video", SdUrl(r), _speed, null, _autoplay, false);
+                    return;
+                }
+            }
+            catch { }
+        }
     }
 
     /// <summary>SD-card player: the sub-stream twin is wanted; what the player holds (the
@@ -1407,6 +1464,10 @@
     private ApiSdRecording? _sdPlaying;
     private string? _sdNote;
     private readonly Dictionary<string, List<ApiSdRecording>> _sdStreamLists = new();
+
+    /// <summary>True once the day's search for the other quality came back empty: the camera keeps one copy only.</summary>
+    private bool SdOtherQualityAbsent(ApiSdRecording r) =>
+        _sdStreamLists.TryGetValue($"{(r.StreamType == "sub" ? "main" : "sub")}:{r.Start:yyyy-MM-dd}", out var list) && list.Count == 0;
 
     /// <summary>The recording's copy in the other stream (same start, within 5 s), or null when the card has none.</summary>
     private async Task<ApiSdRecording?> SdTwinAsync(ApiSdRecording r, bool sub)
@@ -1443,7 +1504,9 @@
         _sdSub = sub;
         _sdNote = null;
         _sdPlaying = twin;
-        await JS.InvokeVoidAsync("neolink.eventPlayer", "ev-video", SdUrl(twin), _speed, null, _autoplay, false);
+        _sdPartial = true;
+        await JS.InvokeVoidAsync("neolink.eventPlayer", "ev-video", SdUrl(twin), 1, null, _autoplay, false);
+        _ = PollSdStatusAsync(twin);
     }
 
     /// <summary>Gives the server the camera's recording password (kept in memory, sent
@@ -1660,15 +1723,28 @@
         return $"{url}{(url.Contains('?') ? '&' : '?')}v={ev.ArtifactVersion}";
     }
 
+    /// <summary>The camera's own copy (from its SD card) plays first when the event has one;
+    /// false switches to Neolink's clip. Reset per event.</summary>
+    private bool _cameraCopy = true;
+
     private string PlayerUrl(ApiEvent ev) =>
-        _sd && ev.HasPreview ? Artifact(ev, "preview") : Artifact(ev, "clip");
+        ev.HasCameraClip && _cameraCopy ? Artifact(ev, "camera")
+        : _sd && ev.HasPreview ? Artifact(ev, "preview") : Artifact(ev, "clip");
 
     /// <summary>The other stream is the silent error fallback, both ways: a
     /// preview can be an empty capture (sub stream never delivered a frame)
     /// while the clip plays, and a device out of video decoders can fail the
-    /// main stream but manage the sub-stream.</summary>
+    /// main stream but manage the sub-stream. A camera copy falls back to Neolink's clip.</summary>
     private string? PlayerFallback(ApiEvent ev) =>
-        ev.HasPreview && ev.HasClip ? Artifact(ev, _sd ? "clip" : "preview") : null;
+        ev.HasCameraClip && _cameraCopy ? (ev.HasClip ? Artifact(ev, "clip") : null)
+        : ev.HasPreview && ev.HasClip ? Artifact(ev, _sd ? "clip" : "preview") : null;
+
+    private async Task SetCameraCopyAsync(bool on)
+    {
+        _cameraCopy = on;
+        if (_selected is { } ev && (ev.HasClip || ev.HasCameraClip))
+            await JS.InvokeVoidAsync("neolink.eventPlayer", "ev-video", PlayerUrl(ev), _speed, PlayerFallback(ev), _autoplay, ev.Ongoing);
+    }
 
     /// <summary>Resolve a ?event={id} deep link: find the event (the rolling list, or a
     /// direct lookup for older ones), bring its day into the list, and play it.</summary>
@@ -1705,9 +1781,10 @@
 
     private async Task SelectAsync(ApiEvent ev)
     {
+        _cameraCopy = true; // the camera's own copy, when the event has one, plays first
         // _speed deliberately survives: the user's last pick applies to every event.
         _selected = ev;
-        if (ev.HasClip) _pendingVideoUrl = PlayerUrl(ev); // attach after the <video> renders
+        if (ev.HasClip || ev.HasCameraClip) _pendingVideoUrl = PlayerUrl(ev); // attach after the <video> renders
         WatchOngoing(ev);
         // Viewing an event is reviewing it: mark it the moment it's opened, not on close.
         if (!ev.Reviewed) await MarkReviewedAsync(ev);
@@ -1989,7 +2066,7 @@
         if (_sdMode)
         {
             if ((_sdPlaying ?? _sdSelected) is { } sr)
-                await JS.InvokeVoidAsync("neolink.eventPlayer", "ev-video", SdUrl(sr), s, null, _autoplay, false);
+                await JS.InvokeVoidAsync("neolink.eventPlayer", "ev-video", SdUrl(sr), _sdPartial ? 1 : s, null, _autoplay, false);
         }
         else if (_selected is { HasClip: true } ev)
             await JS.InvokeVoidAsync("neolink.eventPlayer", "ev-video", PlayerUrl(ev), s, PlayerFallback(ev), _autoplay, ev.Ongoing);

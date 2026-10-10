@@ -204,11 +204,14 @@ address. Repeat the power-cycle, or switch to A1.
   or no hints, connect and start receiving video. The hint removes the
   *detection* latency, not the wake-up physics.
 - **The camera's own SD card has the full event**: it records locally the
-  instant it wakes, pre-roll included. On the models tested so far there is
-  no working API to pull those clips off the card (the HTTP download command
-  crashes the firmware, and the app's playback path is encrypted), so that
-  pre-roll currently stays on the card. Reading it back after the fact is an
-  open research line, not a promise.
+  instant it wakes, pre-roll included. Neolink fetches that copy over
+  Baichuan once the event ends, while the camera is still awake (it is never
+  woken for it), keeps it beside its own clip and plays it first. On by
+  default for battery cameras, under the camera's Recording tab; needs a
+  mounted card with SD recording on.
+  The timeline's **SD card** switch (beta, off by default, remembered per
+  account) plays that copy for the seconds before Neolink's own recording
+  began; Neolink's footage always wins where both exist.
 
 ### Option B: firewall log (OPNsense/pfSense)
 
@@ -441,7 +444,8 @@ merge.
 | `brief fast-ping blip (N sample(s)) ended before the 3-sample wake confirmation` | The radio went flat too briefly to be a confirmed wake. Frequent blips near a miss = wakes too short for the scan; none = the PIR never fired. |
 | `wake hint (router saw …) — the camera is calling home for an event` | Router-fed instant wake (option B); connecting at once. |
 | `wake hint (… called the decoy push service …)` | Push-decoy instant wake (option A); connecting at once. |
-| `[wake-diag] REAL self-wake / LIKELY OUR PROBE / SUSPECT FALSE ASLEEP / HINT MISFIRE / INCONCLUSIVE` | Post-mortem of each wake with evidence. Paste this into issues. |
+| `self-wake caught (router wake hint): a detection followed` | The wake was real; nothing to do. |
+| `[wake-diag] LIKELY OUR PROBE / SUSPECT FALSE ASLEEP / HINT MISFIRE / INCONCLUSIVE` | Post-mortem of a wake that caught nothing. The evidence line behind it is logged at debug level; paste both into issues. |
 
 ### Timings
 

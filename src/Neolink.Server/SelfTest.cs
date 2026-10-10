@@ -1066,9 +1066,67 @@ public static class SelfTest
             var wrapped = new byte[64];
             "1001"u8.CopyTo(wrapped);
             wrapped[35] = 0x20; // ftyp box size 32, big-endian
-            "ftyp"u8.CopyTo(wrapped.AsSpan(36));
+            "ftypmp42"u8.CopyTo(wrapped.AsSpan(36));
             AssertEq(Web.SdSpool.Mp4Offset(wrapped) ?? -1, 32);
             Assert(Web.SdSpool.Mp4Offset(new byte[64]) == null, "no ftyp, no offset");
+            // An Argus download: the header, ~180 KB of thumbnails, then the MP4.
+            var far = new byte[200_000];
+            "1002"u8.CopyTo(far);
+            Random.Shared.NextBytes(far.AsSpan(32, 183_000));
+            far[183_379] = 0x18;
+            "ftypiso4"u8.CopyTo(far.AsSpan(183_380));
+            AssertEq(Web.SdSpool.Mp4Offset(far) ?? -1, 183_376);
+            // The index is whole once ftyp and moov have both arrived.
+            far[183_379] = 0x18; // ftyp box: 24 bytes
+            far[183_376 + 24 + 3] = 0x40; // moov box: 64 bytes
+            "moov"u8.CopyTo(far.AsSpan(183_376 + 24 + 4));
+            AssertEq(Web.SdSpool.Mp4IndexEnd(far, 183_376) ?? -1, 183_376 + 24 + 64);
+            Assert(Web.SdSpool.Mp4IndexEnd(far.AsSpan(0, 183_376 + 40), 183_376) == null, "moov still arriving");
+        });
+
+        Test("SD spool: a slow camera's clip plays from its index while the rest arrives", () =>
+        {
+            // A download like the Argus sends: a BcMedia header, junk, then ftyp + moov + mdat,
+            // trickled through a pipe; the player gets the MP4 part, whole, before the copy ends.
+            var mp4 = new byte[600 * 1024];
+            Random.Shared.NextBytes(mp4);
+            mp4.AsSpan(0, 4).Clear(); mp4[3] = 0x18; "ftypiso4"u8.CopyTo(mp4.AsSpan(4));
+            mp4.AsSpan(24, 4).Clear(); mp4[24 + 2] = 0x10; "moov"u8.CopyTo(mp4.AsSpan(28)); // moov: 4096 bytes
+            // mvhd (version 0): a 60 s clip, so its bitrate is far below the trickle and playback may start early.
+            mp4.AsSpan(32, 108).Clear(); mp4[35] = 108; "mvhd"u8.CopyTo(mp4.AsSpan(36));
+            BinaryPrimitives.WriteUInt32BigEndian(mp4.AsSpan(32 + 20), 1000);
+            BinaryPrimitives.WriteUInt32BigEndian(mp4.AsSpan(32 + 24), 60_000);
+            byte[] raw = [.. "1002"u8.ToArray(), .. new byte[28], .. new byte[50_000], .. mp4];
+            AssertEq(Web.SdSpool.Mp4Duration(raw, 50_032) ?? -1, 60.0);
+            Assert(!Web.SdSpool.EnoughToPlay(written: 400_000, indexEnd: 50_000, expectedBytes: 3_000_000, durationSeconds: 17, elapsedSeconds: 2),
+                "2 s buffered, 13 s still to come: wait");
+            Assert(Web.SdSpool.EnoughToPlay(written: 1_700_000, indexEnd: 50_000, expectedBytes: 3_000_000, durationSeconds: 17, elapsedSeconds: 8.5),
+                "9.5 s buffered, 6.5 s still to come: start");
+            Assert(!Web.SdSpool.EnoughToPlay(written: 400_000, indexEnd: 50_000, expectedBytes: 3_000_000, durationSeconds: 17, elapsedSeconds: 4),
+                "arriving slower than it plays: wait");
+            Assert(Web.SdSpool.EnoughToPlay(written: 3_000_000, indexEnd: 50_000, expectedBytes: 3_000_000, durationSeconds: 17, elapsedSeconds: 30),
+                "complete: start");
+            var pipe = new System.IO.Pipelines.Pipe();
+            var feed = Task.Run(async () =>
+            {
+                for (int at = 0; at < raw.Length; at += 32 * 1024)
+                {
+                    await pipe.Writer.WriteAsync(raw.AsMemory(at, Math.Min(32 * 1024, raw.Length - at)));
+                    await Task.Delay(40);
+                }
+                await pipe.Writer.CompleteAsync();
+            });
+            var download = new ReolinkHttpApi.SdDownload(pipe.Reader.AsStream(), null, viaBaichuan: true, expectedBytes: raw.Length);
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            var (ready, growing) = Web.SdSpool.ServeAsync("selftest", $"clip-{Guid.NewGuid():N}", download,
+                CancellationToken.None).GetAwaiter().GetResult();
+            Assert(ready == null && growing != null, "playback starts on the growing file");
+            Assert(clock.Elapsed < TimeSpan.FromMilliseconds(600), $"started before the copy ended ({clock.ElapsedMilliseconds} ms)");
+            using var got = new MemoryStream();
+            growing!.CopyTo(got);
+            growing.Dispose();
+            feed.GetAwaiter().GetResult();
+            AssertSeq(got.ToArray(), mp4);
         });
 
         Test("SD card over Baichuan: calendar, search and download bodies", () =>
@@ -1116,9 +1174,11 @@ public static class SelfTest
         {
             var utc = new DateTime(2026, 10, 9, 18, 0, 0);
             const int regina = 21600; // UTC-6, seconds west
-            Assert(Streaming.CameraClock.Correction(new DateTime(2026, 10, 9, 12, 0, 30), utc, regina) == null, "in sync");
+            Assert(Streaming.CameraClock.Correction(new DateTime(2026, 10, 9, 12, 0, 5), utc, regina) == null, "in sync");
             Assert(Streaming.CameraClock.Correction(new DateTime(2026, 10, 9, 13, 0, 10), utc, regina) == null,
                 "an hour off is the camera's own DST: left alone");
+            AssertEq(Streaming.CameraClock.Correction(new DateTime(2026, 10, 9, 12, 0, 18), utc, regina),
+                (DateTime?)new DateTime(2026, 10, 9, 12, 0, 0));
             AssertEq(Streaming.CameraClock.Correction(new DateTime(2026, 10, 9, 12, 7, 0), utc, regina),
                 (DateTime?)new DateTime(2026, 10, 9, 12, 0, 0));
             AssertEq(Streaming.CameraClock.Correction(new DateTime(2026, 10, 9, 13, 9, 0), utc, regina),
@@ -1238,6 +1298,45 @@ public static class SelfTest
             Assert(Streaming.CameraControl.ParseBcAiSensitivity("people", ai) is { Type: "people", Sensitivity: 61, StayTime: 2 },
                 "AI sensitivity parses");
             Assert(Streaming.CameraControl.ParseBcAiSensitivity("vehicle", ai) == null, "a reply for another type is ignored");
+        });
+
+        Test("event clip length is read from a closed MP4 with its moov at the end", () =>
+        {
+            static byte[] Box(string type, params byte[][] parts)
+            {
+                var body = parts.SelectMany(b => b).ToArray();
+                var box = new byte[8 + body.Length];
+                System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(box, (uint)box.Length);
+                System.Text.Encoding.ASCII.GetBytes(type).CopyTo(box, 4);
+                body.CopyTo(box, 8);
+                return box;
+            }
+            static byte[] U32(uint v) { var b = new byte[4]; System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(b, v); return b; }
+            var mvhd = Box("mvhd", new byte[4], U32(0), U32(0), U32(1000), U32(12_300));
+            var file = Box("ftyp", "isom"u8.ToArray()).Concat(Box("free", new byte[500])).Concat(Box("moov", mvhd)).ToArray();
+            AssertEq(Recording.EventStore.ClipLength(new MemoryStream(file)), (double?)12.3);
+            var fragmented = Box("ftyp", "isom"u8.ToArray()).Concat(Box("moof", new byte[16])).Concat(Box("mdat", new byte[64])).ToArray();
+            Assert(Recording.EventStore.ClipLength(new MemoryStream(fragmented)) == null, "a fragmented file has no length to read");
+        });
+
+        Test("SD fill picks the card recording nearest the event start", () =>
+        {
+            var t = new DateTime(2026, 10, 9, 14, 30, 10);
+            Streaming.SdRecording R(int offsetSeconds) =>
+                new($"r{offsetSeconds}", t.AddSeconds(offsetSeconds), t.AddSeconds(offsetSeconds + 20), 1000, "main");
+            var end = t.AddSeconds(100);
+            var list = new[] { R(-600), R(-40), R(-6), R(8), R(30) };
+            AssertEq(Recording.SdFill.Pick(list, t, end)?.Name ?? "", "r-40");
+            AssertEq(Recording.SdFill.Pick(new[] { R(8), R(59), R(90) }, t, end)?.Name ?? "", "r8");
+            AssertEq(Recording.SdFill.Pick(new[] { R(59), R(90) }, t, end)?.Name ?? "", "r59");
+            Assert(Recording.SdFill.Pick(new[] { R(-600), R(130) }, t, end) == null, "nothing from 45 s before the start to the end");
+            // A camera clock 18 s behind: its clip stamped 60 s before the event is really 42 s before.
+            var behind = TimeSpan.FromSeconds(18);
+            AssertEq(Recording.SdFill.Pick(new[] { R(-60), R(30) }, t, end, behind)?.Name ?? "", "r-60");
+            AssertEq(Recording.SdFill.Pick(new[] { R(-64), R(30) }, t, end, behind)?.Name ?? "", "r30");
+            AssertEq(Streaming.CameraControl.ClockOffset(t, t.AddSeconds(-18)), (TimeSpan?)behind);
+            AssertEq(Streaming.CameraControl.ClockOffset(t, t.AddSeconds(7.4)), (TimeSpan?)TimeSpan.FromSeconds(-7));
+            Assert(Streaming.CameraControl.ClockOffset(t, t.AddHours(-5)) == null, "a lost date gives no offset");
         });
 
         Test("config.json write problems are named for the admin", () =>

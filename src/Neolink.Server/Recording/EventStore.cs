@@ -22,6 +22,12 @@ public sealed class EventRecord
     public bool HasThumb { get; set; }
     /// <summary>A low-res sub-stream twin of the clip exists (preview.mp4), for strip previews.</summary>
     public bool HasPreview { get; set; }
+    /// <summary>The camera's own recording of the event (camera.mp4), fetched from its SD card.</summary>
+    public bool HasCameraClip { get; set; }
+    public DateTime? CameraClipStartUtc { get; set; }
+    public double? CameraClipSeconds { get; set; }
+    /// <summary>Seconds of video actually in clip.mp4; shorter than the event when the stream died.</summary>
+    public double? ClipSeconds { get; set; }
     /// <summary>What an LLM said it saw (AI event descriptions, opt-in) — written
     /// after the event closes, once the model answers; null until/unless it does.</summary>
     public string? AiDescription { get; set; }
@@ -222,6 +228,80 @@ public sealed class EventStore
     public string EventDir(EventRecord rec)
     {
         lock (_gate) { return _byId[rec.Id].Dir; }
+    }
+
+    /// <summary>Fills in clip lengths for events stored before they were recorded: one file at a time, unhurried.</summary>
+    public async Task BackfillClipLengthsAsync(CancellationToken ct)
+    {
+        List<EventRecord> todo;
+        lock (_gate) { todo = _byId.Values.Select(e => e.Record).Where(r => r.ClipSeconds == null && r.HasClip && !r.Ongoing).ToList(); }
+        if (todo.Count == 0) return;
+        Log.Info($"Events: reading the clip length of {todo.Count} earlier event(s) in the background");
+        foreach (var rec in todo)
+        {
+            if (ct.IsCancellationRequested) return;
+            ClipSecondsOrProbe(rec);
+            await Task.Delay(50, ct).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>The clip's length, read from the file once for events recorded before it was stored (0 = unknown).</summary>
+    public double? ClipSecondsOrProbe(EventRecord rec)
+    {
+        if (rec.ClipSeconds != null || !rec.HasClip || rec.Ongoing) return rec.ClipSeconds;
+        double seconds = 0;
+        try
+        {
+            if (ArtifactPath(rec.Id, "clip.mp4") is { } path)
+            {
+                using var file = FootageVault.OpenRead(path);
+                seconds = Math.Round(ClipLength(file) ?? 0, 1);
+            }
+        }
+        catch (Exception ex) { Log.Debug($"Events: clip length of {rec.Id} unknown: {ex.Message}"); }
+        rec.ClipSeconds = seconds;
+        Save(rec);
+        return seconds;
+    }
+
+    /// <summary>Seconds in the mvhd of a closed MP4 (moov at either end); null for a fragmented or odd file.</summary>
+    internal static double? ClipLength(Stream file)
+    {
+        Span<byte> head = stackalloc byte[8];
+        var be = System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian;
+        for (long at = 0; at + 8 <= file.Length;)
+        {
+            file.Position = at;
+            if (file.Read(head) < 8) return null;
+            long size = be(head);
+            if (size == 1 || size < 8) return null; // 64-bit sizes never come from the clip writer
+            if (head[4..].SequenceEqual("moov"u8))
+            {
+                if (size > 64 * 1024 * 1024) return null;
+                var moov = new byte[size];
+                file.Position = at;
+                file.ReadExactly(moov);
+                for (int p = 8; p + 8 <= moov.Length;)
+                {
+                    long inner = be(moov.AsSpan(p));
+                    if (inner < 8) return null;
+                    if (moov.AsSpan(p + 4, 4).SequenceEqual("mvhd"u8))
+                    {
+                        int version = moov[p + 8];
+                        if (version == 0 && p + 28 <= moov.Length)
+                            return be(moov.AsSpan(p + 24)) / (double)Math.Max(1, be(moov.AsSpan(p + 20)));
+                        if (version == 1 && p + 40 <= moov.Length)
+                            return System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(moov.AsSpan(p + 32))
+                                   / (double)Math.Max(1, be(moov.AsSpan(p + 28)));
+                        return null;
+                    }
+                    p += (int)inner;
+                }
+                return null;
+            }
+            at += size;
+        }
+        return null;
     }
 
     public EventRecord? Find(string id)

@@ -318,6 +318,13 @@ public sealed class BcCamera : IBcCamera
                         }
                         continue;
                     }
+                    // An SD-card transfer on this session starves the video on a thin link: tearing the
+                    // session down would kill the transfer, so the stall is waited out until it ends.
+                    if (Volatile.Read(ref _transfers) > 0)
+                    {
+                        Log.Debug($"{_logTag}: no video while an SD-card transfer runs; holding the connection");
+                        continue;
+                    }
                     throw new IOException("Video stream stalled (no data for 15s)");
                 }
                 if (holding)
@@ -737,9 +744,19 @@ public sealed class BcCamera : IBcCamera
         }
     }
 
+    /// <summary>SD-card transfers in flight on this session (the video stall watchdog stands down meanwhile).</summary>
+    private int _transfers;
+
     /// <summary>SD-card download (msg 8): an XML reply, then BcMedia frames as binary messages,
     /// then a data-free message at the end of the file. Always closes with msg 9.</summary>
     public async Task<long> DownloadFileAsync(XElement request, long expectedBytes, Stream dest, CancellationToken ct)
+    {
+        Interlocked.Increment(ref _transfers);
+        try { return await DownloadFileCoreAsync(request, expectedBytes, dest, ct).ConfigureAwait(false); }
+        finally { Interlocked.Decrement(ref _transfers); }
+    }
+
+    private async Task<long> DownloadFileCoreAsync(XElement request, long expectedBytes, Stream dest, CancellationToken ct)
     {
         using var sub = _conn.Subscribe(BcConstants.MsgIdDownload);
         var ext = new ExtensionXml { ChannelId = _channelId };
@@ -759,19 +776,25 @@ public sealed class BcCamera : IBcCamera
         }, ct).ConfigureAwait(false);
 
         long got = 0;
-        bool loggedHead = false;
+        bool loggedHead = false, wentQuiet = false;
         try
         {
-            while (expectedBytes <= 0 || got < expectedBytes)
+            while (true)
             {
                 BcMessage reply;
+                // The listed size is the usual end (every model so far sends exactly it); past it
+                // only a short wait, in case a firmware sends more; before it, the camera's silence.
+                bool complete = expectedBytes > 0 && got >= expectedBytes;
                 try
                 {
-                    reply = await sub.ReceiveAsync(TimeSpan.FromSeconds(got == 0 ? 20 : 8), ct).ConfigureAwait(false);
+                    reply = await sub.ReceiveAsync(
+                        got == 0 ? TimeSpan.FromSeconds(20) : complete ? TimeSpan.FromMilliseconds(400) : TimeSpan.FromSeconds(8),
+                        ct).ConfigureAwait(false);
                 }
                 catch (TimeoutException) when (got > 0)
                 {
-                    break; // the camera went quiet after the data: done
+                    wentQuiet = !complete; // silence short of the listed size is a dropped link, not the end
+                    break;
                 }
                 if (reply.Binary is { Length: > 0 } bin)
                 {
@@ -800,6 +823,10 @@ public sealed class BcCamera : IBcCamera
             catch (Exception ex) when (ex is CameraCommandException or TimeoutException or IOException
                                        or ObjectDisposedException or InvalidOperationException) { }
         }
+        // Silence well short of the listed size is a dropped link, not a recording. A camera that
+        // closes the file itself with fewer bytes than listed is believed (some firmwares do).
+        if (wentQuiet && expectedBytes > 0 && got < expectedBytes * 98 / 100)
+            throw new IOException($"the camera stopped sending after {got / 1024} KB of {expectedBytes / 1024} KB (its link dropped)");
         return got;
     }
 

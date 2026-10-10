@@ -157,7 +157,7 @@ public sealed record ApiSdRecording(string File, DateTime Start, DateTime End, l
 }
 
 /// <summary>GET /api/cameras/{name}/sdcard/recordings reply.</summary>
-public sealed record ApiSdRecordings(string Date, List<ApiSdRecording> Recordings);
+public sealed record ApiSdRecordings(string Date, List<ApiSdRecording> Recordings, bool Offline = false);
 
 /// <summary>One PTZ preset slot; disabled slots are free for saving.</summary>
 public sealed record ApiPtzPreset(int Id, string Name, bool Enabled);
@@ -395,7 +395,8 @@ public sealed record ApiRecordingSettings(bool Events, bool Continuous,
     // Event notifications: per-camera opt-in per channel; *Available = that
     // channel is configured (the panel hints at setup otherwise).
     bool EmailEvents = false, bool EmailAvailable = false,
-    bool WebhookEvents = false, bool WebhookAvailable = false)
+    bool WebhookEvents = false, bool WebhookAvailable = false,
+    bool SdFillAvailable = false, bool SdFill = false)
 {
     /// <summary>null EventTypes = every detection type is recorded.</summary>
     public bool TypeEnabled(string label) => EventTypes == null || EventTypes.Contains(label);
@@ -497,7 +498,9 @@ public sealed record ApiEventSearch(bool AiAvailable, bool Ai = false,
 public sealed record ApiEvent(string Id, string Camera, DateTime Start, DateTime End,
     List<string> Labels, bool Reviewed, bool Ongoing, bool HasClip, bool HasThumb,
     bool HasPreview = false, string? AiDescription = null, string? AiLevel = null,
-    bool AiPending = false, List<string>? AiObjects = null)
+    bool AiPending = false, List<string>? AiObjects = null,
+    bool HasCameraClip = false, DateTime? CameraClipStart = null, double? CameraClipSeconds = null,
+    double? ClipSeconds = null)
 {
     private static readonly (string Label, string Name)[] Known =
     {

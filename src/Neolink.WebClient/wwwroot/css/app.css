@@ -4512,6 +4512,22 @@ button.ev-switch-opt {
     pointer-events: none;
 }
 
+/* The camera's own copy of an event (from its SD card): drawn under Neolink's coverage. */
+.tl-cov-sd {
+    background: #3f6e62;
+    pointer-events: auto;
+}
+
+/* What the camera's card holds, whether or not Neolink has the same minutes: a strip along the lane's foot. */
+.tl-sd-strip {
+    position: absolute;
+    bottom: 1px;
+    height: 3px;
+    min-width: 2px;
+    background: #5fa88f;
+    border-radius: 1px;
+}
+
 .tl-ev {
     position: absolute;
     top: 15%;

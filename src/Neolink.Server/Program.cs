@@ -298,6 +298,8 @@ if (config.Recording is { } recCfg)
         eventStore = new EventStore(storage.MainRoot,
             storage.HasClipsTier ? storage.ClipsRoot : null, storage.ArchiveRoot);
         eventStore.Load();
+        var backfillStore = eventStore;
+        _ = Task.Run(() => backfillStore.BackfillClipLengthsAsync(shutdown.Token));
         // Runtime switches live in the state dir; older locations (config dir,
         // recordings root) are checked once for migration.
         recordingSettings = new RecordingSettings(stateDir, configDir, eventStore.Root);
@@ -362,6 +364,7 @@ var notifier = new Neolink.Notifications.Notifier(notificationStore, Environment
 // Detection-event emails: one emailer for all cameras (its per-camera opt-in
 // and cooldown live in settings); wired to each recorder as it is built below.
 Neolink.Notifications.EventEmailer? eventEmailer = null;
+Neolink.Recording.SdFill? sdFill = null;
 // Emergency mode (beta): a server-wide overlay that forces notifications on and
 // latches sirens/lights. Camera actions are bound after the camera list exists.
 var emergencyStore = new Neolink.Notifications.EmergencyStore(stateDir);
@@ -468,6 +471,7 @@ var onvifEventTargets = new List<(OnvifEventService Events, string Name, Action<
 // Neolink holds no connection to the camera, so it can't be viewed or recorded).
 // Shared by the web API / MQTT bridge (which toggle it) and applied at startup.
 var cameraState = new Neolink.Web.CameraStateStore(stateDir);
+Neolink.Web.SdListings.Configure(stateDir);
 
 foreach (var cam in config.Cameras)
 {
@@ -693,7 +697,17 @@ foreach (var cam in config.Cameras)
                 eventEmailer.RegisterHub(cam.Name, recordStream.Hub);
                 // The delay setting decides at event time which hook sends.
                 recorder.EventStarted += eventEmailer.OnEventStarted;
-                recorder.OnEventClosed = eventEmailer.OnEventClosed;
+                // The camera's own copy of each event from its SD card (battery cameras).
+                sdFill ??= new Neolink.Recording.SdFill(eventStore, recordingSettings, shutdown.Token);
+                sdFill.Register(cam.Name, control, () => camServices.Any(s => s.SleepFriendly),
+                    span => HoldOne(camServices, span));
+                var emailer = eventEmailer;
+                var filler = sdFill;
+                recorder.OnEventClosed = rec =>
+                {
+                    emailer.OnEventClosed(rec);
+                    filler.OnEventClosed(rec);
+                };
                 recorderSink = recorder.OnMotion;
                 eventRecorder = recorder;
                 tasks.Add(Task.Run(() => recorder.RunAsync(shutdown.Token)));
@@ -850,6 +864,8 @@ foreach (var cam in config.Cameras)
             {
                 foreach (var s in camServices) s.HoldAwake = hold;
             },
+            // SD-card browsing holds it for a few minutes at a time.
+            HoldAwake = camServices.Count == 0 ? null : span => HoldOne(camServices, span),
             // Any stream service saying it may doze makes the camera sleep-friendly:
             // the policy is per camera (battery + no always_on), so the streams agree.
             SleepFriendly = readers.Count == 0 ? null : () => readers.Any(s => s.SleepFriendly),
@@ -1268,6 +1284,14 @@ static async Task RunRtspGuardedAsync(RtspCameraService service, string tag, Can
             }
         }
     }
+}
+
+/// <summary>Holds one stream's session up for the card (the one that owns wakes): a battery camera
+/// on a thin link cannot feed two video streams and a transfer at once.</summary>
+static void HoldOne(IReadOnlyList<CameraService> services, TimeSpan span)
+{
+    var one = services.FirstOrDefault(s => s.WakeProbeOwner) ?? services.FirstOrDefault();
+    one?.HoldAwakeFor(span);
 }
 
 static int Fail(string message)

@@ -53,7 +53,10 @@ public sealed record CameraRecordingSettings(bool Events, bool Continuous, List<
     bool EmailEvents = false,
     // Same opt-in for the webhook channel (Server settings → Notifications owns
     // the endpoint and format).
-    bool WebhookEvents = false)
+    bool WebhookEvents = false,
+    // Fetch the camera's own recording of each event from its SD card (the seconds
+    // before Neolink connected). Null = on for battery cameras, off otherwise.
+    bool? SdFill = null)
 {
     /// <summary>Known detection labels (what the UI offers as event-type filters).</summary>
     public static readonly string[] KnownLabels =
@@ -271,7 +274,8 @@ public sealed class RecordingSettings
         int? archiveRetentionDays = null, bool setArchiveRetention = false,
         bool? wakeTimeline = null, bool? aiDescribe = null,
         string? aiContext = null, bool setAiContext = false,
-        bool? emailEvents = null, bool? webhookEvents = null)
+        bool? emailEvents = null, bool? webhookEvents = null,
+        bool? sdFill = null, bool setSdFill = false)
     {
         CameraRecordingSettings next;
         lock (_gate)
@@ -295,7 +299,8 @@ public sealed class RecordingSettings
                 aiDescribe ?? cur.AiDescribe,
                 setAiContext ? aiContext : cur.AiContext,
                 emailEvents ?? cur.EmailEvents,
-                webhookEvents ?? cur.WebhookEvents);
+                webhookEvents ?? cur.WebhookEvents,
+                setSdFill ? sdFill : cur.SdFill);
             _cameras = new Dictionary<string, CameraRecordingSettings>(_cameras, StringComparer.OrdinalIgnoreCase)
             {
                 [camera] = next,

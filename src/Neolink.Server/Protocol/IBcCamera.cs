@@ -65,7 +65,7 @@ public interface IBcCamera : IAsyncDisposable
     Task<byte[]?> SnapAsync(CancellationToken ct);
 
     /// <summary>Downloads one SD-card file (msg 8, closed with msg 9) as BcMedia frames into
-    /// <paramref name="dest"/>; returns the bytes received. 0 expected = until the camera ends it.</summary>
+    /// <paramref name="dest"/>; returns the bytes received. The listed size ends it; 0 = until the camera goes quiet.</summary>
     Task<long> DownloadFileAsync(System.Xml.Linq.XElement request, long expectedBytes, Stream dest,
         CancellationToken ct) => throw new NotSupportedException("this connection can't download SD files");
 

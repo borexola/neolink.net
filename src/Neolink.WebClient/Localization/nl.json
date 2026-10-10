@@ -1484,5 +1484,17 @@
  "This camera's SD card can't be browsed: {0}.": "De SD-kaart van deze camera kan niet worden doorzocht: {0}.",
  "Low-res sub-stream recording from the card, when the camera kept one": "Lage-resolutie substream-opname van de kaart, als de camera er een bewaarde",
  "The card holds no low-res copy of this recording.": "De kaart bevat geen lage-resolutiekopie van deze opname.",
- "The card holds no full-quality copy of this recording.": "De kaart bevat geen kopie van deze opname in volledige kwaliteit."
+ "The card holds no full-quality copy of this recording.": "De kaart bevat geen kopie van deze opname in volledige kwaliteit.",
+ "The camera's own recording, fetched from its SD card; it starts at the camera's trigger": "De eigen opname van de camera, opgehaald van de SD-kaart; ze begint bij de trigger van de camera",
+ "The camera's own recording, from its SD card; it starts {0} s before Neolink's.": "De eigen opname van de camera, van de SD-kaart; ze begint {0} s eerder dan die van Neolink.",
+ "The camera's own recording, from its SD card.": "De eigen opname van de camera, van de SD-kaart.",
+ "Fetch the camera's own copy of each event": "De eigen kopie van de camera van elke gebeurtenis ophalen",
+ "After each event, the camera's own recording is fetched from its SD card (click to stop)": "Na elke gebeurtenis wordt de eigen opname van de camera van de SD-kaart opgehaald (klik om te stoppen)",
+ "Events keep only what Neolink captured after connecting (click to also fetch the camera's copy)": "Gebeurtenissen bewaren alleen wat Neolink na het verbinden vastlegde (klik om ook de kopie van de camera op te halen)",
+ "A battery camera starts recording at its own trigger, seconds before Neolink connects. Once an event ends, its copy is fetched from the SD card while the camera is still awake (never waking it), stored beside Neolink's clip, and played first. Needs a mounted card with SD recording on.": "Een batterijcamera begint op te nemen bij haar eigen trigger, seconden voordat Neolink verbindt. Na afloop van een gebeurtenis wordt haar kopie van de SD-kaart opgehaald zolang de camera nog wakker is (ze wordt nooit gewekt), naast de clip van Neolink bewaard en als eerste afgespeeld. Vereist een gemounte kaart met SD-opname aan.",
+ "Faster playback once the whole clip has arrived": "Sneller afspelen zodra de hele clip binnen is",
+ "From the camera's SD card": "Van de SD-kaart van de camera",
+ "SD card is on: the camera's own copy of each event fills the seconds before Neolink's own recording began. Click to hide it.": "SD-kaart aan: de eigen kopie van de camera vult bij elke gebeurtenis de seconden voordat Neolinks eigen opname begon. Klik om te verbergen.",
+ "SD card (beta): also play the camera's own copy of each event for the seconds before Neolink's own recording began. Useful for battery cameras.": "SD-kaart (bèta): speel bij elke gebeurtenis ook de eigen kopie van de camera af voor de seconden voordat Neolinks eigen opname begon. Handig voor batterijcamera's.",
+ "On the camera's SD card: {0}, {1} s": "Op de SD-kaart van de camera: {0}, {1} s"
 }

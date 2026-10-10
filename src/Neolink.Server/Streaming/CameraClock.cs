@@ -48,7 +48,7 @@ internal static class CameraClock
     }
 
     /// <summary>The wall time to write, or null when fine. timeZone is seconds west of UTC; whole-hour
-    /// offsets (the camera's DST) are kept, drift over 2 min is fixed, a lost date is reset.</summary>
+    /// offsets (the camera's DST) are kept, drift over 10 s is fixed, a lost date is reset.</summary>
     internal static DateTime? Correction(DateTime cameraLocal, DateTime utcNow, int timeZoneSeconds)
     {
         var expected = utcNow.AddSeconds(-timeZoneSeconds);
@@ -57,6 +57,6 @@ internal static class CameraClock
         int hours = (int)Math.Round(delta.TotalHours);
         if (Math.Abs(hours) > 2) return null;
         var drift = delta - TimeSpan.FromHours(hours);
-        return Math.Abs(drift.TotalMinutes) <= 2 ? null : expected.AddHours(hours);
+        return Math.Abs(drift.TotalSeconds) <= 10 ? null : expected.AddHours(hours);
     }
 }

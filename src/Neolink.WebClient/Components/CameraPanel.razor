@@ -1471,6 +1471,26 @@
                             </div>
                         }
                     }
+                    @if (_recording.SdFillAvailable)
+                    {
+                        @* The seconds before Neolink connected: the camera's own clip, from its card. *@
+                        <div class="control-row">
+                            <span>@T["Fetch the camera's own copy of each event"] <span class="beta-tag">@T["BETA"]</span></span>
+                            <button class="chip @(_recording.SdFill ? "" : "chip-off")"
+                                    title="@(_recording.SdFill
+                                        ? T["After each event, the camera's own recording is fetched from its SD card (click to stop)"]
+                                        : T["Events keep only what Neolink captured after connecting (click to also fetch the camera's copy)"])"
+                                    @onclick="() => SetRecordingAsync(sdFill: !_recording.SdFill)">
+                                @(_recording.SdFill ? T["on"] : T["off"])
+                            </button>
+                        </div>
+                        @if (_recording.SdFill)
+                        {
+                            <div class="event-sub">
+                                @T["A battery camera starts recording at its own trigger, seconds before Neolink connects. Once an event ends, its copy is fetched from the SD card while the camera is still awake (never waking it), stored beside Neolink's clip, and played first. Needs a mounted card with SD recording on."]
+                            </div>
+                        }
+                    }
                     @if (_recording.Continuous || (_recording.ContinuousBlockedBySleep && _recording.WakeTimeline))
                     {
                         <div class="control-row">
@@ -3073,14 +3093,14 @@
         bool? scheduleEnabled = null,
         bool? archiveEvents = null, bool? archiveContinuous = null, int? archiveRetentionDays = null,
         bool? wakeTimeline = null, bool? aiDescribe = null, string? aiContext = null,
-        bool? emailEvents = null, bool? webhookEvents = null)
+        bool? emailEvents = null, bool? webhookEvents = null, bool? sdFill = null)
     {
         object body = new
         {
             events, continuous, eventTypes, eventRetentionDays, continuousRetentionDays, recordStream,
             scheduleDays, scheduleStart, scheduleEnd, scheduleEnabled,
             archiveEvents, archiveContinuous, archiveRetentionDays, wakeTimeline, aiDescribe, aiContext,
-            emailEvents, webhookEvents,
+            emailEvents, webhookEvents, sdFill,
         };
         if (await PostAsync("recording", body))
             _recording = await GetAsync<ApiRecordingSettings>("recording");

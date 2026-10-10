@@ -124,6 +124,12 @@ is configured in the Reolink app. A Video Doorbell serves clips over HTTP only
 with RTMP enabled (Ports tab); otherwise they come over Baichuan, which needs
 ffmpeg. Encrypted recordings ask for the recording password.
 
+On the timeline, the **SD card** switch (beta, off by default, remembered per
+account like **Events only**) plays a battery camera's own copy of each event
+for the seconds before Neolink's recording began, and draws a thin strip along each lane's
+foot for everything the card holds that day (a sleeping camera is not woken for it).
+See [battery cameras](battery-cameras.md).
+
 ## Install as an app (PWA)
 
 Chrome/Edge show an install icon in the address bar; iPhone/iPad use

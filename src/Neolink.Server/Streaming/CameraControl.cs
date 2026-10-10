@@ -469,14 +469,16 @@ public interface ICameraControl
 
     /// <summary>The SD-card recordings of one (camera-local) day, or null. <paramref name="stream"/>
     /// "main"/"sub" lists that stream only; null lists main, or sub when main has nothing.</summary>
-    Task<IReadOnlyList<SdRecording>?> GetSdRecordingsAsync(DateOnly day, CancellationToken ct, string? stream = null) =>
+    Task<IReadOnlyList<SdRecording>?> GetSdRecordingsAsync(DateOnly day, CancellationToken ct, string? stream = null,
+        bool preempt = true) =>
         Task.FromResult<IReadOnlyList<SdRecording>?>(null);
 
     /// <summary>Why the last SD-card search failed, in words for the UI; null when it didn't.</summary>
     string? SdFailure => null;
 
     /// <summary>Opens a streaming download of one SD-card recording by its Search name.</summary>
-    Task<ReolinkHttpApi.SdDownload> OpenSdRecordingAsync(string fileName, CancellationToken ct) =>
+    /// <paramref name="yield"/>: a background fetch that must never pre-empt a viewer's transfer.
+    Task<ReolinkHttpApi.SdDownload> OpenSdRecordingAsync(string fileName, CancellationToken ct, bool yield = false) =>
         throw new NotSupportedException("SD-card playback is not available for this camera");
 
     /// <summary>The password of encrypted SD recordings, held in memory only; null clears it.</summary>
@@ -485,6 +487,16 @@ public interface ICameraControl
     /// <summary>Device settings over Baichuan (SD recording switch, auto-reboot, PTZ guard and
     /// patrols, privacy masks, chimes, smart rules, SD cards), or null. Default: none.</summary>
     Task<DeviceExtras?> GetDeviceExtrasAsync(CancellationToken ct) => Task.FromResult<DeviceExtras?>(null);
+
+    /// <summary>Whether a card is mounted and the camera records to it (two small reads); null when unknown.</summary>
+    Task<(bool Mounted, bool Recording)?> GetSdStateAsync(CancellationToken ct) =>
+        Task.FromResult<(bool, bool)?>(null);
+
+    /// <summary>The last card listing fetched for a day (any caller), with when; null when never fetched.</summary>
+    (DateTime At, IReadOnlyList<SdRecording> List)? LastSdRecordings(DateOnly day, string? stream = null) => null;
+
+    /// <summary>Server time minus the camera's clock, to the second (what to add to card times); null when unknown.</summary>
+    Task<TimeSpan?> GetClockOffsetAsync(CancellationToken ct) => Task.FromResult<TimeSpan?>(null);
 
     /// <summary>The camera's own SD recording on or off.</summary>
     Task SetSdRecordingAsync(bool on, CancellationToken ct) => NotHere("SD recording");
@@ -2766,6 +2778,32 @@ public sealed class CameraControl : ICameraControl
     /// <summary>Chime volume steps (the doorbell reports 0-4).</summary>
     internal const int ChimeVolumeMax = 4;
 
+    public Task<(bool Mounted, bool Recording)?> GetSdStateAsync(CancellationToken ct) =>
+        WithCameraAsync<(bool, bool)?>(async camera =>
+        {
+            var hdd = TryAsync(() => camera.GetRawAsync(BcConstants.MsgIdGetHdd, "HddInfoList", timeout: ExtrasTimeout, ct: ct));
+            var record = TryAsync(() => camera.GetRawAsync(BcConstants.MsgIdGetRecordEnable, "Record", timeout: ExtrasTimeout, ct: ct));
+            await Task.WhenAll(hdd, record).ConfigureAwait(false);
+            if (hdd.Result == null && record.Result == null) return null;
+            bool mounted = ParseHdd(hdd.Result)?.Any(c => c.Mounted) == true;
+            bool recording = XInt(record.Result, "enable") is { } en ? en != 0 : mounted;
+            return (mounted, recording);
+        }, ct);
+
+    public Task<TimeSpan?> GetClockOffsetAsync(CancellationToken ct) =>
+        WithCameraAsync<TimeSpan?>(async camera =>
+        {
+            var general = await TryAsync(() => camera.GetSystemGeneralAsync(ExtrasTimeout, ct)).ConfigureAwait(false);
+            return BcCameraCommands.ParseTime(general) is { } cameraLocal ? ClockOffset(DateTime.Now, cameraLocal) : null;
+        }, ct);
+
+    /// <summary>Whole seconds to add to the camera's times; null when the clocks are hours apart (a lost date).</summary>
+    internal static TimeSpan? ClockOffset(DateTime serverLocal, DateTime cameraLocal)
+    {
+        var offset = TimeSpan.FromSeconds(Math.Round((serverLocal - cameraLocal).TotalSeconds));
+        return Math.Abs(offset.TotalHours) < 3 ? offset : null;
+    }
+
     public async Task<DeviceExtras?> GetDeviceExtrasAsync(CancellationToken ct)
     {
         var caps = await GetCapabilitiesAsync(ct).ConfigureAwait(false);
@@ -3048,9 +3086,12 @@ public sealed class CameraControl : ICameraControl
 
     /// <summary>SD searches walk the card's file table — give them the roomy
     /// snapshot budget, not the 6s config-read cap.</summary>
-    public async Task<IReadOnlyList<int>?> GetSdRecordingDaysAsync(int year, int month, CancellationToken ct) =>
-        (HttpAbsent ? null : await HttpSdDaysAsync(year, month, ct).ConfigureAwait(false))
-        ?? await BcSdDaysAsync(year, month, ct).ConfigureAwait(false);
+    public async Task<IReadOnlyList<int>?> GetSdRecordingDaysAsync(int year, int month, CancellationToken ct)
+    {
+        PreemptFillTransfer();
+        return (HttpAbsent ? null : await HttpSdDaysAsync(year, month, ct).ConfigureAwait(false))
+               ?? await BcSdDaysAsync(year, month, ct).ConfigureAwait(false);
+    }
 
     private Task<IReadOnlyList<int>?> HttpSdDaysAsync(int year, int month, CancellationToken ct) =>
         HttpTryAsync<IReadOnlyList<int>?>(async c =>
@@ -3087,9 +3128,29 @@ public sealed class CameraControl : ICameraControl
     /// answered, file search never did), so the day is paged into short walks.</summary>
     private static readonly TimeSpan SdWindowTimeout = TimeSpan.FromSeconds(20);
 
-    public async Task<IReadOnlyList<SdRecording>?> GetSdRecordingsAsync(DateOnly day, CancellationToken ct, string? stream = null) =>
-        (HttpAbsent ? null : await HttpSdRecordingsAsync(day, ct, stream).ConfigureAwait(false))
-        ?? await BcSdRecordingsAsync(day, ct, stream).ConfigureAwait(false);
+    public async Task<IReadOnlyList<SdRecording>?> GetSdRecordingsAsync(DateOnly day, CancellationToken ct, string? stream = null,
+        bool preempt = true)
+    {
+        if (preempt) PreemptFillTransfer();
+        var list = (HttpAbsent ? null : await HttpSdRecordingsAsync(day, ct, stream).ConfigureAwait(false))
+                   ?? await BcSdRecordingsAsync(day, ct, stream).ConfigureAwait(false);
+        if (list != null && stream == null) Web.SdListings.Remember(CameraName, day, list);
+        return list;
+    }
+
+    public (DateTime At, IReadOnlyList<SdRecording> List)? LastSdRecordings(DateOnly day, string? stream = null) =>
+        stream == null ? Web.SdListings.Last(CameraName, day) : null;
+
+    /// <summary>A viewer's card request outranks a background fill's transfer, which the camera
+    /// would otherwise serve first and leave the search unanswered; the fill retries later.</summary>
+    private void PreemptFillTransfer()
+    {
+        if (_sdCurrentYields && _sdCurrent is { } fill)
+        {
+            Log.Info($"{CameraName}: a viewer is browsing the card; the background copy transfer yields");
+            try { fill.Cancel(); } catch (ObjectDisposedException) { }
+        }
+    }
 
     private Task<IReadOnlyList<SdRecording>?> HttpSdRecordingsAsync(DateOnly day, CancellationToken ct, string? stream = null) =>
         HttpTryAsync<IReadOnlyList<SdRecording>?>(async c =>
@@ -3223,12 +3284,12 @@ public sealed class CameraControl : ICameraControl
 
     /// <summary>Fetches one recording as the camera's web UI does: CheckDownload first (it flags
     /// encryption), then uncapped Playback, then Download (1 MB/s); an FLV Playback comes last.</summary>
-    public async Task<ReolinkHttpApi.SdDownload> OpenSdRecordingAsync(string fileName, CancellationToken ct)
+    public async Task<ReolinkHttpApi.SdDownload> OpenSdRecordingAsync(string fileName, CancellationToken ct, bool yield = false)
     {
         if (_bcSdFiles.TryGetValue(fileName, out var bcEntry))
-            return await OpenBcSdRecordingAsync(fileName, bcEntry, ct).ConfigureAwait(false);
+            return await OpenBcSdRecordingAsync(fileName, bcEntry, ct, yield).ConfigureAwait(false);
         if (_sdViaBc && AnyLive() != null)
-            return await OpenBcTwinAsync(fileName, ct).ConfigureAwait(false);
+            return await OpenBcTwinAsync(fileName, ct, yield).ConfigureAwait(false);
         if (_httpApi == null)
             throw new NotSupportedException($"SD-card playback needs the camera's HTTP API ('{CameraName}' has none)");
 
@@ -3290,7 +3351,7 @@ public sealed class CameraControl : ICameraControl
             Log.Info($"{CameraName}: HTTP served neither Playback nor Download ({string.Join("; ", errors)}); " +
                      "fetching SD recordings over Baichuan from now on (enabling RTMP in the Ports tab restores HTTP)");
             _sdViaBc = true;
-            return await OpenBcTwinAsync(fileName, ct).ConfigureAwait(false);
+            return await OpenBcTwinAsync(fileName, ct, yield).ConfigureAwait(false);
         }
         throw new ReolinkApiException("the camera served this recording by neither Playback nor Download; " +
                                       "on a Video Doorbell, enable RTMP in the Ports tab: " + string.Join("; ", errors));
@@ -3309,7 +3370,7 @@ public sealed class CameraControl : ICameraControl
 
     /// <summary>Fetches an HTTP-listed recording over Baichuan: the Baichuan search names files
     /// differently, so the day is searched and the entry with the same start time is used.</summary>
-    private async Task<ReolinkHttpApi.SdDownload> OpenBcTwinAsync(string httpName, CancellationToken ct)
+    private async Task<ReolinkHttpApi.SdDownload> OpenBcTwinAsync(string httpName, CancellationToken ct, bool yield = false)
     {
         var start = _httpSdFiles.TryGetValue(httpName, out var listed) ? listed.Start
             : SdStartFromName(httpName)
@@ -3324,7 +3385,7 @@ public sealed class CameraControl : ICameraControl
                                                $"({twins.Count} that day)");
         if (!_bcSdFiles.TryGetValue(twin.Name, out var entry))
             throw new NotSupportedException($"no search entry for '{twin.Name}'");
-        return await OpenBcSdRecordingAsync(twin.Name, entry, ct).ConfigureAwait(false);
+        return await OpenBcSdRecordingAsync(twin.Name, entry, ct, yield).ConfigureAwait(false);
     }
 
     /// <summary>The start time in a Reolink recording name (…_YYYYMMDD_HHMMSS_…), or null.</summary>
@@ -3337,7 +3398,10 @@ public sealed class CameraControl : ICameraControl
     }
     /// <summary>One Baichuan transfer per camera at a time; the running one, so a newer pick can cancel it.</summary>
     private readonly SemaphoreSlim _sdGate = new(1, 1);
+    /// <summary>Whether the transfer in flight is a background fill (a viewer may cut it short).</summary>
+    private volatile bool _sdCurrentYields;
     private volatile CancellationTokenSource? _sdCurrent;
+    private volatile string? _sdCurrentName;
     /// <summary>Why the last SD-card search over Baichuan failed, for the UI; null after success.</summary>
     private volatile string? _sdFailure;
     public string? SdFailure => _sdFailure;
@@ -3472,25 +3536,48 @@ public sealed class CameraControl : ICameraControl
     }
 
     private async Task<ReolinkHttpApi.SdDownload> OpenBcSdRecordingAsync(string fileName, XElement entry,
-        CancellationToken ct)
+        CancellationToken ct, bool yield = false)
     {
         var camera = AnyLive() ?? throw new CameraOfflineException(CameraName);
-        // Latest wins: a clip still loading is abandoned for the one just picked.
-        try { _sdCurrent?.Cancel(); } catch (ObjectDisposedException) { }
+        // Latest wins: a clip still loading is abandoned for a different one just picked.
+        if (!yield && _sdCurrentName != fileName)
+            try { _sdCurrent?.Cancel(); } catch (ObjectDisposedException) { }
         await _sdGate.WaitAsync(ct).ConfigureAwait(false);
-        long size = BcCameraCommands.FileInfoSize(entry); // the file's size; the frames sent differ from it
+        long size = BcCameraCommands.FileInfoSize(entry); // the camera sends exactly this many bytes
         var pipe = new System.IO.Pipelines.Pipe();
         var cts = new CancellationTokenSource(TimeSpan.FromMinutes(10));
         _sdCurrent = cts;
-        var writer = pipe.Writer.AsStream();
+        _sdCurrentName = fileName;
+        _sdCurrentYields = yield;
+        var writer = new FirstWriteStream(pipe.Writer.AsStream());
+        var clock = System.Diagnostics.Stopwatch.StartNew();
         _ = Task.Run(async () =>
         {
             try
             {
-                long got = await camera.DownloadFileAsync(BcCameraCommands.BuildDownload(entry), 0, writer, cts.Token)
-                    .ConfigureAwait(false);
+                long got;
+                for (int attempt = 1; ; attempt++)
+                {
+                    try
+                    {
+                        got = await camera.DownloadFileAsync(BcCameraCommands.BuildDownload(entry), size, writer, cts.Token)
+                            .ConfigureAwait(false);
+                        break;
+                    }
+                    // A 400 right after a reconnect: the camera is still closing the transfer the
+                    // dropped session left behind. Nothing was written yet, so ask again shortly.
+                    catch (CameraCommandException ex) when (ex.ResponseCode == 400 && attempt < 3 && writer.FirstWriteAt == null)
+                    {
+                        Log.Info($"{CameraName}: the camera refused the SD transfer of '{fileName}' (busy); asking again in 3 s");
+                        await Task.Delay(TimeSpan.FromSeconds(3), cts.Token).ConfigureAwait(false);
+                        camera = AnyLive() ?? throw new CameraOfflineException(CameraName);
+                    }
+                }
+                var firstByte = writer.FirstWriteAt ?? clock.Elapsed;
+                var transfer = clock.Elapsed - firstByte;
                 Log.Info($"{CameraName}: SD recording '{fileName}' fetched over Baichuan ({got / 1024} KB" +
-                         $"{(size > 0 ? $" of {size / 1024} KB" : "")})");
+                         $"{(size > 0 ? $" of {size / 1024} KB" : "")}; first byte after {firstByte.TotalSeconds:0.0} s, " +
+                         $"then {transfer.TotalSeconds:0.0} s at {got / 1024.0 / Math.Max(0.1, transfer.TotalSeconds):0} KB/s)");
                 await pipe.Writer.CompleteAsync().ConfigureAwait(false);
             }
             catch (Exception ex)
@@ -3508,7 +3595,37 @@ public sealed class CameraControl : ICameraControl
             }
         }, CancellationToken.None);
         return new ReolinkHttpApi.SdDownload(pipe.Reader.AsStream(), null,
-            owner: new CancelOnDispose(cts), viaBaichuan: true);
+            owner: new CancelOnDispose(cts), viaBaichuan: true, expectedBytes: size > 0 ? size : null);
+    }
+
+    /// <summary>Notes when the first bytes arrive (the camera's reply latency for the fetch log).</summary>
+    private sealed class FirstWriteStream : Stream
+    {
+        private readonly Stream _inner;
+        private readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
+        public TimeSpan? FirstWriteAt { get; private set; }
+        public FirstWriteStream(Stream inner) => _inner = inner;
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken ct = default)
+        {
+            FirstWriteAt ??= _clock.Elapsed;
+            return _inner.WriteAsync(buffer, ct);
+        }
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            FirstWriteAt ??= _clock.Elapsed;
+            _inner.Write(buffer, offset, count);
+        }
+        public override void Flush() => _inner.Flush();
+        public override Task FlushAsync(CancellationToken ct) => _inner.FlushAsync(ct);
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        protected override void Dispose(bool disposing) { if (disposing) _inner.Dispose(); base.Dispose(disposing); }
     }
 
     /// <summary>Stops a background transfer when its reader goes away.</summary>

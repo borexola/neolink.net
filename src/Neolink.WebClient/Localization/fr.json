@@ -1484,5 +1484,17 @@
  "This camera's SD card can't be browsed: {0}.": "La carte SD de cette caméra ne peut pas être parcourue : {0}.",
  "Low-res sub-stream recording from the card, when the camera kept one": "Enregistrement basse résolution du sous-flux depuis la carte, si la caméra en a gardé un",
  "The card holds no low-res copy of this recording.": "La carte ne contient pas de copie basse résolution de cet enregistrement.",
- "The card holds no full-quality copy of this recording.": "La carte ne contient pas de copie pleine qualité de cet enregistrement."
+ "The card holds no full-quality copy of this recording.": "La carte ne contient pas de copie pleine qualité de cet enregistrement.",
+ "The camera's own recording, fetched from its SD card; it starts at the camera's trigger": "L'enregistrement propre de la caméra, récupéré sur sa carte SD ; il commence au déclenchement de la caméra",
+ "The camera's own recording, from its SD card; it starts {0} s before Neolink's.": "L'enregistrement propre de la caméra, depuis sa carte SD ; il commence {0} s avant celui de Neolink.",
+ "The camera's own recording, from its SD card.": "L'enregistrement propre de la caméra, depuis sa carte SD.",
+ "Fetch the camera's own copy of each event": "Récupérer la copie propre de la caméra de chaque événement",
+ "After each event, the camera's own recording is fetched from its SD card (click to stop)": "Après chaque événement, l'enregistrement propre de la caméra est récupéré sur sa carte SD (cliquez pour arrêter)",
+ "Events keep only what Neolink captured after connecting (click to also fetch the camera's copy)": "Les événements ne gardent que ce que Neolink a capturé après connexion (cliquez pour récupérer aussi la copie de la caméra)",
+ "A battery camera starts recording at its own trigger, seconds before Neolink connects. Once an event ends, its copy is fetched from the SD card while the camera is still awake (never waking it), stored beside Neolink's clip, and played first. Needs a mounted card with SD recording on.": "Une caméra sur batterie commence à enregistrer à son propre déclenchement, quelques secondes avant que Neolink se connecte. À la fin d'un événement, sa copie est récupérée sur la carte SD tant que la caméra est encore éveillée (jamais réveillée), stockée à côté du clip de Neolink et lue en premier. Nécessite une carte montée avec l'enregistrement SD activé.",
+ "Faster playback once the whole clip has arrived": "Lecture accélérée une fois le clip entièrement arrivé",
+ "From the camera's SD card": "Depuis la carte SD de la caméra",
+ "SD card is on: the camera's own copy of each event fills the seconds before Neolink's own recording began. Click to hide it.": "Carte SD activée : la copie propre de la caméra comble, pour chaque événement, les secondes avant le début de l'enregistrement de Neolink. Cliquez pour la masquer.",
+ "SD card (beta): also play the camera's own copy of each event for the seconds before Neolink's own recording began. Useful for battery cameras.": "Carte SD (bêta) : lire aussi, pour chaque événement, la copie propre de la caméra pour les secondes avant le début de l'enregistrement de Neolink. Utile pour les caméras sur batterie.",
+ "On the camera's SD card: {0}, {1} s": "Sur la carte SD de la caméra : {0}, {1} s"
 }

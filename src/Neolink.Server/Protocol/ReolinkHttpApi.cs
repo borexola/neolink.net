@@ -507,10 +507,13 @@ public sealed class ReolinkHttpApi : IDisposable
         private readonly IDisposable? _owner;
         internal SdDownload(HttpResponseMessage response, Stream stream, bool flv = false)
             : this(stream, response.Content.Headers.ContentLength, response, flv) { }
-        public SdDownload(Stream stream, long? length, IDisposable? owner = null, bool flv = false, bool viaBaichuan = false)
-        { Stream = stream; Length = length; _owner = owner; Flv = flv; ViaBaichuan = viaBaichuan; }
+        public SdDownload(Stream stream, long? length, IDisposable? owner = null, bool flv = false, bool viaBaichuan = false,
+            long? expectedBytes = null)
+        { Stream = stream; Length = length; _owner = owner; Flv = flv; ViaBaichuan = viaBaichuan; ExpectedBytes = expectedBytes ?? length; }
         public Stream Stream { get; }
         public long? Length { get; }
+        /// <summary>The size the camera listed, when known (a Baichuan transfer has no Length).</summary>
+        public long? ExpectedBytes { get; }
         /// <summary>The camera answered with FLV (its nginx flv module), not MP4: it must be remuxed.</summary>
         public bool Flv { get; }
         /// <summary>Fetched over Baichuan: the format is only known once the bytes are in.</summary>

@@ -14,6 +14,7 @@ in the README). Paste the matching section below into the GitHub release.
 - **SD-card playback for cameras without an HTTP API (beta),** such as the Lumus, over Baichuan.
 - **Encrypted SD recordings** play after you enter the recording password in the SD view; the password is kept in memory only.
 - **Camera clocks are corrected on connect** when they drift or lose their date, which matters for cameras with no backup clock or blocked NTP.
+- **Battery cameras: the seconds before Neolink connected (beta).** After each event, the camera's own recording is fetched from its SD card, kept beside Neolink's clip and played first. On by default for battery cameras, under the camera's Recording tab. The timeline's new **SD card** switch (off by default, remembered per account, like Events only now) plays that copy for the seconds before Neolink began recording.
 - **Server settings say why config.json can't be written** (wrong owner or permissions, read-only mount, missing file) instead of silently disabling the camera editor.
 
 ### Fixed
@@ -21,6 +22,8 @@ in the README). Paste the matching section below into the GitHub release.
 - **Floodlight brightness and auto mode on cameras that never showed them** (the Duo Floodlight, and spotlights without an HTTP API such as the Lumus): Neolink asked with a message id these firmwares don't have.
 - **SD recordings load much faster:** they are fetched with the camera's uncapped Playback command instead of Download, which the camera caps at 1 MB/s. Clips the camera won't serve over HTTP (a Video Doorbell with RTMP off) come over Baichuan instead.
 - **SD recordings the camera damaged while recording now play:** when the browser's decoder gives up on one, the server re-encodes it with the damage concealed, as VLC and the Reolink app do.
+- **Timeline: an event clip cut short by a dropped stream ends where its video ends** instead of freezing on the last frame while the cursor moves on.
+- **Self-wake log lines are one short line;** the probe evidence behind them moved to debug level.
 
 ## 1.1.1
 

@@ -56,8 +56,16 @@
                     title="@(_skipEvents
                         ? T["Events only is on: playback skips the quiet stretches and pauses after the day's last event. Click for normal playback."]
                         : T["Events only: playback hops from event to event; the quiet stretches in between are skipped, and after the day's last event it pauses. Categories hidden in the EVENTS filter are skipped too."])"
-                    @onclick="ToggleSkipEvents">
+                    @onclick="ToggleSkipEventsAsync">
                 @UiIcon.Render("skip-fwd", 12) @T["Events only"]
+            </button>
+            @* The camera's own copies of events, fetched from its card (battery cameras). *@
+            <button class="chip tl-evonly @(_sdCard ? "chip-active" : "chip-off")"
+                    title="@(_sdCard
+                        ? T["SD card is on: the camera's own copy of each event fills the seconds before Neolink's own recording began. Click to hide it."]
+                        : T["SD card (beta): also play the camera's own copy of each event for the seconds before Neolink's own recording began. Useful for battery cameras."])"
+                    @onclick="ToggleSdCardAsync">
+                @UiIcon.Render("archive", 12) @T["SD card"] <span class="beta-tag">@T["BETA"]</span>
             </button>
         </div>
 
@@ -480,6 +488,17 @@
                     @foreach (var cam in Included)
                     {
                         <div class="tl-lane">
+                            @* Card copies: drawn only where Neolink has no footage of its own. *@
+                            @if (_sdCard)
+                            {
+                                @foreach (var (ps, pe) in SdPieces(cam.Name))
+                                {
+                                    @if (InView(ps, pe))
+                                    {
+                                        <div class="tl-cov tl-cov-sd" title="@T["From the camera's SD card"]" style="left:@Pct(ps); width:@W(pe - ps)"></div>
+                                    }
+                                }
+                            }
                             @if (_cov.TryGetValue(cam.Name, out var segs))
                             {
                                 @foreach (var s in segs)
@@ -498,6 +517,16 @@
                                     {
                                         <div class="tl-ev" title="@m.Title"
                                              style="left:@Pct(m.Start); width:@WMark(m.End - m.Start); background:@m.Color"></div>
+                                    }
+                                }
+                            }
+                            @if (_sdCard && _sdStrip.TryGetValue(cam.Name, out var strip))
+                            {
+                                @foreach (var (ss, se, title) in strip)
+                                {
+                                    @if (InView(ss, se))
+                                    {
+                                        <div class="tl-sd-strip" title="@title" style="left:@Pct(ss); width:@W(se - ss)"></div>
                                     }
                                 }
                             }
@@ -647,7 +676,8 @@
     private sealed record Seg(double Start, double Span, string Url);
     /// <summary>One event as a colored lane mark (seconds of day). Kind is the
     /// legend category the EVENTS filter switches on and off.</summary>
-    private sealed record Mark(double Start, double End, string Color, string Title, string Kind);
+    /// <summary>CamStart: where the camera's own card copy begins (equals Start when there is none).</summary>
+    private sealed record Mark(double Start, double End, string Color, string Title, string Kind, double CamStart);
 
     private const string PrefsKey = "neolink.timeline";
     /// <summary>Timeline preferences. Fields are nullable so a partial blob (an
@@ -663,6 +693,8 @@
         public double? BoardH { get; set; }
         public double? StudioBoardH { get; set; }
         public double? StudioRailW { get; set; }
+        public bool? EventsOnly { get; set; }
+        public bool? SdCard { get; set; }
     }
 
     // ------------------------------------------------------------ resizable tracks
@@ -1085,6 +1117,8 @@
     {
         _cov.Clear();
         _eventSegs.Clear();
+        _sdSegs.Clear();
+        _sdStrip.Clear();
         _marks.Clear();
         _playing = false;
 
@@ -1125,7 +1159,9 @@
                 if (!_marks.TryGetValue(ev.Camera, out var list))
                     _marks[ev.Camera] = list = new List<Mark>();
                 var evKind = EventKind(ev.Labels);
-                list.Add(new Mark(s, e, KindColor(evKind), $"{ev.LocalTitle(k => T[k])} · {start:HH:mm:ss}", evKind));
+                double camStart = ev.HasCameraClip && ev.CameraClipStart is { } ccs
+                    ? Math.Clamp((ccs.ToLocalTime() - _date).TotalSeconds, 0, s) : s;
+                list.Add(new Mark(s, e, KindColor(evKind), $"{ev.LocalTitle(k => T[k])} · {start:HH:mm:ss}", evKind, camStart));
 
                 // The clip (full main-stream) is what plays; the sub-stream preview
                 // is a lighter fallback. Offset into the file = cursor − event start.
@@ -1135,8 +1171,25 @@
                     if (!_eventSegs.TryGetValue(ev.Camera, out var segs))
                         _eventSegs[ev.Camera] = segs = new List<Seg>();
                     var url = $"{Base}/api/events/{Uri.EscapeDataString(ev.Id)}/{kind}{TokenQuery('?')}";
-                    segs.Add(new Seg(s, dur,
+                    // The clip can be shorter than the event when the stream died mid-way.
+                    double clipDur = ev.ClipSeconds is { } written && written > 0 ? Math.Min(written, dur) : dur;
+                    segs.Add(new Seg(s, clipDur,
                         $"{url}{(url.Contains('?') ? '&' : '?')}v={ev.ArtifactVersion}"));
+                }
+                // The camera's own copy from its SD card covers only the gap before Neolink's
+                // own recording began (the seconds a battery camera spent waking up).
+                if (ev.HasCameraClip && ev.CameraClipStart is { } camStartUtc)
+                {
+                    double cs = (camStartUtc.ToLocalTime() - _date).TotalSeconds;
+                    double lead = Math.Min(s, cs + (ev.CameraClipSeconds ?? dur)) - cs;
+                    if (cs >= 0 && lead >= 1)
+                    {
+                        if (!_sdSegs.TryGetValue(ev.Camera, out var sdSegs))
+                            _sdSegs[ev.Camera] = sdSegs = new List<Seg>();
+                        var camUrl = $"{Base}/api/events/{Uri.EscapeDataString(ev.Id)}/camera{TokenQuery('?')}";
+                        sdSegs.Add(new Seg(cs, lead,
+                            $"{camUrl}{(camUrl.Contains('?') ? '&' : '?')}v={ev.ArtifactVersion}"));
+                    }
                 }
             }
         }
@@ -1153,6 +1206,7 @@
                 await LoadCoverageAsync(cam.Name);
         }
         _covRefreshed = DateTime.UtcNow; // the periodic refresh restarts from here
+        if (_sdCard) _ = LoadSdStripAsync();
 
         // Land the cursor somewhere useful: today starts five minutes back —
         // autoplay then rolls through the recent past, which is almost always
@@ -1435,15 +1489,84 @@
     /// detections read as one incident, and a sub-second seek would stutter.</summary>
     private const double SkipBridge = 2;
 
-    private void ToggleSkipEvents() => _skipEvents = !_skipEvents;
+    private Task ToggleSkipEventsAsync()
+    {
+        _skipEvents = !_skipEvents;
+        return SavePrefsAsync();
+    }
+
+    /// <summary>Show the camera's own copies of events (from its SD card) as footage; off by default.</summary>
+    private bool _sdCard;
+    private readonly Dictionary<string, List<Seg>> _sdSegs = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The parts of a camera's card copies that Neolink's own footage (continuous or event clips) does not cover.</summary>
+    private IEnumerable<(double Start, double End)> SdPieces(string camera)
+    {
+        if (!_sdSegs.TryGetValue(camera, out var sd)) yield break;
+        var own = new List<(double Start, double End)>();
+        if (_cov.TryGetValue(camera, out var cov)) own.AddRange(cov.Select(c => (c.Start, c.Start + c.Span)));
+        if (_eventSegs.TryGetValue(camera, out var evs)) own.AddRange(evs.Select(e => (e.Start, e.Start + e.Span)));
+        own.Sort();
+        foreach (var s in sd)
+        {
+            double at = s.Start, end = s.Start + s.Span;
+            foreach (var (os, oe) in own)
+            {
+                if (oe <= at) continue;
+                if (os >= end) break;
+                if (os > at) yield return (at, os);
+                at = Math.Max(at, oe);
+                if (at >= end) break;
+            }
+            if (at < end) yield return (at, end);
+        }
+    }
+
+    private async Task ToggleSdCardAsync()
+    {
+        _sdCard = !_sdCard;
+        await SavePrefsAsync();
+        await SyncVideosAsync();
+        if (_sdCard) _ = LoadSdStripAsync();
+    }
+
+    /// <summary>What each camera's card holds for the day, for the strip along the lane's foot.</summary>
+    private readonly Dictionary<string, List<(double Start, double End, string Title)>> _sdStrip = new(StringComparer.OrdinalIgnoreCase);
+    private int _sdStripSeq;
+
+    /// <summary>Asks each shown camera for its card's list (quietly: a sleeping camera is left asleep).</summary>
+    private async Task LoadSdStripAsync()
+    {
+        int seq = ++_sdStripSeq;
+        var date = _date;
+        foreach (var cam in Included.ToList())
+        {
+            try
+            {
+                var list = await GetJsonAsync<ApiSdRecordings>(
+                    $"/api/cameras/{Uri.EscapeDataString(cam.Name)}/sdcard/recordings?date={date:yyyy-MM-dd}&quiet=1");
+                if (seq != _sdStripSeq || date != _date) return;
+                if (list == null) continue;
+                _sdStrip[cam.Name] = list.Recordings
+                    .Where(r => r.Start.Date == date)
+                    .Select(r => ((r.Start - date).TotalSeconds, Math.Min(DaySeconds, (r.End - date).TotalSeconds),
+                        T.F("On the camera's SD card: {0}, {1} s", r.Start.ToString("HH:mm:ss"), (int)(r.End - r.Start).TotalSeconds)))
+                    .ToList();
+                StateHasChanged();
+            }
+            catch { /* no card, or the camera refused: the strip just stays empty */ }
+        }
+    }
 
     /// <summary>The visible events merged into sorted, non-overlapping play
     /// windows. Obeys the EVENTS filter, like the [ and ] hops.</summary>
     private List<(double Start, double End)> EventWindows()
     {
         var merged = new List<(double Start, double End)>();
+        // With the SD card switch on, an event begins where the camera's own copy does.
         var marks = Included
             .SelectMany(c => _marks.TryGetValue(c.Name, out var m) ? VisibleMarks(m) : Array.Empty<Mark>())
+            .Select(m => (Start: _sdCard ? m.CamStart : m.Start, m.End))
             .OrderBy(m => m.Start);
         foreach (var m in marks)
         {
@@ -1569,6 +1692,8 @@
         if (p.BoardH is { } bh) _boardH = Math.Clamp(bh, MinBoard, 4000);
         if (p.StudioBoardH is { } sbh) _studioBoardH = Math.Clamp(sbh, MinBoard, 4000);
         if (p.StudioRailW is { } rw) _studioRailW = Math.Clamp(rw, MinRail, 2000);
+        if (p.EventsOnly is { } eo) _skipEvents = eo;
+        if (p.SdCard is { } sd) _sdCard = sd;
     }
 
     /// <summary>Signed in: the account's server-side prefs override the local copy —
@@ -1598,6 +1723,8 @@
             BoardH = _boardH,
             StudioBoardH = _studioBoardH,
             StudioRailW = _studioRailW,
+            EventsOnly = _skipEvents,
+            SdCard = _sdCard,
         });
 
     private async Task SavePrefsAsync()
@@ -1685,8 +1812,11 @@
             var hit = cont.FirstOrDefault(s => _t >= s.Start && _t < s.Start + s.Span);
             if (hit != null) return hit;
         }
-        if (_eventSegs.TryGetValue(camera, out var evs))
-            return evs.FirstOrDefault(s => _t >= s.Start && _t < s.Start + s.Span);
+        if (_eventSegs.TryGetValue(camera, out var evs)
+            && evs.FirstOrDefault(s => _t >= s.Start && _t < s.Start + s.Span) is { } ev)
+            return ev;
+        if (_sdCard && _sdSegs.TryGetValue(camera, out var sd))
+            return sd.FirstOrDefault(s => _t >= s.Start && _t < s.Start + s.Span);
         return null;
     }
 

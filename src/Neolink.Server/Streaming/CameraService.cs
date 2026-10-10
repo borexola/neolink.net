@@ -326,7 +326,17 @@ public sealed class CameraService : ILiveCameraSource
     // everything else streams around the clock (the pre-battery behavior). A live
     // keep-alive window suspends dozing entirely (see KeepAliveActive).
     private bool AllowSleep => _demandHub != null && !(_config.AlwaysOn ?? !_batteryPowered)
-                               && !KeepAliveActive && !HoldAwake;
+                               && !KeepAliveActive && !HoldAwake && DateTime.UtcNow.Ticks >= Volatile.Read(ref _holdUntilTicks);
+
+    private long _holdUntilTicks;
+
+    /// <summary>Holds the camera awake for <paramref name="span"/> (SD-card browsing): a parked
+    /// camera reconnects, a connected one stops dozing until the hold expires.</summary>
+    public void HoldAwakeFor(TimeSpan span)
+    {
+        long until = (DateTime.UtcNow + span).Ticks;
+        if (until > Volatile.Read(ref _holdUntilTicks)) Volatile.Write(ref _holdUntilTicks, until);
+    }
 
     /// <summary>Held awake at runtime (emergency mode): the camera stops dozing for
     /// as long as this is set, exactly like an open keep-alive window and with the
@@ -1436,8 +1446,12 @@ public sealed class CameraService : ILiveCameraSource
             false => $"the camera said AWAKE {d.SleepStatusMs:0}ms after connect (it was already up)",
             _ => "the camera never sent a sleepStatus push",
         };
-        Log.Info($"{Tag}: [wake-diag] {d.Verdict(WakeProbeTimeout.TotalMilliseconds)}. " +
-                 $"Evidence: {edge} " +
+        // The happy case is one short line; the evidence only matters when something is off.
+        if (d.SawDetection)
+            Log.Info($"{Tag}: self-wake caught{(d.HintSource != null ? " (router wake hint)" : "")}: a detection followed");
+        else
+            Log.Info($"{Tag}: [wake-diag] {d.Verdict(WakeProbeTimeout.TotalMilliseconds)}.");
+        Log.Debug($"{Tag}: [wake-diag] evidence: {edge} " +
                  $"({d.ProbesTotal} probes this park, slowest answer {d.SlowestAnsweredMs:0}ms of a " +
                  $"{WakeProbeTimeout.TotalMilliseconds:0}ms timeout); " +
                  $"{d.UnansweredSummary(WakeProbeTimeout.TotalMilliseconds)}; {sleepSaid}; " +
