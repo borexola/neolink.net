@@ -75,6 +75,8 @@ public static class EventSearch
         ["line-crossing"] = new[] { "line-crossing", "crossline", "crossing", "tripwire" },
         ["intrusion"] = new[] { "intrusion", "intruder" },
         ["loitering"] = new[] { "loitering", "loiterer" },
+        ["object-left"] = new[] { "object-left", "abandoned", "forgotten", "unattended" },
+        ["object-taken"] = new[] { "object-taken", "removed", "stolen" },
     };
 
     // Words a query needs but a match never does — the asking, not the scene.
@@ -938,7 +940,8 @@ public static class EventSearch
             "All five fields are always present: {\"labels\":[],\"cameras\":[],\"from\":null,\"to\":null,\"keywords\":[]}\n" +
             "Rules:\n" +
             "- labels: zero or more of exactly person, vehicle, animal, package, doorbell, motion, crying, " +
-            "line-crossing, intrusion, loitering. Map words in any language: car/truck/bike -> vehicle, " +
+            "line-crossing, intrusion, loitering, object-left, object-taken. Map words in any language: " +
+            "car/truck/bike -> vehicle, " +
             "someone/man/woman/kid -> person, dog/cat -> animal. Never output any other label.\n" +
             $"- cameras: only names copied character-for-character from this list: {camList}. Several may match. " +
             "A place this list does not name is NOT a camera: leave cameras alone and put the place word, in " +

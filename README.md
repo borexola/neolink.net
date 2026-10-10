@@ -227,7 +227,7 @@ recording, notifications and Home Assistant continue to follow the camera.
 - **Events** review strip and deep-linkable events page, a synced
   multi-camera **Timeline** with footage export, and **camera SD-card
   playback** (preview)
-- **Perimeter protection**: line-crossing / intrusion / loitering alerts from
+- **Perimeter protection**: line-crossing / intrusion / loitering / object left or taken alerts from
   the Reolink app become their own event types — opt-in per camera under
   *Event types* (an untouched setup records what it always did); they get
   their own icons in the strip
@@ -781,7 +781,8 @@ onvif:
 
 - Frigate signs in as an RTSP user. With no users, PTZ only listens on a
   loopback `ptz_bind`.
-- Presets need the camera's HTTP API. Zoom is untested on a real zoom camera.
+- Presets come from the camera's HTTP API, or over Baichuan when it has none.
+  Zoom is untested on a real zoom camera.
   Click-to-move and autotracking aren't offered.
 - Video stays on RTSP. In Docker, publish the PTZ port or use host networking.
 

@@ -1024,6 +1024,252 @@ public static class SelfTest
             Assert(!Streaming.CameraControl.SupportFlag(null, "ptzMode"), "no Support xml = unsupported");
         });
 
+        Test("floodlight task id: 438 when answered, else the firmware's 289", () =>
+        {
+            // Every analysed IPC firmware defines GET_FLOODLIGHT_TASK as 289; none has 438.
+            var c = Streaming.CameraControl.ClassifyFloodlight(answered438: true, answered289: true, spotlightBit: true);
+            Assert(c is { Floodlight: true, SpotlightTasks: false } && c.ReadId == 438, "438 keeps today's floodlight");
+            c = Streaming.CameraControl.ClassifyFloodlight(answered438: false, answered289: true, spotlightBit: false);
+            Assert(c is { Floodlight: true, SpotlightTasks: false } && c.ReadId == 289, "289 alone makes a floodlight (Duo)");
+            c = Streaming.CameraControl.ClassifyFloodlight(answered438: false, answered289: true, spotlightBit: true);
+            Assert(c is { Floodlight: false, SpotlightTasks: true } && c.ReadId == 289,
+                "a spotlight stays a spotlight; 289 only adds its brightness (Lumus)");
+            c = Streaming.CameraControl.ClassifyFloodlight(answered438: false, answered289: false, spotlightBit: true);
+            Assert(c is { Floodlight: false, SpotlightTasks: false }, "nothing answered, nothing claimed");
+        });
+
+        Test("negotiated encryption outside the known set is called out", () =>
+        {
+            Assert(BcCamera.UnfamiliarEncryption(0x12, "md5") == null, "FullAes + md5 is the norm");
+            Assert(BcCamera.UnfamiliarEncryption(0x02, "") == null, "AES with no type element");
+            Assert(BcCamera.UnfamiliarEncryption(0x01, "whatever") == null, "BCEncrypt has no AES key");
+            Assert(BcCamera.UnfamiliarEncryption(0x13, "md5") != null, "an unseen scheme byte");
+            Assert(BcCamera.UnfamiliarEncryption(0x12, "sha256") != null, "a non-MD5 key type");
+        });
+
+        Test("SD fetch: Playback query, stream from the file name, container sniffing", () =>
+        {
+            AssertEq(ReolinkHttpApi.StreamOfFile("Mp4Record/2026-10-09/RecM02_20261009_101500_101600_0.mp4") ?? "", "main");
+            AssertEq(ReolinkHttpApi.StreamOfFile("RecS03_x.mp4") ?? "", "sub");
+            Assert(ReolinkHttpApi.StreamOfFile("clip.mp4") == null, "no stream marker, no guess");
+            using var api = new ReolinkHttpApi("10.0.0.5", "admin", "pw", 0);
+            var pb = api.RecordingQuery("Playback", "RecM02_a.mp4", "TOK");
+            Assert(pb.Contains("cmd=Playback") && pb.Contains("source=RecM02_a.mp4") && pb.Contains("filename=RecM02_a.mp4")
+                   && pb.Contains("channel=0") && pb.Contains("stream=main") && pb.EndsWith("token=TOK"),
+                "Playback carries what the firmware's parser reads");
+            var dl = api.RecordingQuery("Download", "RecM02_a.mp4", "TOK");
+            Assert(dl.Contains("cmd=Download") && !dl.Contains("filename="), "Download keeps its own query");
+            AssertEq(Web.SdSpool.SniffContainer("FLV\x01\x05"u8) ?? "", "flv");
+            AssertEq(Web.SdSpool.SniffContainer(new byte[] { 0, 0, 0, 0x20, (byte)'f', (byte)'t', (byte)'y', (byte)'p' }) ?? "", "mp4");
+            Assert(Web.SdSpool.SniffContainer(new byte[] { 0x31, 0x30, 0x30, 0x31, 0, 0, 0, 0 }) == null, "BcMedia is not a container");
+            // A Lumus download: a 32-byte BcMedia info header, then the MP4 file itself.
+            var wrapped = new byte[64];
+            "1001"u8.CopyTo(wrapped);
+            wrapped[35] = 0x20; // ftyp box size 32, big-endian
+            "ftyp"u8.CopyTo(wrapped.AsSpan(36));
+            AssertEq(Web.SdSpool.Mp4Offset(wrapped) ?? -1, 32);
+            Assert(Web.SdSpool.Mp4Offset(new byte[64]) == null, "no ftyp, no offset");
+        });
+
+        Test("SD card over Baichuan: calendar, search and download bodies", () =>
+        {
+            var req = BcCameraCommands.BuildDayRecords(0, new DateTime(2026, 10, 1), new DateTime(2026, 10, 31, 23, 59, 59));
+            AssertEq((string?)req.Element("startTime")?.Element("month") ?? "", "10");
+            AssertEq((string?)req.Element("DayRecordList")?.Element("DayRecord")?.Element("channelId") ?? "", "0");
+            // The firmware counts days from 0 and lists only the recorded ones.
+            var cal = System.Xml.Linq.XElement.Parse(
+                "<DayRecords><DayRecordList><DayRecord><channelId>0</channelId><dayTypeList>" +
+                "<dayType><index>3</index><type>normal</type></dayType><dayType><index>9</index><type>none</type></dayType>" +
+                "<dayType><index>30</index><type>alarm</type></dayType></dayTypeList></DayRecord></DayRecordList></DayRecords>");
+            AssertEq(string.Join(",", BcCameraCommands.ParseDayRecords(cal, 2026, 10)), "4,31");
+            var zero = System.Xml.Linq.XElement.Parse(
+                "<DayRecords><dayType><index>0</index><type>all</type></dayType></DayRecords>");
+            AssertEq(string.Join(",", BcCameraCommands.ParseDayRecords(zero, 2026, 10)), "1");
+            var feb = System.Xml.Linq.XElement.Parse(
+                "<DayRecords><dayType><index>28</index><type>normal</type></dayType></DayRecords>");
+            AssertEq(string.Join(",", BcCameraCommands.ParseDayRecords(feb, 2026, 2)), "");
+
+            var search = BcCameraCommands.BuildFileSearch(0, "mainStream", new DateTime(2026, 10, 9), new DateTime(2026, 10, 9, 23, 59, 59));
+            var types = search.Element("FileInfo")?.Element("recordType")?.Value ?? "";
+            Assert(types.Contains("md") && types.Contains("visitor") && types.Length < 128,
+                "every record type asked for, within the firmware's 128-byte field");
+            // An HTTP-listed file's Baichuan twin is found by start time; the name carries it.
+            AssertEq(Streaming.CameraControl.SdStartFromName(
+                "/mnt/sda/Mp4Record/2026-10-07/RecM0A_20261007_000521_000555_0_6D288080000000_12A2828.mp4")?.ToString("s") ?? "",
+                "2026-10-07T00:05:21");
+            Assert(Streaming.CameraControl.SdStartFromName("0120261007132948") == null, "a Baichuan name has no start");
+            var reply = System.Xml.Linq.XElement.Parse(
+                "<FileInfoList><FileInfo><handle>7</handle></FileInfo>" +
+                "<FileInfo><name>RecM02_a.mp4</name><sizeL>10</sizeL><sizeH>1</sizeH>" +
+                "<startTime><year>2026</year><month>10</month><day>9</day><hour>10</hour><minute>15</minute><second>0</second></startTime>" +
+                "<endTime><year>2026</year><month>10</month><day>9</day><hour>10</hour><minute>16</minute><second>0</second></endTime>" +
+                "</FileInfo></FileInfoList>");
+            AssertEq(BcCameraCommands.SearchHandle(reply) ?? -1, 7);
+            var files = BcCameraCommands.ParseFileInfos(reply).ToList();
+            Assert(files.Count == 1 && files[0].Name == "RecM02_a.mp4" && files[0].Size == (1L << 32) + 10
+                   && files[0].Start == new DateTime(2026, 10, 9, 10, 15, 0), "entry, 64-bit size and times parse");
+            var dl = BcCameraCommands.BuildDownload(files[0].Raw);
+            AssertEq((string?)dl.Element("FileInfo")?.Element("name") ?? "", "RecM02_a.mp4");
+        });
+
+        Test("camera clock: drift is fixed, zone and DST offsets are kept", () =>
+        {
+            var utc = new DateTime(2026, 10, 9, 18, 0, 0);
+            const int regina = 21600; // UTC-6, seconds west
+            Assert(Streaming.CameraClock.Correction(new DateTime(2026, 10, 9, 12, 0, 30), utc, regina) == null, "in sync");
+            Assert(Streaming.CameraClock.Correction(new DateTime(2026, 10, 9, 13, 0, 10), utc, regina) == null,
+                "an hour off is the camera's own DST: left alone");
+            AssertEq(Streaming.CameraClock.Correction(new DateTime(2026, 10, 9, 12, 7, 0), utc, regina),
+                (DateTime?)new DateTime(2026, 10, 9, 12, 0, 0));
+            AssertEq(Streaming.CameraClock.Correction(new DateTime(2026, 10, 9, 13, 9, 0), utc, regina),
+                (DateTime?)new DateTime(2026, 10, 9, 13, 0, 0));
+            AssertEq(Streaming.CameraClock.Correction(new DateTime(2000, 1, 1, 0, 3, 0), utc, regina),
+                (DateTime?)new DateTime(2026, 10, 9, 12, 0, 0));
+            Assert(Streaming.CameraClock.Correction(new DateTime(2026, 10, 9, 0, 0, 0), utc, regina) == null,
+                "a plausible date many hours off is not guessed at");
+        });
+
+        Test("device settings over Baichuan: the firmware's own request shapes", () =>
+        {
+            System.Xml.Linq.XElement X(string s) => System.Xml.Linq.XElement.Parse(s);
+            var reboot = Streaming.CameraControl.ParseAutoReboot(X(
+                "<AutoReboot><enable>1</enable><weekDay>Everyday</weekDay><hour>3</hour><minute>30</minute><second>0</second></AutoReboot>"));
+            Assert(reboot is { Enabled: true, WeekDay: "everyday", Hour: 3, Minute: 30 }, "auto-reboot parses");
+            AssertEq(Streaming.CameraControl.MatchCase("monday", "Everyday"), "Monday");
+
+            // Guard: the camera applies settings only under setGrd; needSetPos 1 also saves the position.
+            var guard = X("<PtzGuard><channelId>0</channelId><benable>0</benable><bvalid>1</bvalid><timeout>60</timeout></PtzGuard>");
+            Assert(Streaming.CameraControl.ParseGuard(guard) is { Enabled: false, Valid: true, Timeout: 60 }, "guard parses");
+            var cfg = Streaming.CameraControl.BuildGuard(guard, true, 90, null);
+            Assert((string?)cfg.Element("benable") == "1" && (string?)cfg.Element("timeout") == "90"
+                   && (string?)cfg.Element("command") == "setGrd" && (string?)cfg.Element("needSetPos") == "0",
+                "a settings write is setGrd that keeps the saved position");
+            var set = Streaming.CameraControl.BuildGuard(guard, null, null, "set");
+            Assert((string?)set.Element("command") == "setGrd" && (string?)set.Element("needSetPos") == "1", "set = setGrd");
+            AssertEq((string?)Streaming.CameraControl.BuildGuard(guard, null, null, "go").Element("command") ?? "", "toGrd");
+            Assert(guard.Element("command") == null, "the camera's element is not mutated");
+
+            // Patrols run through PTZ control (msg 18), not the patrol config.
+            var run = Streaming.CameraControl.BuildPatrolControl(0, 2, true);
+            Assert((string?)run.Element("command") == "startPatrol" && (string?)run.Element("patrolId") == "2", "start patrol");
+            AssertEq((string?)Streaming.CameraControl.BuildPatrolControl(0, 2, false).Element("command") ?? "", "stopPatrol");
+            var cruise = X("<PtzCruise><channelId>0</channelId><cruiseList>" +
+                           "<cruise><patrolId>0</patrolId><enable>1</enable><starting>0</starting><name>Yard</name>" +
+                           "<keyPosList><keyPos><presetId>1</presetId></keyPos></keyPosList></cruise>" +
+                           "<cruise><patrolId>1</patrolId><enable>0</enable><starting>0</starting><name></name></cruise>" +
+                           "</cruiseList></PtzCruise>");
+            var patrols = Streaming.CameraControl.ParsePatrols(cruise)!;
+            Assert(patrols.Count == 1 && patrols[0] is { Id: 0, Name: "Yard" }, "empty slots are skipped");
+
+            var masks = Streaming.CameraControl.ParseMasks(X(
+                "<Shelter><enable>1</enable><shelterList><Shelter><id>0</id><width>40</width></Shelter>" +
+                "<Shelter><id>1</id><width>0</width></Shelter></shelterList></Shelter>"));
+            Assert(masks is { Enabled: true, Count: 1 }, "only drawn masks count");
+
+            var chime = Streaming.CameraControl.ParseChime(
+                X("<dingdongDeviceInfo><id>3</id><netstate>1</netstate><name>Hall</name></dingdongDeviceInfo>"),
+                X("<dingdongDeviceOpt><id>3</id><volLevel>2</volLevel><ledState>0</ledState></dingdongDeviceOpt>"),
+                X("<dingdongSilentMode><id>3</id><time>3600</time><remainTime>1200</remainTime><type>1</type></dingdongSilentMode>"));
+            Assert(chime is { Id: 3, Name: "Hall", Online: true, Volume: 2, Led: false, SilentSeconds: 1200 }, "chime parses");
+            var silence = Streaming.CameraControl.BuildDingdongSilent(3, 1800);
+            Assert((string?)silence.Element("time") == "1800" && (string?)silence.Element("type") == "1", "silence = type 1, seconds");
+            AssertEq((string?)Streaming.CameraControl.BuildDingdongSilent(3, 0).Element("type") ?? "", "0");
+            Assert(Streaming.CameraControl.BuildDingdongSilent(3, null).Element("time") == null, "a read only names the chime");
+
+            // Smart rules: one item under a top-level op, matched by index on the camera.
+            var rules = X("<IntrusionDetect><channelId>0</channelId><maxNum>4</maxNum>" +
+                          "<intrusionDetectItem><index>0</index><name>Gate</name><aiType>people</aiType><sesensitivity>50</sesensitivity><stayTime>3</stayTime></intrusionDetectItem>" +
+                          "<intrusionDetectItem><index>1</index><name>Drive</name><aiType>vehicle</aiType><sesensitivity>40</sesensitivity><stayTime>0</stayTime></intrusionDetectItem>" +
+                          "</IntrusionDetect>");
+            var parsed = Streaming.CameraControl.ParseSmartRules("intrusion", rules).ToList();
+            Assert(parsed.Count == 2 && parsed[0] is { Name: "Gate", Sensitivity: 50, Seconds: 3 }, "smart rules parse");
+            var edit = Streaming.CameraControl.BuildSmartRuleEdit(rules, "intrusionDetectItem", "stayTime", 1, 80, 5, false)!;
+            var items = edit.Elements("intrusionDetectItem").ToList();
+            Assert((string?)edit.Element("op") == "modify" && items.Count == 1
+                   && (string?)items[0].Element("index") == "1" && (string?)items[0].Element("name") == "Drive"
+                   && (string?)items[0].Element("sesensitivity") == "80" && (string?)items[0].Element("stayTime") == "5",
+                "modify sends the one edited rule, whole");
+            var del = Streaming.CameraControl.BuildSmartRuleEdit(rules, "intrusionDetectItem", "stayTime", 0, null, null, true)!;
+            Assert((string?)del.Element("op") == "delete" && del.Elements("intrusionDetectItem").Single().Element("index")!.Value == "0",
+                "delete names only its rule — never the whole list");
+            Assert(Streaming.CameraControl.BuildSmartRuleEdit(rules, "intrusionDetectItem", "stayTime", 9, 1, null, false) == null,
+                "unknown rule");
+            Assert(rules.Elements("intrusionDetectItem").All(i => i.Element("op") == null), "the camera's element is not mutated");
+
+            // SD sizes: whole GB plus the leftover MB.
+            var cards = Streaming.CameraControl.ParseHdd(X(
+                "<HddInfoList><HddInfo><number>0</number><capacity>58</capacity><capacityM>612</capacityM>" +
+                "<remainSize>11</remainSize><remainSizeM>731</remainSizeM><format>1</format><mount>1</mount></HddInfo></HddInfoList>"))!;
+            Assert(cards.Count == 1 && cards[0] is { TotalMb: 58 * 1024 + 612, FreeMb: 11 * 1024 + 731, Formatted: true, Mounted: true },
+                "SD card sizes add up");
+        });
+
+        Test("HTTP settings over Baichuan: picture, presets, AI sensitivity", () =>
+        {
+            System.Xml.Linq.XElement X(string s) => System.Xml.Linq.XElement.Parse(s);
+            var picture = Streaming.CameraControl.ParseVideoInput(X(
+                "<VideoInput version=\"1.1\"><channelId>0</channelId><bright>128</bright><contrast>120</contrast>" +
+                "<saturation>130</saturation><hue>127</hue><sharpen>128</sharpen><corridorMode>close</corridorMode></VideoInput>"));
+            Assert(picture is { Bright: 128, Contrast: 120, Saturation: 130, Hue: 127, Sharpen: 128, DayNight: null, Flip: null },
+                "VideoInput carries the sliders only");
+            Assert(Streaming.CameraControl.ParseVideoInput(X("<VideoInput><channelId>0</channelId></VideoInput>")) == null,
+                "no sliders, no picture section");
+
+            // Msg 190 lists saved slots only; the free ones are filled in up to maxPresetNum.
+            var presets = Streaming.CameraControl.ParseBcPresets(X(
+                "<PtzPreset version=\"1.1\"><channelId>0</channelId><maxPresetNum>64</maxPresetNum><maxPresetPicNum>64</maxPresetPicNum>" +
+                "<presetList><preset><id>0</id><name>Door</name><imageName></imageName></preset>" +
+                "<preset><id>5</id><name></name></preset></presetList></PtzPreset>"));
+            Assert(presets.Count == 64 && presets[0] is { Name: "Door", Enabled: true } && presets[5].Enabled
+                   && presets.Count(p => p.Enabled) == 2 && presets[1] is { Enabled: false },
+                "saved and free slots");
+            var go = Streaming.CameraControl.BuildPresetCommand(0, 5, "toPos", null);
+            var slot = go.Element("presetList")!.Element("preset")!;
+            Assert((string?)slot.Element("id") == "5" && (string?)slot.Element("command") == "toPos"
+                   && slot.Element("name") == null, "toPos names only the slot");
+            var save = Streaming.CameraControl.BuildPresetCommand(0, 2, "setPos", "Gate & yard");
+            AssertEq((string?)save.Element("presetList")!.Element("preset")!.Element("name") ?? "", "Gate & yard");
+
+            // AiDetectCfg: read by chn + type, written back whole (it carries the zone grid).
+            var read = Streaming.CameraControl.BuildAiDetectRead(0, "people");
+            Assert((string?)read.Element("chn") == "0" && (string?)read.Element("type") == "people", "AI read names chn and type");
+            var ai = X("<AiDetectCfg version=\"1.1\"><chn>0</chn><type>people</type><sensitivity>61</sensitivity>" +
+                       "<stayTime>2</stayTime><width>80</width><height>60</height><area>AAAA</area></AiDetectCfg>");
+            Assert(Streaming.CameraControl.ParseBcAiSensitivity("people", ai) is { Type: "people", Sensitivity: 61, StayTime: 2 },
+                "AI sensitivity parses");
+            Assert(Streaming.CameraControl.ParseBcAiSensitivity("vehicle", ai) == null, "a reply for another type is ignored");
+        });
+
+        Test("config.json write problems are named for the admin", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), "neolink-selftest-cfg-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            var path = Path.Combine(dir, "config.json");
+            try
+            {
+                File.WriteAllText(path, "{}");
+                Assert(Config.ConfigEditor.WriteProblem(path) == null, "a fresh file is writable");
+                // root ignores permission bits, so the denied case is only testable elsewhere.
+                if (OperatingSystem.IsWindows() || Environment.UserName != "root")
+                {
+                    File.SetAttributes(path, FileAttributes.ReadOnly);
+                    if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(path, UnixFileMode.UserRead);
+                    var problem = Config.ConfigEditor.WriteProblem(path);
+                    Assert(problem != null && problem.Contains("permission denied") && problem.Contains(Environment.UserName),
+                        $"read-only file names the user: {problem}");
+                    Assert(!problem!.Contains("cannot be read"), "it is still readable");
+                    File.SetAttributes(path, FileAttributes.Normal);
+                }
+                File.Delete(path);
+                AssertEq(Config.ConfigEditor.WriteProblem(path) ?? "", "the file does not exist");
+            }
+            finally
+            {
+                try { File.SetAttributes(path, FileAttributes.Normal); } catch { }
+                try { Directory.Delete(dir, true); } catch { }
+            }
+        });
+
         Test("channel support flag reads per-channel item then host fallback", () =>
         {
             // Privacy mode is gated on remoteAbility being >0 for the channel
@@ -1217,6 +1463,29 @@ public static class SelfTest
             AssertEq(snap.Meta.ResponseCode, (ushort)200);
             AssertEq(snap.Binary?.Length ?? -1, (int)bodyLen);
             AssertEq(wire.Position, wire.Length);
+        });
+
+        Test("bc codec: an SD download chunk keeps its clear tail after the encrypted head", () =>
+        {
+            // The firmware AES-encrypts only min(chunk, 1024) bytes of each download chunk.
+            var state = new Bc.EncryptionState();
+            state.Set(Bc.EncryptionKind.FullAes, Encoding.ASCII.GetBytes("0123456789ABCDEF"));
+            var chunk = new byte[39400];
+            Random.Shared.NextBytes(chunk);
+            var ext = XmlCrypto.Encrypt(0, Encoding.UTF8.GetBytes(
+                "<Extension version=\"1.1\"><binaryData>1</binaryData><encryptLen>1024</encryptLen></Extension>"), state);
+            byte[] payload = [.. XmlCrypto.AesCfbEncrypt(chunk.AsSpan(0, 1024), state), .. chunk.AsSpan(1024)];
+            var head = new byte[24];
+            BinaryPrimitives.WriteUInt32LittleEndian(head, BcConstants.MagicHeader);
+            BinaryPrimitives.WriteUInt32LittleEndian(head.AsSpan(4), BcConstants.MsgIdDownload);
+            BinaryPrimitives.WriteUInt32LittleEndian(head.AsSpan(8), (uint)(ext.Length + payload.Length));
+            BinaryPrimitives.WriteUInt16LittleEndian(head.AsSpan(14), 7);
+            BinaryPrimitives.WriteUInt16LittleEndian(head.AsSpan(16), 200);
+            BinaryPrimitives.WriteUInt16LittleEndian(head.AsSpan(18), BcConstants.ClassModern);
+            BinaryPrimitives.WriteUInt32LittleEndian(head.AsSpan(20), (uint)ext.Length);
+            using var wire = new MemoryStream([.. head, .. ext, .. payload]);
+            var msg = BcCodec.ReadMessageAsync(wire, new BcContext(state), CancellationToken.None).GetAwaiter().GetResult();
+            AssertSeq(msg.Binary ?? Array.Empty<byte>(), chunk);
         });
 
         Test("bcudp discovery wire format (battery-camera probe)", () =>
@@ -1819,6 +2088,21 @@ public static class SelfTest
             Assert(loiter.Active, "smart verdict with status=none stays active");
             AssertEq(string.Join(",", Recording.EventRecorder.LabelsOf(loiter).OrderBy(x => x)),
                 "loitering,person");
+
+            // The firmware's other two rule types (Elite smart_ai): "legacy" = object
+            // left behind, "loss" = object taken — their own opt-in labels.
+            var left = BcCamera.ParseAlarmEvent(System.Xml.Linq.XElement.Parse(
+                "<AlarmEvent version=\"1.1\"><channelId>0</channelId><status>none</status>" +
+                "<AItype>none</AItype><smartAiTypeList><smartAiType><type>legacy</type><index>0</index>" +
+                "</smartAiType></smartAiTypeList></AlarmEvent>"));
+            Assert(left.Active, "object-left verdict is active");
+            AssertEq(string.Join(",", Recording.EventRecorder.LabelsOf(left)), "object-left");
+            AssertEq(string.Join(",", Recording.EventRecorder.LabelsOf(BcCamera.ParseAlarmEvent(
+                System.Xml.Linq.XElement.Parse("<AlarmEvent><status>MD,loss</status><AItype>none</AItype></AlarmEvent>")))),
+                "object-taken");
+            Assert(Recording.CameraRecordingSettings.KnownLabels.Contains("object-left")
+                && !Recording.CameraRecordingSettings.DefaultLabels.Contains("object-taken"),
+                "object labels are offered but opt-in, like the other perimeter labels");
 
             // An empty <smartAiTypeList /> rides along on many pushes — no effect.
             var emptySmart = BcCamera.ParseAlarmEvent(System.Xml.Linq.XElement.Parse(

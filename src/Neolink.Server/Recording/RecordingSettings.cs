@@ -64,7 +64,7 @@ public sealed record CameraRecordingSettings(bool Events, bool Continuous, List<
         // Perimeter protection (line/zone crossing set up in the Reolink app):
         // record on these INSTEAD of the plain detections, no non-detection
         // zones needed — untick person/vehicle and keep these.
-        "line-crossing", "intrusion", "loitering",
+        "line-crossing", "intrusion", "loitering", "object-left", "object-taken",
         "motion",
     };
 

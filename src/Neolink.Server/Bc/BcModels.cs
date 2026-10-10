@@ -31,7 +31,7 @@ public static class BcConstants
     public const uint MsgIdSetServicePorts = 36;   // write ONE modified element back (Port Settings)
     public const uint MsgIdGetServicePorts = 37;   // reply: ServerPort/HttpPort/HttpsPort/RtspPort/RtmpPort/OnvifPort
     public const uint MsgIdMotion = 33;
-    public const uint MsgIdGetAbilitySupport = 58;
+    public const uint MsgIdGetAbilitySupport = 58;     // firmware name: GET_USERCFG_V20 (<UserList>)
     public const uint MsgIdVersion = 80;
     public const uint MsgIdPing = 93;
     public const uint MsgIdGetGeneral = 104;
@@ -52,11 +52,48 @@ public static class BcConstants
     public const uint MsgIdBatteryInfo = 253;
     public const uint MsgIdPlayAudio = 263;            // "audioPlayInfo" — manual siren trigger
     public const uint MsgIdFloodlightManual = 288;
+    public const uint MsgIdFloodlightTasksGet = 289;   // GET_FLOODLIGHT_TASK in every Linux IPC firmware
     public const uint MsgIdFloodlightTasksWrite = 290;
     public const uint MsgIdFloodlightStatusList = 291;
     public const uint MsgIdGetZoomFocus = 294;
     public const uint MsgIdSetZoomFocus = 295;
-    public const uint MsgIdFloodlightTasksRead = 438;
+    public const uint MsgIdFloodlightTasksRead = 438;  // reference neolink's id; absent from IPC firmware tables
+
+    // SD card (FileInfoList / DayRecords bodies).
+    public const uint MsgIdDownload = 8;
+    public const uint MsgIdDownloadStop = 9;
+    public const uint MsgIdSearchOpen = 14;
+    public const uint MsgIdSearchFile = 15;
+    public const uint MsgIdSearchClose = 16;
+    public const uint MsgIdGetDayRecords = 142;
+
+    // Device settings recovered from the firmware command tables.
+    public const uint MsgIdGetShelter = 52;        // <Shelter>: privacy masks
+    public const uint MsgIdSetShelter = 53;
+    public const uint MsgIdGetPtzCruise = 64;
+    public const uint MsgIdGetRecordEnable = 81;   // <Record>: SD recording master switch
+    public const uint MsgIdSetRecordEnable = 82;
+    public const uint MsgIdSetAutoReboot = 100;    // <AutoReboot>
+    public const uint MsgIdGetHdd = 102;           // <HddInfoList>: SD cards
+    public const uint MsgIdGetAutoReboot = 101;
+    public const uint MsgIdSetGuard = 331;         // <PtzGuard>
+    public const uint MsgIdGetGuard = 332;
+    public const uint MsgIdDingdongList = 484;     // <dingdongList>: paired chimes
+    public const uint MsgIdDingdongDeviceOpt = 485; // <dingdongDeviceOpt>: per-chime get/set/ring
+    public const uint MsgIdGetCrossline = 527;     // <CrosslineDetect>; each SET is GET + 1
+    public const uint MsgIdGetIntrusion = 529;     // <IntrusionDetect>
+    public const uint MsgIdGetLoitering = 531;     // <LoiteringDetect>
+    public const uint MsgIdGetLegacy = 549;        // <LegacyDetect>: object left behind
+    public const uint MsgIdGetLoss = 551;          // <LossDetect>: object taken
+    public const uint MsgIdGetDingdongSilent = 609; // <dingdongSilentMode>
+    public const uint MsgIdSetDingdongSilent = 610;
+    public const uint MsgIdSetVideoInput = 25;     // <VideoInput>: picture sliders, 0-255
+    public const uint MsgIdGetVideoInput = 26;
+    public const uint MsgIdGetPtzPreset = 190;     // <PtzPreset>: saved slots only; 19 goes/saves
+    public const uint MsgIdGetAudioCfg = 264;      // <audioCfg>: speaker volume
+    public const uint MsgIdSetAudioCfg = 265;
+    public const uint MsgIdGetAiDetectCfg = 342;   // <AiDetectCfg>: per-type AI sensitivity and zone
+    public const uint MsgIdSetAiDetectCfg = 343;
     public const uint MsgIdNetInfo = 464;
     public const uint MsgIdSleepState = 574;           // privacy-mode read (reply carries <sleep>)
     public const uint MsgIdSetSleepState = 575;        // privacy-mode write (<sleepState> body)

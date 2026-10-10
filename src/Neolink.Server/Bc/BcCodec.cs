@@ -147,7 +147,17 @@ public static class BcCodec
             {
                 var (kind, _) = ctx.Encryption.Snapshot();
                 var encLen = msg.Extension?.EncryptLen;
-                if (kind == EncryptionKind.FullAes && encLen.HasValue)
+                if (kind == EncryptionKind.FullAes && encLen.HasValue && msgId == BcConstants.MsgIdDownload
+                    && encLen.Value < payloadLen)
+                {
+                    // SD downloads encrypt only the head of each chunk; the rest is sent in clear.
+                    var clear = XmlCrypto.Decrypt(channelId, payload[..(int)encLen.Value], ctx.Encryption);
+                    var bin = new byte[payloadLen];
+                    clear.CopyTo(bin, 0);
+                    payload[(int)encLen.Value..].CopyTo(bin.AsSpan(clear.Length));
+                    msg.Binary = bin;
+                }
+                else if (kind == EncryptionKind.FullAes && encLen.HasValue)
                 {
                     // FullAes: the media stream is encrypted too. The ciphertext is
                     // padded, so only the plaintext length from this message's

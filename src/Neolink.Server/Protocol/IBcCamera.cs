@@ -64,6 +64,11 @@ public interface IBcCamera : IAsyncDisposable
     /// <summary>Requests a JPEG snapshot from the camera (msg 109), or null if unsupported.</summary>
     Task<byte[]?> SnapAsync(CancellationToken ct);
 
+    /// <summary>Downloads one SD-card file (msg 8, closed with msg 9) as BcMedia frames into
+    /// <paramref name="dest"/>; returns the bytes received. 0 expected = until the camera ends it.</summary>
+    Task<long> DownloadFileAsync(System.Xml.Linq.XElement request, long expectedBytes, Stream dest,
+        CancellationToken ct) => throw new NotSupportedException("this connection can't download SD files");
+
     /// <summary>
     /// Two-way talk: configures the camera's speaker for the given audio profile
     /// (msg 201, retried once after a reset if another talker holds the channel),

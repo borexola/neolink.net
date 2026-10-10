@@ -143,6 +143,8 @@ public sealed class CameraService : ILiveCameraSource
         // Perimeter protection (line/zone crossing) token spellings seen or expected
         "crossline", "cross_line", "tripwire", "intrude", "intrusion", "region",
         "perimeter", "linger", "loiter", "loitering",
+        // Object left behind / taken away (firmware rule names)
+        "legacy", "loss",
     };
     private readonly HashSet<string> _reportedAiTypes = new(StringComparer.Ordinal);
     private volatile IBcCamera? _live;
@@ -1078,6 +1080,7 @@ public sealed class CameraService : ILiveCameraSource
         _wakeClipStarted = false;
         if (!_servicesAudited)
             _ = Task.Run(() => AuditServicePortsAsync(camera, linked.Token), CancellationToken.None);
+        _ = Task.Run(() => CameraClock.MaybeSyncAsync(Name, camera, linked.Token), CancellationToken.None);
         Task? videoTask = null;
         // The status watch always runs: battery pushes keep the sidebar reading
         // fresh even without MQTT; other pushes go to the external sink if any.

@@ -55,6 +55,8 @@ public sealed record ApiFeatures(bool Ptz, bool Led, bool Pir, bool Battery,
     bool Zoom = false, bool Siren = false, bool Floodlight = false, bool Privacy = false,
     bool WhiteLed = false, bool Spotlight = false, bool Doorbell = false, bool Imaging = false,
     bool Onvif = false,
+    // A spotlight whose brightness and auto mode answer over Baichuan (no HTTP API needed).
+    bool SpotlightTasks = false,
     // The camera keeps no detection zone of its own (knowably), so Neolink keeps
     // one for it and the panel offers the editor on a card of its own.
     bool LocalZone = false);
@@ -70,6 +72,27 @@ public sealed record ApiHttpFeatures(ApiImageSettings? Image, int? Volume, ApiWi
     List<ApiSdCard>? SdCards, int? MdSensitivity = null,
     List<ApiAiSensitivity>? AiSensitivities = null, ApiOsd? Osd = null,
     bool? RecordAudio = null, int? TalkVolume = null, int? VisitorVolume = null);
+
+/// <summary>GET /api/cameras/{name}/extras — device settings over Baichuan (beta).
+/// Null members = that feature is absent on this camera.</summary>
+public sealed record ApiDeviceExtras(bool? SdRecording, ApiAutoReboot? AutoReboot, ApiGuard? Guard,
+    List<ApiPatrol>? Patrols, ApiPrivacyMasks? PrivacyMasks, List<ApiChime>? Chimes,
+    List<ApiSmartRule>? SmartRules, List<ApiSdCard>? SdCards);
+
+public sealed record ApiAutoReboot(bool Enabled, string WeekDay, int Hour, int Minute);
+
+public sealed record ApiGuard(bool Enabled, bool Valid, int? Timeout);
+
+public sealed record ApiPatrol(int Id, string Name, bool Enabled);
+
+public sealed record ApiPrivacyMasks(bool Enabled, int Count);
+
+/// <param name="Volume">0-4.</param>
+public sealed record ApiChime(int Id, string Name, bool Online, int? Volume, bool? Led, int? SilentSeconds = null);
+
+/// <param name="Seconds">Stay time (intrusion, loitering) or time threshold (object rules).</param>
+public sealed record ApiSmartRule(string Type, int Index, string Name, string AiType, int? Sensitivity,
+    int? Seconds, string? Direction);
 
 /// <summary>Picture adjustments (0-255, 128 neutral) + ISP config; null = not reported.
 /// Hdr: 0 = off, up to HdrMax (1 = on/off, 2 = off/low/high).</summary>
@@ -201,7 +224,7 @@ public sealed record ApiStorageLocation(string Role, string Label, string Path,
 /// <summary>GET /api/admin/config — the editable server settings, plus the live
 /// footage-encryption key report (source, one-way fingerprint — never the key).</summary>
 public sealed record ApiAdminConfig(string Path, bool Writable, JsonElement Settings,
-    ApiKeyInfo? Encryption = null);
+    ApiKeyInfo? Encryption = null, string? WriteProblem = null);
 
 /// <summary>The running server's secret-key report: where the key comes from
 /// ("env"/"file"/"ephemeral"), its SHA-256 fingerprint prefix, the file path when
@@ -216,7 +239,8 @@ public sealed record ApiAdminCamera(string Name, string Type, string? Address, s
     string? Uid = null, string? AlwaysOn = null, string? Stream = null, string? OnvifAddress = null,
     bool Record = true, bool Udp = false, bool UdpProbe = false, bool WakeCapture = false,
     double KeepAliveHours = 0, string? PtzMode = null, int? PtzPort = null, string? PtzOff = null, bool PtzOpen = false);
-public sealed record ApiAdminCameras(bool Writable, List<ApiAdminCamera> Cameras, ApiAdminPtz? Ptz = null);
+public sealed record ApiAdminCameras(bool Writable, List<ApiAdminCamera> Cameras, ApiAdminPtz? Ptz = null,
+    string? WriteProblem = null);
 
 /// <summary>What the camera editor checks a PTZ port against: the shared ONVIF port, the RTSP and web
 /// ports, whether it binds to loopback only, and whether any RTSP users exist.</summary>
@@ -488,6 +512,8 @@ public sealed record ApiEvent(string Id, string Camera, DateTime Start, DateTime
         ("line-crossing", "Line crossing"),
         ("intrusion", "Intrusion"),
         ("loitering", "Loitering"),
+        ("object-left", "Object left"),
+        ("object-taken", "Object taken"),
         // Recording held open from outside (the Home Assistant "Record" switch).
         ("external", "External"),
         ("motion", "Motion"),
@@ -547,6 +573,8 @@ public static class UiIcon
         "line-crossing" => "line-cross",
         "intrusion" => "shield",
         "loitering" => "clock",
+        "object-left" => "boxes",
+        "object-taken" => "archive",
         "external" => "rec",
         _ => "activity",
     };

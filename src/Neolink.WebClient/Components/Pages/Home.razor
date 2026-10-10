@@ -1,4 +1,4 @@
-@page "/"
+﻿@page "/"
 @page "/cameras/{Camera}"
 @page "/cameras/{Camera}/{Stream}"
 @using System.Text.Json
@@ -27,7 +27,7 @@
             @* The logo tile is the whole brand when collapsed — same "home" role
                as the wordmark (restores the full wall). Inline copy of favicon.svg;
                ids renamed so they can't collide with another inline use. *@
-            <span class="rail-brand" role="button" title="@T["Neolink.NET — back to the full camera wall"]" @onclick="RestoreView">
+            <span class="rail-brand" role="button" title="@T["Neolink.NET: back to the full camera wall"]" @onclick="RestoreView">
                 <svg class="rail-logo" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
                     <defs>
                         <linearGradient id="railTile" x1="0" y1="0" x2="0" y2="1">
@@ -50,12 +50,12 @@
                 </svg>
                 @if (_footageEncrypted)
                 {
-                    <span class="rail-lock" title="@T["Footage encryption is on — recordings are stored encrypted"]">@UiIcon.Render("lock", 9)</span>
+                    <span class="rail-lock" title="@T["Footage encryption is on: recordings are stored encrypted"]">@UiIcon.Render("lock", 9)</span>
                 }
             </span>
 
             <button class="icon-btn rail-toggle"
-                    title="@(RailAttention ? T["Expand the sidebar — a warning is waiting there"] : T["Expand the sidebar"])"
+                    title="@(RailAttention ? T["Expand the sidebar: a warning is waiting there"] : T["Expand the sidebar"])"
                     @onclick="() => SetSidebarCollapsedAsync(false)">
                 @UiIcon.Render("chev-right", 16)
                 @if (RailAttention)
@@ -68,7 +68,7 @@
                 @foreach (var cam in SidebarCameras)
                 {
                     <button class="rail-cam @(cam.Online || cam.Asleep ? "" : "rail-cam-offline") @(IsRouteCamera(cam.Name) ? "rail-cam-active" : "")"
-                            title="@cam.Name — @CamHeadTitle(cam)"
+                            title="@cam.Name · @CamHeadTitle(cam)"
                             @onclick="() => OpenCameraMain(cam)">
                         <span class="dot @(cam.Online ? "on" : cam.Asleep ? "doze" : "off")"></span>
                         <span class="rail-abbr">@RailAbbr(cam.Name)</span>
@@ -90,12 +90,12 @@
                 @if (_emgArmed)
                 {
                     @* Sirens may be sounding right now: say so where it cannot be missed. *@
-                    <span class="brand-emg" title="@T["Emergency mode is armed — click to open it"]"
+                    <span class="brand-emg" title="@T["Emergency mode is armed (click to open it)"]"
                           @onclick:stopPropagation="true" @onclick="OpenEmergencyTabAsync">@UiIcon.Render("siren", 12)</span>
                 }
                 @if (_footageEncrypted)
                 {
-                    <span class="brand-lock" title="@T["Footage encryption is on — recordings are stored encrypted"]">@UiIcon.Render("lock", 12)</span>
+                    <span class="brand-lock" title="@T["Footage encryption is on: recordings are stored encrypted"]">@UiIcon.Render("lock", 12)</span>
                 }
                 else
                 {
@@ -106,14 +106,14 @@
             <button class="icon-btn" title="@T["Server settings"]" @onclick="OpenServerSettingsAsync">@UiIcon.Render("gear", 18)</button>
             @* Desktop only (hidden in the mobile drawer): fold the sidebar into
                the icon rail, giving the room to the tiles. *@
-            <button class="icon-btn rail-toggle" title="@T["Collapse the sidebar to a slim rail — more room for the tiles"]"
+            <button class="icon-btn rail-toggle" title="@T["Collapse the sidebar to a slim rail, more room for the tiles"]"
                     @onclick="() => SetSidebarCollapsedAsync(true)">@UiIcon.Render("chev-left", 16)</button>
         </div>
 
         @if (_setupRequired && !_secWarnDismissed)
         {
             <div class="sec-banner">
-                <span class="sec-banner-text">⚠ @T["This server has no sign-in — anyone who can reach it can watch and control your cameras."]</span>
+                <span class="sec-banner-text">⚠ @T["This server has no sign-in: anyone who can reach it can watch and control your cameras."]</span>
                 <div class="sec-banner-actions">
                     <button class="chip" @onclick="() => { _loginError = null; _showSetupPrompt = true; }">@T["Secure now"]</button>
                     <button class="icon-btn" title="@T["Dismiss this warning"]" @onclick="DismissSecWarnAsync">✕</button>
@@ -136,7 +136,7 @@
         {
             @* Not dismissible: recording is actually stopped until space is freed. *@
             <div class="storage-banner storage-banner-full">
-                <span class="sec-banner-text">⛔ @T.F("{0} storage is FULL — recording has stopped. Free up space or extend retention/archive settings.", _storage.Label)</span>
+                <span class="sec-banner-text">⛔ @T.F("{0} storage is FULL: recording has stopped. Free up space or extend retention/archive settings.", _storage.Label)</span>
                 <div class="sec-banner-actions">
                     <a class="chip" href="monitor">@T["Monitor"]</a>
                 </div>
@@ -145,7 +145,7 @@
         else if (_storage is { } sw && !_storageWarnDismissed)
         {
             <div class="storage-banner">
-                <span class="sec-banner-text">⚠ @T.F("{0} storage is {1}% full — recording stops when it runs out.", sw.Label, sw.UsedPercent.ToString("0"))</span>
+                <span class="sec-banner-text">⚠ @T.F("{0} storage is {1}% full; recording stops when it runs out.", sw.Label, sw.UsedPercent.ToString("0"))</span>
                 <div class="sec-banner-actions">
                     <a class="chip" href="monitor">@T["Monitor"]</a>
                     <button class="icon-btn" title="@T["Dismiss for this session"]" @onclick="DismissStorageWarnAsync">✕</button>
@@ -170,7 +170,7 @@
         else if (_cameras.Count == 0)
         {
             <div class="notice">
-                @((MarkupString)T["<b>No cameras yet.</b> Open <b>Server settings</b> (the gear icon) and add your first camera — then restart the server when it prompts you."])
+                @((MarkupString)T["<b>No cameras yet.</b> Open <b>Server settings</b> (the gear icon) and add your first camera, then restart the server when it prompts you."])
                 <a href="https://github.com/borexola/neolink.net#configuration" target="_blank" rel="noopener">@T["Setup guide"] →</a>
             </div>
         }
@@ -194,7 +194,7 @@
                     <span class="cam-name">@cam.Name</span>
                     @if (cam.Udp)
                     {
-                        <span class="beta-tag" title="@T["Connected over UDP (Baichuan-over-UDP) — used by battery-only models like the Argus family"]">UDP</span>
+                        <span class="beta-tag" title="@T["Connected over UDP (Baichuan-over-UDP), used by battery-only models like the Argus family"]">UDP</span>
                     }
                     @if (cam.Battery is { } bat)
                     {
@@ -213,7 +213,7 @@
                            level, or an RJ45 jack for a camera on a cable — which is
                            not the same thing as "no signal" and must not look like it. *@
                         <span class="cam-wifi @(!link.IsWired && link.Level <= 1 ? "wifi-weak" : "")"
-                              title="@(link.IsWired ? T["Wired network (Ethernet) — no Wi-Fi signal to report"] : T.F("Wi-Fi signal: {0}", link.Label))">
+                              title="@(link.IsWired ? T["Wired network (Ethernet), no Wi-Fi signal to report"] : T.F("Wi-Fi signal: {0}", link.Label))">
                             @(link.IsWired ? UiIcon.Render("lan", 13) : UiIcon.RenderWifi(link.Level, 14))
                         </span>
                     }
@@ -222,19 +222,19 @@
                         @* Status only — resuming is always an explicit button press
                            (the tile overlay's Resume, or the camera panel header). *@
                         <span class="cam-doze-badge"
-                              title="@T["Suspended in Neolink.NET — not viewed or recorded here; resume from the tile or the camera panel (the camera itself keeps running)"]">
+                              title="@T["Suspended in Neolink.NET: not viewed or recorded here; resume from the tile or the camera panel (the camera itself keeps running)"]">
                             @UiIcon.Render("eye-off", 10) @T["suspended"]
                         </span>
                     }
                     else if (cam.Privacy)
                     {
-                        <span class="cam-privacy-badge" title="@T["Privacy mode — the camera is dark on purpose (turn it off here or in the Reolink app)"]">
+                        <span class="cam-privacy-badge" title="@T["Privacy mode: the camera is dark on purpose (turn it off here or in the Reolink app)"]">
                             🔒 @T["private"]
                         </span>
                     }
                     else if (cam.Asleep && !cam.Online)
                     {
-                        <span class="cam-doze-badge" title="@T["Battery camera sleeping — open its stream to reconnect"]">
+                        <span class="cam-doze-badge" title="@T["Battery camera sleeping; open its stream to reconnect"]">
                             @UiIcon.Render("moon", 10) @T["asleep"]
                         </span>
                     }
@@ -255,7 +255,7 @@
                     @foreach (var s in cam.Streams)
                     {
                         <button class="chip @(s.Ready ? "" : "chip-off") @(IsRouteStream(cam.Name, s.Kind) ? "chip-active" : "")"
-                                title="@T.F("Open {0} ({1}) full size — {2} {3}", cam.Name, T[s.Label], s.Path, s.Codec != null ? $"({s.Codec} {s.Width}x{s.Height})" : "")"
+                                title="@T.F("Open {0} ({1}) full size · {2} {3}", cam.Name, T[s.Label], s.Path, s.Codec != null ? $"({s.Codec} {s.Width}x{s.Height})" : "")"
                                 @onclick="() => { _sidebarOpen = false; Nav.NavigateTo(StreamUrl(cam.Name, s.Kind)); }">
                             @T[s.Label]
                             @if (s.Codec == "H265")
@@ -370,7 +370,7 @@
                 <div class="events-bar-scroll">
                     @if (strip.Count == 0)
                     {
-                        <span class="event-sub">@T["no unreviewed events match these filters — the strip hides itself when you close the filter editor"]</span>
+                        <span class="event-sub">@T["no unreviewed events match these filters; the strip hides itself when you close the filter editor"]</span>
                     }
                     @{ int trickleBudget = 8; }
                     @foreach (var ev in strip.Take(30))
@@ -380,7 +380,7 @@
                            Capped so a big backlog doesn't decode dozens of videos. *@
                         bool trickle = (ev.HasPreview || ev.HasClip) && !ev.Ongoing && trickleBudget-- > 0;
                         <div class="event-card @(ev.Ongoing ? "live" : "")" @key="ev.Id" style="@CardAspect(ev)"
-                             title="@T.F("{0} — click to play", EventTitle(ev))" @onclick="() => OpenEvent(ev)">
+                             title="@T.F("{0} (click to play)", EventTitle(ev))" @onclick="() => OpenEvent(ev)">
                             <div class="event-thumb">
                                 @if (trickle)
                                 {
@@ -411,7 +411,7 @@
                                     @if (ev.AiLevel != null)
                                     {
                                         <span class="ai-dot ai-@ev.AiLevel"
-                                              title="@(T.F("AI threat level: {0}", ev.AiLevel.ToUpperInvariant()) + (ev.AiDescription == null ? "" : " — " + ev.AiDescription))"></span>
+                                              title="@(T.F("AI threat level: {0}", ev.AiLevel.ToUpperInvariant()) + (ev.AiDescription == null ? "" : ": " + ev.AiDescription))"></span>
                                     }
                                 </span>
                                 <span class="event-sub">@ev.Camera · @Ago(ev.Start)</span>
@@ -444,7 +444,7 @@
                     @foreach (var t in StripTypes)
                     {
                         <button class="chip @(_hiddenTypes.Contains(t) ? "chip-off" : "chip-active")"
-                                title="@(_hiddenTypes.Contains(t) ? T["Hidden — click to show"] : T["Shown — click to hide"])"
+                                title="@(_hiddenTypes.Contains(t) ? T["Hidden (click to show)"] : T["Shown (click to hide)"])"
                                 @onclick="() => ToggleTypeFilterAsync(t)">@StripTypeIcon(t) @T[t]</button>
                     }
                     <span class="tool-sep"></span>
@@ -453,7 +453,7 @@
                     {
                         var name = cam.Name;
                         <button class="chip @(_hiddenCams.Contains(name) ? "chip-off" : "chip-active")"
-                                title="@(_hiddenCams.Contains(name) ? T["Hidden — click to show"] : T["Shown — click to hide"])"
+                                title="@(_hiddenCams.Contains(name) ? T["Hidden (click to show)"] : T["Shown (click to hide)"])"
                                 @onclick="() => ToggleCamFilterAsync(name)">@name</button>
                     }
                     @if (HasStripFilters)
@@ -482,7 +482,7 @@
                on a narrow phone toolbar without scrolling. Always says "Layout"; the
                loaded layout's name rides along as a value. *@
             <button class="tool-btn layouts-btn @(_showLayouts ? "active" : "")"
-                    title="@(_activeLayout != null ? T.F("Saved layouts (current: {0})", _activeLayout) : T["Saved layouts — save and reload camera arrangements"])"
+                    title="@(_activeLayout != null ? T.F("Saved layouts (current: {0})", _activeLayout) : T["Saved layouts: save and reload camera arrangements"])"
                     @onclick="() => _showLayouts = !_showLayouts">
                 @UiIcon.Render("layout", 14) <span class="tool-name">@(_activeLayout != null ? T["Layout"] + ":" : T["Layouts"])</span>
                 @if (_activeLayout != null)
@@ -566,7 +566,7 @@
                 <span class="tool-label">@T["SAVED LAYOUTS"]</span>
                 @if (_layouts.Count == 0)
                 {
-                    <span class="event-sub">@T["nothing saved yet — arrange your cameras, type a name and save"]</span>
+                    <span class="event-sub">@T["nothing saved yet: arrange your cameras, type a name and save"]</span>
                 }
                 @foreach (var l in _layouts)
                 {
@@ -597,7 +597,7 @@
         {
             <div class="perf-toast" role="status">
                 @* The name arrives from the URL and this notice renders as markup. *@
-                <span>@((MarkupString)T.F("Camera \"<b>{0}</b>\" doesn't exist on this server — showing the camera wall instead.", System.Net.WebUtility.HtmlEncode(_missingCamera)))</span>
+                <span>@((MarkupString)T.F("Camera \"<b>{0}</b>\" doesn't exist on this server; showing the camera wall instead.", System.Net.WebUtility.HtmlEncode(_missingCamera)))</span>
                 <button class="chip" @onclick="() => _missingCamera = null">@T["Got it"]</button>
             </div>
         }
@@ -616,7 +616,7 @@
                 <span>
                     @T.F("This browser cannot decode {0}, so the tile switched to the sub stream.",
                          _codecFallbackCodec ?? "H.265")
-                    @T["H.265 needs hardware decoding, which Chromium browsers only use when graphics acceleration is working — check your browser's GPU status. Other browsers on this account are unaffected."]
+                    @T["H.265 needs hardware decoding, which Chromium browsers only use when graphics acceleration is working; check your browser's GPU status. Other browsers on this account are unaffected."]
                 </span>
                 <button class="chip" @onclick="() => _showCodecFallback = false">@T["Got it"]</button>
             </div>
@@ -625,7 +625,7 @@
         @if (_showMainWarn)
         {
             <div class="perf-toast" role="status">
-                <span>⚡ @((MarkupString)T["More than 4 <b>main</b> streams on screen — decoding several high-res feeds can strain this device. Sub streams keep the wall smooth; a maximized tile switches itself to main quality."])</span>
+                <span>⚡ @((MarkupString)T["More than 4 <b>main</b> streams on screen; decoding several high-res feeds can strain this device. Sub streams keep the wall smooth; a maximized tile switches itself to main quality."])</span>
                 <button class="chip" @onclick="() => _showMainWarn = false">@T["Got it"]</button>
             </div>
         }
@@ -678,7 +678,7 @@
                     }
                     @if (slot.Camera == null)
                     {
-                        <div class="tile-empty" title="@T["Click to choose a camera — or drag one from the sidebar"]">＋</div>
+                        <div class="tile-empty" title="@T["Click to choose a camera, or drag one from the sidebar"]">＋</div>
                     }
                     else
                     {
@@ -709,7 +709,7 @@
                                controls, and the chip used to sit on top of them. *@
                             <div class="tile-batt" @onclick:stopPropagation="true" @ondblclick:stopPropagation="true">
                                 <label class="tile-batt-keep" title="@(batt.KeepAlive
-                                           ? T["Held awake for as long as this tab watches — this spends the camera's battery. Untick to give the view a time limit again."]
+                                           ? T["Held awake for as long as this tab watches; this spends the camera's battery. Untick to give the view a time limit again."]
                                            : T.F("Live view of a battery camera: this tile stops itself after {0} minutes so the camera can go back to sleep. Tick to keep watching (holds the camera awake and spends its battery).", $"{BatteryViewBudget.TotalMinutes:0}"))">
                                     <input type="checkbox" checked="@batt.KeepAlive"
                                            @onchange="e => ToggleBatteryKeepAlive(index, (bool?)e.Value == true)" />
@@ -719,7 +719,7 @@
                                     }
                                     @if (batt.KeepAlive)
                                     {
-                                        <span>@T["held awake — spending battery"]</span>
+                                        <span>@T["held awake, spending battery"]</span>
                                     }
                                     else
                                     {
@@ -749,7 +749,7 @@
                                 <span>@T["suspended"]</span>
                                 <small>@T["not viewed or recorded here"]</small>
                                 <button type="button" class="tile-resume-btn"
-                                        title="@T.F("Resume {0} in Neolink.NET — viewing and recording start again", camera.Name)"
+                                        title="@T.F("Resume {0} in Neolink.NET: viewing and recording start again", camera.Name)"
                                         @onclick="() => ResumeCameraAsync(camera.Name)" @onclick:stopPropagation="true">
                                     @UiIcon.Render("play", 12) @T["Resume"]
                                 </button>
@@ -789,21 +789,21 @@
                             <div class="tile-privacy tile-resting tile-privacy-resume @(awake ? "tile-awake" : "tile-asleep")"
                                  role="@(awake ? "button" : null)" tabindex="@(awake ? "0" : null)"
                                  title="@(awake
-                                     ? T.F("{0} is awake — click to watch (it is already up, so this costs no extra battery)", slot.Camera)
+                                     ? T.F("{0} is awake: click to watch (it is already up, so this costs no extra battery)", slot.Camera)
                                      : null)"
                                  @onclick="async () => { if (awake) await ResumeBatteryTileAsync(index); }"
                                  @onclick:stopPropagation="true">
                                 <span class="tile-privacy-icon">@UiIcon.Render(awake ? "sun" : "moon", 22)</span>
                                 <span>@(awake ? T["awake"] : bs.Released ? T["resting"] : T["asleep"])</span>
                                 <small>@(awake
-                                    ? T["camera is up — watching it now costs no extra battery"]
+                                    ? T["camera is up; watching it now costs no extra battery"]
                                     : bs.Released
                                         ? T["stream released to save battery"]
-                                        : T["battery camera dozing — not woken automatically"])</small>
+                                        : T["battery camera dozing, not woken automatically"])</small>
                                 <button type="button" class="tile-resume-btn"
                                         title="@(awake
-                                            ? T["Watch now — the camera is already up"]
-                                            : T.F("Wake {0} and open the feed — waking spends battery", slot.Camera))"
+                                            ? T["Watch now (the camera is already up)"]
+                                            : T.F("Wake {0} and open the feed (waking spends battery)", slot.Camera))"
                                         @onclick="() => ResumeBatteryTileAsync(index)" @onclick:stopPropagation="true">
                                     @UiIcon.Render("play", 12) @(awake ? T["Watch now"] : T["Wake & watch"])
                                 </button>
@@ -816,7 +816,7 @@
                             <div class="tile-privacy tile-offline">
                                 <span class="tile-privacy-icon">@UiIcon.Render("video-off", 22)</span>
                                 <span>@T["offline"]</span>
-                                <small>@T["camera unreachable — the view returns when it answers"]</small>
+                                <small>@T["camera unreachable; the view returns when it answers"]</small>
                             </div>
                         }
                         @* Phones: the camera name floats translucent over the feed's top-right
@@ -868,7 +868,7 @@
                                UI button or HA switch). Counts down to the automatic stop; on the
                                maximized tile it doubles as the stop button (CSS gates clicks). *@
                             <div class="clip-overlay" role="button"
-                                 title="@T["Recording a clip — stops by itself; click to stop now"]"
+                                 title="@T["Recording a clip: stops by itself; click to stop now"]"
                                  @onclick="() => ToggleClipAsync(camera!)"
                                  @onclick:stopPropagation="true" @ondblclick:stopPropagation="true">
                                 <span class="clip-overlay-dot"></span>
@@ -975,7 +975,7 @@
             <div class="event-player-head">
                 <div class="event-player-title">
                     <span class="event-title">@qv.Camera</span>
-                    <span class="event-sub">@T["quick view — your layout stays as it is"]</span>
+                    <span class="event-sub">@T["quick view, your layout stays as it is"]</span>
                 </div>
                 @if (qvCam != null && qvCam.Streams.Count > 1)
                 {
@@ -1010,7 +1010,7 @@
                         <span>@T["suspended"]</span>
                         <small>@T["not viewed or recorded here"]</small>
                         <button type="button" class="tile-resume-btn"
-                                title="@T.F("Resume {0} in Neolink.NET — viewing and recording start again", qv.Camera)"
+                                title="@T.F("Resume {0} in Neolink.NET: viewing and recording start again", qv.Camera)"
                                 @onclick="() => ResumeCameraAsync(qv.Camera!)" @onclick:stopPropagation="true">
                             @UiIcon.Render("play", 12) @T["Resume"]
                         </button>
@@ -1021,7 +1021,7 @@
                     <div class="tile-privacy">
                         <span class="tile-privacy-icon">🔒</span>
                         <span>@T["privacy mode"]</span>
-                        <small>@T["the camera is dark on purpose — switch it back in camera settings or the Reolink app"]</small>
+                        <small>@T["the camera is dark on purpose; switch it back in camera settings or the Reolink app"]</small>
                     </div>
                 }
                 else if (qvCam is { Online: false, Asleep: false })
@@ -1029,7 +1029,7 @@
                     <div class="tile-privacy tile-offline">
                         <span class="tile-privacy-icon">@UiIcon.Render("video-off", 22)</span>
                         <span>@T["offline"]</span>
-                        <small>@T["camera unreachable — the view returns when it answers"]</small>
+                        <small>@T["camera unreachable; the view returns when it answers"]</small>
                     </div>
                 }
                 @ZoomHud
@@ -1080,7 +1080,7 @@
         <aside class="campanel auth-panel" role="dialog" aria-label="@T["Create admin account"]">
             <div class="campanel-head"><span class="campanel-title">🔐 @T["SECURE THIS SERVER"]</span></div>
             <div class="notice">
-                @T["No accounts exist yet, so the UI is open to anyone who can reach this address. Create the admin account to require sign-in — you can add more users afterwards. Your layout and filters will be saved per account."]
+                @T["No accounts exist yet, so the UI is open to anyone who can reach this address. Create the admin account to require sign-in; you can add more users afterwards. Your layout and filters will be saved per account."]
             </div>
             <div class="settings">
                 <label>@T["Admin username"]</label>
@@ -1256,13 +1256,13 @@
                         <div class="campanel-section">
                             <div class="campanel-section-title">@UiIcon.Render("activity", 13) @T["SERVER CONNECTION"]</div>
                             <div class="notice small">
-                                @((MarkupString)T["These settings belong to <b>this browser</b> — they are stored locally (per device, per profile) and never written to the server's config.json."])
+                                @((MarkupString)T["These settings belong to <b>this browser</b>; they are stored locally (per device, per profile) and never written to the server's config.json."])
                             </div>
                             <div class="control-row"><span>@T["Server API URL"]</span>
                                 <input class="notif-input" placeholder="@T["blank = this server"]"
                                        @bind="_server" @bind:after="OnServerChangedAsync" /></div>
                             <div class="notice small">
-                                @((MarkupString)T["Where this page sends its API calls and pulls video from. <b>Leave it blank in normal setups</b> — the UI automatically talks to the server that served it. Set it only when this UI runs somewhere else than the Neolink.NET server (a dev build, a separately hosted copy) or you want this browser to control a <i>different</i> Neolink.NET instance, e.g. <code>http://192.168.1.10:8655</code>."])
+                                @((MarkupString)T["Where this page sends its API calls and pulls video from. <b>Leave it blank in normal setups</b>: the UI automatically talks to the server that served it. Set it only when this UI runs somewhere else than the Neolink.NET server (a dev build, a separately hosted copy) or you want this browser to control a <i>different</i> Neolink.NET instance, e.g. <code>http://192.168.1.10:8655</code>."])
                             </div>
                             <div class="control-row"><span>@T["Two-way talk microphone"]</span>
                                 <select class="notif-input" @bind="_micId" @bind:after="MicChangedAsync">
@@ -1275,7 +1275,7 @@
                                 <button class="chip" @onclick="RefreshMicsAsync">@T["Refresh"]</button>
                             </div>
                             <div class="notice small">
-                                @T["Which microphone two-way talk uses on this device. Pick one explicitly when the system default is not a real microphone (a headset amplifier, a virtual cable) — talk streams silence from those. Refresh may ask for microphone permission: device names only show once it is granted."]
+                                @T["Which microphone two-way talk uses on this device. Pick one explicitly when the system default is not a real microphone (a headset amplifier, a virtual cable); talk streams silence from those. Refresh may ask for microphone permission: device names only show once it is granted."]
                             </div>
                             <div class="campanel-divider"></div>
                             <div class="campanel-subtitle">@T["CONTROL CREDENTIALS (LEGACY)"]</div>
@@ -1286,7 +1286,7 @@
                                 <input class="notif-input" type="password" placeholder="@T["password"]" autocomplete="off"
                                        @bind="_pass" @bind:after="SaveAsync" /></div>
                             <div class="notice small">
-                                @((MarkupString)T["Only for servers <b>without web sign-in</b> that define an RTSP <code>\"users\"</code> list in config.json: control actions (PTZ, camera settings, reboot) then need these credentials — the same username/password as the RTSP streams, sent as HTTP Basic. Once you are <b>signed in to the web UI, your session covers control actions and these fields are ignored</b> — leave them blank. The password is stored in this browser's local storage, so don't fill it on a shared machine."])
+                                @((MarkupString)T["Only for servers <b>without web sign-in</b> that define an RTSP <code>\"users\"</code> list in config.json: control actions (PTZ, camera settings, reboot) then need these credentials: the same username/password as the RTSP streams, sent as HTTP Basic. Once you are <b>signed in to the web UI, your session covers control actions and these fields are ignored</b>; leave them blank. The password is stored in this browser's local storage, so don't fill it on a shared machine."])
                             </div>
                             @if (_setupRequired)
                             {
@@ -1305,7 +1305,7 @@
                         <div class="campanel-section">
                             <div class="campanel-section-title">@UiIcon.Render("user", 13) @T["USERS"]</div>
                             <div class="notice small">
-                                @((MarkupString)T["Web-UI accounts (users.json) — separate from the RTSP <code>\"users\"</code> list in config.json. Changes apply immediately."])
+                                @((MarkupString)T["Web-UI accounts (users.json), separate from the RTSP <code>\"users\"</code> list in config.json. Changes apply immediately."])
                             </div>
                             @if (_usersError != null)
                             {
@@ -1365,7 +1365,7 @@
                                             <span class="event-sub">
                                                 @(_camsEditAll
                                                     ? T["Sees every camera, including ones added later."]
-                                                    : T["Sees only the cameras picked here — on the wall, in events, the timeline and search. Applies immediately."])
+                                                    : T["Sees only the cameras picked here: on the wall, in events, the timeline and search. Applies immediately."])
                                             </span>
                                             <span class="row-actions">
                                                 <button class="chip" @onclick="() => SaveUserCamerasAsync(u.Name)">@T["save"]</button>
@@ -1407,7 +1407,7 @@
                                         <input class="ret-input" type="number" min="1" max="1440"
                                                @bind="_security.LockMinutes" @bind:after="SaveSecurityAsync" /></div>
                                     <div class="notice small">
-                                        @T["Behind a reverse proxy the caller's real address is taken from the forwarded-for header the proxy adds. A proxy that sets no such header leaves every sign-in looking like the proxy itself, so the address block would apply to everyone at once — account lockouts are unaffected either way."]
+                                        @T["Behind a reverse proxy the caller's real address is taken from the forwarded-for header the proxy adds. A proxy that sets no such header leaves every sign-in looking like the proxy itself, so the address block would apply to everyone at once; account lockouts are unaffected either way."]
                                     </div>
                                     @* Key must not collide with the account rows above: duplicate
                                        sibling keys throw during the render diff. *@
@@ -1439,7 +1439,7 @@
                         <div class="campanel-section">
                             <div class="campanel-section-title">@UiIcon.Render("lan", 13) @T["RTSP USERS"]</div>
                             <div class="notice small">
-                                @((MarkupString)T["Logins for the RTSP streams (VLC, Frigate, Home Assistant…) — the <code>\"users\"</code> list in config.json. Passwords are never shown. Changes apply after a restart."])
+                                @((MarkupString)T["Logins for the RTSP streams (VLC, Frigate, Home Assistant…): the <code>\"users\"</code> list in config.json. Passwords are never shown. Changes apply after a restart."])
                             </div>
                             @if (_rtspError != null)
                             {
@@ -1500,7 +1500,7 @@
                                 @if (_rtspUsers.RestartNeeded)
                                 {
                                     <div class="notice warn small">
-                                        @((MarkupString)T["RTSP users are saved to <code>config.json</code> — <b>restart the service</b> (button below) to apply them."])
+                                        @((MarkupString)T["RTSP users are saved to <code>config.json</code>; <b>restart the service</b> (button below) to apply them."])
                                     </div>
                                 }
                             }
@@ -1512,14 +1512,14 @@
                         <div class="campanel-section">
                             <div class="campanel-section-title">@UiIcon.Render("globe", 13) @T["UI LANGUAGE"]</div>
                             <div class="notice small">
-                                @T["Every label, message and warning in this UI. The change is immediate — nothing restarts, and nothing needs reloading."]
+                                @T["Every label, message and warning in this UI. The change is immediate; nothing restarts, and nothing needs reloading."]
                                 @if (_authUser != null)
                                 {
-                                    <text> </text>@T["It is saved to your account, so it follows you to your other browsers and devices."]
+                                    @(" ")@T["It is saved to your account, so it follows you to your other browsers and devices."]
                                 }
                                 else
                                 {
-                                    <text> </text>@T["Nobody is signed in, so it is remembered in this browser only."]
+                                    @(" ")@T["Nobody is signed in, so it is remembered in this browser only."]
                                 }
                             </div>
                             <div class="lang-choice">
@@ -1530,7 +1530,7 @@
                                         @option.Native
                                         @if (option.Code != Lang.Default && Translations.Count(option.Code) == 0)
                                         {
-                                            <span class="lang-empty" title="@T["This language has no translations installed yet — the UI stays in English."]">!</span>
+                                            <span class="lang-empty" title="@T["This language has no translations installed yet; the UI stays in English."]">!</span>
                                         }
                                     </button>
                                 }
@@ -1540,7 +1540,7 @@
                                 <div class="notice error">@_langError</div>
                             }
                             <div class="notice small">
-                                @T["Languages other than English are AI-translated and cannot be fully verified for accuracy — corrections are welcome."]
+                                @T["Languages other than English are AI-translated and cannot be fully verified for accuracy; corrections are welcome."]
                             </div>
                         </div>
 
@@ -1569,22 +1569,22 @@
                             <div class="notice small">
                                 @if (_isShell)
                                 {
-                                    <text>@T["Pop a native Windows notification when a chosen camera reports a chosen detection. The desktop app delivers these itself — even while this window is closed to the tray. Clicking a notification opens the exact clip."] </text>@(_authEnabled ? T["Preferences follow your account across devices."] :
+                                    <text>@T["Pop a native Windows notification when a chosen camera reports a chosen detection. The desktop app delivers these itself, even while this window is closed to the tray. Clicking a notification opens the exact clip."] </text>@(_authEnabled ? T["Preferences follow your account across devices."] :
                                                                        T["Preferences are stored on this device."])
                                 }
                                 else
                                 {
-                                    <text>@((MarkupString)T["Pop a system notification when a chosen camera reports a chosen detection — on <b>this device</b>, while the app is open (tab or installed app, foreground or minimized; nothing arrives once it is fully closed). Clicking a notification opens the exact clip."]) </text>@(_authEnabled ? T["Preferences follow your account across browsers."] :
+                                    <text>@((MarkupString)T["Pop a system notification when a chosen camera reports a chosen detection, on <b>this device</b>, while the app is open (tab or installed app, foreground or minimized; nothing arrives once it is fully closed). Clicking a notification opens the exact clip."]) </text>@(_authEnabled ? T["Preferences follow your account across browsers."] :
                                                                                               T["Preferences are stored in this browser."])
                                 }
                             </div>
                             <div class="notice small">
-                                @((MarkupString)T["Email and webhook notifications — sent by the server whether or not this app is open — live under <b>Server settings → Notifications</b>."])
+                                @((MarkupString)T["Email and webhook notifications (sent by the server whether or not this app is open) live under <b>Server settings → Notifications</b>."])
                             </div>
                             @if (_notifPerm == "unsupported" && !_isShell)
                             {
                                 <div class="notice error">
-                                    @((MarkupString)T["This browser doesn't expose notifications on this page — they need a secure context: <b>HTTPS</b> (e.g. your reverse proxy) or <code>http://localhost</code>. Same rule as two-way talk."])
+                                    @((MarkupString)T["This browser doesn't expose notifications on this page: they need a secure context: <b>HTTPS</b> (e.g. your reverse proxy) or <code>http://localhost</code>. Same rule as two-way talk."])
                                 </div>
                             }
                             else
@@ -1596,7 +1596,7 @@
                                 <div class="control-row"><span>@(_isShell ? T["Delivery"] : T["Browser permission"])</span>
                                     @if (_isShell)
                                     {
-                                        <span title="@T["The desktop app raises these as native Windows toasts on its own — no browser permission involved. Mute or tune them from the tray icon's Notification settings, or in Windows' notification settings."]">@T["native Windows notifications"] ✓</span>
+                                        <span title="@T["The desktop app raises these as native Windows toasts on its own, no browser permission involved. Mute or tune them from the tray icon's Notification settings, or in Windows' notification settings."]">@T["native Windows notifications"] ✓</span>
                                     }
                                     else if (_notifPerm == "granted")
                                     {
@@ -1606,7 +1606,7 @@
                                     }
                                     else if (_notifPerm == "denied")
                                     {
-                                        <span title="@T["Notifications were blocked for this site — re-allow them in the browser's site settings (the lock icon in the address bar)"]">@T["blocked — re-allow in the browser's site settings"]</span>
+                                        <span title="@T["Notifications were blocked for this site; re-allow them in the browser's site settings (the lock icon in the address bar)"]">@T["blocked: re-allow in the browser's site settings"]</span>
                                     }
                                     else
                                     {
@@ -1621,13 +1621,13 @@
                                 {
                                     <div class="control-row"><span>@T["Cooldown per camera & type (seconds)"]</span>
                                         <input class="ret-input" type="number" min="0" step="5"
-                                               title="@T["After an alert fires, further identical detections from that camera stay quiet this long — so an active driveway doesn't fire twenty times."]"
+                                               title="@T["After an alert fires, further identical detections from that camera stay quiet this long, so an active driveway doesn't fire twenty times."]"
                                                value="@_alerts.CooldownSeconds"
                                                @onchange="SetAlertCooldownAsync" /></div>
                                     <div class="campanel-divider"></div>
                                     <div class="campanel-subtitle">@T["SYSTEM ALERTS"]</div>
                                     <div class="notice small">
-                                        @T["Server-wide conditions — the in-app twin of the email and webhook alerts. They fire on this device while the app is open."]
+                                        @T["Server-wide conditions, the in-app twin of the email and webhook alerts. They fire on this device while the app is open."]
                                     </div>
                                     <div class="control-row"><span>@T["Storage full / recovered"]</span>
                                         <button class="chip @(_alerts.SysStorage ? "" : "chip-off")"
@@ -1640,9 +1640,9 @@
                                                 @onclick=@(() => ToggleSysAlertAsync("write"))>@(_alerts.SysWriteFailure ? T["on"] : T["off"])</button></div>
 
                                     <div class="campanel-divider"></div>
-                                    <div class="campanel-subtitle">@T["PER CAMERA — DETECTIONS & OFFLINE"]</div>
+                                    <div class="campanel-subtitle">@T["PER CAMERA · DETECTIONS & OFFLINE"]</div>
                                     <div class="notice small">
-                                        @((MarkupString)T["Pick which detections alert per camera — <b>All</b> selects every type at once — and toggle <b>offline</b> to also alert when that camera drops off the network or comes back. Detections only fire when the matching event reaches the server (the camera detects; the server must be recording it)."])
+                                        @((MarkupString)T["Pick which detections alert per camera (<b>All</b> selects every type at once) and toggle <b>offline</b> to also alert when that camera drops off the network or comes back. Detections only fire when the matching event reaches the server (the camera detects; the server must be recording it)."])
                                     </div>
                                     <div class="alert-cams">
                                         @foreach (var cam in _cameras)
@@ -1695,7 +1695,7 @@
                             @T["Editing"] <code>@_adminConfigPath</code>.
                             @if (!_adminWritable)
                             {
-                                <b> @T["Read-only — the file cannot be written (check the mount)."]</b>
+                                <b> @T.F("Read-only: the file cannot be written ({0}).", _adminWriteProblem ?? T["check the mount"])</b>
                             }
                             @T["Changes are saved to the file and take effect after a restart. Comments in the file are not preserved."]
                         </div>
@@ -1715,11 +1715,11 @@
                     <div class="campanel-section">
                         <div class="campanel-section-title">@T["WAKE HINTS (BATTERY CAMERAS)"] <span class="beta-tag">@T["BETA"]</span></div>
                         <div class="notice small">
-                            @((MarkupString)T["Instant wake signals from the moment a battery camera calls Reolink's push service for a PIR event — recipes in <code>docs/battery-cameras.md</code>. <b>Syslog</b>: an OPNsense/pfSense router forwards its firewall log here. <b>Push decoy</b>: the camera's own push is steered to this host — a router NAT redirect of the camera's outbound 443 (recommended), or a DNS override pointing <code>pushx.reolink.com</code> here (Reolink app notifications stop for those cameras either way). Blank ports leave a source off."])
+                            @((MarkupString)T["Instant wake signals from the moment a battery camera calls Reolink's push service for a PIR event; recipes in <code>docs/battery-cameras.md</code>. <b>Syslog</b>: an OPNsense/pfSense router forwards its firewall log here. <b>Push decoy</b>: the camera's own push is steered to this host: a router NAT redirect of the camera's outbound 443 (recommended), or a DNS override pointing <code>pushx.reolink.com</code> here (Reolink app notifications stop for those cameras either way). Blank ports leave a source off."])
                         </div>
                         @AdminField(T["Router syslog UDP port (0 = off)"], "wakeHints.syslogPort", "number",
                             AdminIntError("wakeHints.syslogPort", 1, 65535, alsoAllowed: 0))
-                        @AdminField(T["Push decoy TCP ports (e.g. 8443, 53 — blank = off)"], "wakeHints.pushPorts", "text",
+                        @AdminField(T["Push decoy TCP ports (e.g. 8443, 53; blank = off)"], "wakeHints.pushPorts", "text",
                             AdminPushPortsError())
                         @AdminField(T["Listener bind (blank = server bind)"], "wakeHints.bind", "text",
                             AdminIpError("wakeHints.bind"))
@@ -1749,7 +1749,7 @@
                         <div class="notice small">
                             Streams your microphone to the camera's speaker (doorbells and other
                             cameras that support talk). Browsers only allow microphone access on
-                            <b>HTTPS</b> or <b>localhost</b> pages — on a plain http:// address the
+                            <b>HTTPS</b> or <b>localhost</b> pages; on a plain http:// address the
                             mic button will report that a secure connection is required.
                         </div>
                         @AdminToggle(T["Show background-process strip"], "ui.showBackgroundTasks")
@@ -1797,7 +1797,14 @@
                                 }
                                 @if (_adminCams.Count == 0)
                                 {
-                                    <div class="notice small">@T["No cameras configured yet — add your first one below."]</div>
+                                    <div class="notice small">@T["No cameras configured yet; add your first one below."]</div>
+                                }
+                                @if (!_adminCamsWritable)
+                                {
+                                    <div class="notice small error">
+                                        @T.F("Cameras can't be added or changed from here: Neolink.NET cannot write config.json ({0}).", _adminCamsWriteProblem ?? T["check the mount"])
+                                        @(" ")@T["Give the server's user write access to the file (chown/chmod, or a writable volume), then reopen this panel."]
+                                    </div>
                                 }
                                 <div class="settings-foot-btns">
                                     <span class="tile-spacer"></span>
@@ -1830,7 +1837,7 @@
                                     @if (CamUsernameError != null) { <div class="field-error">@CamUsernameError</div> }
                                     <div class="control-row"><span>@T["Password"]</span>
                                         <input class="notif-input" type="password" autocomplete="new-password"
-                                               placeholder="@(e.HasPassword ? T["•••• stored — blank keeps it"] : T["camera password"])"
+                                               placeholder="@(e.HasPassword ? T["•••• stored (blank keeps it)"] : T["camera password"])"
                                                @bind="e.Password" /></div>
                                     <div class="control-row"><span>@T["HTTP address (blank = derived)"]</span>
                                         <input class="notif-input" placeholder="@T["usually blank"]" @bind="e.HttpAddress" /></div>
@@ -1851,26 +1858,26 @@
                                     <div class="control-row"><span>@T["Always on"]</span>
                                         <select class="event-filter" value="@e.AlwaysOn"
                                                 @onchange='ev => e.AlwaysOn = (string?)ev.Value ?? "auto"'>
-                                            <option value="auto">@T["Auto — battery cams sleep, others stay on"]</option>
-                                            <option value="true">@T["Always on — hold the connection"]</option>
-                                            <option value="false">@T["Let it sleep — connect only when watched"]</option>
+                                            <option value="auto">@T["Auto: battery cams sleep, others stay on"]</option>
+                                            <option value="true">@T["Always on: hold the connection"]</option>
+                                            <option value="false">@T["Let it sleep: connect only when watched"]</option>
                                         </select></div>
                                     <div class="control-row"><span>@T["UID (battery / UDP models)"]</span>
                                         <input class="notif-input @(CamUidError != null ? "input-error" : "")"
-                                               placeholder="@T["95270000ABCDEFGH — from the app or the sticker"]"
+                                               placeholder="@T["95270000ABCDEFGH (from the app or the sticker)"]"
                                                @bind="e.Uid" @bind:event="oninput" /></div>
                                     @if (CamUidError != null) { <div class="field-error">@CamUidError</div> }
                                     <div class="control-row"><span>@T["Connect over UDP"]</span>
                                         <select class="event-filter" value="@(e.Udp ? "true" : "false")"
                                                 @onchange='ev => e.Udp = (string?)ev.Value == "true"'>
-                                            <option value="false">@T["No — over TCP (default)"]</option>
-                                            <option value="true">@T["Yes — Baichuan over UDP"]</option>
+                                            <option value="false">@T["No, over TCP (default)"]</option>
+                                            <option value="true">@T["Yes, Baichuan over UDP"]</option>
                                         </select></div>
                                     <div class="control-row"><span>@T["Wake capture (battery cams)"]</span>
                                         <select class="event-filter" value="@(e.WakeCapture ? "true" : "false")"
                                                 @onchange='ev => e.WakeCapture = (string?)ev.Value == "true"'>
-                                            <option value="false">@T["Off — connect on demand (default)"]</option>
-                                            <option value="true">@T["On — catch events while it sleeps"]</option>
+                                            <option value="false">@T["Off: connect on demand (default)"]</option>
+                                            <option value="true">@T["On: catch events while it sleeps"]</option>
                                         </select></div>
                                     @* Keep-alive only makes sense when the camera is allowed to
                                        sleep — hidden entirely when Always on is forced true. *@
@@ -1885,7 +1892,7 @@
                                         @if (e.KeepAliveHours > 0)
                                         {
                                             <div class="field-warn">
-                                                @T.F("Holds the camera awake for {0} hour(s) after Neolink starts, so every event is caught live — {1} Leave it Off to let the camera sleep and catch self-wakes without waking it (best-effort).",
+                                                @T.F("Holds the camera awake for {0} hour(s) after Neolink starts, so every event is caught live; {1} Leave it Off to let the camera sleep and catch self-wakes without waking it (best-effort).",
                                                     $"{e.KeepAliveHours:0}",
                                                     e.KeepAliveHours >= 8
                                                         ? T["this drains a battery camera heavily."]
@@ -1897,12 +1904,12 @@
                                         <select class="event-filter" value="@(e.UdpProbe ? "true" : "false")"
                                                 @onchange='ev => e.UdpProbe = (string?)ev.Value == "true"'>
                                             <option value="false">@T["Off (default)"]</option>
-                                            <option value="true">@T["On — log the discovery exchange"]</option>
+                                            <option value="true">@T["On: log the discovery exchange"]</option>
                                         </select></div>
                                     <div class="control-row"><span>@T["ONVIF address (blank = derived)"]</span>
                                         <input class="notif-input" placeholder="@T["usually blank"]" @bind="e.OnvifAddress" /></div>
                                     <div class="notice small">
-                                        @((MarkupString)T["<b>UID</b> is only needed for battery/UDP-only models (Argus family) — with <b>Connect over UDP</b> set, it can replace the address entirely (the camera is then found by broadcast on the local network). <b>Always on</b> auto is right for almost everyone."])
+                                        @((MarkupString)T["<b>UID</b> is only needed for battery/UDP-only models (Argus family); with <b>Connect over UDP</b> set, it can replace the address entirely (the camera is then found by broadcast on the local network). <b>Always on</b> auto is right for almost everyone."])
                                     </div>
 
                                     @* Neolink answering ONVIF for Frigate: the opposite direction to the ONVIF address above. *@
@@ -1914,13 +1921,13 @@
                                             <option value="off">@T["Off (default)"]</option>
                                             @if (_adminPtz is { SharedPort: 0 })
                                             {
-                                                <option value="shared" disabled>@T["Shared port — off in the config (ptz_port is 0)"]</option>
+                                                <option value="shared" disabled>@T["Shared port, off in the config (ptz_port is 0)"]</option>
                                             }
                                             else
                                             {
-                                                <option value="shared">@T.F("Shared port {0} — Frigate 0.18+ (recommended)", _adminPtz?.SharedPort ?? 8656)</option>
+                                                <option value="shared">@T.F("Shared port {0}, Frigate 0.18+ (recommended)", _adminPtz?.SharedPort ?? 8656)</option>
                                             }
-                                            <option value="own">@T["Own port — Frigate 0.17 and older"]</option>
+                                            <option value="own">@T["Own port, Frigate 0.17 and older"]</option>
                                         </select></div>
                                     @if (e.PtzMode == "own")
                                     {
@@ -1956,8 +1963,8 @@
                                     <div class="control-row"><span>@T["ONVIF address (blank = derived)"]</span>
                                         <input class="notif-input" placeholder="@T["usually blank"]" @bind="e.OnvifAddress" /></div>
                                     <div class="notice small">
-                                        @((MarkupString)T["Put credentials inside the URL (rtsp://user:pass@host/path). A stored password shows as <b>****</b> — leave the URL untouched to keep it."])
-                                        <text> </text>@((MarkupString)T["The camera's settings — model, picture, streams, pan/tilt, overlays — are read over <b>ONVIF</b>, found on the stream URL's own host unless you give an address here. Use a full URL (<b>http://user:pass@host:8000/onvif/device_service</b>) if its ONVIF login differs from the streaming one."])
+                                        @((MarkupString)T["Put credentials inside the URL (rtsp://user:pass@host/path). A stored password shows as <b>****</b>; leave the URL untouched to keep it."])
+                                        @(" ")@((MarkupString)T["The camera's settings (model, picture, streams, pan/tilt, overlays) are read over <b>ONVIF</b>, found on the stream URL's own host unless you give an address here. Use a full URL (<b>http://user:pass@host:8000/onvif/device_service</b>) if its ONVIF login differs from the streaming one."])
                                     </div>
                                 }
                                 @* Applies to both camera kinds, so it sits outside the branches. *@
@@ -1977,7 +1984,7 @@
                             @if (_camsNeedRestart && _camEdit == null)
                             {
                                 <div class="notice warn small">
-                                    @((MarkupString)T["Camera changes are saved to <code>config.json</code> — <b>restart the service</b> (button below) to apply them."])
+                                    @((MarkupString)T["Camera changes are saved to <code>config.json</code>; <b>restart the service</b> (button below) to apply them."])
                                 </div>
                             }
                         </div>
@@ -1988,7 +1995,7 @@
                         <div class="campanel-section">
                             <div class="campanel-section-title">@T["RECORDING"]</div>
                             <div class="notice">
-                                @T["Recording is off — this server keeps no footage. Switch it on to record detection events (clips, previews and thumbnails) for cameras that report detections. Continuous 24/7 recording stays off until you enable it per camera."]
+                                @T["Recording is off: this server keeps no footage. Switch it on to record detection events (clips, previews and thumbnails) for cameras that report detections. Continuous 24/7 recording stays off until you enable it per camera."]
                             </div>
                             <div class="control-row">
                                 <span>@T["Storage path"]</span>
@@ -1996,7 +2003,7 @@
                                        @bind="_recEnablePath" @bind:event="oninput" />
                             </div>
                             <div class="notice small">
-                                @((MarkupString)T["Where clips and 24/7 footage are written. <b>In Docker, this must be a mounted volume</b> — an unmapped path is created inside the container and its footage is lost when the container is recreated."])
+                                @((MarkupString)T["Where clips and 24/7 footage are written. <b>In Docker, this must be a mounted volume</b>; an unmapped path is created inside the container and its footage is lost when the container is recreated."])
                             </div>
                             @if (_recEnableError != null)
                             {
@@ -2005,7 +2012,7 @@
                             @if (!_adminWritable)
                             {
                                 <div class="notice warn small">
-                                    @((MarkupString)T["<code>config.json</code> is not writable by the server, so recording cannot be switched on from here — add a <code>recording</code> section to the file instead."])
+                                    @((MarkupString)T["<code>config.json</code> is not writable by the server, so recording cannot be switched on from here; add a <code>recording</code> section to the file instead."])
                                 </div>
                             }
                             else
@@ -2047,7 +2054,7 @@
                             <div class="campanel-divider"></div>
                             @AdminToggle(T["Encrypt footage"], "recording.encrypt")
                             <div class="notice small">
-                                @((MarkupString)T["New footage — event clips, previews, thumbnails and 24/7 segments — is written encrypted (AES-256-GCM) so a stolen disk or a copied backup exposes nothing. Playback, seeking and exports work exactly as before; footage recorded before turning this on keeps playing unencrypted. Applies after a restart, to new recordings only. ⚠ The key is the server's <b>secret.key</b> in the state dir (or <b>NEOLINK_SECRET_KEY</b>) — <b>back it up</b>: without it, encrypted footage is unrecoverable."])
+                                @((MarkupString)T["New footage (event clips, previews, thumbnails and 24/7 segments) is written encrypted (AES-256-GCM) so a stolen disk or a copied backup exposes nothing. Playback, seeking and exports work exactly as before; footage recorded before turning this on keeps playing unencrypted. Applies after a restart, to new recordings only. ⚠ The key is the server's <b>secret.key</b> in the state dir (or <b>NEOLINK_SECRET_KEY</b>); <b>back it up</b>: without it, encrypted footage is unrecoverable."])
                             </div>
                             @if (_adminEnc is { } enc)
                             {
@@ -2055,7 +2062,7 @@
                                     @T["Key in use:"]
                                     @if (enc.Source == "env")
                                     {
-                                        <b>NEOLINK_SECRET_KEY</b><text> </text>@T["(environment — not stored on disk)"]
+                                        <b>NEOLINK_SECRET_KEY</b>@(" ")@T["(environment: not stored on disk)"]
                                     }
                                     else if (enc.Source == "file")
                                     {
@@ -2063,15 +2070,15 @@
                                     }
                                     else
                                     {
-                                        <b>@T["in-memory only"]</b><text> </text>@T["(state dir unwritable — fix before enabling!)"]
+                                        <b>@T["in-memory only"]</b>@(" ")@T["(state dir unwritable: fix before enabling!)"]
                                     }
                                     <text> · @T["fingerprint"] </text><code>@enc.Fingerprint</code>
-                                    @T["— match this against your backup to confirm it is the same key."]
+                                    @T["(match this against your backup to confirm it is the same key)"]
                                 </div>
                                 @if (enc.OnFootageDisk)
                                 {
                                     <div class="notice warn small">
-                                        ⚠ @((MarkupString)T["The key file sits on the <b>same disk</b> as the footage it protects — a stolen disk would carry its own key. Point <code>ui.state_dir</code> at a different disk, or supply the key via <code>NEOLINK_SECRET_KEY</code> so it never touches disk."])
+                                        ⚠ @((MarkupString)T["The key file sits on the <b>same disk</b> as the footage it protects; a stolen disk would carry its own key. Point <code>ui.state_dir</code> at a different disk, or supply the key via <code>NEOLINK_SECRET_KEY</code> so it never touches disk."])
                                     </div>
                                 }
                             }
@@ -2080,7 +2087,7 @@
                                 <div class="campanel-divider"></div>
                                 <div class="campanel-subtitle">@T["TURN RECORDING OFF"]</div>
                                 <div class="notice small">
-                                    @T["Turns recording off: no events, no 24/7 footage, and the Timeline and Events pages go quiet. Your settings are set aside in config.json and restored when you enable recording again; footage already on disk is left untouched — nothing is deleted."]
+                                    @T["Turns recording off: no events, no 24/7 footage, and the Timeline and Events pages go quiet. Your settings are set aside in config.json and restored when you enable recording again; footage already on disk is left untouched; nothing is deleted."]
                                 </div>
                                 @if (_recDisableConfirm)
                                 {
@@ -2119,7 +2126,7 @@
                             <label class="admin-field @(AdminValue("mqtt.password").Length > 0 ? "edited" : "")">
                                 <span>@T["Password"]</span>
                                 <input type="password" autocomplete="new-password"
-                                       placeholder="@(AdminBool("mqtt.hasPassword") ? T["•••• stored — blank keeps it"] : T["broker password"])"
+                                       placeholder="@(AdminBool("mqtt.hasPassword") ? T["•••• stored (blank keeps it)"] : T["broker password"])"
                                        value="@AdminValue("mqtt.password")"
                                        @oninput='e => _adminEdits["mqtt.password"] = e.Value?.ToString() ?? ""' />
                             </label>
@@ -2136,13 +2143,13 @@
                             @AdminField(T["Max packet size (bytes)"], "mqtt.maxPacketBytes", "number",
                                 AdminIntError("mqtt.maxPacketBytes", 1024, 268_435_455))
                             <div class="notice small">
-                                @((MarkupString)T["Mosquitto 2.1+ rejects packets over its own limit (2 MB default) — raise this here <b>and</b> on the broker for bigger payloads such as 4K snapshots. Discovery prefix must match Home Assistant's MQTT integration setting (<code>homeassistant</code> unless changed)."])
+                                @((MarkupString)T["Mosquitto 2.1+ rejects packets over its own limit (2 MB default); raise this here <b>and</b> on the broker for bigger payloads such as 4K snapshots. Discovery prefix must match Home Assistant's MQTT integration setting (<code>homeassistant</code> unless changed)."])
                             </div>
                             <div class="campanel-divider"></div>
                             @AdminField(T["Server health interval (seconds, 0 = off)"], "mqtt.statsInterval", "number",
                                 AdminIntError("mqtt.statsInterval", 5, 86400, alsoAllowed: 0))
                             <div class="notice small">
-                                @((MarkupString)T["How often the server publishes its own health — CPU, memory, disk, recording rate, viewers — as a <b>Neolink.NET Server</b> device in Home Assistant. 60 s suits dashboards; lower it for near-live gauges (minimum 5). To disable MQTT entirely, remove the <code>mqtt</code> section from the file."])
+                                @((MarkupString)T["How often the server publishes its own health (CPU, memory, disk, recording rate, viewers) as a <b>Neolink.NET Server</b> device in Home Assistant. 60 s suits dashboards; lower it for near-live gauges (minimum 5). To disable MQTT entirely, remove the <code>mqtt</code> section from the file."])
                             </div>
                         </div>
                     }
@@ -2152,10 +2159,10 @@
                         <div class="campanel-section">
                             <div class="campanel-section-title">@UiIcon.Render("bell", 13) @T["NOTIFICATIONS"]</div>
                             <div class="notice small">
-                                @((MarkupString)T["Email alerts for critical events — saved here and applied immediately (no restart). The SMTP password is <b>encrypted at rest</b>, but anyone with full access to the server's files could still decrypt it (unavoidable for sending email), so prefer a provider <b>app password</b> over your main account password."])
+                                @((MarkupString)T["Email alerts for critical events, saved here and applied immediately (no restart). The SMTP password is <b>encrypted at rest</b>, but anyone with full access to the server's files could still decrypt it (unavoidable for sending email), so prefer a provider <b>app password</b> over your main account password."])
                             </div>
                             <div class="notice small">
-                                @((MarkupString)T["Pop-up alerts on this device live under the <b>Browser alerts</b> tab — they fire only while the app is open there."])
+                                @((MarkupString)T["Pop-up alerts on this device live under the <b>Browser alerts</b> tab; they fire only while the app is open there."])
                             </div>
                             <div class="campanel-subtitle">@T["EMAIL SETTINGS"]</div>
                             <div class="control-row">
@@ -2193,7 +2200,7 @@
                                 }
                                 <div class="control-row"><span>@T["Password"]</span>
                                     <input class="notif-input" type="password" autocomplete="new-password"
-                                           placeholder="@(_notif.HasPassword ? T["•••• stored — blank keeps it"] : T["app password"])"
+                                           placeholder="@(_notif.HasPassword ? T["•••• stored (blank keeps it)"] : T["app password"])"
                                            @bind="_notifPassword" /></div>
                                 <div class="control-row"><span>@T["From (blank = username)"]</span>
                                     <input class="notif-input @(NotifFromInvalid ? "input-error" : "")"
@@ -2248,8 +2255,8 @@
                                     <input class="notif-input" placeholder="@WebhookUrlPlaceholder" @bind="_notif.WebhookUrl" /></div>
                                 <div class="control-row"><span>@T["Access token (optional)"]</span>
                                     <input class="notif-input" type="password" autocomplete="new-password"
-                                           placeholder="@(_notif.HasWebhookToken ? T["•••• stored — blank keeps it"] : "tk_…")"
-                                           title="@T["Sent as an Authorization: Bearer header — ntfy protected topics and most token APIs. Encrypted at rest; an Authorization line under Advanced → headers overrides it."]"
+                                           placeholder="@(_notif.HasWebhookToken ? T["•••• stored (blank keeps it)"] : "tk_…")"
+                                           title="@T["Sent as an Authorization: Bearer header: ntfy protected topics and most token APIs. Encrypted at rest; an Authorization line under Advanced → headers overrides it."]"
                                            @bind="_webhookToken" /></div>
                                 <div class="control-row">
                                     <span>@T["Accept self-signed certificates"]</span>
@@ -2282,8 +2289,8 @@
                                         <select class="event-filter webhook-select" @bind="_notif.WebhookBodyMode">
                                             <option value="json">@T["JSON (full event data + snapshots)"]</option>
                                             <option value="text">@T["Text (template below)"]</option>
-                                            <option value="snapshot">@T["Snapshot image (text in headers — the ntfy shape)"]</option>
-                                            <option value="multipart">@T["Multipart (template + image files — the Discord shape)"]</option>
+                                            <option value="snapshot">@T["Snapshot image (text in headers, the ntfy shape)"]</option>
+                                            <option value="multipart">@T["Multipart (template + image files, the Discord shape)"]</option>
                                         </select></div>
                                     @if (_notif.WebhookBodyMode != "json")
                                     {
@@ -2293,7 +2300,7 @@
                                     <div class="control-row"><span>@T["Extra headers, one per line (Name: value)"]</span></div>
                                     <textarea class="notif-input ai-prompt" rows="3" @bind="WebhookHeadersText"></textarea>
                                     <div class="event-sub email-sub">
-                                        @T["Placeholders for template and header values: {title} {message} {detail} {link} {camera} {labels} {time} {duration} {status} {server} — {message} is the short push text, {detail} the full story, {link} opens the event (needs the server address above)"]
+                                        @T["Placeholders for template and header values: {title} {message} {detail} {link} {camera} {labels} {time} {duration} {status} {server}. {message} is the short push text, {detail} the full story, {link} opens the event (needs the server address above)"]
                                     </div>
                                 }
                                 <div class="control-row">
@@ -2333,7 +2340,7 @@
                                 <div class="campanel-divider"></div>
                                 <div class="campanel-subtitle">@T["SERVER ALERTS"]</div>
                                 <div class="notice small">
-                                    @T["Which server conditions are sent — through email, the webhook, or both, as enabled above."]
+                                    @T["Which server conditions are sent, through email, the webhook, or both, as enabled above."]
                                 </div>
                                 @NotifToggle(T["Storage full / recovered"], _notif.AlertStorage, v => _notif.AlertStorage = v)
                                 @NotifToggle(T["Server overload"], _notif.AlertOverload, v => _notif.AlertOverload = v)
@@ -2353,7 +2360,7 @@
                                     @if (_notif.OfflineAttachSnapshots)
                                     {
                                         <div class="notice small">
-                                            @T["When a camera goes offline, its alert carries snapshots from the last detection before it stopped answering — so a cut feed still tells you what was there."]
+                                            @T["When a camera goes offline, its alert carries snapshots from the last detection before it stopped answering, so a cut feed still tells you what was there."]
                                         </div>
                                         <div class="control-row"><span>@T["Images to attach"]</span>
                                             <input class="ret-input" type="number" min="1" max="10" @bind="_notif.OfflineSnapshotCount" /></div>
@@ -2369,7 +2376,7 @@
                                         </div>
                                         @if (_alertsAdvanced)
                                         {
-                                            <div class="notice small">@((MarkupString)T["Per-camera override — blank uses the default above, <b>0</b> never alerts for that camera:"])</div>
+                                            <div class="notice small">@((MarkupString)T["Per-camera override: blank uses the default above, <b>0</b> never alerts for that camera:"])</div>
                                             <div class="cam-override-list">
                                                 @foreach (var cam in _notif.Cameras)
                                                 {
@@ -2392,10 +2399,10 @@
                         <div class="campanel-section">
                             <div class="campanel-section-title">@UiIcon.Render("sparkles", 13) @T["AI EVENT DESCRIPTIONS"] <span class="beta-tag">@T["BETA"]</span></div>
                             <div class="notice small">
-                                @((MarkupString)T["When a camera records a detection event, low-res frames (spread across the event, from the camera's own snapshot) go to a <b>vision-capable</b> model — via LM Studio, Ollama, llama.cpp or a hosted API — and its description is stored in the event's metadata and written to the server log. Enable it here, then switch it on <b>per camera</b> (camera panel → Recording). The API key is <b>encrypted at rest</b>."])
+                                @((MarkupString)T["When a camera records a detection event, low-res frames (spread across the event, from the camera's own snapshot) go to a <b>vision-capable</b> model (via LM Studio, Ollama, llama.cpp or a hosted API) and its description is stored in the event's metadata and written to the server log. Enable it here, then switch it on <b>per camera</b> (camera panel → Recording). The API key is <b>encrypted at rest</b>."])
                             </div>
                             <div class="notice small ai-beta-note">
-                                @((MarkupString)T["<b>Beta</b> — and we'd love your feedback. It won't affect recording or streaming (a slow or dead model only means an event goes undescribed). Tell us how it goes for you and what your setup is."])
+                                @((MarkupString)T["<b>Beta</b>, and we'd love your feedback. It won't affect recording or streaming (a slow or dead model only means an event goes undescribed). Tell us how it goes for you and what your setup is."])
                             </div>
                             <div class="control-row">
                                 <span>@T["Describe events with AI"]</span>
@@ -2407,7 +2414,7 @@
                                 <div class="campanel-subtitle">@T["LLM SERVER"]</div>
                                 <div class="control-row"><span>@T["Backend"]</span>
                                     <select class="event-filter" @bind="_ai.Provider"
-                                            title="@T["Every backend keeps its own endpoint, model and key — switching loses nothing. The selected one handles every event."]">
+                                            title="@T["Every backend keeps its own endpoint, model and key; switching loses nothing. The selected one handles every event."]">
                                         <option value="openai">@T["OpenAI-style (LM Studio, llama.cpp, hosted)"]</option>
                                         <option value="ollama">@T["Ollama (native API)"]</option>
                                         <option value="anthropic">@T["Anthropic-style (Claude)"]</option>
@@ -2421,7 +2428,7 @@
                                     @if (AiEndpointInvalid)
                                     {
                                         <div class="field-error">
-                                            @T["Enter the Ollama base URL, e.g. http://127.0.0.1:11434 — /api/chat is appended automatically."]
+                                            @T["Enter the Ollama base URL, e.g. http://127.0.0.1:11434; /api/chat is appended automatically."]
                                         </div>
                                     }
                                     <div class="control-row"><span>@T["Model"]</span>
@@ -2457,7 +2464,7 @@
                                     }
                                     <div class="control-row"><span>@T["API key"]</span>
                                         <input class="notif-input" type="password" autocomplete="new-password"
-                                               placeholder="@(_ai.HasAnthropicKey ? T["•••• stored — blank keeps it"] : "sk-ant-…")"
+                                               placeholder="@(_ai.HasAnthropicKey ? T["•••• stored (blank keeps it)"] : "sk-ant-…")"
                                                @bind="_aiAnthropicKey" /></div>
                                 }
                                 else
@@ -2469,7 +2476,7 @@
                                     @if (AiEndpointInvalid)
                                     {
                                         <div class="field-error">
-                                            @T["Enter the API base URL, e.g. http://127.0.0.1:1234/v1 (LM Studio) — /chat/completions is appended automatically."]
+                                            @T["Enter the API base URL, e.g. http://127.0.0.1:1234/v1 (LM Studio); /chat/completions is appended automatically."]
                                         </div>
                                     }
                                     <div class="control-row"><span>@T["Model"]</span>
@@ -2477,7 +2484,7 @@
                                                @bind="_ai.Model" /></div>
                                     <div class="control-row"><span>@T["API key"]</span>
                                         <input class="notif-input" type="password" autocomplete="new-password"
-                                               placeholder="@(_ai.HasApiKey ? T["•••• stored — blank keeps it"] : T["usually none for local servers"])"
+                                               placeholder="@(_ai.HasApiKey ? T["•••• stored (blank keeps it)"] : T["usually none for local servers"])"
                                                @bind="_aiApiKey" /></div>
                                 }
                                 <div class="campanel-divider"></div>
@@ -2485,7 +2492,7 @@
                                 <div class="control-row"><span>@T["One frame every … seconds"]</span>
                                     <input class="ret-input @(AiIntervalInvalid ? "input-error" : "")"
                                            type="number" min="1" max="600"
-                                           title="@T["The sampling density, as the source allows: when frames come from the stream itself (ffmpeg installed), only keyframes can be sampled — cameras emit one every 2-4 seconds, so lower values simply mean 'every keyframe'. Camera-snapshot sampling follows this directly. The event's first 5 seconds always sample at full source density."]"
+                                           title="@T["The sampling density, as the source allows: when frames come from the stream itself (ffmpeg installed), only keyframes can be sampled; cameras emit one every 2-4 seconds, so lower values simply mean 'every keyframe'. Camera-snapshot sampling follows this directly. The event's first 5 seconds always sample at full source density."]"
                                            @bind="_ai.SampleEverySeconds" @bind:event="oninput" /></div>
                                 @if (AiIntervalInvalid)
                                 {
@@ -2494,7 +2501,7 @@
                                 <div class="control-row"><span>@T["Max frames per event"]</span>
                                     <input class="ret-input @(AiFramesInvalid ? "input-error" : "")"
                                            type="number" min="1"
-                                           title="@T["The cost ceiling, most relevant on paid APIs. When a long event would exceed it, the kept frames spread out to cover the event end to end — same payload, thinner sampling. More frames = better answers but bigger, slower, pricier requests."]"
+                                           title="@T["The cost ceiling, most relevant on paid APIs. When a long event would exceed it, the kept frames spread out to cover the event end to end: same payload, thinner sampling. More frames = better answers but bigger, slower, pricier requests."]"
                                            @bind="_ai.MaxFrames" @bind:event="oninput" /></div>
                                 @if (AiFramesInvalid)
                                 {
@@ -2507,17 +2514,17 @@
                                 </div>
                                 <div class="control-row"><span>@T["Skip model 'thinking'"]</span>
                                     <button class="chip @(_ai.NoThink ? "" : "chip-off")"
-                                            title="@T["Asks reasoning models to answer directly (the /no_think convention) — much faster on local hardware. Think-blocks are stripped from answers either way."]"
+                                            title="@T["Asks reasoning models to answer directly (the /no_think convention), much faster on local hardware. Think-blocks are stripped from answers either way."]"
                                             @onclick="() => _ai.NoThink = !_ai.NoThink">@(_ai.NoThink ? T["on"] : T["off"])</button></div>
                                 <div class="control-row"><span>@T["Answer timeout (seconds)"]</span>
                                     <input class="ret-input" type="number" min="5" max="600"
-                                           title="@T["How long one description may take before it is abandoned — local models on modest hardware can genuinely need minutes."]"
+                                           title="@T["How long one description may take before it is abandoned; local models on modest hardware can genuinely need minutes."]"
                                            @bind="_ai.TimeoutSeconds" /></div>
                                 <div class="control-row"><span>@T["Instruction (system prompt)"]</span></div>
                                 <textarea class="notif-input ai-prompt" rows="5"
                                           placeholder="@_ai.DefaultPrompt" @bind="_ai.Prompt"></textarea>
                                 <div class="notice small">
-                                    @T["Blank uses the built-in instruction (shown greyed above). Descriptions are processed one at a time in the background — a slow model never delays recording or streaming; if it can't keep up, extra events are skipped (and say so in the log)."]
+                                    @T["Blank uses the built-in instruction (shown greyed above). Descriptions are processed one at a time in the background: a slow model never delays recording or streaming; if it can't keep up, extra events are skipped (and say so in the log)."]
                                 </div>
                             }
                         </div>
@@ -2526,7 +2533,7 @@
                     @if (_settingsTab == "experimental")
                     {
                         <div class="notice small preview-note">
-                            @((MarkupString)T["<b>Preview features — still being built.</b> They work today, but how they behave, what their settings are called and what they store may change in a future release. Recording, streaming and notifications carry on either way."])
+                            @((MarkupString)T["<b>Preview features: still being built.</b> They work today, but how they behave, what their settings are called and what they store may change in a future release. Recording, streaming and notifications carry on either way."])
                         </div>
                     }
 
@@ -2537,18 +2544,18 @@
                                 @UiIcon.Render("siren", 13) @T["EMERGENCY MODE"] <span class="preview-tag">@T["PREVIEW"]</span>
                             </div>
                             <div class="notice small">
-                                @T["One switch for when something is happening. While it is armed, every camera's detections are sent through the channels you have set up — ignoring each camera's own notification switches and the cooldown that normally spaces alerts out — and the cameras you pick hold their siren and light on until you switch it off."]
-                                <text> </text>@T["Every camera is also brought live for the duration — suspended ones reconnect, privacy mode is lifted, and battery cameras stop dozing — and all of it is put back when you switch it off."]
-                                <text> </text>@T["It forwards the detections a camera already records: one with event recording turned off stays silent."]
+                                @T["One switch for when something is happening. While it is armed, every camera's detections are sent through the channels you have set up (ignoring each camera's own notification switches and the cooldown that normally spaces alerts out) and the cameras you pick hold their siren and light on until you switch it off."]
+                                @(" ")@T["Every camera is also brought live for the duration: suspended ones reconnect, privacy mode is lifted, and battery cameras stop dozing; and all of it is put back when you switch it off."]
+                                @(" ")@T["It forwards the detections a camera already records: one with event recording turned off stays silent."]
                             </div>
                             @if (_emg.Issues.Count > 0)
                             {
                                 <div class="notice emg-warn">
-                                    @T["Some cameras did not take the change — they are offline or asleep. It is retried every minute until it sticks."]
+                                    @T["Some cameras did not take the change; they are offline or asleep. It is retried every minute until it sticks."]
                                     <ul class="emg-warn-list">
                                         @foreach (var issue in _emg.Issues)
                                         {
-                                            <li>@issue.Camera — @issue.Reason</li>
+                                            <li>@issue.Camera: @issue.Reason</li>
                                         }
                                     </ul>
                                 </div>
@@ -2559,7 +2566,7 @@
                                     @(_emg.Enabled ? T["ARMED"] : T["Not armed"])
                                     @if (_emg.Enabled && _emg.ArmedUtc is { } since)
                                     {
-                                        <span class="event-sub"> — @T.F("since {0}", since.ToLocalTime().ToString("HH:mm"))</span>
+                                        <span class="event-sub"> · @T.F("since {0}", since.ToLocalTime().ToString("HH:mm"))</span>
                                     }
                                 </span>
                                 <span>
@@ -2587,7 +2594,7 @@
                                     <ul class="emg-warn-list">
                                         @if (warnEmail > 0)
                                         {
-                                            <li>@T.F("Every detection emails you, on {0} of {1} cameras — the per-camera switches and the cooldown are ignored.", warnEmail, camTotal)</li>
+                                            <li>@T.F("Every detection emails you, on {0} of {1} cameras; the per-camera switches and the cooldown are ignored.", warnEmail, camTotal)</li>
                                         }
                                         @if (warnHook > 0)
                                         {
@@ -2607,7 +2614,7 @@
                                         <li>@T["All of that is put back exactly as it was when you switch emergency mode off."]</li>
                                         @if (warnEmail + warnHook + warnSiren + warnLights == 0)
                                         {
-                                            <li>@T["Nothing else is switched on yet — open the settings to choose what else emergency mode should do."]</li>
+                                            <li>@T["Nothing else is switched on yet; open the settings to choose what else emergency mode should do."]</li>
                                         }
                                     </ul>
                                     <div class="settings-foot-btns">
@@ -2624,7 +2631,7 @@
                                 @if (!_emg.EmailAvailable && !_emg.WebhookAvailable)
                                 {
                                     <div class="notice">
-                                        @T["No way to reach you yet. Set up email or a webhook under Notifications first — emergency mode uses whichever you have configured."]
+                                        @T["No way to reach you yet. Set up email or a webhook under Notifications first; emergency mode uses whichever you have configured."]
                                         <button class="chip" @onclick='() => _settingsTab = "notifications"'>@T["Open Notifications"]</button>
                                     </div>
                                 }
@@ -2653,7 +2660,7 @@
                                                  : T["sent when the event ends"])
                                         @if (_notif.EventCooldownMinutes > 0)
                                         {
-                                            <text> </text>@T.F("Your {0}-minute cooldown does not apply while armed.", _notif.EventCooldownMinutes)
+                                            @(" ")@T.F("Your {0}-minute cooldown does not apply while armed.", _notif.EventCooldownMinutes)
                                         }
                                     </div>
                                 }
@@ -2665,7 +2672,7 @@
                                 @if (_emgAdvanced)
                                 {
                                     <div class="notice small">
-                                        @T["Per camera — auto follows the choices above. A camera without a siren or light simply skips that part."]
+                                        @T["Per camera: auto follows the choices above. A camera without a siren or light simply skips that part."]
                                     </div>
                                     <div class="cam-override-list">
                                         <div class="control-row emg-cam-head">
@@ -2700,9 +2707,9 @@
                                 @UiIcon.Render("eye", 13) @T["LIVE OBJECT BOXES"] <span class="preview-tag">@T["PREVIEW"]</span>
                             </div>
                             <div class="notice small">
-                                @T["Outlines the people, vehicles and animals in view while you watch one camera. Your cameras report WHAT they detected but never where it was, so the picture is read here in your browser — the server never looks at your video for this, and no frame leaves the device you are watching on."]
-                                <text> </text>@T["Boxes are drawn on a single camera on its own — click a camera to open it full-size. The wall of tiles never draws them: that would mean one detector running per tile."]
-                                <text> </text>@T["It works on every camera, whether or not the camera itself does any detecting, and it is only ever a second opinion: recording, notifications and Home Assistant still follow what the CAMERA reports."]
+                                @T["Outlines the people, vehicles and animals in view while you watch one camera. Your cameras report WHAT they detected but never where it was, so the picture is read here in your browser; the server never looks at your video for this, and no frame leaves the device you are watching on."]
+                                @(" ")@T["Boxes are drawn on a single camera on its own; click a camera to open it full-size. The wall of tiles never draws them: that would mean one detector running per tile."]
+                                @(" ")@T["It works on every camera, whether or not the camera itself does any detecting, and it is only ever a second opinion: recording, notifications and Home Assistant still follow what the CAMERA reports."]
                             </div>
                             <div class="control-row">
                                 <span>@T["Draw boxes"]</span>
@@ -2716,11 +2723,11 @@
                                 @switch (_detect.Assets.State)
                                 {
                                     case "ready":
-                                        <div class="notice small ok">@T["Ready — open a camera full-size to see the boxes."]</div>
+                                        <div class="notice small ok">@T["Ready: open a camera full-size to see the boxes."]</div>
                                         break;
                                     case "downloading":
                                         <div class="notice small">
-                                            @T.F("Fetching the detector — {0}% of {1} MB.", _detect.Assets.Percent,
+                                            @T.F("Fetching the detector: {0}% of {1} MB.", _detect.Assets.Percent,
                                                  $"{_detect.Assets.Bytes / 1_000_000.0:0}")
                                         </div>
                                         break;
@@ -2733,7 +2740,7 @@
                                         break;
                                     default:
                                         <div class="notice small">
-                                            @T.F("The detector is about {0} MB — the model and the runtime that runs it. It downloads once, to this server, and is then served to your browsers from here, so this keeps working with no internet.",
+                                            @T.F("The detector is about {0} MB: the model and the runtime that runs it. It downloads once, to this server, and is then served to your browsers from here, so this keeps working with no internet.",
                                                  $"{_detect.Assets.Bytes / 1_000_000.0:0}")
                                         </div>
                                         break;
@@ -2764,7 +2771,7 @@
                                 <div class="control-row">
                                     <span>@T["Look at the picture"]</span>
                                     <select class="notif-input" value="@_detect.Fps" disabled="@_detectBusy"
-                                            title="@T["The video always plays at its own frame rate — this is only how often the boxes are worked out, and it is the whole cost of the feature."]"
+                                            title="@T["The video always plays at its own frame rate; this is only how often the boxes are worked out, and it is the whole cost of the feature."]"
                                             @onchange="e => SaveDetectAsync(d => d.Fps = int.TryParse((string?)e.Value, out var v) ? v : d.Fps)">
                                         @foreach (var fps in new[] { 1, 2, 5, 10 })
                                         {
@@ -2790,7 +2797,7 @@
                                             break;
                                         case "downloading":
                                             <div class="notice small">
-                                                @T.F("Fetching the bigger model — {0}% of {1} MB.", _detect.DetailedAssets.Percent,
+                                                @T.F("Fetching the bigger model: {0}% of {1} MB.", _detect.DetailedAssets.Percent,
                                                      $"{_detect.DetailedAssets.Bytes / 1_000_000.0:0}")
                                             </div>
                                             break;
@@ -2833,7 +2840,7 @@
                         }
                         @if (NotifDirty)
                         {
-                            <div class="notice pending">@((MarkupString)T.F("Unsaved changes — click <b>{0}</b> to apply them.", _notif.Enabled ? T["Save notifications"] : T["Save"]))</div>
+                            <div class="notice pending">@((MarkupString)T.F("Unsaved changes: click <b>{0}</b> to apply them.", _notif.Enabled ? T["Save notifications"] : T["Save"]))</div>
                         }
                         <div class="settings-foot-btns">
                             <span class="tile-spacer"></span>
@@ -2850,7 +2857,7 @@
                         }
                         @if (AiDirty)
                         {
-                            <div class="notice pending">@((MarkupString)T.F("Unsaved changes — click <b>{0}</b> to apply them.", _ai.Enabled ? T["Save AI settings"] : T["Save"]))</div>
+                            <div class="notice pending">@((MarkupString)T.F("Unsaved changes: click <b>{0}</b> to apply them.", _ai.Enabled ? T["Save AI settings"] : T["Save"]))</div>
                         }
                         <div class="settings-foot-btns">
                             @if (_ai.Enabled)
@@ -2883,9 +2890,9 @@
                             <span class="event-sub">
                                 @(_settingsTab switch
                                 {
-                                    "connection" => T["Saved instantly — these settings live in this browser only."],
-                                    "alerts" => T["Saved instantly to your account — no config.json, no restart."],
-                                    "language" => T["Saved instantly — the whole UI follows the moment you pick."],
+                                    "connection" => T["Saved instantly: these settings live in this browser only."],
+                                    "alerts" => T["Saved instantly to your account, no config.json, no restart."],
+                                    "language" => T["Saved instantly: the whole UI follows the moment you pick."],
                                     _ => T["Web-UI account changes apply immediately; RTSP users after a restart."],
                                 })
                             </span>
@@ -2940,8 +2947,8 @@
                         {
                             <div class="notice pending">
                                 @((MarkupString)(pending == 1
-                                    ? T["1 unsaved change — nothing is written until you click <b>Save to config.json</b> (or <b>Restart</b>, which saves first). Closing this panel discards it."]
-                                    : T.F("{0} unsaved changes — nothing is written until you click <b>Save to config.json</b> (or <b>Restart</b>, which saves first). Closing this panel discards them.", pending)))
+                                    ? T["1 unsaved change: nothing is written until you click <b>Save to config.json</b> (or <b>Restart</b>, which saves first). Closing this panel discards it."]
+                                    : T.F("{0} unsaved changes: nothing is written until you click <b>Save to config.json</b> (or <b>Restart</b>, which saves first). Closing this panel discards them.", pending)))
                             </div>
                         }
                         @if (AdminPendingCount > 0 && AdminSettingsError is { } settingsInvalid)
@@ -2958,7 +2965,7 @@
                                         @onclick="SaveServerSettingsAsync">@T["Save to config.json"]</button>
                                 @if (AdminPendingCount > 0)
                                 {
-                                    <button class="chip chip-off" title="@T["Drop the staged edits — fields snap back to what config.json says"]"
+                                    <button class="chip chip-off" title="@T["Drop the staged edits: fields snap back to what config.json says"]"
                                             @onclick="DiscardServerSettings">@T["Discard"]</button>
                                 }
                             }
@@ -3020,7 +3027,7 @@
                    Events page, which is opened later) — say what is happening; the
                    10 s poll swaps in the finished description. *@
                 <div class="event-ai ai-none">
-                    <span class="event-ai-text event-ai-pending">🧠 @T["AI is describing this event — the text appears here when the model answers…"]</span>
+                    <span class="event-ai-text event-ai-pending">🧠 @T["AI is describing this event; the text appears here when the model answers…"]</span>
                 </div>
             }
             @if (_playEvent.HasClip)
@@ -3069,7 +3076,7 @@
                             <button class="chip @(_playSd ? "" : "chip-active")" title="@T["Full-quality main-stream recording"]"
                                     @onclick="() => SetPlayStreamAsync(sd: false)">HD</button>
                             <button class="chip @(_playSd ? "chip-active" : "")"
-                                    title="@T["Low-res sub-stream recording — smoother fast-forward on slow storage"]"
+                                    title="@T["Low-res sub-stream recording: smoother fast-forward on slow storage"]"
                                     @onclick="() => SetPlayStreamAsync(sd: true)">SD</button>
                         </span>
                     }
@@ -3077,7 +3084,7 @@
             }
             else
             {
-                <div class="notice">@(_playEvent.Ongoing ? T["No clip was recorded for this event yet — it is still being captured."] : T["No clip was recorded for this event."])</div>
+                <div class="notice">@(_playEvent.Ongoing ? T["No clip was recorded for this event yet; it is still being captured."] : T["No clip was recorded for this event."])</div>
             }
             <div class="event-player-foot">
                 <button class="chip" disabled="@(NeighborEvent(1) == null)"
@@ -3257,6 +3264,7 @@
     private bool _showServerSettings;
     private JsonElement? _adminConfig;
     private bool _adminWritable;
+    private string? _adminWriteProblem;
     private string _adminConfigPath = "";
     private string? _adminError;
     private string? _adminStatus;
@@ -3436,7 +3444,7 @@
         "discord" => T["Channel settings → Integrations → Webhooks → copy the webhook URL. Snapshots arrive as image attachments."],
         "gotify" => T["Use your server's /message URL with the app token, e.g. https://gotify.example.com/message?token=…"],
         "slack" => T["Create an incoming webhook in Slack and paste its URL. Snapshots are not supported by Slack webhooks."],
-        "json" => T["Sends the full event as JSON (snapshots as base64) — for Node-RED, n8n, Home Assistant or your own script."],
+        "json" => T["Sends the full event as JSON (snapshots as base64), for Node-RED, n8n, Home Assistant or your own script."],
         _ => null,
     };
 
@@ -3461,7 +3469,7 @@
             if (res.IsSuccessStatusCode)
             {
                 _webhookTestError = false;
-                _webhookTestStatus = T["Test webhook delivered — the endpoint accepted it."];
+                _webhookTestStatus = T["Test webhook delivered; the endpoint accepted it."];
             }
             else
             {
@@ -3538,7 +3546,7 @@
             if (res.IsSuccessStatusCode)
             {
                 _emailTestError = false;
-                _emailTestStatus = T["Test email sent — check the recipient inbox."];
+                _emailTestStatus = T["Test email sent; check the recipient inbox."];
             }
             else
             {
@@ -3933,13 +3941,13 @@
             {
                 ConfirmEmergency(cur);
                 _emgError = false;
-                _emgStatus = T["Emergency mode is off — your camera settings apply again."];
+                _emgStatus = T["Emergency mode is off; your camera settings apply again."];
             }
             else
             {
                 _emgError = true;
                 if (!await ReloadEmergencyAsync()) RevertEmergency();
-                _emgStatus = T.F("Save failed ({0}) — emergency mode is still {1}.",
+                _emgStatus = T.F("Save failed ({0}); emergency mode is still {1}.",
                     (int)res.StatusCode, _emgArmed ? T["armed"] : T["off"]);
             }
         }
@@ -3947,7 +3955,7 @@
         {
             _emgError = true;
             if (!await ReloadEmergencyAsync()) RevertEmergency();
-            _emgStatus = T.F("Save failed ({0}) — emergency mode is still {1}.",
+            _emgStatus = T.F("Save failed ({0}); emergency mode is still {1}.",
                 ex.Message, _emgArmed ? T["armed"] : T["off"]);
         }
         finally { _emgBusy = false; }
@@ -4030,7 +4038,7 @@
                 _emgError = false;
                 _emgStatus = saved.Enabled
                     ? T["Emergency mode is armed."]
-                    : T["Emergency mode is off — your camera settings apply again."];
+                    : T["Emergency mode is off; your camera settings apply again."];
             }
             else
             {
@@ -4038,7 +4046,7 @@
                 // Show what the server actually holds — an optimistic "off" while
                 // the sirens are still sounding is the one lie this must not tell.
                 if (!await ReloadEmergencyAsync()) RevertEmergency();
-                _emgStatus = T.F("Save failed ({0}) — emergency mode is still {1}.",
+                _emgStatus = T.F("Save failed ({0}); emergency mode is still {1}.",
                     (int)res.StatusCode, _emg?.Enabled == true ? T["armed"] : T["off"]);
             }
         }
@@ -4046,7 +4054,7 @@
         {
             _emgError = true;
             if (!await ReloadEmergencyAsync()) RevertEmergency();
-            _emgStatus = T.F("Save failed ({0}) — emergency mode is still {1}.",
+            _emgStatus = T.F("Save failed ({0}); emergency mode is still {1}.",
                 ex.Message, _emg?.Enabled == true ? T["armed"] : T["off"]);
         }
         finally { _emgBusy = false; }
@@ -4073,7 +4081,7 @@
                 _aiAnthropicKey = "";
                 _aiSignature = AiSig(); // saved state is the new baseline
                 _aiError = false;
-                _aiStatus = T["AI settings saved — they apply to the next event."];
+                _aiStatus = T["AI settings saved; they apply to the next event."];
             }
             else
             {
@@ -4105,7 +4113,7 @@
             if (res.IsSuccessStatusCode)
             {
                 _aiError = false;
-                _aiStatus = T.F("LLM reachable — {0}",
+                _aiStatus = T.F("LLM reachable: {0}",
                     body.TryGetProperty("detail", out var d) ? d.GetString() : T["it answered."]);
             }
             else
@@ -4815,8 +4823,8 @@
             _resetPass = "";
             if (admin != null) _loginUser = admin;
             _loginError = admin == null
-                ? T["Password updated — sign in with it now, then set reset_admin_password back to false."]
-                : T.F("Password updated for '{0}' — sign in as that account now, then set reset_admin_password back to false.", admin);
+                ? T["Password updated; sign in with it now, then set reset_admin_password back to false."]
+                : T.F("Password updated for '{0}'; sign in as that account now, then set reset_admin_password back to false.", admin);
         }
         catch (Exception ex)
         {
@@ -5196,6 +5204,7 @@
             if (cfg == null) { _adminError = T["Empty settings response"]; return; }
             _adminConfig = cfg.Settings;
             _adminWritable = cfg.Writable;
+            _adminWriteProblem = cfg.WriteProblem;
             _adminConfigPath = cfg.Path;
             _adminEnc = cfg.Encryption;
             _adminHasRecording = cfg.Settings.TryGetProperty("recording", out var r)
@@ -5219,6 +5228,7 @@
 
     private List<ApiAdminCamera>? _adminCams;
     private bool _adminCamsWritable;
+    private string? _adminCamsWriteProblem;
     private CamEdit? _camEdit;
     private string? _camDeleteConfirm;
     private bool _camTestBusy, _camSaveBusy, _camsNeedRestart;
@@ -5303,6 +5313,7 @@
             var payload = await res.Content.ReadFromJsonAsync<ApiAdminCameras>();
             _adminCams = payload?.Cameras ?? new();
             _adminCamsWritable = payload?.Writable ?? false;
+            _adminCamsWriteProblem = payload?.WriteProblem;
             _adminPtz = payload?.Ptz;
         }
         catch (Exception ex)
@@ -5377,7 +5388,7 @@
             // the camera is found by broadcast discovery keyed on its UID.
             if (string.IsNullOrWhiteSpace(e.Address) && !string.IsNullOrWhiteSpace(e.Uid))
                 return e.Udp ? null
-                    : "Without an address, set \"Connect over UDP\" below — the camera is then found by its UID.";
+                    : "Without an address, set \"Connect over UDP\" below; the camera is then found by its UID.";
             return HostPortClientError(e.Address);
         }
     }
@@ -5385,7 +5396,7 @@
     private static string? HostPortClientError(string address)
     {
         address = address.Trim();
-        if (address.Length == 0) return "An address is required — the camera's IP or hostname (or a UID, for UDP battery cameras).";
+        if (address.Length == 0) return "An address is required: the camera's IP or hostname (or a UID, for UDP battery cameras).";
         if (address.Contains("://")) return "Enter a bare host or host:port, not a URL.";
         if (address.Any(char.IsWhiteSpace)) return "The address must not contain spaces.";
         int colon = address.LastIndexOf(':');
@@ -6016,7 +6027,7 @@
             <button class="chip chip-danger"
                     title="@(AdminPendingCount > 0
                         ? T["Save the staged changes to config.json, then stop the service so the restart policy brings it back with them applied"]
-                        : T["Stop the service so the restart policy brings it back — needed to apply saved changes"])"
+                        : T["Stop the service so the restart policy brings it back (needed to apply saved changes)"])"
                     @onclick="() => _confirmRestart = true">@(AdminPendingCount > 0 ? T["Save & restart…"] : T["Restart service…"])</button>
         }
         else
@@ -6507,7 +6518,7 @@
     private static readonly string[] AlertLabels =
     {
         "person", "vehicle", "animal", "package", "doorbell", "crying",
-        "line-crossing", "intrusion", "loitering", "motion",
+        "line-crossing", "intrusion", "loitering", "object-left", "object-taken", "motion",
     };
 
     private const string AlertPrefsKey = "neolink.alerts";
@@ -6599,7 +6610,7 @@
         _alertTestFailed = !ok;
         _alertTestStatus = ok
             ? T["Sent, and the browser accepted it. Nothing popped up? Then the OS is muting this browser: check its notification permission in system settings, Focus Assist / Do Not Disturb, and whether it landed silently in the notification center."]
-            : T["The browser refused to show it — re-check this site's notification permission."];
+            : T["The browser refused to show it; re-check this site's notification permission."];
     }
 
     private async Task SetAlertCooldownAsync(ChangeEventArgs e)
@@ -6704,17 +6715,17 @@
             if (_alerts.SysStorage && storageFull != _prevStorageFull)
                 await FireSystemNotifAsync("sys-storage",
                     storageFull ? "Storage full" : "Storage recovered",
-                    storageFull ? "Recording has stopped — free space or adjust retention/archive."
+                    storageFull ? "Recording has stopped; free space or adjust retention/archive."
                                 : "Storage is no longer full.");
             if (_alerts.SysOverload && overload != _prevOverload)
                 await FireSystemNotifAsync("sys-overload",
                     overload ? "Server overloaded" : "Server load back to normal",
-                    overload ? "CPU has stayed near maximum for several minutes — streams or recording may lag."
+                    overload ? "CPU has stayed near maximum for several minutes; streams or recording may lag."
                              : "CPU usage has returned to normal.");
             if (_alerts.SysWriteFailure && writeFailure != _prevWriteFailure)
                 await FireSystemNotifAsync("sys-write",
                     writeFailure ? "Recording write failures" : "Recording writes recovered",
-                    writeFailure ? "The server is failing to write footage to disk — check the drive."
+                    writeFailure ? "The server is failing to write footage to disk; check the drive."
                                  : "Footage is writing to disk again.");
         }
         _prevStorageFull = storageFull; _prevOverload = overload; _prevWriteFailure = writeFailure;
@@ -6761,6 +6772,8 @@
         "crossline" or "cross_line" or "tripwire" => "line-crossing",
         "intrude" or "region" or "perimeter" => "intrusion",
         "linger" or "loiter" => "loitering",
+        "legacy" => "object-left",
+        "loss" => "object-taken",
         "visitor" => "doorbell",
         var x => x,
     };
@@ -6933,7 +6946,7 @@
             using var res = await Http.SendAsync(req);
             if (res.StatusCode == System.Net.HttpStatusCode.Unauthorized)
             {
-                _error = "Not authorized — set your credentials under server settings (⚙).";
+                _error = "Not authorized; set your credentials under server settings (⚙).";
                 return false;
             }
             return res.IsSuccessStatusCode;
@@ -7249,14 +7262,14 @@
 
     private string CamHeadTitle(ApiCamera cam) =>
         cam.Suspended
-            ? T["Suspended in Neolink.NET — not viewed or recorded here until resumed (the camera itself keeps running)"]
+            ? T["Suspended in Neolink.NET: not viewed or recorded here until resumed (the camera itself keeps running)"]
             : cam.Privacy
-            ? T["Privacy mode is on — the camera is dark on purpose until it is switched back"]
+            ? T["Privacy mode is on: the camera is dark on purpose until it is switched back"]
             : cam.Online
-                ? T["Open full view (main stream) — drag the card onto a tile to add it to the wall, or onto another camera to reorder the sidebar"]
+                ? T["Open full view (main stream); drag the card onto a tile to add it to the wall, or onto another camera to reorder the sidebar"]
                 : cam.Asleep
-                    ? T["Battery camera sleeping to save power — opening a stream reconnects (it must be awake to answer)"]
-                    : T["Camera unreachable — reconnecting"];
+                    ? T["Battery camera sleeping to save power; opening a stream reconnects (it must be awake to answer)"]
+                    : T["Camera unreachable, reconnecting"];
 
     private void ChangeStream(int index, ApiCamera camera, string? path)
     {
@@ -7897,7 +7910,7 @@
                 break;
             case "silent":
                 // The session stays live — this is a diagnosis, not a failure.
-                _talkError = T.F("The microphone ({0}) is capturing silence — the camera hears nothing. Pick a real microphone under Server settings → Connection.",
+                _talkError = T.F("The microphone ({0}) is capturing silence; the camera hears nothing. Pick a real microphone under Server settings → Connection.",
                     string.IsNullOrWhiteSpace(detail) ? T["System default"] : detail!);
                 break;
             default: // "off"

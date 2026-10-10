@@ -4,6 +4,24 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
+## Unreleased
+
+### Added
+
+- **Camera settings over Baichuan (beta):** SD recording on/off, automatic reboot, PTZ guard position and patrols, privacy masks, doorbell chimes (volume, light, silent mode) and smart-detection rule sensitivity, with no camera HTTP API needed.
+- **Cameras without an HTTP API get picture sliders, speaker volume, PTZ presets and AI sensitivity** over Baichuan, in the panel and in Home Assistant.
+- **Object left / object taken events** from the camera's item rules record, notify and reach Home Assistant as their own opt-in event types.
+- **SD-card playback for cameras without an HTTP API (beta),** such as the Lumus, over Baichuan.
+- **Encrypted SD recordings** play after you enter the recording password in the SD view; the password is kept in memory only.
+- **Camera clocks are corrected on connect** when they drift or lose their date, which matters for cameras with no backup clock or blocked NTP.
+- **Server settings say why config.json can't be written** (wrong owner or permissions, read-only mount, missing file) instead of silently disabling the camera editor.
+
+### Fixed
+
+- **Floodlight brightness and auto mode on cameras that never showed them** (the Duo Floodlight, and spotlights without an HTTP API such as the Lumus): Neolink asked with a message id these firmwares don't have.
+- **SD recordings load much faster:** they are fetched with the camera's uncapped Playback command instead of Download, which the camera caps at 1 MB/s. Clips the camera won't serve over HTTP (a Video Doorbell with RTMP off) come over Baichuan instead.
+- **SD recordings the camera damaged while recording now play:** when the browser's decoder gives up on one, the server re-encodes it with the damage concealed, as VLC and the Reolink app do.
+
 ## 1.1.1
 
 ### Added

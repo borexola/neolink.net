@@ -52,7 +52,7 @@ matching line.
   `docker rm`) and eats the Docker host's disk. Map a volume for every
   configured tier. The Monitor page's STORAGE section is the tell: tiers on
   the container layer report the same total/free bytes as the root disk.
-- **Perimeter events (line crossing / intrusion / loitering) don't appear**:
+- **Perimeter events (line crossing / intrusion / loitering / object left or taken) don't appear**:
   they are opt-in — tick them under the camera's ⚙ → *Event types* first
   (they need perimeter protection configured in the Reolink app). If the
   camera still produces none, set `NEOLINK_DEBUG_ALARMS=1`, trip the line

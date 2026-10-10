@@ -18,6 +18,8 @@ internal sealed record ApiEvent(
         "crossline" or "cross_line" or "tripwire" => "line-crossing",
         "intrude" or "region" or "perimeter" => "intrusion",
         "linger" or "loiter" => "loitering",
+        "legacy" => "object-left",
+        "loss" => "object-taken",
         "visitor" => "doorbell",
         var x => x,
     };
@@ -27,7 +29,8 @@ internal sealed record ApiEvent(
         ("person", "Human"), ("vehicle", "Vehicle"), ("animal", "Animal"),
         ("package", "Package"), ("doorbell", "Doorbell"), ("crying", "Crying"),
         ("line-crossing", "Line crossing"), ("intrusion", "Intrusion"),
-        ("loitering", "Loitering"), ("external", "External"), ("motion", "Motion"),
+        ("loitering", "Loitering"), ("object-left", "Object left"), ("object-taken", "Object taken"),
+        ("external", "External"), ("motion", "Motion"),
     };
 
     /// <summary>"Human detected", "Human + Vehicle detected" — the same sentence

@@ -17,7 +17,7 @@ const OFFLINE_HTML = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="theme-color" content="#0b0d12">
-<title>Neolink.NET — server unreachable</title>
+<title>Neolink.NET · server unreachable</title>
 <style>
   html, body { margin: 0; height: 100%; background: #0b0d12; color: #e7ebf4;
     font: 14px/1.5 "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", sans-serif;

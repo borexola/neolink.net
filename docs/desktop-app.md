@@ -139,7 +139,8 @@ matters:
 and the browser agrees, and the other way round):
 
 - which cameras alert, and for which detections (person, vehicle, animal,
-  package, doorbell, crying, line-crossing, intrusion, loitering, motion)
+  package, doorbell, crying, line-crossing, intrusion, loitering, object-left,
+  object-taken, motion)
 - per-camera **offline** alerts
 - server alerts: storage full, server overloaded, recording write failures
 - the repeat cooldown

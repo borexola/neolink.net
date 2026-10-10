@@ -182,8 +182,14 @@ public sealed class BcCamera : IBcCamera
             0x02 => "AES (0x02, control XML only - media unencrypted)",
             _ => $"FullAes (0x{negotiated:x2}, media stream encrypted)",
         };
+        var keyType = reply.Xml?.Encryption?.Type ?? "";
+        if (keyType.Length > 0) encDesc += $", key type {keyType}";
         if (LoggedEncryption.TryAdd($"{_logTag}|{negotiated:x2}", 0))
+        {
             Log.Info($"BC {_logTag}: encryption negotiated: {encDesc}");
+            if (UnfamiliarEncryption(negotiated, keyType) is { } why)
+                Log.Warn($"BC {_logTag}: {why} — if video or commands fail on this camera, please report this line");
+        }
         else
             Log.Debug($"BC {_logTag}: encryption negotiated: {encDesc}");
     }
@@ -224,6 +230,17 @@ public sealed class BcCamera : IBcCamera
 
     /// <summary>Connection tags whose negotiated encryption level was already announced at Info.</summary>
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> LoggedEncryption = new();
+
+    /// <summary>Why a negotiated scheme is outside what Neolink knows, or null. Unknown
+    /// codes still run as FullAes (MD5 key, AES-CFB); this only makes them visible.</summary>
+    internal static string? UnfamiliarEncryption(int negotiated, string keyType)
+    {
+        if (negotiated is not (0x00 or 0x01 or 0x02 or 0x12))
+            return $"the camera chose encryption scheme 0x{negotiated:x2}, which Neolink has not seen; treating it as FullAes";
+        if (negotiated >= 0x02 && keyType.Length > 0 && !keyType.Equals("md5", StringComparison.OrdinalIgnoreCase))
+            return $"the camera announced key type '{keyType}', but Neolink derives its AES key with MD5";
+        return null;
+    }
 
     /// <summary>Connection tags whose overridden login framing was already announced.</summary>
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> LoggedLoginMode = new();
@@ -466,6 +483,7 @@ public sealed class BcCamera : IBcCamera
                     or "crossline" or "cross_line" or "tripwire"
                     or "intrude" or "intrusion" or "region" or "perimeter"
                     or "linger" or "loiter" or "loitering"
+                    or "legacy" or "loss"
                 && !aiTypes.Contains(token))
                 aiTypes.Add(token);
         }
@@ -717,6 +735,72 @@ public sealed class BcCamera : IBcCamera
             if (expected < 0 && jpeg.Length > 0)
                 return jpeg.ToArray(); // no size advertised: single-message JPEG
         }
+    }
+
+    /// <summary>SD-card download (msg 8): an XML reply, then BcMedia frames as binary messages,
+    /// then a data-free message at the end of the file. Always closes with msg 9.</summary>
+    public async Task<long> DownloadFileAsync(XElement request, long expectedBytes, Stream dest, CancellationToken ct)
+    {
+        using var sub = _conn.Subscribe(BcConstants.MsgIdDownload);
+        var ext = new ExtensionXml { ChannelId = _channelId };
+        await _conn.SendAsync(new BcMessage
+        {
+            Meta = new BcMeta
+            {
+                MsgId = BcConstants.MsgIdDownload,
+                ChannelId = _channelId,
+                MsgNum = NewMessageNum(),
+                StreamType = 0,
+                ResponseCode = 0,
+                Class = BcConstants.ClassModern,
+            },
+            Extension = ext,
+            Xml = BcXmlBody.FromRaw(request),
+        }, ct).ConfigureAwait(false);
+
+        long got = 0;
+        bool loggedHead = false;
+        try
+        {
+            while (expectedBytes <= 0 || got < expectedBytes)
+            {
+                BcMessage reply;
+                try
+                {
+                    reply = await sub.ReceiveAsync(TimeSpan.FromSeconds(got == 0 ? 20 : 8), ct).ConfigureAwait(false);
+                }
+                catch (TimeoutException) when (got > 0)
+                {
+                    break; // the camera went quiet after the data: done
+                }
+                if (reply.Binary is { Length: > 0 } bin)
+                {
+                    await dest.WriteAsync(bin, ct).ConfigureAwait(false);
+                    got += bin.Length;
+                    continue;
+                }
+                if (!loggedHead && reply.Xml is { Raw.Count: > 0 } x)
+                {
+                    loggedHead = true;
+                    Log.Debug($"BC {_logTag}: SD download reply: " +
+                              string.Concat(x.Raw.Select(e => e.ToString(SaveOptions.DisableFormatting))));
+                }
+                if (got > 0) break; // the data-free end-of-file message
+                if (reply.Meta.ResponseCode is not (200 or 0))
+                    throw new CameraCommandException(BcConstants.MsgIdDownload, reply.Meta.ResponseCode);
+            }
+        }
+        finally
+        {
+            try
+            {
+                await SendCommandAsync(BcConstants.MsgIdDownloadStop, BcXmlBody.FromRaw(new XElement(request)), ext,
+                    TimeSpan.FromSeconds(2), tolerateNoReply: true, ct: CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is CameraCommandException or TimeoutException or IOException
+                                       or ObjectDisposedException or InvalidOperationException) { }
+        }
+        return got;
     }
 
     public async Task TalkAsync(TalkAbilityXml ability, ChannelReader<byte[]> frames, CancellationToken ct)

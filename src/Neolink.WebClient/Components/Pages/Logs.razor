@@ -1,4 +1,4 @@
-@page "/logs"
+﻿@page "/logs"
 @using System.Text.Json
 @inject NavigationManager Nav
 @inject HttpClient Http
@@ -11,7 +11,7 @@
    straight into the DOM by neolink.js — see logsAttach — so a chatty server
    never churns the Blazor circuit. *@
 
-<PageTitle>@T["Neolink.NET — Logs"]</PageTitle>
+<PageTitle>@T["Neolink.NET · Logs"]</PageTitle>
 
 <div class="logs-page">
     <div class="toolbar">
@@ -26,7 +26,7 @@
             @foreach (var lvl in LogLevelChips)
             {
                 <button class="chip @(_hiddenLevels.Contains(lvl) ? "chip-off" : "chip-active")"
-                        title="@(_hiddenLevels.Contains(lvl) ? T["Hidden — click to show"] : T["Shown — click to hide"])"
+                        title="@(_hiddenLevels.Contains(lvl) ? T["Hidden (click to show)"] : T["Shown (click to hide)"])"
                         @onclick="() => ToggleLevel(lvl)">@lvl</button>
             }
             @if (_cameras.Count > 0)
@@ -58,7 +58,7 @@
     else if (_checked && !_authEnabled)
     {
         <div class="notice">
-            @T["Live server logs are admin-only — and with authentication off there is no admin yet. Create the admin account from the live view, then come back here."]
+            @T["Live server logs are admin-only, and with authentication off there is no admin yet. Create the admin account from the live view, then come back here."]
         </div>
     }
     else if (_checked)

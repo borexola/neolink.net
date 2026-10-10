@@ -43,6 +43,11 @@ brightness, PIR, a latched siren, privacy mode and reboot. Over the camera's
 HTTP API (beta) it adds picture sliders, day/night and anti-flicker, HDR,
 speaker volume, motion and per-type AI detection sensitivity, the on-screen
 display, PTZ presets, doorbell quick replies and a firmware-update badge.
+Over Baichuan (beta, no HTTP API needed) it adds the SD-recording switch,
+automatic reboot, PTZ guard position and patrols, privacy masks, doorbell
+chimes (volume, light, silent mode) and smart-detection rule sensitivity;
+these apply at once. A camera without an HTTP API also gets its picture
+sliders, speaker volume, PTZ presets and AI sensitivity over Baichuan.
 Device settings **stage** and are sent only on "Apply to camera", with an
 up-front warning when a change restarts the stream or reboots the camera.
 The **PORTS tab** shows the camera's own service switches (HTTP, HTTPS,
@@ -108,16 +113,16 @@ already carrying, decoded with ffmpeg.
   original segments. The dialog pre-fills the zoomed window and shows the
   size first; mind that a full high-bitrate day is tens of gigabytes.
 
-## Camera SD-card playback (preview)
+## Camera SD-card playback (beta)
 
 The Events page's **SD card** mode lists and plays the recordings a camera
 stored on its own card — footage from when the server was down, and
 battery-camera clips that never streamed. Day calendar from the camera,
-playback with scrubbing, download. Needs the camera's HTTP API and a mounted
-card; what the camera records onto its card is configured in the Reolink
-app. *Preview* because it hangs on per-model firmware: the Video Doorbell
-WiFi lists recordings its firmware cannot serve (those clips only play in
-the Reolink app, and the player says so).
+playback with scrubbing, download. Uses the camera's HTTP API, or Baichuan
+when it has none or won't serve a clip; what the camera records onto its card
+is configured in the Reolink app. A Video Doorbell serves clips over HTTP only
+with RTMP enabled (Ports tab); otherwise they come over Baichuan, which needs
+ffmpeg. Encrypted recordings ask for the recording password.
 
 ## Install as an app (PWA)
 

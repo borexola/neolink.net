@@ -72,7 +72,7 @@ Alternatively, skip MQTT for the picture entirely: point a Home Assistant
 | Entity | Type | Notes |
 |---|---|---|
 | Motion / Person / Vehicle / Animal | `binary_sensor` | From the camera's alarm pushes (AI labels need Smart Detection enabled in the Reolink app) |
-| Package / Crying / Line crossing / Intrusion / Loitering | `binary_sensor` | Created up front like the core four, so automations can be built before the first event — they stay **Clear** until the camera pushes one (smart/perimeter detection must be configured in the Reolink app for that to ever happen). Crying is the indoor cams' audio detection and uses device class `sound` |
+| Package / Crying / Line crossing / Intrusion / Loitering / Object left / Object taken | `binary_sensor` | Created up front like the core four, so automations can be built before the first event — they stay **Clear** until the camera pushes one (smart/perimeter detection must be configured in the Reolink app for that to ever happen). Crying is the indoor cams' audio detection and uses device class `sound` |
 | Doorbell | `event` | Video doorbells: every button press publishes an MQTT event (`event_type: press`, `device_class: doorbell`) — the natural trigger for ring automations |
 | Visitor | `binary_sensor` | Momentary doorbell-press pulse; HA clears it itself after a few seconds |
 | Record on demand | `switch` | **Record a clip on demand from HA**, regardless of what the camera detects — one clip, stops by itself; see below (appears when the server records events for this camera) |
@@ -90,7 +90,7 @@ Alternatively, skip MQTT for the picture entirely: point a Home Assistant
 | PIR sensor | `switch` | Enable/disable the PIR |
 | Reboot, Pan up/down/left/right | `button` | PTZ buttons on pan-tilt cameras |
 | Snapshot | `camera` | Latest JPEG, refreshed periodically (when the camera supports snapshots) |
-| Volume (beta) | `number` | Speaker volume 0-100 via the camera's HTTP API — governs sirens, alerts and two-way talk |
+| Volume (beta) | `number` | Speaker volume 0-100 via the camera's HTTP API, or Baichuan when it has none — governs sirens, alerts and two-way talk |
 | Record audio (beta) | `switch` | The camera-side flag that puts the microphone into every stream and recording — only on cameras whose firmware exposes it |
 | Auto-tracking (beta) | `switch` | Follow detected subjects, on cameras that support AI tracking |
 | PTZ preset (beta) | `select` | The camera's saved positions; picking one moves the camera there |

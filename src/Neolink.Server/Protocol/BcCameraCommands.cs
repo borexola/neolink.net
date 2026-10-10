@@ -255,10 +255,12 @@ public static class BcCameraCommands
 
     // ------------------------------------------------------------------ floodlight
 
-    /// <summary>Raw &lt;FloodlightTask&gt; XML (brightness, auto-mode, schedule), or null if unsupported.</summary>
-    public static async Task<XElement?> GetFloodlightTasksAsync(this IBcCamera cam, TimeSpan? timeout = null, CancellationToken ct = default)
+    /// <summary>Raw &lt;FloodlightTask&gt; XML (brightness, auto-mode, schedule), or null if unsupported.
+    /// <paramref name="msgId"/> is 289 (the firmware's GET_FLOODLIGHT_TASK) or 438 (reference neolink's).</summary>
+    public static async Task<XElement?> GetFloodlightTasksAsync(this IBcCamera cam, TimeSpan? timeout = null,
+        CancellationToken ct = default, uint msgId = BcConstants.MsgIdFloodlightTasksGet)
     {
-        var reply = await cam.SendCommandAsync(BcConstants.MsgIdFloodlightTasksRead, extension: ChannelExt(cam),
+        var reply = await cam.SendCommandAsync(msgId, extension: ChannelExt(cam),
             replyTimeout: timeout, ct: ct).ConfigureAwait(false);
         return reply?.Xml?.RawElement("FloodlightTask");
     }
@@ -284,4 +286,130 @@ public static class BcCameraCommands
             BcXmlBody.FromRaw(BuildFloodlightManual(cam.ChannelId, on, durationSeconds)), ChannelExt(cam),
             replyTimeout: TimeSpan.FromMilliseconds(500), tolerateNoReply: true, ct: ct).ConfigureAwait(false);
     }
+
+    // ------------------------------------------------------------------ device settings
+    // Ids, roots and field names below come from the firmware's own command and
+    // serializer tables (firmware-analysis/data/bc_ids.csv), not from captures.
+
+    /// <summary>Raw &lt;<paramref name="root"/>&gt; from a channel-scoped read, or null when absent.</summary>
+    public static async Task<XElement?> GetRawAsync(this IBcCamera cam, uint msgId, string root,
+        XElement? body = null, TimeSpan? timeout = null, CancellationToken ct = default)
+    {
+        var reply = await cam.SendCommandAsync(msgId, body == null ? null : BcXmlBody.FromRaw(body),
+            ChannelExt(cam), replyTimeout: timeout, ct: ct).ConfigureAwait(false);
+        return reply?.Xml?.RawElement(root);
+    }
+
+    /// <summary>Writes an element with a set id; a silent camera counts as accepted.</summary>
+    public static Task SetRawAsync(this IBcCamera cam, uint msgId, XElement element, CancellationToken ct = default,
+        TimeSpan? replyTimeout = null) =>
+        cam.SendCommandAsync(msgId, BcXmlBody.FromRaw(element), ChannelExt(cam),
+            replyTimeout: replyTimeout ?? TimeSpan.FromMilliseconds(1500), tolerateNoReply: true, ct: ct);
+
+    /// <summary>&lt;SystemGeneral&gt; (msg 104): device name, time zone and the camera's wall clock.</summary>
+    public static async Task<XElement?> GetSystemGeneralAsync(this IBcCamera cam, TimeSpan? timeout = null,
+        CancellationToken ct = default)
+    {
+        var reply = await cam.SendCommandAsync(BcConstants.MsgIdGetGeneral, replyTimeout: timeout, ct: ct)
+            .ConfigureAwait(false);
+        return reply?.Xml?.RawElement("SystemGeneral");
+    }
+
+    /// <summary>Writes back a (modified) &lt;SystemGeneral&gt; (msg 105).</summary>
+    public static Task SetSystemGeneralAsync(this IBcCamera cam, XElement general, CancellationToken ct = default) =>
+        cam.SendCommandAsync(BcConstants.MsgIdSetGeneral, BcXmlBody.FromRaw(general),
+            replyTimeout: TimeSpan.FromSeconds(2), tolerateNoReply: true, ct: ct);
+
+    /// <summary>A firmware time element: year, month, day, hour, minute, second children.</summary>
+    internal static XElement TimeElement(string name, DateTime t) => new(name,
+        new XElement("year", t.Year), new XElement("month", t.Month), new XElement("day", t.Day),
+        new XElement("hour", t.Hour), new XElement("minute", t.Minute), new XElement("second", t.Second));
+
+    /// <summary>Reads a time element (or the same fields directly on <paramref name="t"/>); null when invalid.</summary>
+    internal static DateTime? ParseTime(XElement? t)
+    {
+        if (t == null) return null;
+        int? F(string n) => int.TryParse(t.Element(n)?.Value.Trim(), out var v) ? v : null;
+        try
+        {
+            return F("year") is { } y && F("month") is { } mo && F("day") is { } d
+                ? new DateTime(y, mo, d, F("hour") ?? 0, F("minute") ?? 0, F("second") ?? 0)
+                : null;
+        }
+        catch (ArgumentOutOfRangeException) { return null; }
+    }
+
+    // ------------------------------------------------------------------ SD card over Baichuan
+
+    /// <summary>&lt;DayRecords&gt; calendar request (msg 142) for one channel over a time window.</summary>
+    internal static XElement BuildDayRecords(byte channelId, DateTime start, DateTime end) =>
+        new("DayRecords", new XAttribute("version", BcXmlBody.XmlVersion),
+            TimeElement("startTime", start), TimeElement("endTime", end),
+            new XElement("DayRecordList", new XElement("DayRecord", new XElement("channelId", channelId))));
+
+    /// <summary>Days of the month with recordings from a &lt;DayRecords&gt; reply asked from the
+    /// 1st: the firmware lists only recorded days, dayType "index" counting from 0.</summary>
+    internal static IReadOnlyList<int> ParseDayRecords(XElement dayRecords, int year, int month)
+    {
+        int last = DateTime.DaysInMonth(year, month);
+        return dayRecords.Descendants("dayType")
+            .Where(d => d.Element("type")?.Value.Trim().ToLowerInvariant() is not (null or "" or "none"))
+            .Select(d => int.TryParse(d.Element("index")?.Value.Trim(), out var i) ? i + 1 : 0)
+            .Where(d => d >= 1 && d <= last)
+            .Distinct().OrderBy(d => d).ToList();
+    }
+
+    /// <summary>Every record type the firmwares' file filters know (doorbells add visitor and
+    /// package); each is matched as a substring, so a token a model lacks is ignored.</summary>
+    internal const string AllRecordTypes = "manual,sched,md,pir,io,people,face,vehicle,other,dog_cat,visitor,package";
+
+    /// <summary>&lt;FileInfoList&gt; file-search open (msg 14).</summary>
+    internal static XElement BuildFileSearch(byte channelId, string streamType, DateTime start, DateTime end) =>
+        new("FileInfoList", new XAttribute("version", BcXmlBody.XmlVersion),
+            new XElement("FileInfo",
+                new XElement("channelId", channelId),
+                new XElement("streamType", streamType),
+                new XElement("recordType", AllRecordTypes),
+                TimeElement("startTime", start), TimeElement("endTime", end)));
+
+    /// <summary>&lt;FileInfoList&gt; carrying a search handle (msg 15 next page, msg 16 close).</summary>
+    internal static XElement BuildFileHandle(byte channelId, int handle) =>
+        new("FileInfoList", new XAttribute("version", BcXmlBody.XmlVersion),
+            new XElement("FileInfo", new XElement("channelId", channelId), new XElement("handle", handle)));
+
+    /// <summary>Download request (msg 8): the file's own search entry, echoed back.</summary>
+    internal static XElement BuildDownload(XElement fileInfo) =>
+        new("FileInfoList", new XAttribute("version", BcXmlBody.XmlVersion), new XElement(fileInfo));
+
+    /// <summary>A file entry's size: sizeH/sizeL (high/low 32 bits), else fileSize.</summary>
+    internal static long FileInfoSize(XElement f)
+    {
+        long.TryParse(f.Element("sizeL")?.Value.Trim(), out var lo);
+        long.TryParse(f.Element("sizeH")?.Value.Trim(), out var hi);
+        if (lo > 0 || hi > 0) return (hi << 32) | (lo & 0xffffffffL);
+        return long.TryParse(f.Element("fileSize")?.Value.Trim(), out var size) ? size : 0;
+    }
+
+    /// <summary>The named entries of a search reply, as (raw entry, name, start, end, size).</summary>
+    internal static IEnumerable<(XElement Raw, string Name, DateTime Start, DateTime End, long Size)> ParseFileInfos(XElement? list)
+    {
+        if (list == null) yield break;
+        foreach (var f in list.Descendants("FileInfo"))
+        {
+            var name = f.Element("name")?.Value.Trim() ?? "";
+            if (name.Length == 0) continue;
+            yield return (f, name, ParseTime(f.Element("startTime")) ?? default,
+                ParseTime(f.Element("endTime")) ?? default, FileInfoSize(f));
+        }
+    }
+
+    /// <summary>The search handle a msg-14 reply hands out, or null.</summary>
+    internal static int? SearchHandle(XElement? list) =>
+        list?.Descendants("handle").Select(h => int.TryParse(h.Value.Trim(), out var v) ? v : (int?)null)
+            .FirstOrDefault(v => v != null);
+
+    /// <summary>Closes a file search; best-effort.</summary>
+    public static Task CloseFileSearchAsync(this IBcCamera cam, int handle, CancellationToken ct = default) =>
+        cam.SendCommandAsync(BcConstants.MsgIdSearchClose, BcXmlBody.FromRaw(BuildFileHandle(cam.ChannelId, handle)),
+            ChannelExt(cam), replyTimeout: TimeSpan.FromSeconds(2), tolerateNoReply: true, ct: ct);
 }

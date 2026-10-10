@@ -19,7 +19,7 @@ namespace Neolink.Mqtt;
 /// Per camera it publishes (all retained, so HA repopulates after a restart):
 ///   • binary_sensor: motion, person, vehicle, animal,
 ///                    package, line crossing, intrusion,
-///                    loitering                          (from the alarm pushes)
+///                    loitering, object left/taken       (from the alarm pushes)
 ///   • binary_sensor: siren sounding                     (from the status pushes)
 ///   • switch:        siren — ON sounds until OFF        (audio-alarm cameras)
 ///   • switch:        privacy mode — camera dark         (cameras answering msg 574)
@@ -114,7 +114,8 @@ public sealed class HomeAssistantMqtt
     /// pushes (feature absent, or not configured in the Reolink app) simply stays
     /// Clear — visible-but-idle beats invisible-until-it-happens.</summary>
     internal static readonly string[] DetectionLabels =
-        { "motion", "person", "vehicle", "animal", "package", "crying", "line-crossing", "intrusion", "loitering" };
+        { "motion", "person", "vehicle", "animal", "package", "crying", "line-crossing", "intrusion", "loitering",
+          "object-left", "object-taken" };
 
     private readonly MqttConfig _cfg;
     private readonly string _version;
@@ -1258,6 +1259,8 @@ internal sealed class CameraBridge
             "line-crossing" => "Line crossing",
             "intrusion" => "Intrusion",
             "loitering" => "Loitering",
+            "object-left" => "Object left",
+            "object-taken" => "Object taken",
             _ => label,
         },
         unique_id = $"neolink_{Id}_{label}",
@@ -1277,6 +1280,8 @@ internal sealed class CameraBridge
             "line-crossing" => "mdi:vector-line",
             "intrusion" => "mdi:shield-alert-outline",
             "loitering" => "mdi:account-clock-outline",
+            "object-left" => "mdi:bag-personal-outline",
+            "object-taken" => "mdi:bag-personal-off-outline",
             _ => (string?)null,
         },
         device = Device(),

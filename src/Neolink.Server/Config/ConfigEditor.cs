@@ -21,17 +21,33 @@ public static class ConfigEditor
     private static readonly JsonSerializerOptions WriteOpts = new() { WriteIndented = true };
     private static readonly object Gate = new();
 
-    public static bool IsWritable(string path)
+    public static bool IsWritable(string path) => WriteProblem(path) == null;
+
+    /// <summary>Why the file can't be opened for writing, in words an admin can act on; null when it can.</summary>
+    public static string? WriteProblem(string path)
     {
         try
         {
             using var _ = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite);
-            return true;
+            return null;
         }
-        catch
+        catch (FileNotFoundException) { return "the file does not exist"; }
+        catch (DirectoryNotFoundException) { return "its folder does not exist"; }
+        catch (UnauthorizedAccessException)
         {
-            return false;
+            string mode = "";
+            try { if (!OperatingSystem.IsWindows()) mode = $", mode {Convert.ToString((int)File.GetUnixFileMode(path), 8)}"; }
+            catch { }
+            bool readable = false;
+            try { using var _ = File.OpenRead(path); readable = true; } catch { }
+            return $"permission denied for the server's user '{Environment.UserName}'{mode}" +
+                   (readable ? "" : ", and it cannot be read either");
         }
+        catch (IOException ex) when (ex.Message.Contains("read-only", StringComparison.OrdinalIgnoreCase))
+        {
+            return "the file system is mounted read-only";
+        }
+        catch (Exception ex) { return ex.Message; }
     }
 
     /// <summary>The editable settings, read fresh from the file.
@@ -57,6 +73,7 @@ public static class ConfigEditor
         {
             path = Path.GetFullPath(path),
             writable = IsWritable(path),
+            writeProblem = WriteProblem(path),
             encryption,
             settings = new
             {

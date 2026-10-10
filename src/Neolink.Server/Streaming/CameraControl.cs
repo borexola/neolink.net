@@ -4,6 +4,7 @@
 using System.Text.Json.Nodes;
 using System.Threading.Channels;
 using System.Xml.Linq;
+using Neolink.Bc;
 using Neolink.Bc.Xml;
 using Neolink.Media;
 using Neolink.Protocol;
@@ -17,9 +18,11 @@ public sealed class CameraOfflineException : Exception
 }
 
 /// <summary>Features a camera was found to support, discovered by probing.</summary>
+/// <param name="SpotlightTasks">A spotlight camera whose brightness and auto mode answer over
+/// Baichuan (FloodlightTask, msg 289) — the path for spotlights with no HTTP API.</param>
 public sealed record CameraFeatures(bool Ptz, bool Led, bool Pir, bool Battery, bool Talk,
     bool Zoom = false, bool Siren = false, bool Floodlight = false, bool Privacy = false,
-    bool WhiteLed = false, bool Spotlight = false, bool Doorbell = false);
+    bool WhiteLed = false, bool Spotlight = false, bool Doorbell = false, bool SpotlightTasks = false);
 
 /// <summary>White-LED / spotlight state read over the HTTP API (brightness 0-100,
 /// on/off, and the auto mode: 0 off, 1 night-auto, 2 always-on, 3 schedule).</summary>
@@ -84,6 +87,30 @@ public sealed record FirmwareStatus(bool UpdateAvailable, string? NewVersion);
 /// <summary>One recording stored on the camera's own SD card, as listed by the HTTP
 /// API's Search. Times are camera-local; Name is the handle Download expects.</summary>
 public sealed record SdRecording(string Name, DateTime Start, DateTime End, long SizeBytes, string StreamType);
+
+public sealed record AutoRebootState(bool Enabled, string WeekDay, int Hour, int Minute);
+
+/// <param name="Valid">A guard position has been saved.</param>
+/// <param name="Timeout">Seconds idle before returning to it, as the camera reports it.</param>
+public sealed record GuardState(bool Enabled, bool Valid, int? Timeout);
+
+public sealed record PatrolInfo(int Id, string Name, bool Enabled);
+
+public sealed record PrivacyMaskState(bool Enabled, int Count);
+
+/// <param name="Volume">0-4.</param>
+/// <param name="SilentSeconds">Time left silenced; null when the doorbell doesn't say.</param>
+public sealed record ChimeInfo(int Id, string Name, bool Online, int? Volume, bool? Led, int? SilentSeconds = null);
+
+/// <param name="Type">crossline, intrusion, loitering, object-left or object-taken.</param>
+/// <param name="Seconds">stayTime (intrusion, loitering) or timeThresh (object rules).</param>
+public sealed record SmartRule(string Type, int Index, string Name, string AiType, int? Sensitivity,
+    int? Seconds, string? Direction);
+
+/// <summary>Device settings read over Baichuan; a null member is absent on this camera.</summary>
+public sealed record DeviceExtras(bool? SdRecording, AutoRebootState? AutoReboot, GuardState? Guard,
+    IReadOnlyList<PatrolInfo>? Patrols, PrivacyMaskState? PrivacyMasks, IReadOnlyList<ChimeInfo>? Chimes,
+    IReadOnlyList<SmartRule>? SmartRules, IReadOnlyList<SdCardInfo>? SdCards);
 
 /// <summary>The scale a camera reported its Wi-Fi strength in.</summary>
 public enum WifiUnit
@@ -440,13 +467,57 @@ public interface ICameraControl
     Task<IReadOnlyList<int>?> GetSdRecordingDaysAsync(int year, int month, CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<int>?>(null);
 
-    /// <summary>The SD-card recordings of one (camera-local) day, or null.</summary>
-    Task<IReadOnlyList<SdRecording>?> GetSdRecordingsAsync(DateOnly day, CancellationToken ct) =>
+    /// <summary>The SD-card recordings of one (camera-local) day, or null. <paramref name="stream"/>
+    /// "main"/"sub" lists that stream only; null lists main, or sub when main has nothing.</summary>
+    Task<IReadOnlyList<SdRecording>?> GetSdRecordingsAsync(DateOnly day, CancellationToken ct, string? stream = null) =>
         Task.FromResult<IReadOnlyList<SdRecording>?>(null);
+
+    /// <summary>Why the last SD-card search failed, in words for the UI; null when it didn't.</summary>
+    string? SdFailure => null;
 
     /// <summary>Opens a streaming download of one SD-card recording by its Search name.</summary>
     Task<ReolinkHttpApi.SdDownload> OpenSdRecordingAsync(string fileName, CancellationToken ct) =>
         throw new NotSupportedException("SD-card playback is not available for this camera");
+
+    /// <summary>The password of encrypted SD recordings, held in memory only; null clears it.</summary>
+    void SetSdPassword(string? password) { }
+
+    /// <summary>Device settings over Baichuan (SD recording switch, auto-reboot, PTZ guard and
+    /// patrols, privacy masks, chimes, smart rules, SD cards), or null. Default: none.</summary>
+    Task<DeviceExtras?> GetDeviceExtrasAsync(CancellationToken ct) => Task.FromResult<DeviceExtras?>(null);
+
+    /// <summary>The camera's own SD recording on or off.</summary>
+    Task SetSdRecordingAsync(bool on, CancellationToken ct) => NotHere("SD recording");
+
+    /// <summary>Scheduled reboot; null fields stay as they are.</summary>
+    Task SetAutoRebootAsync(bool? enabled, string? weekDay, int? hour, int? minute, CancellationToken ct) =>
+        NotHere("auto-reboot");
+
+    /// <summary>Guard position: return-to-guard on/off and its idle timeout (seconds), or an
+    /// action — "set" saves the current position, "go" drives there.</summary>
+    Task SetGuardAsync(bool? enabled, int? timeout, string? action, CancellationToken ct) => NotHere("PTZ guard");
+
+    /// <summary>Starts or stops a saved patrol.</summary>
+    Task SetPatrolAsync(int id, bool run, CancellationToken ct) => NotHere("PTZ patrol");
+
+    /// <summary>Privacy masks (drawn in the Reolink app) on or off.</summary>
+    Task SetPrivacyMasksAsync(bool on, CancellationToken ct) => NotHere("privacy masks");
+
+    /// <summary>A paired chime's volume and/or LED; null fields stay as they are.</summary>
+    Task SetChimeAsync(int id, int? volume, bool? led, CancellationToken ct) => NotHere("chime control");
+
+    /// <summary>Rings a paired chime once.</summary>
+    Task RingChimeAsync(int id, CancellationToken ct) => NotHere("chime control");
+
+    /// <summary>Silences a chime for <paramref name="seconds"/>; 0 ends the silence.</summary>
+    Task SetChimeSilentAsync(int id, int seconds, CancellationToken ct) => NotHere("chime silent mode");
+
+    /// <summary>Edits (sensitivity, seconds) or deletes one smart-detection rule.</summary>
+    Task SetSmartRuleAsync(string type, int index, int? sensitivity, int? seconds, bool delete, CancellationToken ct) =>
+        NotHere("smart detection rules");
+
+    private static Task NotHere(string what) =>
+        Task.FromException(new NotSupportedException($"{what} is not available for this camera"));
 
     /// <summary>
     /// Two-way talk: streams 16-bit LE mono PCM chunks at <paramref name="sampleRate"/>
@@ -490,6 +561,7 @@ public sealed class CameraControl : ICameraControl
     // (new IBcCamera instance) invalidates the cache.
     private IBcCamera? _capsSession;
     private CameraCapabilities? _caps;
+    private uint _floodlightReadId = BcConstants.MsgIdFloodlightTasksGet;
 
     /// <param name="allSources">Every stream service of this camera. The camera is
     /// ONE device with up to three connections (main/sub/extern): it is online if
@@ -581,7 +653,15 @@ public sealed class CameraControl : ICameraControl
             var batteryTask = ProbeAsync(() => camera.GetBatteryInfoAsync(ProbeTimeout, ct));
             var talkTask = TryAsync(() => camera.GetTalkAbilityAsync(ProbeTimeout, ct));
             var zoomTask = TryAsync(() => camera.GetZoomFocusAsync(ProbeTimeout, ct));
-            var floodTask = TryAsync(() => camera.GetFloodlightTasksAsync(ProbeTimeout, ct));
+            // FloodlightTask: 289 is in every shared IPC binary, so only a camera advertising
+            // a light is asked; 438 (reference neolink's id) stays for firmware that answers it.
+            uint ledCtrl = ChannelSupportValue(support, camera.ChannelId, "ledCtrl");
+            bool lightAdvertised = (ledCtrl & 4) != 0
+                                   || ChannelSupportValue(support, camera.ChannelId, "lightType") > 0;
+            var floodGetTask = lightAdvertised
+                ? TryAsync(() => camera.GetFloodlightTasksAsync(ProbeTimeout, ct, BcConstants.MsgIdFloodlightTasksGet))
+                : Task.FromResult<XElement?>(null);
+            var floodTask = TryAsync(() => camera.GetFloodlightTasksAsync(ProbeTimeout, ct, BcConstants.MsgIdFloodlightTasksRead));
             // White-LED / spotlight over the HTTP API (Lumus, Elite, ... — cameras
             // that don't answer the Baichuan FloodlightTask). Runs in parallel with
             // the BC probes and shares their timeout, so an unreachable HTTP port
@@ -602,7 +682,8 @@ public sealed class CameraControl : ICameraControl
             var privacyTask = sleepAd && remoteAbility
                 ? ProbeValueAsync(() => camera.GetPrivacyModeAsync(ProbeTimeout, ct))
                 : Task.FromResult<bool?>(null);
-            await Task.WhenAll(ledTask, pirTask, batteryTask, talkTask, zoomTask, floodTask, privacyTask, whiteLedTask).ConfigureAwait(false);
+            await Task.WhenAll(ledTask, pirTask, batteryTask, talkTask, zoomTask, floodTask, floodGetTask,
+                privacyTask, whiteLedTask).ConfigureAwait(false);
             bool led = ledTask.Result;
             bool pir = pirTask.Result;
             bool battery = batteryTask.Result;
@@ -611,14 +692,16 @@ public sealed class CameraControl : ICameraControl
             // A real zoom lens reports a usable range; fixed-lens cameras answer
             // with max 0 (or not at all) and get no zoom UI.
             bool zoom = ZoomMax(zoomTask.Result) > 0;
-            bool floodlight = floodTask.Result != null;
+            bool spotlightBit = (ledCtrl & 4) != 0;
+            var (floodlight, spotlightTasks, floodReadId) =
+                ClassifyFloodlight(floodTask.Result != null, floodGetTask.Result != null, spotlightBit);
+            _floodlightReadId = floodReadId;
             bool privacy = privacyTask.Result != null; // camera answered the sleep query
             // A physical white spotlight is advertised by ledCtrl bit 2 in Support —
             // this picks out the Lumus/Elite lines and leaves status-LED-only models
             // (E1 Pro) and the doorbell out. Its ON/OFF rides the Baichuan lightState
-            // toggle; brightness is only reachable when the HTTP read also succeeded.
-            bool spotlight = !floodlight
-                && (ChannelSupportValue(support, camera.ChannelId, "ledCtrl") & 4) != 0;
+            // toggle; brightness rides HTTP when it answers, else FloodlightTask 289.
+            bool spotlight = !floodlight && spotlightBit;
             bool whiteLed = spotlight && whiteLedTask.Result != null;
             // A real video doorbell advertises doorbellVersion in its Support block.
             // Needed as a gate because some non-doorbells (the RLC "Elite" WiFi line)
@@ -626,7 +709,8 @@ public sealed class CameraControl : ICameraControl
             bool doorbell = ChannelSupportValue(support, camera.ChannelId, "doorbellVersion") > 0;
 
             _caps = new CameraCapabilities(version, support, new CameraFeatures(
-                ptz, led, pir, battery, talk, zoom, siren, floodlight, privacy, whiteLed, spotlight, doorbell));
+                ptz, led, pir, battery, talk, zoom, siren, floodlight, privacy, whiteLed, spotlight, doorbell,
+                SpotlightTasks: spotlight && spotlightTasks));
             _capsSession = camera;
             // This sweep probes with a longer budget than the stream service's one
             // short login-time battery query, so it is often the first path to prove
@@ -639,6 +723,7 @@ public sealed class CameraControl : ICameraControl
                      $"(ptz={ptz}, led={led}, pir={pir}, battery={battery}, talk={talk}" +
                      $", zoom={zoom}, siren={siren}, floodlight={floodlight}, privacy={privacy}" +
                      $", spotlight={spotlight}, whiteLed={whiteLed}, doorbell={doorbell}" +
+                     $"{(floodlight || spotlightTasks ? $", floodlightTaskId={floodReadId}" : "")}" +
                      $"{(version != null && version.Model.Length > 0 ? $", model={version.Model}" : "")})");
             if (sleepAd != remoteAbility)
                 Log.Debug($"{CameraName}: privacy gate — DeviceInfo<sleep>={sleepAd}, " +
@@ -904,7 +989,19 @@ public sealed class CameraControl : ICameraControl
         }, ct);
 
     public Task<XElement?> GetFloodlightTasksAsync(CancellationToken ct) =>
-        WithCameraAsync(camera => camera.GetFloodlightTasksAsync(ct: ct), ct);
+        WithCameraAsync(camera => camera.GetFloodlightTasksAsync(ct: ct, msgId: _floodlightReadId), ct);
+
+    /// <summary>438 wins when answered, else 289. A 289 answer makes a floodlight only without
+    /// the spotlight bit, so spotlights keep their Home Assistant entities.</summary>
+    internal static (bool Floodlight, bool SpotlightTasks, uint ReadId) ClassifyFloodlight(
+        bool answered438, bool answered289, bool spotlightBit)
+    {
+        if (answered438) return (true, false, BcConstants.MsgIdFloodlightTasksRead);
+        if (!answered289) return (false, false, BcConstants.MsgIdFloodlightTasksGet);
+        return spotlightBit
+            ? (false, true, BcConstants.MsgIdFloodlightTasksGet)
+            : (true, false, BcConstants.MsgIdFloodlightTasksGet);
+    }
 
     public Task SetFloodlightTasksAsync(XElement task, CancellationToken ct) =>
         WithCameraAsync<object?>(async camera =>
@@ -1058,15 +1155,15 @@ public sealed class CameraControl : ICameraControl
                     // be something it isn't.
                     _httpWarnCooldownUntil = DateTime.MaxValue;
                     Log.Info($"{CameraName}: no HTTP API answered ({reason}) — battery models usually " +
-                             "don't have one, so this is expected. Picture settings, volume, Wi-Fi " +
-                             "detail and scaled snapshots stay unavailable; streams, events, PIR and " +
-                             "battery readings (Baichuan) are unaffected. If this model does expose " +
+                             "don't have one, so this is expected. Picture settings, Wi-Fi detail and " +
+                             "scaled snapshots stay unavailable; streams, events, PIR, battery readings, " +
+                             "volume and presets (Baichuan) are unaffected. If this model does expose " +
                              "HTTP, set 'http_address' explicitly.");
                     return default;
                 }
                 Log.Warn($"{CameraName}: the camera's HTTP API is not answering ({reason}). " +
-                         "Picture settings, volume, Wi-Fi signal, PTZ presets and scaled snapshots are " +
-                         "unavailable until it does. " + (slow
+                         "Picture settings, Wi-Fi signal and scaled snapshots are unavailable until it " +
+                         "does (volume, PTZ presets and AI sensitivity fall back to Baichuan). " + (slow
                              // A no-reply timeout can't tell a slow camera from silently
                              // dropped packets — don't claim "the port is open".
                              ? "Either the camera is overloaded (Wi-Fi camera under streaming load), or " +
@@ -1113,13 +1210,12 @@ public sealed class CameraControl : ICameraControl
     {
         if (_httpApi == null)
         {
-            // No Reolink HTTP API. If this camera has an ONVIF imaging fallback
-            // (Lumus and other HTTP-less models), surface just the picture settings
-            // it can provide; everything else stays null. Otherwise nothing.
-            if (_onvif == null) return null;
-            var onvifImage = await GetOnvifImageSettingsAsync(ct).ConfigureAwait(false);
-            return onvifImage == null ? null
-                : new HttpFeatures(onvifImage, null, null, null, null, null, null);
+            // No Reolink HTTP API: picture settings from ONVIF (Lumus and other
+            // HTTP-less models) and what Baichuan carries; everything else stays null.
+            var onvifImage = await HttpOrOnvifImageAsync(ct).ConfigureAwait(false);
+            var bare = await WithBcStandInsAsync(new HttpFeatures(onvifImage, null, null, null, null, null, null), ct)
+                .ConfigureAwait(false);
+            return bare is { Image: null, Volume: null, PtzPresets: null, AiSensitivities: null } ? null : bare;
         }
         // Sequential on purpose (the HTTP client serializes requests anyway) —
         // but ONE slow answer must not blank the rest of the panel. A mid-sweep
@@ -1162,15 +1258,15 @@ public sealed class CameraControl : ICameraControl
                 return default; // sweep budget spent — the cache stands in
             }
         }
-        var image = await Step<ImageSettings>(GetImageSettingsAsync).ConfigureAwait(false);
-        var volume = await Step<int?>(GetVolumeAsync).ConfigureAwait(false);
+        var image = await Step<ImageSettings>(HttpOrOnvifImageAsync).ConfigureAwait(false);
+        var volume = await Step<int?>(HttpVolumeAsync).ConfigureAwait(false);
         var wifi = await Step<WifiReading>(GetWifiSignalAsync).ConfigureAwait(false);
-        var presets = await Step<IReadOnlyList<PtzPresetInfo>>(GetPtzPresetsAsync).ConfigureAwait(false);
+        var presets = await Step<IReadOnlyList<PtzPresetInfo>>(HttpPresetsAsync).ConfigureAwait(false);
         var replies = await Step<IReadOnlyList<QuickReplyFile>>(GetQuickRepliesAsync).ConfigureAwait(false);
         var autoTrack = await Step<bool?>(GetAutoTrackAsync).ConfigureAwait(false);
         var sdCards = await Step<IReadOnlyList<SdCardInfo>>(GetSdCardsAsync).ConfigureAwait(false);
         var mdSens = await Step<int?>(GetMdSensitivityAsync).ConfigureAwait(false);
-        var aiSens = await Step<IReadOnlyList<AiSensitivity>>(GetAiSensitivitiesAsync).ConfigureAwait(false);
+        var aiSens = await Step<IReadOnlyList<AiSensitivity>>(HttpAiSensitivitiesAsync).ConfigureAwait(false);
         var osd = await Step<OsdSettings>(GetOsdSettingsAsync).ConfigureAwait(false);
         var audio = await Step<AudioState>(GetAudioStateAsync).ConfigureAwait(false);
         var fresh = new HttpFeatures(image, volume, wifi, presets, replies, autoTrack, sdCards, mdSens, aiSens, osd, audio);
@@ -1212,7 +1308,8 @@ public sealed class CameraControl : ICameraControl
             _httpUnreachableWarned = true;
             _httpWarnCooldownUntil = DateTime.UtcNow + TimeSpan.FromMinutes(30);
             Log.Warn($"{CameraName}: none of the camera's HTTP-API features answered — picture settings, " +
-                     "volume, OSD, Wi-Fi signal, PTZ presets and detection sensitivity stay unavailable. " +
+                     "OSD, Wi-Fi signal and motion sensitivity stay unavailable (volume, PTZ presets and AI " +
+                     "sensitivity fall back to Baichuan). " +
                      "The camera streams fine over Baichuan, so this is the HTTP API specifically: it may be " +
                      "disabled on the camera (enable it in the Reolink app, or set 'http_address'), or " +
                      "something between Neolink and the camera is dropping HTTP traffic " +
@@ -1222,10 +1319,13 @@ public sealed class CameraControl : ICameraControl
                            "see this camera's ONVIF log line for whether that route is available.)"
                          : ""));
         }
-        return merged;
+        return await WithBcStandInsAsync(merged, ct, budget.Token).ConfigureAwait(false);
     }
 
-    public async Task<ImageSettings?> GetImageSettingsAsync(CancellationToken ct)
+    public async Task<ImageSettings?> GetImageSettingsAsync(CancellationToken ct) =>
+        await HttpOrOnvifImageAsync(ct).ConfigureAwait(false) ?? await BcImageAsync(ct).ConfigureAwait(false);
+
+    private async Task<ImageSettings?> HttpOrOnvifImageAsync(CancellationToken ct)
     {
         var img = await HttpTryAsync<JsonObject?>(async c => await _httpApi!.GetImageAsync(c).ConfigureAwait(false), ct)
             .ConfigureAwait(false);
@@ -1239,10 +1339,15 @@ public sealed class CameraControl : ICameraControl
             // Remember which transport actually served imaging, so a WRITE follows
             // the same road: the Lumus HAS an _httpApi (derived from its host) but
             // it doesn't answer, and a write to it would just fail.
-            if (onvif != null) _httpImagingWorks = false;
+            if (onvif != null)
+            {
+                _httpImagingWorks = false;
+                _imageViaBc = false;
+            }
             return onvif;
         }
         _httpImagingWorks = true;
+        _imageViaBc = false;
         // The ISP half (day/night, flip, ...) is optional — picture sliders alone
         // are still worth showing if a firmware rejects GetIsp.
         var isp = await HttpTryAsync<JsonObject?>(async c => await _httpApi!.GetIspAsync(c).ConfigureAwait(false), ct)
@@ -1388,6 +1493,20 @@ public sealed class CameraControl : ICameraControl
                     },
                 };
         }
+        if (_imageViaBc)
+        {
+            if (dayNight != null || antiFlicker != null || flip != null || mirror != null)
+                throw new NotSupportedException($"{CameraName} takes only the picture sliders over Baichuan");
+            await ModifyAsync(BcConstants.MsgIdGetVideoInput, BcConstants.MsgIdSetVideoInput, "VideoInput", el =>
+            {
+                foreach (var (name, value) in new[] { ("bright", bright), ("contrast", contrast),
+                             ("saturation", saturation), ("hue", hue), ("sharpen", sharpen) })
+                    if (value is { } v) SetChild(el, name, Math.Clamp(v, 0, 255).ToString());
+                return el;
+            }, "picture settings changed over Baichuan", ct).ConfigureAwait(false);
+            FoldIntoCache();
+            return;
+        }
         if (useOnvif)
         {
             // ONVIF covers brightness/contrast/saturation/sharpness + day/night; the
@@ -1429,8 +1548,16 @@ public sealed class CameraControl : ICameraControl
                  $"{(flip != null || mirror != null ? " (flip/mirror restarts the video stream)" : "")}");
     }
 
-    public Task<int?> GetVolumeAsync(CancellationToken ct) =>
-        HttpTryAsync<int?>(async c => (int?)(await _httpApi!.GetAudioCfgAsync(c).ConfigureAwait(false))["volume"], ct);
+    public async Task<int?> GetVolumeAsync(CancellationToken ct) =>
+        await HttpVolumeAsync(ct).ConfigureAwait(false) ?? await BcVolumeAsync(ct).ConfigureAwait(false);
+
+    private async Task<int?> HttpVolumeAsync(CancellationToken ct)
+    {
+        var v = await HttpTryAsync<int?>(async c =>
+            (int?)(await _httpApi!.GetAudioCfgAsync(c).ConfigureAwait(false))["volume"], ct).ConfigureAwait(false);
+        if (v != null) _volumeViaBc = false;
+        return v;
+    }
 
     /// <summary>The audio settings BEYOND the speaker volume, which models expose
     /// unevenly: the encode settings' record-audio flag, and whichever extra
@@ -1521,9 +1648,14 @@ public sealed class CameraControl : ICameraControl
 
     public async Task SetVolumeAsync(int volume, CancellationToken ct)
     {
-        if (_httpApi == null)
-            throw new NotSupportedException($"the speaker volume needs the camera's HTTP API ('{CameraName}' has none)");
         int vol = Math.Clamp(volume, 0, 100);
+        if (_httpApi == null || _volumeViaBc)
+        {
+            await ModifyAsync(BcConstants.MsgIdGetAudioCfg, BcConstants.MsgIdSetAudioCfg, "audioCfg",
+                el => { SetChild(el, "volume", vol.ToString()); return el; },
+                $"speaker volume set to {vol}", ct).ConfigureAwait(false);
+            return;
+        }
         // Minimal payload, like the picture writes — see SetImageSettingsAsync.
         var cfg = new JsonObject { ["channel"] = _httpApi.ChannelId, ["volume"] = vol };
         await _httpApi.SetAudioCfgAsync(cfg, ct).ConfigureAwait(false);
@@ -1677,9 +1809,16 @@ public sealed class CameraControl : ICameraControl
         return 0;
     }
 
-    public Task<IReadOnlyList<PtzPresetInfo>?> GetPtzPresetsAsync(CancellationToken ct) =>
-        HttpTryAsync<IReadOnlyList<PtzPresetInfo>?>(
-            async c => ParsePtzPresets(await _httpApi!.GetPtzPresetsAsync(c).ConfigureAwait(false)), ct);
+    public async Task<IReadOnlyList<PtzPresetInfo>?> GetPtzPresetsAsync(CancellationToken ct) =>
+        await HttpPresetsAsync(ct).ConfigureAwait(false) ?? await BcPresetsAsync(ct).ConfigureAwait(false);
+
+    private async Task<IReadOnlyList<PtzPresetInfo>?> HttpPresetsAsync(CancellationToken ct)
+    {
+        var list = await HttpTryAsync<IReadOnlyList<PtzPresetInfo>?>(
+            async c => ParsePtzPresets(await _httpApi!.GetPtzPresetsAsync(c).ConfigureAwait(false)), ct).ConfigureAwait(false);
+        if (list != null) _presetsViaBc = false;
+        return list;
+    }
 
     internal static IReadOnlyList<PtzPresetInfo> ParsePtzPresets(JsonArray presets) =>
         presets.OfType<JsonObject>()
@@ -1693,18 +1832,20 @@ public sealed class CameraControl : ICameraControl
 
     public async Task PtzToPresetAsync(int id, CancellationToken ct)
     {
-        if (_httpApi == null)
-            throw new NotSupportedException($"PTZ presets need the camera's HTTP API ('{CameraName}' has none)");
-        await _httpApi.PtzToPresetAsync(id, speed: 32, ct).ConfigureAwait(false);
+        if (_httpApi == null || _presetsViaBc)
+            await BcPresetCommandAsync(id, "toPos", null, ct).ConfigureAwait(false);
+        else
+            await _httpApi.PtzToPresetAsync(id, speed: 32, ct).ConfigureAwait(false);
         PtzCommandSent?.Invoke("preset");
         Log.Info($"{CameraName}: moving to PTZ preset {id}");
     }
 
     public async Task SavePtzPresetAsync(int id, string name, CancellationToken ct)
     {
-        if (_httpApi == null)
-            throw new NotSupportedException($"PTZ presets need the camera's HTTP API ('{CameraName}' has none)");
-        await _httpApi.SetPtzPresetAsync(id, name, ct).ConfigureAwait(false);
+        if (_httpApi == null || _presetsViaBc)
+            await BcPresetCommandAsync(id, "setPos", name, ct).ConfigureAwait(false);
+        else
+            await _httpApi.SetPtzPresetAsync(id, name, ct).ConfigureAwait(false);
         Log.Info($"{CameraName}: current position saved as PTZ preset {id} (\"{name}\")");
     }
 
@@ -1963,7 +2104,10 @@ public sealed class CameraControl : ICameraControl
     /// later reads skip the rejected ones instead of re-asking every panel open.</summary>
     private IReadOnlyList<string>? _aiAlarmTypes;
 
-    public async Task<IReadOnlyList<AiSensitivity>?> GetAiSensitivitiesAsync(CancellationToken ct)
+    public async Task<IReadOnlyList<AiSensitivity>?> GetAiSensitivitiesAsync(CancellationToken ct) =>
+        await HttpAiSensitivitiesAsync(ct).ConfigureAwait(false) ?? await BcAiSensitivitiesAsync(ct).ConfigureAwait(false);
+
+    private async Task<IReadOnlyList<AiSensitivity>?> HttpAiSensitivitiesAsync(CancellationToken ct)
     {
         if (_httpApi == null) return null;
         var list = new List<AiSensitivity>();
@@ -1983,9 +2127,10 @@ public sealed class CameraControl : ICameraControl
             // Transport backoff armed mid-sweep — the rest would no-op anyway.
             if (DateTime.UtcNow < _httpRetryAt) return list.Count > 0 ? list : null;
         }
-        if (_aiAlarmTypes == null && list.Count > 0)
-            _aiAlarmTypes = list.Select(a => a.Type).ToList();
-        return list.Count > 0 ? list : null;
+        if (list.Count == 0) return null;
+        _aiAlarmTypes ??= list.Select(a => a.Type).ToList();
+        _aiViaBc = false;
+        return list;
     }
 
     internal static AiSensitivity? ParseAiSensitivity(string type, JsonObject cfg) =>
@@ -1995,17 +2140,213 @@ public sealed class CameraControl : ICameraControl
 
     public async Task SetAiSensitivityAsync(string aiType, int sensitivity, CancellationToken ct)
     {
-        if (_httpApi == null)
-            throw new NotSupportedException($"AI sensitivity needs the camera's HTTP API ('{CameraName}' has none)");
         if (!AiAlarmTypes.Contains(aiType))
             throw new ArgumentException($"unknown AI type '{aiType}'");
+        int v = Math.Clamp(sensitivity, 0, 100);
+        if (_httpApi == null || _aiViaBc)
+        {
+            await SetBcAiSensitivityAsync(aiType, v, ct).ConfigureAwait(false);
+            return;
+        }
         // Read-modify-write of the full AiAlarm object: it carries channel/ai_type
         // and the target-size bounds the firmware expects to see again.
         var cfg = await _httpApi.GetAiAlarmAsync(aiType, ct).ConfigureAwait(false);
-        cfg["sensitivity"] = Math.Clamp(sensitivity, 0, 100);
+        cfg["sensitivity"] = v;
         await _httpApi.SetAiAlarmAsync(cfg, ct).ConfigureAwait(false);
-        Log.Info($"{CameraName}: {aiType} detection sensitivity set to {Math.Clamp(sensitivity, 0, 100)}/100");
+        Log.Info($"{CameraName}: {aiType} detection sensitivity set to {v}/100");
     }
+
+    // ------------------------------------------- Baichuan stand-ins for HTTP settings
+    // Picture (26/25), presets (190/19), volume (264/265) and AI sensitivity (342/343),
+    // for a camera whose HTTP API (and, for the picture, ONVIF) never served them.
+
+    /// <summary>Set when Baichuan served the section, so its writes go the same way.</summary>
+    private volatile bool _imageViaBc, _presetsViaBc, _volumeViaBc, _aiViaBc;
+
+    /// <summary>Stand-in reads the current session refused or ignored; a new session asks again.</summary>
+    private readonly HashSet<string> _bcRefused = new(StringComparer.Ordinal);
+    private IBcCamera? _bcRefusedBy;
+
+    /// <summary>AI types the firmware's AiDetectCfg parser recognises.</summary>
+    internal static readonly string[] BcAiTypes = { "people", "vehicle", "dog_cat", "face" };
+
+    /// <summary>Fills the sections HTTP left empty from Baichuan, within <paramref name="limit"/>.</summary>
+    private async Task<HttpFeatures> WithBcStandInsAsync(HttpFeatures f, CancellationToken ct,
+        CancellationToken limit = default)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct, limit);
+        try
+        {
+            if (f.Image == null && await BcImageAsync(cts.Token).ConfigureAwait(false) is { } i)
+                f = f with { Image = i };
+            if (f.Volume == null && await BcVolumeAsync(cts.Token).ConfigureAwait(false) is { } v)
+                f = f with { Volume = v };
+            if (f.PtzPresets == null && await BcPresetsAsync(cts.Token).ConfigureAwait(false) is { } p)
+                f = f with { PtzPresets = p };
+            if (f.AiSensitivities == null && await BcAiSensitivitiesAsync(cts.Token).ConfigureAwait(false) is { } a)
+                f = f with { AiSensitivities = a };
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            // The sweep's budget ran out; what was read stands.
+        }
+        return f;
+    }
+
+    /// <summary>One stand-in read on the live session, or null. A refusal retires <paramref name="key"/>
+    /// for the session; silence retires its whole family (the part before ':').</summary>
+    private async Task<XElement?> BcStandInAsync(uint msgId, string root, string key,
+        Func<CameraCapabilities, IBcCamera, bool> supported, Func<byte, XElement?>? body, CancellationToken ct)
+    {
+        if (AnyLive() == null) return null;
+        CameraCapabilities caps;
+        try { caps = await GetCapabilitiesAsync(ct).ConfigureAwait(false); }
+        catch (Exception ex) when (!ct.IsCancellationRequested && ex is not OperationCanceledException) { return null; }
+        var family = key.Split(':')[0];
+        try
+        {
+            return await WithCameraAsync<XElement?>(async camera =>
+            {
+                if (!ReferenceEquals(_bcRefusedBy, camera))
+                {
+                    _bcRefused.Clear();
+                    _bcRefusedBy = camera;
+                }
+                if (_bcRefused.Contains(key) || _bcRefused.Contains(family) || !supported(caps, camera)) return null;
+                try
+                {
+                    var el = await camera.GetRawAsync(msgId, root, body?.Invoke(camera.ChannelId), ExtrasTimeout, ct)
+                        .ConfigureAwait(false);
+                    if (el == null) _bcRefused.Add(key);
+                    return el;
+                }
+                catch (CameraCommandException)
+                {
+                    _bcRefused.Add(key);
+                    return null;
+                }
+                catch (TimeoutException)
+                {
+                    _bcRefused.Add(family);
+                    return null;
+                }
+            }, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested
+                                   && ex is CameraOfflineException or IOException or ObjectDisposedException)
+        {
+            return null;
+        }
+    }
+
+    private async Task<ImageSettings?> BcImageAsync(CancellationToken ct)
+    {
+        var vi = await BcStandInAsync(BcConstants.MsgIdGetVideoInput, "VideoInput", "image",
+            (_, _) => true, null, ct).ConfigureAwait(false);
+        if (vi == null || ParseVideoInput(vi) is not { } image) return null;
+        _imageViaBc = true;
+        return image;
+    }
+
+    /// <summary>&lt;VideoInput&gt;: the five picture sliders (0-255); the ISP half isn't in it.</summary>
+    internal static ImageSettings? ParseVideoInput(XElement vi) =>
+        XInt(vi, "bright") is { } b
+            ? new ImageSettings(b, XInt(vi, "contrast"), XInt(vi, "saturation"), XInt(vi, "hue"), XInt(vi, "sharpen"),
+                DayNight: null, AntiFlicker: null, Flip: null, Mirror: null)
+            : null;
+
+    private async Task<int?> BcVolumeAsync(CancellationToken ct)
+    {
+        var cfg = await BcStandInAsync(BcConstants.MsgIdGetAudioCfg, "audioCfg", "volume",
+            (caps, cam) => !ChannelSupportFlag(caps.Support, cam.ChannelId, "noAudio")
+                           && (caps.Support?.Element("audioCfg") == null || SupportFlag(caps.Support, "audioCfg")),
+            null, ct).ConfigureAwait(false);
+        if (XInt(cfg, "volume") is not { } v) return null;
+        _volumeViaBc = true;
+        return Math.Clamp(v, 0, 100);
+    }
+
+    private async Task<IReadOnlyList<PtzPresetInfo>?> BcPresetsAsync(CancellationToken ct)
+    {
+        var el = await BcStandInAsync(BcConstants.MsgIdGetPtzPreset, "PtzPreset", "presets",
+            (caps, cam) => caps.Features.Ptz || ChannelSupportValue(caps.Support, cam.ChannelId, "ptzPreset") > 0,
+            null, ct).ConfigureAwait(false);
+        if (el == null) return null;
+        _presetsViaBc = true;
+        return ParseBcPresets(el);
+    }
+
+    private async Task<IReadOnlyList<AiSensitivity>?> BcAiSensitivitiesAsync(CancellationToken ct)
+    {
+        var list = new List<AiSensitivity>();
+        foreach (var type in BcAiTypes)
+        {
+            var cfg = await BcStandInAsync(BcConstants.MsgIdGetAiDetectCfg, "AiDetectCfg", "ai:" + type,
+                (caps, cam) => ChannelSupportValue(caps.Support, cam.ChannelId, "aitype") > 0,
+                ch => BuildAiDetectRead(ch, type), ct).ConfigureAwait(false);
+            if (cfg != null && ParseBcAiSensitivity(type, cfg) is { } one) list.Add(one);
+        }
+        if (list.Count == 0) return null;
+        _aiViaBc = true;
+        return list;
+    }
+
+    private Task BcPresetCommandAsync(int id, string command, string? name, CancellationToken ct) =>
+        WithCameraAsync<object?>(async camera =>
+        {
+            await camera.SendCommandAsync(BcConstants.MsgIdPtzPreset,
+                BcXmlBody.FromRaw(BuildPresetCommand(camera.ChannelId, id, command, name)),
+                new ExtensionXml { ChannelId = camera.ChannelId }, ct: ct).ConfigureAwait(false);
+            return null;
+        }, ct);
+
+    /// <summary>AiDetectCfg is read per type and written back whole: it carries the zone grid.</summary>
+    private Task SetBcAiSensitivityAsync(string aiType, int sensitivity, CancellationToken ct) =>
+        WithCameraAsync<object?>(async camera =>
+        {
+            var cfg = await camera.GetRawAsync(BcConstants.MsgIdGetAiDetectCfg, "AiDetectCfg",
+                          BuildAiDetectRead(camera.ChannelId, aiType), ExtrasTimeout, ct).ConfigureAwait(false)
+                      ?? throw new NotSupportedException($"the camera reports no {aiType} detection settings");
+            SetChild(cfg, "sensitivity", sensitivity.ToString());
+            await camera.SetRawAsync(BcConstants.MsgIdSetAiDetectCfg, cfg, ct).ConfigureAwait(false);
+            Log.Info($"{CameraName}: {aiType} detection sensitivity set to {sensitivity}/100");
+            return null;
+        }, ct);
+
+    /// <summary>Msg 19 &lt;PtzPreset&gt;: toPos drives to a slot, setPos saves the current view there.</summary>
+    internal static XElement BuildPresetCommand(byte channelId, int id, string command, string? name)
+    {
+        var preset = new XElement("preset", new XElement("id", id), new XElement("command", command));
+        if (name != null) preset.Add(new XElement("name", name));
+        return new XElement("PtzPreset", new XAttribute("version", BcXmlBody.XmlVersion),
+            new XElement("channelId", channelId), new XElement("presetList", preset));
+    }
+
+    /// <summary>The msg 190 reply lists saved slots only; the free ones up to maxPresetNum are added.</summary>
+    internal static IReadOnlyList<PtzPresetInfo> ParseBcPresets(XElement reply)
+    {
+        var saved = reply.Descendants("preset")
+            .Where(p => XInt(p, "id") is >= 0)
+            .GroupBy(p => XInt(p, "id")!.Value)
+            .ToDictionary(g => g.Key, g => g.First().Element("name")?.Value.Trim() ?? "");
+        int slots = Math.Clamp(XInt(reply, "maxPresetNum") ?? 64, 1, 128);
+        return Enumerable.Range(0, Math.Max(slots, saved.Count == 0 ? 0 : saved.Keys.Max() + 1))
+            .Select(id => saved.TryGetValue(id, out var n)
+                ? new PtzPresetInfo(id, n.Length > 0 ? n : $"preset {id}", true)
+                : new PtzPresetInfo(id, $"preset {id}", false))
+            .ToList();
+    }
+
+    internal static XElement BuildAiDetectRead(byte channelId, string type) =>
+        new("AiDetectCfg", new XAttribute("version", BcXmlBody.XmlVersion),
+            new XElement("chn", channelId), new XElement("type", type));
+
+    /// <summary>Null when the reply lacks a sensitivity or answers for another type.</summary>
+    internal static AiSensitivity? ParseBcAiSensitivity(string type, XElement cfg) =>
+        XInt(cfg, "sensitivity") is { } s
+        && (cfg.Element("type")?.Value.Trim() is not { Length: > 0 } t || t.Equals(type, StringComparison.OrdinalIgnoreCase))
+            ? new AiSensitivity(type, Math.Clamp(s, 0, 100), XInt(cfg, "stayTime"))
+            : null;
 
     // ------------------------------------------------- detection zones (HTTP)
 
@@ -2402,11 +2743,316 @@ public sealed class CameraControl : ICameraControl
         }
     }
 
+    // -------------------------------------------- device settings (Baichuan, beta)
+    // Message ids, roots, fields and values come from the firmware's own command
+    // tables and parsers (firmware-analysis/field-notes.md).
+
+    private static readonly TimeSpan ExtrasTimeout = TimeSpan.FromSeconds(4);
+
+    /// <summary>Smart-rule types: read id (write = read + 1), root, item element, seconds field.</summary>
+    internal static readonly (string Type, uint GetId, string Root, string Item, string? SecondsField)[] SmartRuleKinds =
+    {
+        ("crossline", BcConstants.MsgIdGetCrossline, "CrosslineDetect", "crosslineDetectItem", null),
+        ("intrusion", BcConstants.MsgIdGetIntrusion, "IntrusionDetect", "intrusionDetectItem", "stayTime"),
+        ("loitering", BcConstants.MsgIdGetLoitering, "LoiteringDetect", "loiteringDetectItem", "stayTime"),
+        ("object-left", BcConstants.MsgIdGetLegacy, "LegacyDetect", "legacyDetectItem", "timeThresh"),
+        ("object-taken", BcConstants.MsgIdGetLoss, "LossDetect", "lossDetectItem", "timeThresh"),
+    };
+
+    /// <summary>Auto-reboot days the firmware accepts (matched without regard to case).</summary>
+    internal static readonly string[] RebootDays =
+        { "everyday", "sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday" };
+
+    /// <summary>Chime volume steps (the doorbell reports 0-4).</summary>
+    internal const int ChimeVolumeMax = 4;
+
+    public async Task<DeviceExtras?> GetDeviceExtrasAsync(CancellationToken ct)
+    {
+        var caps = await GetCapabilitiesAsync(ct).ConfigureAwait(false);
+        var f = caps.Features;
+        return await WithCameraAsync<DeviceExtras?>(async camera =>
+        {
+            bool smartAi = ChannelSupportValue(caps.Support, camera.ChannelId, "smartAI") > 0;
+            // Distinct message ids, so the reads run side by side under the gate.
+            Task<XElement?> Get(uint id, string root, bool when = true) => when
+                ? TryAsync(() => camera.GetRawAsync(id, root, timeout: ExtrasTimeout, ct: ct))
+                : Task.FromResult<XElement?>(null);
+            var record = Get(BcConstants.MsgIdGetRecordEnable, "Record");
+            var reboot = Get(BcConstants.MsgIdGetAutoReboot, "AutoReboot");
+            var guard = Get(BcConstants.MsgIdGetGuard, "PtzGuard", f.Ptz);
+            var cruise = Get(BcConstants.MsgIdGetPtzCruise, "PtzCruise", f.Ptz);
+            var shelter = Get(BcConstants.MsgIdGetShelter, "Shelter");
+            var chimes = Get(BcConstants.MsgIdDingdongList, "dingdongList", f.Doorbell);
+            var hdd = Get(BcConstants.MsgIdGetHdd, "HddInfoList");
+            var rules = SmartRuleKinds.Select(k => Get(k.GetId, k.Root, smartAi)).ToArray();
+            await Task.WhenAll(new[] { record, reboot, guard, cruise, shelter, chimes, hdd }.Concat(rules))
+                .ConfigureAwait(false);
+
+            List<ChimeInfo>? chimeList = null;
+            if (chimes.Result is { } list)
+            {
+                chimeList = new List<ChimeInfo>();
+                foreach (var info in list.Descendants("dingdongDeviceInfo"))
+                {
+                    if (XInt(info, "id") is not { } id) continue;
+                    var opt = await TryAsync(() => camera.GetRawAsync(BcConstants.MsgIdDingdongDeviceOpt,
+                        "dingdongDeviceOpt", BuildDingdongOpt(id, "getParam"), ExtrasTimeout, ct)).ConfigureAwait(false);
+                    var silent = await TryAsync(() => camera.GetRawAsync(BcConstants.MsgIdGetDingdongSilent,
+                        "dingdongSilentMode", BuildDingdongSilent(id, null), ExtrasTimeout, ct)).ConfigureAwait(false);
+                    chimeList.Add(ParseChime(info, opt, silent));
+                }
+            }
+            List<SmartRule>? smartRules = null;
+            for (int i = 0; i < SmartRuleKinds.Length; i++)
+                if (rules[i].Result is { } r)
+                    (smartRules ??= new List<SmartRule>()).AddRange(ParseSmartRules(SmartRuleKinds[i].Type, r));
+
+            return new DeviceExtras(
+                SdRecording: XInt(record.Result, "enable") is { } en ? en != 0 : null,
+                AutoReboot: ParseAutoReboot(reboot.Result),
+                Guard: ParseGuard(guard.Result),
+                Patrols: ParsePatrols(cruise.Result),
+                PrivacyMasks: ParseMasks(shelter.Result),
+                Chimes: chimeList,
+                SmartRules: smartRules,
+                SdCards: ParseHdd(hdd.Result));
+        }, ct).ConfigureAwait(false);
+    }
+
+    public Task SetSdRecordingAsync(bool on, CancellationToken ct) =>
+        ModifyAsync(BcConstants.MsgIdGetRecordEnable, BcConstants.MsgIdSetRecordEnable, "Record",
+            el => { SetChild(el, "enable", on ? "1" : "0"); return el; },
+            $"SD recording turned {(on ? "on" : "off")}", ct);
+
+    public Task SetAutoRebootAsync(bool? enabled, string? weekDay, int? hour, int? minute, CancellationToken ct)
+    {
+        if (hour is < 0 or > 23 || minute is < 0 or > 59)
+            throw new ArgumentException("hour must be 0-23 and minute 0-59");
+        if (weekDay != null && !RebootDays.Contains(weekDay.ToLowerInvariant()))
+            throw new ArgumentException($"weekDay must be one of: {string.Join(", ", RebootDays)}");
+        return ModifyAsync(BcConstants.MsgIdGetAutoReboot, BcConstants.MsgIdSetAutoReboot, "AutoReboot", el =>
+        {
+            if (enabled is { } e) SetChild(el, "enable", e ? "1" : "0");
+            if (weekDay != null) SetChild(el, "weekDay", MatchCase(weekDay.ToLowerInvariant(), el.Element("weekDay")?.Value));
+            if (hour is { } h) SetChild(el, "hour", h.ToString());
+            if (minute is { } m) SetChild(el, "minute", m.ToString());
+            return el;
+        }, $"auto-reboot set (enabled={enabled}, day={weekDay}, {hour}:{minute})", ct);
+    }
+
+    public Task SetGuardAsync(bool? enabled, int? timeout, string? action, CancellationToken ct)
+    {
+        if (action is not (null or "set" or "go"))
+            throw new ArgumentException("action must be \"set\" or \"go\"");
+        if (timeout is < 10 or > 300)
+            throw new ArgumentException("timeout must be 10-300 seconds");
+        // The camera answers only after its PTZ module does (up to 8 s), refusals included.
+        return ModifyAsync(BcConstants.MsgIdGetGuard, BcConstants.MsgIdSetGuard, "PtzGuard",
+            el => BuildGuard(el, enabled, timeout, action),
+            $"PTZ guard (enabled={enabled}, timeout={timeout}, action={action})", ct, TimeSpan.FromSeconds(10));
+    }
+
+    public Task SetPatrolAsync(int id, bool run, CancellationToken ct) =>
+        WithCameraAsync<object?>(async camera =>
+        {
+            await camera.SendCommandAsync(BcConstants.MsgIdPtzControl, BcXmlBody.FromRaw(BuildPatrolControl(camera.ChannelId, id, run)),
+                new ExtensionXml { ChannelId = camera.ChannelId }, ct: ct).ConfigureAwait(false);
+            Log.Info($"{CameraName}: patrol {id} {(run ? "started" : "stopped")}");
+            return null;
+        }, ct);
+
+    public Task SetPrivacyMasksAsync(bool on, CancellationToken ct) =>
+        ModifyAsync(BcConstants.MsgIdGetShelter, BcConstants.MsgIdSetShelter, "Shelter",
+            el => { SetChild(el, "enable", on ? "1" : "0"); return el; },
+            $"privacy masks turned {(on ? "on" : "off")}", ct);
+
+    public Task SetChimeAsync(int id, int? volume, bool? led, CancellationToken ct) =>
+        WithCameraAsync<object?>(async camera =>
+        {
+            var opt = await camera.GetRawAsync(BcConstants.MsgIdDingdongDeviceOpt, "dingdongDeviceOpt",
+                BuildDingdongOpt(id, "getParam"), ExtrasTimeout, ct).ConfigureAwait(false)
+                ?? throw new NotSupportedException($"chime {id} didn't answer");
+            SetChild(opt, "id", id.ToString());
+            SetChild(opt, "opt", "setParam");
+            if (volume is { } v) SetChild(opt, "volLevel", Math.Clamp(v, 0, ChimeVolumeMax).ToString());
+            if (led is { } l) SetChild(opt, "ledState", l ? "1" : "0");
+            await camera.SetRawAsync(BcConstants.MsgIdDingdongDeviceOpt, opt, ct).ConfigureAwait(false);
+            Log.Info($"{CameraName}: chime {id} set (volume={volume}, led={led})");
+            return null;
+        }, ct);
+
+    public Task RingChimeAsync(int id, CancellationToken ct) =>
+        WithCameraAsync<object?>(async camera =>
+        {
+            await camera.SetRawAsync(BcConstants.MsgIdDingdongDeviceOpt, BuildDingdongOpt(id, "ringWithMusic"), ct)
+                .ConfigureAwait(false);
+            return null;
+        }, ct);
+
+    public Task SetChimeSilentAsync(int id, int seconds, CancellationToken ct) =>
+        WithCameraAsync<object?>(async camera =>
+        {
+            await camera.SetRawAsync(BcConstants.MsgIdSetDingdongSilent, BuildDingdongSilent(id, Math.Max(0, seconds)), ct)
+                .ConfigureAwait(false);
+            Log.Info($"{CameraName}: chime {id} {(seconds > 0 ? $"silenced for {seconds / 60} min" : "unsilenced")}");
+            return null;
+        }, ct);
+
+    public Task SetSmartRuleAsync(string type, int index, int? sensitivity, int? seconds, bool delete, CancellationToken ct)
+    {
+        var kind = SmartRuleKinds.FirstOrDefault(k => k.Type == type);
+        if (kind.Root == null) throw new ArgumentException($"unknown smart-rule type '{type}'");
+        return ModifyAsync(kind.GetId, kind.GetId + 1, kind.Root,
+            el => BuildSmartRuleEdit(el, kind.Item, kind.SecondsField, index, sensitivity, seconds, delete)
+                  ?? throw new ArgumentException($"no {type} rule {index} on this camera"),
+            $"{type} rule {index} {(delete ? "deleted" : $"set (sensitivity={sensitivity}, seconds={seconds})")}", ct);
+    }
+
+    /// <summary>Reads <paramref name="root"/>, builds the write from it, sends it with <paramref name="setId"/>.</summary>
+    private Task ModifyAsync(uint getId, uint setId, string root, Func<XElement, XElement> build, string what,
+        CancellationToken ct, TimeSpan? replyTimeout = null) =>
+        WithCameraAsync<object?>(async camera =>
+        {
+            var el = await camera.GetRawAsync(getId, root, timeout: ExtrasTimeout, ct: ct).ConfigureAwait(false)
+                     ?? throw new NotSupportedException($"the camera reports no {root} settings");
+            await camera.SetRawAsync(setId, build(el), ct, replyTimeout).ConfigureAwait(false);
+            Log.Info($"{CameraName}: {what}");
+            return null;
+        }, ct);
+
+    internal static XElement BuildDingdongOpt(int id, string opt) =>
+        new("dingdongDeviceOpt", new XAttribute("version", BcXmlBody.XmlVersion),
+            new XElement("id", id), new XElement("opt", opt));
+
+    /// <summary>&lt;dingdongSilentMode&gt;: a read names the chime; a write silences it for
+    /// <paramref name="seconds"/> (type 1) or ends silence (type 0).</summary>
+    internal static XElement BuildDingdongSilent(int id, int? seconds)
+    {
+        var el = new XElement("dingdongSilentMode", new XAttribute("version", BcXmlBody.XmlVersion), new XElement("id", id));
+        if (seconds is { } s)
+        {
+            el.Add(new XElement("time", s));
+            el.Add(new XElement("type", s > 0 ? 1 : 0));
+        }
+        return el;
+    }
+
+    /// <summary>PTZ control (msg 18) running or stopping a saved patrol.</summary>
+    internal static XElement BuildPatrolControl(byte channelId, int patrolId, bool run) =>
+        new("PtzControl", new XAttribute("version", BcXmlBody.XmlVersion),
+            new XElement("channelId", channelId),
+            new XElement("command", run ? "startPatrol" : "stopPatrol"),
+            new XElement("patrolId", patrolId));
+
+    private static int? XInt(XElement? el, string name) =>
+        int.TryParse(el?.Element(name)?.Value.Trim(), out var v) ? v : null;
+
+    private static bool IsOn(string? v) => v?.Trim().ToLowerInvariant() is "1" or "open" or "on" or "true";
+
+    /// <summary>Gives <paramref name="value"/> the capitalisation of the camera's own value.</summary>
+    internal static string MatchCase(string value, string? current) =>
+        current is { Length: > 0 } c && char.IsUpper(c[0]) && value.Length > 0
+            ? char.ToUpperInvariant(value[0]) + value[1..]
+            : value;
+
+    internal static AutoRebootState? ParseAutoReboot(XElement? a) => a == null ? null : new AutoRebootState(
+        IsOn(a.Element("enable")?.Value), (a.Element("weekDay")?.Value.Trim() ?? "everyday").ToLowerInvariant(),
+        XInt(a, "hour") ?? 0, XInt(a, "minute") ?? 0);
+
+    internal static GuardState? ParseGuard(XElement? g) => g == null ? null :
+        new GuardState(IsOn(g.Element("benable")?.Value), IsOn(g.Element("bvalid")?.Value), XInt(g, "timeout"));
+
+    /// <summary>The guard write. The camera applies settings only under setGrd, saving the current
+    /// position when needSetPos is 1; toGrd drives to the saved one.</summary>
+    internal static XElement BuildGuard(XElement guard, bool? enabled, int? timeout, string? action)
+    {
+        var g = new XElement(guard);
+        if (enabled is { } e) SetChild(g, "benable", e ? "1" : "0");
+        if (timeout is { } t) SetChild(g, "timeout", t.ToString());
+        SetChild(g, "needSetPos", action == "set" ? "1" : "0");
+        SetChild(g, "command", action == "go" ? "toGrd" : "setGrd");
+        return g;
+    }
+
+    /// <summary>Configured patrols only; empty firmware slots (no name, no key positions) are skipped.</summary>
+    internal static IReadOnlyList<PatrolInfo>? ParsePatrols(XElement? cruise) => cruise?.Descendants("cruise")
+        .Where(c => XInt(c, "patrolId") != null
+                    && (IsOn(c.Element("enable")?.Value) || (c.Element("name")?.Value.Trim().Length ?? 0) > 0
+                        || c.Descendants("presetId").Any()))
+        .Select(c => new PatrolInfo(XInt(c, "patrolId")!.Value, c.Element("name")?.Value.Trim() ?? "",
+            IsOn(c.Element("enable")?.Value)))
+        .ToList();
+
+    internal static PrivacyMaskState? ParseMasks(XElement? shelter) => shelter == null ? null :
+        new PrivacyMaskState(IsOn(shelter.Element("enable")?.Value),
+            shelter.Element("shelterList")?.Elements("Shelter").Count(m => XInt(m, "width") is not (null or 0)) ?? 0);
+
+    internal static ChimeInfo ParseChime(XElement info, XElement? opt, XElement? silent = null) => new(
+        XInt(info, "id") ?? 0,
+        (opt?.Element("name")?.Value.Trim() is { Length: > 0 } n ? n : info.Element("name")?.Value.Trim()) ?? "",
+        IsOn(info.Element("netstate")?.Value) || info.Element("netstate")?.Value.Trim().ToLowerInvariant() == "online",
+        XInt(opt, "volLevel"),
+        opt?.Element("ledState") is { } l ? IsOn(l.Value) : null,
+        silent == null ? null : Math.Max(0, XInt(silent, "remainTime") ?? 0));
+
+    internal static IEnumerable<SmartRule> ParseSmartRules(string type, XElement root)
+    {
+        var kind = SmartRuleKinds.First(k => k.Type == type);
+        foreach (var item in root.Elements(kind.Item))
+        {
+            if (XInt(item, "index") is not { } index) continue;
+            yield return new SmartRule(type, index, item.Element("name")?.Value.Trim() ?? "",
+                item.Element("aiType")?.Value.Trim() ?? "", XInt(item, "sesensitivity"),
+                kind.SecondsField == null ? null : XInt(item, kind.SecondsField),
+                item.Element("direction")?.Value.Trim());
+        }
+    }
+
+    /// <summary>The write for one rule: the firmware applies a top-level op (modify or delete)
+    /// to the items sent, matched by index — so only the edited item goes. Null = no such rule.</summary>
+    internal static XElement? BuildSmartRuleEdit(XElement current, string itemName, string? secondsField, int index,
+        int? sensitivity, int? seconds, bool delete)
+    {
+        var item = current.Elements(itemName).FirstOrDefault(i => XInt(i, "index") == index);
+        if (item == null) return null;
+        var edited = new XElement(item);
+        if (!delete)
+        {
+            if (sensitivity is { } s) SetChild(edited, "sesensitivity", Math.Clamp(s, 0, 100).ToString());
+            if (seconds is { } sec && secondsField != null) SetChild(edited, secondsField, Math.Max(0, sec).ToString());
+        }
+        return new XElement(current.Name, new XAttribute("version", BcXmlBody.XmlVersion),
+            new XElement("channelId", current.Element("channelId")?.Value.Trim() ?? "0"),
+            new XElement("op", delete ? "delete" : "modify"),
+            edited);
+    }
+
+    /// <summary>SD cards from &lt;HddInfoList&gt; (msg 102): the firmware splits sizes into whole
+    /// GB (capacity, remainSize) and the leftover MB (capacityM, remainSizeM).</summary>
+    internal static IReadOnlyList<SdCardInfo>? ParseHdd(XElement? hdd) => hdd?.Elements("HddInfo")
+        .Select(h =>
+        {
+            long total = XLong(h, "capacity") * 1024 + XLong(h, "capacityM");
+            long free = XLong(h, "remainSize") * 1024 + XLong(h, "remainSizeM");
+            if (total == 0) { total = XLong(h, "capacityV2"); free = XLong(h, "remainSizeV2"); }
+            return new SdCardInfo(XInt(h, "number") ?? 0, total, free,
+                IsOn(h.Element("format")?.Value), IsOn(h.Element("mount")?.Value));
+        })
+        .Where(c => c.TotalMb > 0)
+        .ToList();
+
+    private static long XLong(XElement el, string name) =>
+        long.TryParse(el.Element(name)?.Value.Trim(), out var v) ? v : 0;
+
     // -------------------------------------------- SD-card recordings (HTTP, beta)
 
     /// <summary>SD searches walk the card's file table — give them the roomy
     /// snapshot budget, not the 6s config-read cap.</summary>
-    public Task<IReadOnlyList<int>?> GetSdRecordingDaysAsync(int year, int month, CancellationToken ct) =>
+    public async Task<IReadOnlyList<int>?> GetSdRecordingDaysAsync(int year, int month, CancellationToken ct) =>
+        (HttpAbsent ? null : await HttpSdDaysAsync(year, month, ct).ConfigureAwait(false))
+        ?? await BcSdDaysAsync(year, month, ct).ConfigureAwait(false);
+
+    private Task<IReadOnlyList<int>?> HttpSdDaysAsync(int year, int month, CancellationToken ct) =>
         HttpTryAsync<IReadOnlyList<int>?>(async c =>
         {
             var start = new DateTime(year, month, 1);
@@ -2441,7 +3087,11 @@ public sealed class CameraControl : ICameraControl
     /// answered, file search never did), so the day is paged into short walks.</summary>
     private static readonly TimeSpan SdWindowTimeout = TimeSpan.FromSeconds(20);
 
-    public Task<IReadOnlyList<SdRecording>?> GetSdRecordingsAsync(DateOnly day, CancellationToken ct) =>
+    public async Task<IReadOnlyList<SdRecording>?> GetSdRecordingsAsync(DateOnly day, CancellationToken ct, string? stream = null) =>
+        (HttpAbsent ? null : await HttpSdRecordingsAsync(day, ct, stream).ConfigureAwait(false))
+        ?? await BcSdRecordingsAsync(day, ct, stream).ConfigureAwait(false);
+
+    private Task<IReadOnlyList<SdRecording>?> HttpSdRecordingsAsync(DateOnly day, CancellationToken ct, string? stream = null) =>
         HttpTryAsync<IReadOnlyList<SdRecording>?>(async c =>
         {
             // The camera records whichever stream its own settings say — usually
@@ -2449,7 +3099,7 @@ public sealed class CameraControl : ICameraControl
             // main has nothing — and a stream the firmware REJECTS searching
             // must not abort the other one.
             bool anyWindowFailed = false, anyWindowWorked = false;
-            foreach (var streamType in new[] { "main", "sub" })
+            foreach (var streamType in stream == null ? new[] { "main", "sub" } : new[] { stream })
             {
                 var files = new List<SdRecording>();
                 var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -2507,6 +3157,8 @@ public sealed class CameraControl : ICameraControl
                     if (anyWindowFailed)
                         Log.Info($"{CameraName}: SD file search ({streamType}, {day:yyyy-MM-dd}) shows a PARTIAL " +
                                  $"day ({files.Count} recordings) — some windows failed; refresh fills the gaps");
+                    if (_httpSdFiles.Count > 5000) _httpSdFiles.Clear();
+                    foreach (var f in files) _httpSdFiles[f.Name] = f;
                     return files;
                 }
                 if (rejected || lastResult == null) continue;
@@ -2558,14 +3210,316 @@ public sealed class CameraControl : ICameraControl
         : new DateTime((int?)t["year"] ?? 1, (int?)t["mon"] ?? 1, (int?)t["day"] ?? 1,
             (int?)t["hour"] ?? 0, (int?)t["min"] ?? 0, (int?)t["sec"] ?? 0);
 
+    /// <summary>After Playback failed or answered FLV once, this camera goes straight to Download.</summary>
+    private bool _sdPreferDownload;
+    /// <summary>Null = not asked yet; false = the firmware has no CheckDownload.</summary>
+    private bool? _sdHasCheckDownload;
+    private string? _sdPassword;
+    /// <summary>HTTP served neither Playback nor Download, so recordings come over Baichuan.</summary>
+    private bool _sdViaBc;
+
+    public void SetSdPassword(string? password) =>
+        _sdPassword = string.IsNullOrEmpty(password) ? null : password;
+
+    /// <summary>Fetches one recording as the camera's web UI does: CheckDownload first (it flags
+    /// encryption), then uncapped Playback, then Download (1 MB/s); an FLV Playback comes last.</summary>
     public async Task<ReolinkHttpApi.SdDownload> OpenSdRecordingAsync(string fileName, CancellationToken ct)
     {
+        if (_bcSdFiles.TryGetValue(fileName, out var bcEntry))
+            return await OpenBcSdRecordingAsync(fileName, bcEntry, ct).ConfigureAwait(false);
+        if (_sdViaBc && AnyLive() != null)
+            return await OpenBcTwinAsync(fileName, ct).ConfigureAwait(false);
         if (_httpApi == null)
             throw new NotSupportedException($"SD-card playback needs the camera's HTTP API ('{CameraName}' has none)");
-        var download = await _httpApi.DownloadAsync(fileName, ct).ConfigureAwait(false);
-        Log.Info($"{CameraName}: streaming SD-card recording '{fileName}'" +
-                 $"{(download.Length is { } len ? $" ({len / 1024 / 1024} MB)" : "")}");
-        return download;
+
+        var source = fileName;
+        ReolinkHttpApi.DownloadCheck? check = null;
+        if (_sdHasCheckDownload != false)
+        {
+            check = await _httpApi.CheckDownloadAsync(fileName, ct).ConfigureAwait(false);
+            _sdHasCheckDownload = check != null;
+            if (check is { Encrypted: true })
+            {
+                if (_sdPassword is not { } pw)
+                    throw new ReolinkApiException("this recording is encrypted on the camera; enter its recording password" +
+                                                  (check.Prompt is { Length: > 0 } hint ? $" (hint: {hint})" : ""));
+                source = check.FileName is { Length: > 0 } unlocked ? unlocked : fileName;
+                if (!await _httpApi.SetRecDecryptKeyAsync(source, pw, ct).ConfigureAwait(false))
+                    throw new ReolinkApiException("the camera did not accept the recording password");
+            }
+        }
+
+        var errors = new List<string>();
+        bool flvSeen = false;
+        foreach (var method in _sdPreferDownload ? new[] { "Download", "Playback" } : new[] { "Playback", "Download" })
+        {
+            try
+            {
+                var download = method == "Playback"
+                    ? await _httpApi.PlaybackAsync(source, ct).ConfigureAwait(false)
+                    : await _httpApi.DownloadAsync(source, ct).ConfigureAwait(false);
+                if (download.Flv)
+                {
+                    // Elite / Video Doorbell: Playback is a real-time FLV stream for their own player.
+                    download.Dispose();
+                    flvSeen = true;
+                    _sdPreferDownload = true;
+                    errors.Add("Playback: FLV stream");
+                    continue;
+                }
+                Log.Info($"{CameraName}: streaming SD-card recording '{fileName}' ({method}" +
+                         $"{(download.Length is { } len ? $", {len / 1024 / 1024} MB" : "")})");
+                return download;
+            }
+            catch (ReolinkApiException ex) when (!ct.IsCancellationRequested)
+            {
+                errors.Add($"{method}: {ex.Message}");
+                if (method == "Playback") _sdPreferDownload = true;
+            }
+        }
+        if (flvSeen)
+        {
+            var flv = await _httpApi.PlaybackAsync(source, ct).ConfigureAwait(false);
+            Log.Info($"{CameraName}: SD-card recording '{fileName}' only came as FLV; remuxing it");
+            return flv;
+        }
+        // Doorbells hand both to their RTMP service, which is off unless RTMP is enabled;
+        // the same recording is fetched over Baichuan instead.
+        if (AnyLive() != null && check is not { Encrypted: true })
+        {
+            Log.Info($"{CameraName}: HTTP served neither Playback nor Download ({string.Join("; ", errors)}); " +
+                     "fetching SD recordings over Baichuan from now on (enabling RTMP in the Ports tab restores HTTP)");
+            _sdViaBc = true;
+            return await OpenBcTwinAsync(fileName, ct).ConfigureAwait(false);
+        }
+        throw new ReolinkApiException("the camera served this recording by neither Playback nor Download; " +
+                                      "on a Video Doorbell, enable RTMP in the Ports tab: " + string.Join("; ", errors));
+    }
+
+    // ------------------------------------- SD-card recordings (Baichuan, beta)
+    // For cameras with no working HTTP API (the Lumus ships without one). Shapes follow
+    // the firmware's parsers; the first reply is logged to settle the details.
+
+    /// <summary>Search entries by name, so a download can echo the camera's own entry back.</summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, XElement> _bcSdFiles =
+        new(StringComparer.Ordinal);
+    /// <summary>HTTP-listed recordings by name: their start time finds the Baichuan twin.</summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, SdRecording> _httpSdFiles =
+        new(StringComparer.Ordinal);
+
+    /// <summary>Fetches an HTTP-listed recording over Baichuan: the Baichuan search names files
+    /// differently, so the day is searched and the entry with the same start time is used.</summary>
+    private async Task<ReolinkHttpApi.SdDownload> OpenBcTwinAsync(string httpName, CancellationToken ct)
+    {
+        var start = _httpSdFiles.TryGetValue(httpName, out var listed) ? listed.Start
+            : SdStartFromName(httpName)
+              ?? throw new NotSupportedException($"'{httpName}' is not in the current SD listing; refresh the day and retry");
+        var day = DateOnly.FromDateTime(start);
+        var stream = listed?.StreamType ?? ReolinkHttpApi.StreamOfFile(httpName) ?? "main";
+        var twins = await BcSdRecordingsAsync(day, ct, stream).ConfigureAwait(false)
+                    ?? throw new NotSupportedException("the camera did not answer the Baichuan file search");
+        var twin = twins.Where(t => Math.Abs((t.Start - start).TotalSeconds) <= 5)
+            .OrderBy(t => Math.Abs((t.Start - start).TotalSeconds)).FirstOrDefault()
+            ?? throw new NotSupportedException($"the Baichuan search lists no recording starting {start:HH:mm:ss} " +
+                                               $"({twins.Count} that day)");
+        if (!_bcSdFiles.TryGetValue(twin.Name, out var entry))
+            throw new NotSupportedException($"no search entry for '{twin.Name}'");
+        return await OpenBcSdRecordingAsync(twin.Name, entry, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>The start time in a Reolink recording name (…_YYYYMMDD_HHMMSS_…), or null.</summary>
+    internal static DateTime? SdStartFromName(string name)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(name, @"_(\d{8})_(\d{6})_");
+        return m.Success && DateTime.TryParseExact(m.Groups[1].Value + m.Groups[2].Value, "yyyyMMddHHmmss",
+                   System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var t)
+            ? t : null;
+    }
+    /// <summary>One Baichuan transfer per camera at a time; the running one, so a newer pick can cancel it.</summary>
+    private readonly SemaphoreSlim _sdGate = new(1, 1);
+    private volatile CancellationTokenSource? _sdCurrent;
+    /// <summary>Why the last SD-card search over Baichuan failed, for the UI; null after success.</summary>
+    private volatile string? _sdFailure;
+    public string? SdFailure => _sdFailure;
+    private readonly HashSet<string> _bcSdLogged = new();
+
+    /// <summary>A battery model that never answered HTTP: its SD card is asked over Baichuan only.</summary>
+    private bool HttpAbsent => _httpApi == null || _httpWarnCooldownUntil == DateTime.MaxValue;
+    private static readonly TimeSpan SdBcTimeout = TimeSpan.FromSeconds(10);
+
+    private async Task<IReadOnlyList<int>?> BcSdDaysAsync(int year, int month, CancellationToken ct)
+    {
+        try
+        {
+            return await WithCameraAsync<IReadOnlyList<int>?>(async camera =>
+            {
+                var start = new DateTime(year, month, 1);
+                var body = BcCameraCommands.BuildDayRecords(camera.ChannelId, start, start.AddMonths(1).AddSeconds(-1));
+                var reply = await camera.SendCommandAsync(BcConstants.MsgIdGetDayRecords, BcXmlBody.FromRaw(body),
+                    new ExtensionXml { ChannelId = camera.ChannelId }, SdBcTimeout, ct: ct).ConfigureAwait(false);
+                var days = reply?.Xml?.RawElement("DayRecords");
+                LogBcSdOnce("calendar", days);
+                if (days == null)
+                {
+                    // The reply's shape is the only clue to an unmapped firmware dialect.
+                    _sdFailure = "the camera answered the SD calendar with " + (reply?.Xml?.Raw is { Count: > 0 } raw
+                        ? "<" + string.Join(">, <", raw.Select(e => e.Name.LocalName)) + "> instead of <DayRecords>"
+                        : "no XML");
+                    Log.Info($"{CameraName}: {_sdFailure}" + (reply?.Xml?.Raw is { Count: > 0 } r
+                        ? ": " + Truncate(string.Concat(r.Select(e => e.ToString(SaveOptions.DisableFormatting))), 600) : ""));
+                    return null;
+                }
+                _sdFailure = null;
+                return BcCameraCommands.ParseDayRecords(days, year, month);
+            }, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is CameraCommandException or TimeoutException or CameraOfflineException)
+        {
+            _sdFailure = ex switch
+            {
+                CameraOfflineException => "Neolink has no live connection to the camera right now",
+                TimeoutException => "the camera did not answer the SD calendar (msg 142) in time",
+                _ => $"the camera rejected the SD calendar (msg 142): {ex.Message}",
+            };
+            Log.Info($"{CameraName}: SD calendar over Baichuan failed: {_sdFailure}");
+            return null;
+        }
+    }
+
+    private async Task<IReadOnlyList<SdRecording>?> BcSdRecordingsAsync(DateOnly day, CancellationToken ct, string? wanted = null)
+    {
+        try
+        {
+            return await WithCameraAsync<IReadOnlyList<SdRecording>?>(async camera =>
+            {
+                var start = day.ToDateTime(TimeOnly.MinValue);
+                var end = day.ToDateTime(new TimeOnly(23, 59, 59));
+                bool answered = false;
+                var streams = wanted == null ? new[] { "mainStream", "subStream" }
+                    : new[] { wanted == "sub" ? "subStream" : "mainStream" };
+                foreach (var stream in streams)
+                {
+                    XElement? open;
+                    try
+                    {
+                        open = await camera.GetRawAsync(BcConstants.MsgIdSearchOpen, "FileInfoList",
+                            BcCameraCommands.BuildFileSearch(camera.ChannelId, stream, start, end), SdBcTimeout, ct)
+                            .ConfigureAwait(false);
+                    }
+                    catch (CameraCommandException) { continue; } // this stream isn't searchable
+                    answered = true;
+                    LogBcSdOnce("file search", open);
+                    var files = new List<SdRecording>();
+                    AddBcSdFiles(open, stream, files);
+                    if (BcCameraCommands.SearchHandle(open) is { } handle)
+                    {
+                        try
+                        {
+                            for (int page = 0; page < 100; page++)
+                            {
+                                XElement? more;
+                                try
+                                {
+                                    more = await camera.GetRawAsync(BcConstants.MsgIdSearchFile, "FileInfoList",
+                                        BcCameraCommands.BuildFileHandle(camera.ChannelId, handle), SdBcTimeout, ct)
+                                        .ConfigureAwait(false);
+                                }
+                                catch (CameraCommandException) { break; } // past the last page
+                                int before = files.Count;
+                                AddBcSdFiles(more, stream, files);
+                                if (files.Count == before) break;
+                            }
+                        }
+                        finally
+                        {
+                            try { await camera.CloseFileSearchAsync(handle, ct).ConfigureAwait(false); }
+                            catch (Exception ex) when (ex is CameraCommandException or TimeoutException) { }
+                        }
+                    }
+                    Log.Info($"{CameraName}: SD file search over Baichuan ({stream}, {day:yyyy-MM-dd}): {files.Count} recording(s)");
+                    if (files.Count > 0)
+                        return files.OrderBy(f => f.Start).ToList();
+                }
+                return answered ? new List<SdRecording>() : null;
+            }, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is TimeoutException or CameraOfflineException)
+        {
+            _sdFailure = ex is CameraOfflineException
+                ? "Neolink has no live connection to the camera right now"
+                : "the camera did not answer the SD file search (msg 14) in time";
+            Log.Info($"{CameraName}: SD file search over Baichuan failed: {_sdFailure}");
+            return null;
+        }
+    }
+
+    private void AddBcSdFiles(XElement? list, string stream, List<SdRecording> into)
+    {
+        if (_bcSdFiles.Count > 5000) _bcSdFiles.Clear();
+        foreach (var f in BcCameraCommands.ParseFileInfos(list))
+        {
+            if (into.Any(r => r.Name == f.Name)) continue;
+            _bcSdFiles[f.Name] = f.Raw;
+            into.Add(new SdRecording(f.Name, f.Start, f.End, f.Size, stream == "subStream" ? "sub" : "main"));
+        }
+    }
+
+    private void LogBcSdOnce(string what, XElement? reply)
+    {
+        if (reply == null || !_bcSdLogged.Add(what)) return;
+        Log.Info($"{CameraName}: SD card over Baichuan, first {what} reply: " +
+                 Truncate(reply.ToString(SaveOptions.DisableFormatting), 600));
+    }
+
+    private async Task<ReolinkHttpApi.SdDownload> OpenBcSdRecordingAsync(string fileName, XElement entry,
+        CancellationToken ct)
+    {
+        var camera = AnyLive() ?? throw new CameraOfflineException(CameraName);
+        // Latest wins: a clip still loading is abandoned for the one just picked.
+        try { _sdCurrent?.Cancel(); } catch (ObjectDisposedException) { }
+        await _sdGate.WaitAsync(ct).ConfigureAwait(false);
+        long size = BcCameraCommands.FileInfoSize(entry); // the file's size; the frames sent differ from it
+        var pipe = new System.IO.Pipelines.Pipe();
+        var cts = new CancellationTokenSource(TimeSpan.FromMinutes(10));
+        _sdCurrent = cts;
+        var writer = pipe.Writer.AsStream();
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                long got = await camera.DownloadFileAsync(BcCameraCommands.BuildDownload(entry), 0, writer, cts.Token)
+                    .ConfigureAwait(false);
+                Log.Info($"{CameraName}: SD recording '{fileName}' fetched over Baichuan ({got / 1024} KB" +
+                         $"{(size > 0 ? $" of {size / 1024} KB" : "")})");
+                await pipe.Writer.CompleteAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Log.Info(cts.IsCancellationRequested
+                    ? $"{CameraName}: SD download over Baichuan of '{fileName}' abandoned (another clip was picked, or the viewer left)"
+                    : $"{CameraName}: SD download over Baichuan failed for '{fileName}': {Log.Flatten(ex)}");
+                await pipe.Writer.CompleteAsync(ex).ConfigureAwait(false);
+            }
+            finally
+            {
+                if (ReferenceEquals(_sdCurrent, cts)) _sdCurrent = null;
+                _sdGate.Release();
+                cts.Dispose();
+            }
+        }, CancellationToken.None);
+        return new ReolinkHttpApi.SdDownload(pipe.Reader.AsStream(), null,
+            owner: new CancelOnDispose(cts), viaBaichuan: true);
+    }
+
+    /// <summary>Stops a background transfer when its reader goes away.</summary>
+    private sealed class CancelOnDispose : IDisposable
+    {
+        private readonly CancellationTokenSource _cts;
+        public CancelOnDispose(CancellationTokenSource cts) => _cts = cts;
+        public void Dispose()
+        {
+            try { _cts.Cancel(); } catch (ObjectDisposedException) { }
+        }
     }
 
     public Task RebootAsync(CancellationToken ct) =>

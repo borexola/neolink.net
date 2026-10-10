@@ -504,19 +504,97 @@ public sealed class ReolinkHttpApi : IDisposable
     /// <summary>An open download of one SD-card recording; dispose to drop the connection.</summary>
     public sealed class SdDownload : IDisposable
     {
-        private readonly HttpResponseMessage _response;
-        internal SdDownload(HttpResponseMessage response, Stream stream)
-        { _response = response; Stream = stream; }
+        private readonly IDisposable? _owner;
+        internal SdDownload(HttpResponseMessage response, Stream stream, bool flv = false)
+            : this(stream, response.Content.Headers.ContentLength, response, flv) { }
+        public SdDownload(Stream stream, long? length, IDisposable? owner = null, bool flv = false, bool viaBaichuan = false)
+        { Stream = stream; Length = length; _owner = owner; Flv = flv; ViaBaichuan = viaBaichuan; }
         public Stream Stream { get; }
-        public long? Length => _response.Content.Headers.ContentLength;
-        public void Dispose() { Stream.Dispose(); _response.Dispose(); }
+        public long? Length { get; }
+        /// <summary>The camera answered with FLV (its nginx flv module), not MP4: it must be remuxed.</summary>
+        public bool Flv { get; }
+        /// <summary>Fetched over Baichuan: the format is only known once the bytes are in.</summary>
+        public bool ViaBaichuan { get; }
+        /// <summary>Must spool before serving: an FLV or a Baichuan transfer can't be passed through.</summary>
+        public bool NeedsSpool => Flv || ViaBaichuan;
+        public void Dispose() { Stream.Dispose(); _owner?.Dispose(); }
     }
+
+    /// <summary>cmd=Playback: nginx serves /playback/ uncapped, where Download's /downloadfile/
+    /// is capped at 1 MB/s, one at a time. Some firmwares answer with FLV.</summary>
+    public Task<SdDownload> PlaybackAsync(string fileName, CancellationToken ct) =>
+        FetchRecordingAsync("Playback", fileName, ct);
 
     /// <summary>Streams one recording file off the SD card (cmd=Download). The name
     /// comes from <see cref="SearchAsync"/> File entries. Runs on a connection with
     /// no overall timeout — a full clip takes minutes over Wi-Fi — so the caller's
     /// token governs its lifetime; only the token handshake holds the command gate.</summary>
-    public async Task<SdDownload> DownloadAsync(string fileName, CancellationToken ct)
+    public Task<SdDownload> DownloadAsync(string fileName, CancellationToken ct) =>
+        FetchRecordingAsync("Download", fileName, ct);
+
+    /// <summary>What CheckDownload said: an encrypted file names the file to unlock and the password hint.</summary>
+    public sealed record DownloadCheck(string? FileName, string? Prompt)
+    {
+        public bool Encrypted => !string.IsNullOrEmpty(FileName) || !string.IsNullOrEmpty(Prompt);
+    }
+
+    /// <summary>The step newer firmwares (Video Doorbell, Elite) take before every download, as their
+    /// own web UI does; null when the firmware doesn't know the command.</summary>
+    public async Task<DownloadCheck?> CheckDownloadAsync(string fileName, CancellationToken ct)
+    {
+        try
+        {
+            // The web UI sends "filename"; the parser's own name is "fileName".
+            var value = await ExecAsync("CheckDownload",
+                new JsonObject { ["filename"] = fileName, ["fileName"] = fileName }, ct).ConfigureAwait(false);
+            return ParseDownloadCheck(value);
+        }
+        catch (ReolinkApiException ex)
+        {
+            Log.Debug($"CheckDownload rejected: {ex.Message}");
+            return null;
+        }
+    }
+
+    internal static DownloadCheck ParseDownloadCheck(JsonNode? value)
+    {
+        static string? Str(JsonNode? n) => n is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;
+        return new DownloadCheck(Str((value as JsonObject)?["fileName"]), Str((value as JsonObject)?["prompt"]));
+    }
+
+    /// <summary>Unlocks an encrypted recording with its password (the camera hashes it itself);
+    /// false when the camera still asks for one.</summary>
+    public async Task<bool> SetRecDecryptKeyAsync(string fileName, string password, CancellationToken ct)
+    {
+        var value = await ExecAsync("SetRecDecryptKey",
+            new JsonObject { ["type"] = 0, ["key"] = password, ["fileName"] = fileName }, ct).ConfigureAwait(false);
+        return !ParseDownloadCheck(value).Encrypted;
+    }
+
+    /// <summary>"main"/"sub" from a Reolink recording name (RecM… / RecS…), or null.</summary>
+    internal static string? StreamOfFile(string fileName)
+    {
+        var name = fileName[(fileName.LastIndexOfAny(new[] { '/', '\\' }) + 1)..];
+        return name.StartsWith("RecM", StringComparison.OrdinalIgnoreCase) ? "main"
+             : name.StartsWith("RecS", StringComparison.OrdinalIgnoreCase) ? "sub"
+             : null;
+    }
+
+    /// <summary>The query a recording fetch sends: Download takes source/output; Playback's
+    /// parser reads channel, stream and filename as well.</summary>
+    internal string RecordingQuery(string cmd, string fileName, string token)
+    {
+        var f = Uri.EscapeDataString(fileName);
+        var q = $"{_apiUrl}?cmd={cmd}&source={f}&output={f}";
+        if (cmd == "Playback")
+        {
+            q += $"&channel={_channelId}&filename={f}";
+            if (StreamOfFile(fileName) is { } stream) q += $"&stream={stream}";
+        }
+        return q + $"&token={Uri.EscapeDataString(token)}";
+    }
+
+    private async Task<SdDownload> FetchRecordingAsync(string cmd, string fileName, CancellationToken ct)
     {
         // Ensure a live token under the gate, then stream outside it: holding the
         // gate for a minutes-long transfer would freeze every other API call.
@@ -531,8 +609,7 @@ public sealed class ReolinkHttpApi : IDisposable
             _gate.Release();
         }
 
-        var url = $"{_apiUrl}?cmd=Download&source={Uri.EscapeDataString(fileName)}" +
-                  $"&output={Uri.EscapeDataString(fileName)}&token={Uri.EscapeDataString(_token!)}";
+        var url = RecordingQuery(cmd, fileName, _token!);
         HttpResponseMessage res;
         try
         {
@@ -540,32 +617,24 @@ public sealed class ReolinkHttpApi : IDisposable
         }
         catch (HttpRequestException ex) when (!ct.IsCancellationRequested)
         {
-            // We get here with a proven-live API (the caller just listed the SD
-            // card over it), so a transport failure on THIS request is the known
-            // firmware bug: some models advertise recDownload but their Download
-            // handler crashes at entry and the camera drops the connection —
-            // verified on the Video Doorbell WiFi (empty reply for cmd=Download
-            // even with no parameters, while Snap/Search on the same session
-            // work). Nothing the client sends changes that.
-            throw new ReolinkApiException(
-                "the camera dropped the Download request — this firmware does not actually serve " +
-                "SD recordings over HTTP (a known firmware bug on the Video Doorbell WiFi: its " +
-                "Download handler crashes even though the camera lists the recordings fine). " +
-                $"The clip can be viewed in the Reolink app instead. ({ex.Message})");
+            // A proven-live API dropping THIS request: some firmwares' handler crashes
+            // at entry (Download on the Video Doorbell WiFi) — the caller tries another.
+            throw new ReolinkApiException($"the camera dropped the {cmd} request ({ex.Message})");
         }
         try
         {
             if (!res.IsSuccessStatusCode)
-                throw new ReolinkApiException($"camera HTTP API returned HTTP {(int)res.StatusCode} for Download");
+                throw new ReolinkApiException($"camera HTTP API returned HTTP {(int)res.StatusCode} for {cmd}");
             // Errors (bad name, stale token) come back as a small JSON body.
             var mediaType = res.Content.Headers.ContentType?.MediaType ?? "";
-            if (mediaType.Contains("json", StringComparison.OrdinalIgnoreCase))
+            if (mediaType.Contains("json", StringComparison.OrdinalIgnoreCase)
+                || mediaType.Contains("text/html", StringComparison.OrdinalIgnoreCase))
             {
                 var text = await res.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-                throw new ReolinkApiException($"camera refused the download: {Truncate(text, 200)}");
+                throw new ReolinkApiException($"camera refused the {cmd}: {Truncate(text, 200)}");
             }
             var stream = await res.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-            return new SdDownload(res, stream);
+            return new SdDownload(res, stream, flv: mediaType.Contains("flv", StringComparison.OrdinalIgnoreCase));
         }
         catch
         {

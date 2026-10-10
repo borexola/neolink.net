@@ -1,4 +1,4 @@
-@page "/monitor"
+﻿@page "/monitor"
 @using System.Diagnostics
 @using System.Globalization
 @using System.Text.Json
@@ -13,7 +13,7 @@
    sampled server-side every 2s, and the frontend (this very browser tab —
    JS heap, frame rate, circuit round-trip) sampled locally at the same beat. *@
 
-<PageTitle>@T["Neolink.NET — Monitor"]</PageTitle>
+<PageTitle>@T["Neolink.NET · Monitor"]</PageTitle>
 
 <div class="mon-page">
     <div class="toolbar mon-toolbar">
@@ -45,7 +45,7 @@
     }
     else if (!_supported)
     {
-        <div class="notice">@T["This server does not expose resource statistics — update the Neolink.NET server."]</div>
+        <div class="notice">@T["This server does not expose resource statistics; update the Neolink.NET server."]</div>
     }
     else
     {
@@ -89,7 +89,7 @@
                      @onkeydown="@(e => e.Key == "Enter" ? ToggleViewersAsync() : Task.CompletedTask)">
                     <span class="mon-card-label">@T["VIEWERS"]@(_admin ? (_viewersOpen ? " ▾" : " ▸") : "")</span>
                     <span class="mon-card-value">@(Last?.View.ToString() ?? "—")</span>
-                    <span class="mon-card-sub">@T["watching live (RTSP + web) — recorders not counted"]</span>
+                    <span class="mon-card-sub">@T["watching live (RTSP + web), recorders not counted"]</span>
                 </div>
                 <div class="mon-card">
                     <span class="mon-card-label">@T["RECORDING"]</span>
@@ -116,7 +116,7 @@
                 </div>
                 @if (_viewersUnsupported)
                 {
-                    <div class="mon-avail-sub" style="margin: 0 2px 18px">@T["This server does not list viewers — update the Neolink.NET server."]</div>
+                    <div class="mon-avail-sub" style="margin: 0 2px 18px">@T["This server does not list viewers; update the Neolink.NET server."]</div>
                 }
                 else if (_viewers == null)
                 {
@@ -202,7 +202,7 @@
                             <span class="mon-card-value" style="color:@StorageColor(loc)">
                                 @(loc.Online ? T.F("{0} free", Bytes(loc.FreeBytes)) : T["offline"])
                             </span>
-                            <span class="mon-card-sub">@loc.Path@(loc.Online && loc.TotalBytes > 0 ? " · " + T.F("{0}% of {1} used", $"{loc.UsedPercent:0}", Bytes(loc.TotalBytes)) : "")@(loc.Full ? " · " + T["FULL — recording halted"] : loc.Warn ? " · " + T["getting full"] : "")@(loc.Full ? "" : ForecastText(loc))</span>
+                            <span class="mon-card-sub">@loc.Path@(loc.Online && loc.TotalBytes > 0 ? " · " + T.F("{0}% of {1} used", $"{loc.UsedPercent:0}", Bytes(loc.TotalBytes)) : "")@(loc.Full ? " · " + T["FULL: recording halted"] : loc.Warn ? " · " + T["getting full"] : "")@(loc.Full ? "" : ForecastText(loc))</span>
                         </div>
                     }
                 </div>
@@ -248,7 +248,7 @@
             @* ---------------- frontend ---------------- *@
             <div class="mon-section">
                 <span class="mon-section-title">@T["FRONTEND"]</span>
-                <span class="mon-section-sub">@T["this browser tab — sampled locally at the same beat"]</span>
+                <span class="mon-section-sub">@T["this browser tab, sampled locally at the same beat"]</span>
             </div>
 
             <div class="mon-cards">

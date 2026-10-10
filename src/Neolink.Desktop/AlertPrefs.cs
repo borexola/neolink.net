@@ -56,7 +56,7 @@ internal sealed class AlertPrefs
     public static readonly string[] Labels =
     {
         "person", "vehicle", "animal", "package", "doorbell", "crying",
-        "line-crossing", "intrusion", "loitering", "motion",
+        "line-crossing", "intrusion", "loitering", "object-left", "object-taken", "motion",
     };
 
     public AlertPrefs Clone() => new()

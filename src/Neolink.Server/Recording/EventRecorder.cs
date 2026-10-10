@@ -602,7 +602,7 @@ public sealed class EventRecorder
                 labels = LabelsOf(push).Where(settings.AllowsLabel).ToList();
                 if (labels.Count == 0)
                 {
-                    NoteDiscarded(push, "every label is unticked in this camera's event types");
+                    NoteDiscarded(push, "none of its labels are ticked in this camera's event types");
                     continue;
                 }
             }
@@ -632,7 +632,7 @@ public sealed class EventRecorder
             return;
         _lastDiscardReason = reason;
         _lastDiscardLog = now;
-        Log.Info($"{_camera}: detection push ({string.Join("+", LabelsOf(push))}) NOT recorded — {reason}");
+        Log.Info($"{_camera}: detection push ({string.Join("+", LabelsOf(push))}) NOT recorded: {reason}");
     }
 
     private async Task RunEventAsync(List<string> initialLabels, bool provisional,
@@ -757,8 +757,8 @@ public sealed class EventRecorder
                     // filtered label cannot confirm the wake, so the footage
                     // gets discarded as if nothing happened.
                     NoteDiscarded(push, provisional
-                        ? "every label is unticked in this camera's event types, so it cannot confirm the wake recording"
-                        : "every label is unticked in this camera's event types (event not extended)");
+                        ? "none of its labels are ticked in this camera's event types, so it cannot confirm the wake recording"
+                        : "none of its labels are ticked in this camera's event types (event not extended)");
                     continue;
                 }
                 active = true;
@@ -1062,6 +1062,9 @@ public sealed class EventRecorder
             "crossline" or "cross_line" or "tripwire" => "line-crossing",
             "intrude" or "intrusion" or "region" or "perimeter" => "intrusion",
             "linger" or "loiter" or "loitering" => "loitering",
+            // Firmware rule names (smart_ai): "legacy" = an object left behind, "loss" = one taken away.
+            "legacy" or "object-left" => "object-left",
+            "loss" or "object-taken" => "object-taken",
             _ => t,
         }).Distinct().ToList();
         return labels.Count > 0 ? labels : new List<string> { "motion" };

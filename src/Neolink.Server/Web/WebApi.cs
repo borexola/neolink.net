@@ -198,6 +198,13 @@ public static class WebApi
     private sealed record PtzRequest(string? Command, float? Speed);
     private sealed record ZoomFocusRequest(uint? Zoom, uint? Focus);
     private sealed record FloodlightRequest(int? Brightness, bool? Auto);
+    private sealed record SdUnlockRequest(string? Password);
+    private sealed record ToggleRequest(bool? On);
+    private sealed record AutoRebootRequest(bool? Enabled, string? WeekDay, int? Hour, int? Minute);
+    private sealed record GuardRequest(bool? Enabled, int? Timeout, string? Action);
+    private sealed record PatrolRequest(int? Id, bool? Run);
+    private sealed record ChimeRequest(int? Id, int? Volume, bool? Led, bool? Ring, int? SilentMinutes);
+    private sealed record SmartRuleRequest(string? Type, int? Index, int? Sensitivity, int? Seconds, bool? Delete);
     private sealed record WhiteLedRequest(int? Brightness, bool? On, int? Mode);
     private sealed record ImageRequest(int? Bright, int? Contrast, int? Saturation, int? Hue, int? Sharpen,
         string? DayNight, string? AntiFlicker, bool? Flip, bool? Mirror);
@@ -824,7 +831,7 @@ public static class WebApi
             }
             catch (Exception ex)
             {
-                return Results.Json(new { error = ex.Message }, statusCode: 500);
+                return Results.Json(new { error = ex is UnauthorizedAccessException or IOException ? $"config.json cannot be read: {ex.Message}" : ex.Message }, statusCode: 500);
             }
         });
 
@@ -993,6 +1000,7 @@ public static class WebApi
                 return Results.Json(new
                 {
                     writable = ConfigEditor.IsWritable(o.ConfigPath),
+                    writeProblem = ConfigEditor.WriteProblem(o.ConfigPath),
                     // What the editor needs to check a PTZ port before saving (the loader has the last word).
                     ptz = new
                     {
@@ -1038,7 +1046,7 @@ public static class WebApi
             }
             catch (Exception ex)
             {
-                return Results.Json(new { error = ex.Message }, statusCode: 500);
+                return Results.Json(new { error = ex is UnauthorizedAccessException or IOException ? $"config.json cannot be read: {ex.Message}" : ex.Message }, statusCode: 500);
             }
         });
 
@@ -2327,6 +2335,7 @@ public static class WebApi
                         floodlight = caps.Features.Floodlight,
                         whiteLed = caps.Features.WhiteLed,
                         spotlight = caps.Features.Spotlight,
+                        spotlightTasks = caps.Features.SpotlightTasks,
                         doorbell = caps.Features.Doorbell,
                         privacy = caps.Features.Privacy,
                         streamSettings = control.CanSetStreamSettings,
@@ -3198,7 +3207,7 @@ public static class WebApi
                     // A Reolink answers exactly as before: 503 only while its API
                     // cannot be asked, 404 otherwise.
                     return control.HttpPaused || (t == "md" && control.OnvifOnly && control.CameraHoldsZone == null)
-                        ? Results.Json(new { error = "the camera could not be asked just now (it is asleep, or its HTTP API is backing off after a failure) — try again shortly" },
+                        ? Results.Json(new { error = "the camera could not be asked just now (it is asleep, or its HTTP API is backing off after a failure); try again shortly" },
                             statusCode: 503)
                         : Results.Json(new { error = $"this camera reports no {t} detection zone" }, statusCode: 404);
                 if (o.CameraState == null)
@@ -3332,6 +3341,122 @@ public static class WebApi
                 return Results.Json(new { updateAvailable = status.UpdateAvailable, newVersion = status.NewVersion });
             }));
 
+        // ------------------------------------- device settings over Baichuan (beta)
+        // SD recording switch, auto-reboot, PTZ guard and patrols, privacy masks, chimes,
+        // smart-detection rules and SD cards: firmware commands, so no HTTP API needed.
+        app.MapGet("/api/cameras/{name}/extras", (string name, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: false, async (control, reqCt) =>
+            {
+                var x = await control.GetDeviceExtrasAsync(reqCt);
+                if (x == null)
+                    return Results.Json(new { error = "no device settings on this camera" }, statusCode: 404);
+                return Results.Json(new
+                {
+                    sdRecording = x.SdRecording,
+                    autoReboot = x.AutoReboot is { } ar
+                        ? new { enabled = ar.Enabled, weekDay = ar.WeekDay, hour = ar.Hour, minute = ar.Minute }
+                        : null,
+                    guard = x.Guard is { } g ? new { enabled = g.Enabled, valid = g.Valid, timeout = g.Timeout } : null,
+                    patrols = x.Patrols?.Select(p => new { id = p.Id, name = p.Name, enabled = p.Enabled }),
+                    privacyMasks = x.PrivacyMasks is { } pm ? new { enabled = pm.Enabled, count = pm.Count } : null,
+                    chimes = x.Chimes?.Select(c => new
+                    {
+                        id = c.Id, name = c.Name, online = c.Online, volume = c.Volume, led = c.Led,
+                        silentSeconds = c.SilentSeconds,
+                    }),
+                    smartRules = x.SmartRules?.Select(r => new
+                    {
+                        type = r.Type, index = r.Index, name = r.Name, aiType = r.AiType,
+                        sensitivity = r.Sensitivity, seconds = r.Seconds, direction = r.Direction,
+                    }),
+                    sdCards = x.SdCards?.Select(s => new
+                    {
+                        id = s.Id, totalMb = s.TotalMb, freeMb = s.FreeMb, formatted = s.Formatted, mounted = s.Mounted,
+                    }),
+                });
+            }));
+
+        app.MapPost("/api/cameras/{name}/extras/sdrecording", (string name, ToggleRequest req, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: true, async (control, reqCt) =>
+            {
+                if (req.On is not { } on)
+                    return Results.Json(new { error = "provide on (bool)" }, statusCode: 400);
+                await control.SetSdRecordingAsync(on, reqCt);
+                return Results.Json(new { ok = true });
+            }));
+
+        app.MapPost("/api/cameras/{name}/extras/autoreboot", (string name, AutoRebootRequest req, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: true, async (control, reqCt) =>
+            {
+                if (req is { Enabled: null, WeekDay: null, Hour: null, Minute: null })
+                    return Results.Json(new { error = "provide enabled, weekDay, hour and/or minute" }, statusCode: 400);
+                await control.SetAutoRebootAsync(req.Enabled, req.WeekDay, req.Hour, req.Minute, reqCt);
+                return Results.Json(new { ok = true });
+            }));
+
+        app.MapPost("/api/cameras/{name}/extras/guard", (string name, GuardRequest req, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: true, async (control, reqCt) =>
+            {
+                if (req is { Enabled: null, Timeout: null, Action: null })
+                    return Results.Json(new { error = "provide enabled (bool), timeout (seconds) and/or action (set|go)" }, statusCode: 400);
+                await control.SetGuardAsync(req.Enabled, req.Timeout, req.Action, reqCt);
+                return Results.Json(new { ok = true });
+            }));
+
+        app.MapPost("/api/cameras/{name}/extras/patrol", (string name, PatrolRequest req, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: true, async (control, reqCt) =>
+            {
+                if (req.Id is not { } id || req.Run is not { } run)
+                    return Results.Json(new { error = "provide id and run (bool)" }, statusCode: 400);
+                await control.SetPatrolAsync(id, run, reqCt);
+                return Results.Json(new { ok = true });
+            }));
+
+        app.MapPost("/api/cameras/{name}/extras/privacymasks", (string name, ToggleRequest req, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: true, async (control, reqCt) =>
+            {
+                if (req.On is not { } on)
+                    return Results.Json(new { error = "provide on (bool)" }, statusCode: 400);
+                await control.SetPrivacyMasksAsync(on, reqCt);
+                return Results.Json(new { ok = true });
+            }));
+
+        app.MapPost("/api/cameras/{name}/extras/chime", (string name, ChimeRequest req, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: true, async (control, reqCt) =>
+            {
+                if (req.Id is not { } id || (req.Volume == null && req.Led == null && req.Ring != true && req.SilentMinutes == null))
+                    return Results.Json(new { error = "provide id and volume (0-4), led, ring and/or silentMinutes" }, statusCode: 400);
+                if (req.SilentMinutes is < 0 or > 24 * 60)
+                    return Results.Json(new { error = "silentMinutes must be 0-1440" }, statusCode: 400);
+                if (req.Volume != null || req.Led != null)
+                    await control.SetChimeAsync(id, req.Volume, req.Led, reqCt);
+                if (req.SilentMinutes is { } minutes)
+                    await control.SetChimeSilentAsync(id, minutes * 60, reqCt);
+                if (req.Ring == true)
+                    await control.RingChimeAsync(id, reqCt);
+                return Results.Json(new { ok = true });
+            }));
+
+        app.MapPost("/api/cameras/{name}/extras/smartrule", (string name, SmartRuleRequest req, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: true, async (control, reqCt) =>
+            {
+                if (req.Type is not { Length: > 0 } type || req.Index is not { } index)
+                    return Results.Json(new { error = "provide type and index" }, statusCode: 400);
+                if (req.Sensitivity == null && req.Seconds == null && req.Delete != true)
+                    return Results.Json(new { error = "provide sensitivity, seconds and/or delete" }, statusCode: 400);
+                await control.SetSmartRuleAsync(type, index, req.Sensitivity, req.Seconds, req.Delete == true, reqCt);
+                return Results.Json(new { ok = true });
+            }));
+
+        // Encrypted recordings (Video Doorbell, Elite): the password the camera decrypts
+        // with, held in memory for this run. It travels in the body, never in a URL.
+        app.MapPost("/api/cameras/{name}/sdcard/unlock", (string name, SdUnlockRequest req, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: true, (control, _) =>
+            {
+                control.SetSdPassword(req.Password);
+                return Task.FromResult(Results.Json(new { ok = true, unlocked = !string.IsNullOrEmpty(req.Password) }));
+            }));
+
         // ------------------------------------------------- camera SD-card recordings
         // Footage the CAMERA recorded onto its own SD card — including anything from
         // when neolink was down and battery-camera clips that never streamed.
@@ -3344,17 +3469,20 @@ public static class WebApi
                     return Results.Json(new { error = "provide year and month" }, statusCode: 400);
                 var days = await control.GetSdRecordingDaysAsync(y, m, reqCt);
                 if (days == null)
-                    return Results.Json(new { error = "this camera's SD card cannot be searched" }, statusCode: 404);
+                    return Results.Json(new { error = control.SdFailure ?? "this camera's SD card cannot be searched" },
+                        statusCode: 404);
                 return Results.Json(new { year = y, month = m, days });
             }));
 
         // The recordings of one (camera-local) day.
-        app.MapGet("/api/cameras/{name}/sdcard/recordings", (string name, string? date, HttpContext ctx) =>
+        app.MapGet("/api/cameras/{name}/sdcard/recordings", (string name, string? date, string? stream, HttpContext ctx) =>
             ExecAsync(name, ctx, mutating: false, async (control, reqCt) =>
             {
                 if (!DateOnly.TryParseExact(date, "yyyy-MM-dd", out var day))
                     return Results.Json(new { error = "provide date: yyyy-MM-dd" }, statusCode: 400);
-                var files = await control.GetSdRecordingsAsync(day, reqCt);
+                if (stream is not (null or "main" or "sub"))
+                    return Results.Json(new { error = "stream must be main or sub" }, statusCode: 400);
+                var files = await control.GetSdRecordingsAsync(day, reqCt, stream);
                 if (files == null)
                     return Results.Json(new { error = "this camera's SD card cannot be searched" }, statusCode: 404);
                 return Results.Json(new
@@ -3377,12 +3505,17 @@ public static class WebApi
         // "dl" binds as a STRING on purpose: the UI sends ?dl=1, and ASP.NET's
         // bool binding rejects "1" with an empty 400 BEFORE the handler runs —
         // invisible in our logs (field report: every SD download failed 400).
-        app.MapGet("/api/cameras/{name}/sdcard/download", (string name, string? file, string? dl, HttpContext ctx) =>
+        app.MapGet("/api/cameras/{name}/sdcard/download", (string name, string? file, string? dl, string? probe, string? repair, HttpContext ctx) =>
             ExecAsync(name, ctx, mutating: false, async (control, reqCt) =>
             {
                 var fileName = (file ?? "").Trim();
                 if (fileName.Length is 0 or > 255 || fileName.Any(char.IsControl))
                     return Results.Json(new { error = "provide file: a name from /sdcard/recordings" }, statusCode: 400);
+                // The player asks why its last attempt failed; a <video> can't read the error body.
+                if (probe == "1")
+                    return SdSpool.RecentFailure(name, fileName) is { } why
+                        ? Results.Json(new { error = why }, statusCode: 502)
+                        : Results.Json(new { error = "no recent failure" }, statusCode: 404);
                 bool asDownload = dl is "1" or "true" or "yes";
                 string contentType = fileName.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase)
                     ? "video/mp4" : "application/octet-stream";
@@ -3393,20 +3526,41 @@ public static class WebApi
                 // keep the moov index at the END, so direct pass-through never
                 // played in a browser (see SdSpool). The browser's range probes all
                 // hit the same spooled file — one camera fetch per recording.
+                // repair=1: the browser could not decode the clip (damaged as recorded); serve a
+                // re-encode with the damage concealed, the way VLC and the Reolink app play it.
+                bool repairing = repair == "1";
                 if (await SdSpool.TryGetAsync(name, fileName, reqCt) is { } cached)
-                    return Results.File(cached, contentType, fileDownloadName: downloadName,
-                        enableRangeProcessing: true);
-                var download = await control.OpenSdRecordingAsync(fileName, reqCt);
-                if (download.Length is { } len && len <= SdSpool.MaxBytes)
+                    return Results.File(repairing ? await SdSpool.RepairAsync(name, fileName, cached, reqCt) : cached,
+                        contentType, fileDownloadName: downloadName, enableRangeProcessing: true);
+                try
                 {
-                    var spooled = await SdSpool.SpoolAsync(name, fileName, download, reqCt);
-                    return Results.File(spooled, contentType, fileDownloadName: downloadName,
-                        enableRangeProcessing: true);
+                    var download = await control.OpenSdRecordingAsync(fileName, reqCt);
+                    // FLV and Baichuan transfers are only playable once spooled (remuxed/checked).
+                    if (download.NeedsSpool || download.Length is { } len && len <= SdSpool.MaxBytes)
+                    {
+                        var spooled = await SdSpool.SpoolAsync(name, fileName, download, reqCt);
+                        if (repairing) spooled = await SdSpool.RepairAsync(name, fileName, spooled, reqCt);
+                        return Results.File(spooled, contentType, fileDownloadName: downloadName,
+                            enableRangeProcessing: true);
+                    }
+                    // Oversized (long continuous segments) or unknown length: stream
+                    // straight through like before — playable only after download.
+                    ctx.Response.RegisterForDispose(download);
+                    return Results.Stream(download.Stream, contentType, fileDownloadName: downloadName);
                 }
-                // Oversized (long continuous segments) or unknown length: stream
-                // straight through like before — playable only after download.
-                ctx.Response.RegisterForDispose(download);
-                return Results.Stream(download.Stream, contentType, fileDownloadName: downloadName);
+                catch (Exception ex) when (!reqCt.IsCancellationRequested)
+                {
+                    // Every failure is logged here: ExecAsync's mapping to a status code is silent.
+                    var why = ex switch
+                    {
+                        CameraOfflineException => "camera offline",
+                        OperationCanceledException => "the transfer from the camera timed out",
+                        _ => ex.Message,
+                    };
+                    SdSpool.NoteFailure(name, fileName, why);
+                    Log.Warn($"{name}: SD recording '{fileName}' could not be served: {why}");
+                    throw;
+                }
             }));
 
         // On-demand clip capture: start records ONE clip capped at

@@ -57,6 +57,9 @@ neolink-*.tar
 # Local dev tools, not shipped
 /devtools/
 
+# Firmware teardown notes (local research, not shipped)
+/firmware-analysis/
+
 # Installer output (installer/build-msi.ps1)
 /artifacts/
 *.wixpdb
