@@ -706,7 +706,7 @@ public sealed class CameraControl : ICameraControl
             bool zoom = ZoomMax(zoomTask.Result) > 0;
             bool spotlightBit = (ledCtrl & 4) != 0;
             var (floodlight, spotlightTasks, floodReadId) =
-                ClassifyFloodlight(floodTask.Result != null, floodGetTask.Result != null, spotlightBit);
+                ClassifyFloodlight(floodTask.Result != null, HasLightRange(floodGetTask.Result), spotlightBit);
             _floodlightReadId = floodReadId;
             bool privacy = privacyTask.Result != null; // camera answered the sleep query
             // A physical white spotlight is advertised by ledCtrl bit 2 in Support —
@@ -1002,6 +1002,10 @@ public sealed class CameraControl : ICameraControl
 
     public Task<XElement?> GetFloodlightTasksAsync(CancellationToken ct) =>
         WithCameraAsync(camera => camera.GetFloodlightTasksAsync(ct: ct, msgId: _floodlightReadId), ct);
+
+    /// <summary>A FloodlightTask that describes a real light: 289 lives in every IPC firmware,
+    /// so only a reply with a brightness range counts as an answer.</summary>
+    internal static bool HasLightRange(XElement? task) => (long?)task?.Element("brightness_max") > 0;
 
     /// <summary>438 wins when answered, else 289. A 289 answer makes a floodlight only without
     /// the spotlight bit, so spotlights keep their Home Assistant entities.</summary>
@@ -3276,8 +3280,9 @@ public sealed class CameraControl : ICameraControl
     /// <summary>Null = not asked yet; false = the firmware has no CheckDownload.</summary>
     private bool? _sdHasCheckDownload;
     private string? _sdPassword;
-    /// <summary>HTTP served neither Playback nor Download, so recordings come over Baichuan.</summary>
-    private bool _sdViaBc;
+    /// <summary>HTTP served neither Playback nor Download: recordings come over Baichuan until then.</summary>
+    private DateTime _sdViaBcUntil;
+    private static readonly TimeSpan SdViaBcFor = TimeSpan.FromMinutes(10);
 
     public void SetSdPassword(string? password) =>
         _sdPassword = string.IsNullOrEmpty(password) ? null : password;
@@ -3288,7 +3293,7 @@ public sealed class CameraControl : ICameraControl
     {
         if (_bcSdFiles.TryGetValue(fileName, out var bcEntry))
             return await OpenBcSdRecordingAsync(fileName, bcEntry, ct, yield).ConfigureAwait(false);
-        if (_sdViaBc && AnyLive() != null)
+        if (DateTime.UtcNow < _sdViaBcUntil && AnyLive() != null)
             return await OpenBcTwinAsync(fileName, ct, yield).ConfigureAwait(false);
         if (_httpApi == null)
             throw new NotSupportedException($"SD-card playback needs the camera's HTTP API ('{CameraName}' has none)");
@@ -3349,8 +3354,9 @@ public sealed class CameraControl : ICameraControl
         if (AnyLive() != null && check is not { Encrypted: true })
         {
             Log.Info($"{CameraName}: HTTP served neither Playback nor Download ({string.Join("; ", errors)}); " +
-                     "fetching SD recordings over Baichuan from now on (enabling RTMP in the Ports tab restores HTTP)");
-            _sdViaBc = true;
+                     $"fetching SD recordings over Baichuan for the next {SdViaBcFor.TotalMinutes:0} min " +
+                     "(on a Video Doorbell, enabling RTMP in the Ports tab makes HTTP serve them)");
+            _sdViaBcUntil = DateTime.UtcNow + SdViaBcFor;
             return await OpenBcTwinAsync(fileName, ct, yield).ConfigureAwait(false);
         }
         throw new ReolinkApiException("the camera served this recording by neither Playback nor Download; " +

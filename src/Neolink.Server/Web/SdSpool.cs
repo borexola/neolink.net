@@ -81,6 +81,22 @@ internal static class SdSpool
     public static bool IsSpooling(string camera, string file) =>
         Entries.TryGetValue(Key(camera, file), out var e) && !e.File.Value.IsCompleted;
 
+    /// <summary>Drops a finished spool and its file now (a copy that already went elsewhere).</summary>
+    public static void Discard(string camera, string file)
+    {
+        if (!Entries.TryGetValue(Key(camera, file), out var e) || !e.File.Value.IsCompletedSuccessfully) return;
+        try
+        {
+            File.Delete(e.File.Value.Result);
+            File.Delete(Path.ChangeExtension(e.File.Value.Result, ".bcm"));
+            Entries.TryRemove(Key(camera, file), out _);
+        }
+        catch
+        {
+            // Being served right now: the sweeper gets it later.
+        }
+    }
+
     /// <summary>The already-spooled temp file for this recording, or null. Touches
     /// the entry so an actively-watched clip isn't evicted mid-scrub.</summary>
     public static async Task<string?> TryGetAsync(string camera, string file, CancellationToken ct)
@@ -228,24 +244,8 @@ internal static class SdSpool
         if (at + 8 > head.Length) return null;
         int moovAt = at + (int)be(head[at..]);
         if (moovAt + 8 > head.Length || !head.Slice(moovAt + 4, 4).SequenceEqual("moov"u8)) return null;
-        long moovEnd = Math.Min(head.Length, moovAt + be(head[moovAt..]));
-        for (int p = moovAt + 8; p + 8 <= moovEnd;)
-        {
-            long size = be(head[p..]);
-            if (size < 8) return null;
-            if (head.Slice(p + 4, 4).SequenceEqual("mvhd"u8))
-            {
-                int version = head[p + 8];
-                if (version == 0 && p + 28 <= head.Length)
-                    return be(head[(p + 24)..]) / (double)Math.Max(1, be(head[(p + 20)..]));
-                if (version == 1 && p + 40 <= head.Length)
-                    return System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(head[(p + 32)..])
-                           / (double)Math.Max(1, be(head[(p + 28)..]));
-                return null;
-            }
-            p += (int)size;
-        }
-        return null;
+        int moovLen = (int)Math.Min(head.Length - moovAt, be(head[moovAt..]));
+        return Media.Mp4Pipe.MoovSeconds(head.Slice(moovAt, moovLen));
     }
 
     /// <summary>Where a complete MP4 index ends inside <paramref name="head"/>: the ftyp box at
@@ -470,10 +470,10 @@ internal static class SdSpool
                 // The file is busy (still being served) — keep the entry, retry later.
             }
         }
-        // Idle per-file gates of recordings no longer spooled go too.
+        // Idle per-file gates of recordings no longer spooled are dropped, never disposed: a
+        // request may have picked one up between the check and the removal.
         foreach (var (key, gate) in Opening)
-            if (!Entries.ContainsKey(key) && gate.CurrentCount == 1 && Opening.TryRemove(key, out var removed))
-                removed.Dispose();
+            if (!Entries.ContainsKey(key) && gate.CurrentCount == 1) Opening.TryRemove(key, out _);
         // Strays (a raw download kept after a failed conversion, a crashed copy) go after an hour.
         try
         {

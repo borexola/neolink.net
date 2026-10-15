@@ -1445,18 +1445,24 @@
                     $"/api/cameras/{cam}/sdcard/download?file={Uri.EscapeDataString(r.File)}&status=1"));
                 if (!res.IsSuccessStatusCode) continue;
                 var j = await res.Content.ReadFromJsonAsync<JsonElement>();
-                if (j.TryGetProperty("complete", out var c) && c.GetBoolean())
-                {
-                    _sdPartial = false;
-                    StateHasChanged();
-                    if (_speed != 1)
-                        await JS.InvokeVoidAsync("neolink.eventPlayer", "ev-video", SdUrl(r), _speed, null, _autoplay, false);
-                    return;
-                }
+                bool complete = j.TryGetProperty("complete", out var c) && c.GetBoolean();
+                bool spooling = j.TryGetProperty("spooling", out var sp) && sp.GetBoolean();
+                // No spool a minute in: the recording streams straight from the camera (nothing to wait for).
+                if (!complete && (spooling || i < 30)) continue;
+                _sdPartial = false;
+                StateHasChanged();
+                // A fresh URL swaps the growing stream for the finished, seekable file.
+                if (complete || _speed != 1)
+                    await JS.InvokeVoidAsync("neolink.eventPlayer", "ev-video", SdPlayerUrl(r), _speed, null, _autoplay, false);
+                return;
             }
             catch { }
         }
     }
+
+    /// <summary>The player's URL for a card recording: once the clip is whole it changes, so the
+    /// player refetches the seekable file instead of keeping the stream it played meanwhile.</summary>
+    private string SdPlayerUrl(ApiSdRecording r) => SdUrl(r) + (_sdPartial ? "" : "&whole=1");
 
     /// <summary>SD-card player: the sub-stream twin is wanted; what the player holds (the
     /// selection or its twin); per-day lists fetched for the other stream.</summary>
@@ -1531,7 +1537,12 @@
         }
         _sdUnlockPassword = "";
         _sdUnlockOpen = false;
-        if ((_sdPlaying ?? _sdSelected) is { } r) _pendingVideoUrl = SdUrl(r);
+        if ((_sdPlaying ?? _sdSelected) is { } r)
+        {
+            _sdPartial = true; // the unlocked fetch starts over
+            _pendingVideoUrl = SdUrl(r);
+            _ = PollSdStatusAsync(r);
+        }
     }
 
     private string SdUrl(ApiSdRecording r, bool dl = false) =>
@@ -2066,7 +2077,7 @@
         if (_sdMode)
         {
             if ((_sdPlaying ?? _sdSelected) is { } sr)
-                await JS.InvokeVoidAsync("neolink.eventPlayer", "ev-video", SdUrl(sr), _sdPartial ? 1 : s, null, _autoplay, false);
+                await JS.InvokeVoidAsync("neolink.eventPlayer", "ev-video", SdPlayerUrl(sr), _sdPartial ? 1 : s, null, _autoplay, false);
         }
         else if (_selected is { HasClip: true } ev)
             await JS.InvokeVoidAsync("neolink.eventPlayer", "ev-video", PlayerUrl(ev), s, PlayerFallback(ev), _autoplay, ev.Ongoing);

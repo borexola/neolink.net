@@ -220,19 +220,39 @@ public sealed class Mp4Pipe
 
     private void ReadMvhd(byte[] moov, int body, int end)
     {
-        if (end - body < 4) return;
-        int version = moov[body];
-        if (version == 0 && end - body >= 20)
+        if (MvhdSeconds(moov.AsSpan(body, end - body)) is { } seconds) DurationSeconds = seconds;
+    }
+
+    /// <summary>Seconds from an mvhd box body (after its 8-byte header); null when unset or odd.</summary>
+    internal static double? MvhdSeconds(ReadOnlySpan<byte> body)
+    {
+        if (body.Length < 4) return null;
+        int version = body[0];
+        if (version == 0 && body.Length >= 20)
         {
-            uint timescale = BinaryPrimitives.ReadUInt32BigEndian(moov.AsSpan(body + 12));
-            uint duration = BinaryPrimitives.ReadUInt32BigEndian(moov.AsSpan(body + 16));
-            if (timescale > 0 && duration != uint.MaxValue) DurationSeconds = duration / (double)timescale;
+            uint timescale = BinaryPrimitives.ReadUInt32BigEndian(body[12..]);
+            uint duration = BinaryPrimitives.ReadUInt32BigEndian(body[16..]);
+            return timescale > 0 && duration != uint.MaxValue ? duration / (double)timescale : null;
         }
-        else if (version == 1 && end - body >= 32)
+        if (version == 1 && body.Length >= 32)
         {
-            uint timescale = BinaryPrimitives.ReadUInt32BigEndian(moov.AsSpan(body + 20));
-            ulong duration = BinaryPrimitives.ReadUInt64BigEndian(moov.AsSpan(body + 24));
-            if (timescale > 0 && duration != ulong.MaxValue) DurationSeconds = duration / (double)timescale;
+            uint timescale = BinaryPrimitives.ReadUInt32BigEndian(body[20..]);
+            ulong duration = BinaryPrimitives.ReadUInt64BigEndian(body[24..]);
+            return timescale > 0 && duration != ulong.MaxValue ? duration / (double)timescale : null;
         }
+        return null;
+    }
+
+    /// <summary>Seconds from the mvhd inside a whole moov box (header included); null when absent.</summary>
+    internal static double? MoovSeconds(ReadOnlySpan<byte> moov)
+    {
+        for (int p = 8; p + 8 <= moov.Length;)
+        {
+            long size = BinaryPrimitives.ReadUInt32BigEndian(moov[p..]);
+            if (size < 8 || p + size > moov.Length) return null;
+            if (moov.Slice(p + 4, 4).SequenceEqual("mvhd"u8)) return MvhdSeconds(moov.Slice(p + 8, (int)size - 8));
+            p += (int)size;
+        }
+        return null;
     }
 }

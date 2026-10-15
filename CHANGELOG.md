@@ -14,7 +14,8 @@ in the README). Paste the matching section below into the GitHub release.
 - **SD-card playback for cameras without an HTTP API (beta),** such as the Lumus, over Baichuan.
 - **Encrypted SD recordings** play after you enter the recording password in the SD view; the password is kept in memory only.
 - **Camera clocks are corrected on connect** when they drift or lose their date, which matters for cameras with no backup clock or blocked NTP.
-- **Battery cameras: the seconds before Neolink connected (beta).** After each event, the camera's own recording is fetched from its SD card, kept beside Neolink's clip and played first. On by default for battery cameras, under the camera's Recording tab. The timeline's new **SD card** switch (off by default, remembered per account, like Events only now) plays that copy for the seconds before Neolink began recording.
+- **Battery cameras: the seconds before Neolink connected (beta).** After each event, the camera's own recording is fetched from its SD card, kept beside Neolink's clip and played first; on by default for battery cameras, under the camera's Recording tab.
+- **Timeline: an SD card switch** plays that camera copy for the seconds before Neolink began recording; off by default and remembered per account, as Events only now is too.
 - **Server settings say why config.json can't be written** (wrong owner or permissions, read-only mount, missing file) instead of silently disabling the camera editor.
 
 ### Fixed

@@ -2294,9 +2294,8 @@ public static class WebApi
         // No-op when MQTT isn't configured; a failed publish heals on the next refresh.
         void NudgeHa(string cameraName) => _ = o.OnCameraChanged?.Invoke(cameraName);
 
-        // SD-card browsing counts as watching: a battery camera is held for a few minutes
-        // and a parked session is reconnected first (the camera itself must be awake).
-        // Wakes a sleeping battery camera for its card and waits up to a minute for it; false = still asleep.
+        // SD-card browsing counts as watching: holds a battery camera for a few minutes and wakes
+        // a parked one, waiting up to a minute for it; false = still asleep.
         async Task<bool> SdHoldAsync(string name, ICameraControl control, CancellationToken ct)
         {
             var cam = cameras.FirstOrDefault(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase));
@@ -3568,9 +3567,10 @@ public static class WebApi
                 var fileName = (file ?? "").Trim();
                 if (fileName.Length is 0 or > 255 || fileName.Any(char.IsControl))
                     return Results.Json(new { error = "provide file: a name from /sdcard/recordings" }, statusCode: 400);
-                // status=1: whether the whole clip is in (a clip still arriving plays at 1x only).
-                if (status == "1") // a recording streamed straight from the camera has no spool: nothing is arriving
-                    return Results.Json(new { complete = !SdSpool.IsSpooling(name, fileName) });
+                // status=1: whether the whole clip is in (a clip still arriving plays at 1x only);
+                // neither flag = no spool yet, or a recording streamed straight from the camera.
+                if (status == "1")
+                    return Results.Json(new { complete = SdSpool.IsComplete(name, fileName), spooling = SdSpool.IsSpooling(name, fileName) });
                 // The player asks why its last attempt failed; a <video> can't read the error body.
                 if (probe == "1")
                     return SdSpool.RecentFailure(name, fileName) is { } why

@@ -26,6 +26,33 @@ public sealed class SdFill
         public (DateTime At, bool Ready, string Why) Card;
         /// <summary>The last camera-clock reading (server minus camera), good for an hour.</summary>
         public (DateTime At, TimeSpan? Offset) Clock;
+        /// <summary>The run of fills holding a battery camera up; see StretchOpen.</summary>
+        public DateTime StretchStart, LastActive;
+        public bool Exhausted, SeenAsleep;
+    }
+
+    private static readonly TimeSpan MaxStretch = TimeSpan.FromMinutes(5);
+
+    /// <summary>A battery camera gives fills 5 min per run; a backlog waits for its next wake
+    /// (or 5 idle minutes), so the camera is never held up for a queue.</summary>
+    private static bool StretchOpen(Cam cam, string camera)
+    {
+        if (!cam.Battery()) return true;
+        lock (cam)
+        {
+            var now = DateTime.UtcNow;
+            if (cam.SeenAsleep || now - cam.LastActive > MaxStretch)
+            {
+                cam.SeenAsleep = cam.Exhausted = false;
+                cam.StretchStart = now;
+            }
+            if (!cam.Exhausted && now - cam.StretchStart > MaxStretch)
+            {
+                cam.Exhausted = true;
+                Log.Info($"{camera}: camera copies have held the camera for {MaxStretch.TotalMinutes:0} min; the rest wait for its next wake");
+            }
+            return !cam.Exhausted;
+        }
     }
 
     /// <summary>Card times are the camera's clock; this is what to add to put them on the server's.</summary>
@@ -108,6 +135,12 @@ public sealed class SdFill
                 // Only while the camera is awake anyway; it is never woken for this.
                 if (!cam.Control.Online)
                 {
+                    lock (cam) cam.SeenAsleep = true;
+                    await Task.Delay(TimeSpan.FromMinutes(1), _shutdown).ConfigureAwait(false);
+                    continue;
+                }
+                if (!StretchOpen(cam, rec.Camera))
+                {
                     await Task.Delay(TimeSpan.FromMinutes(1), _shutdown).ConfigureAwait(false);
                     continue;
                 }
@@ -117,6 +150,7 @@ public sealed class SdFill
                 {
                     if (!await CardReadyAsync(cam, rec.Camera, _shutdown).ConfigureAwait(false)) return;
                     verdict = await TryOnceAsync(cam, rec, _shutdown).ConfigureAwait(false);
+                    lock (cam) cam.LastActive = DateTime.UtcNow;
                 }
                 catch (OperationCanceledException) when (!_shutdown.IsCancellationRequested)
                 {
@@ -178,6 +212,7 @@ public sealed class SdFill
         await using (var dst = FootageVault.Create(tmp))
             await src.CopyToAsync(dst, ct).ConfigureAwait(false);
         File.Move(tmp, Path.Combine(dir, "camera.mp4"), overwrite: true);
+        Web.SdSpool.Discard(rec.Camera, pick.Name); // the event folder holds it now
 
         rec.HasCameraClip = true;
         rec.CameraClipStartUtc = pickStart.ToUniversalTime();

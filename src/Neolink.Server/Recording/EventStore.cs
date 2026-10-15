@@ -281,23 +281,7 @@ public sealed class EventStore
                 var moov = new byte[size];
                 file.Position = at;
                 file.ReadExactly(moov);
-                for (int p = 8; p + 8 <= moov.Length;)
-                {
-                    long inner = be(moov.AsSpan(p));
-                    if (inner < 8) return null;
-                    if (moov.AsSpan(p + 4, 4).SequenceEqual("mvhd"u8))
-                    {
-                        int version = moov[p + 8];
-                        if (version == 0 && p + 28 <= moov.Length)
-                            return be(moov.AsSpan(p + 24)) / (double)Math.Max(1, be(moov.AsSpan(p + 20)));
-                        if (version == 1 && p + 40 <= moov.Length)
-                            return System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(moov.AsSpan(p + 32))
-                                   / (double)Math.Max(1, be(moov.AsSpan(p + 28)));
-                        return null;
-                    }
-                    p += (int)inner;
-                }
-                return null;
+                return Media.Mp4Pipe.MoovSeconds(moov);
             }
             at += size;
         }
