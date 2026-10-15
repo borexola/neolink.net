@@ -16,6 +16,10 @@ matching line.
   TCP connection and then dropped it without answering the login. First make sure
   you're on the latest build (FullAes support). If it still happens, see
   [Cameras that reset the connection at login](#cameras-that-reset-the-connection-at-login).
+- **Only the Sub (or Main) stream gets that error while the other stream plays**:
+  the camera allows one client at a time (NVR-kit models such as the NVC-B12M).
+  The log says so once; set the camera's *Stream* to the one stream you need in
+  the camera editor (or `"stream": "mainStream"` in `config.json`) and restart.
 - **A camera is missing from the wall and the log says "skipping camera …"**: that
   entry could not be loaded (the message names what is wrong), so it was dropped and
   every other camera started. A skipped camera is not shown in the web UI's camera

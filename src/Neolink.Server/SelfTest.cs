@@ -4626,6 +4626,23 @@ public static class SelfTest
             var full = Protocol.OnvifClient.BuildCandidates("http://cam/onvif/device_service");
             Assert(full.Length == 1 && full[0] == "http://cam/onvif/device_service", "full URL verbatim");
 
+            // The camera's own port table leads the probe; an explicit port is still taken at its word.
+            AssertEq(string.Join(",", Protocol.OnvifClient.ProbeOrder(8080, new[] { 8000, 80 })), "8080,8000,80");
+            AssertEq(string.Join(",", Protocol.OnvifClient.ProbeOrder(8000, new[] { 8000, 80 })), "8000,80");
+            AssertEq(string.Join(",", Protocol.OnvifClient.ProbeOrder(null, new[] { 8000, 80 })), "8000,80");
+            using (var reported = new Protocol.OnvifClient("10.1.1.29", "admin", "pw", "t"))
+            {
+                reported.NoteReportedService(8080, true);
+                Assert(reported.Candidates[0] == "http://10.1.1.29:8080/onvif/device_service" && reported.Candidates.Count == 3,
+                    "a reported port is tried first");
+            }
+            using (var pinned = new Protocol.OnvifClient("10.1.1.29:8899", "admin", "pw", "t"))
+            {
+                pinned.NoteReportedService(8080, true);
+                Assert(pinned.Candidates.Count == 1 && pinned.Candidates[0] == "http://10.1.1.29:8899/onvif/device_service",
+                    "an explicit onvif_address port is not overridden");
+            }
+
             // XAddr host normalization: a camera reporting an internal host is reached
             // at the address we actually used, keeping its port and path.
             Assert(Protocol.OnvifClient.NormalizeXAddr("http://127.0.0.1:8000/onvif/media", "http://10.1.1.29:8000/onvif/device_service")

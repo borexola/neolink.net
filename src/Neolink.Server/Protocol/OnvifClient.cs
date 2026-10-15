@@ -60,7 +60,10 @@ public sealed partial class OnvifClient : IDisposable
     private const string Base64Type = "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-message-security-1.0#Base64Binary";
 
     private readonly HttpClient _http;
-    private readonly string[] _candidates;   // device-service URLs to try, in order
+    private volatile string[] _candidates;   // device-service URLs to try, in order
+    private readonly string _bare;           // the address as given, for rebuilding the candidates
+    private readonly IReadOnlyList<int>? _probePorts;
+    private bool _reportedOff;               // the camera's own port table says ONVIF is disabled
     private string _deviceUrl;               // the candidate currently being tried / that worked
     private readonly string _username;
     private readonly string _password;
@@ -128,6 +131,8 @@ public sealed partial class OnvifClient : IDisposable
         // and it is the field the settings UI already offers. Generic cameras only —
         // a Reolink signs in with its own login, as it always has.
         var (bare, user, pass) = generic ? SplitCredentials(address) : (address, null, null);
+        _bare = bare;
+        _probePorts = probePorts;
         _candidates = BuildCandidates(bare, probePorts);
         _deviceUrl = _candidates[0];
         _username = user ?? username;
@@ -235,6 +240,21 @@ public sealed partial class OnvifClient : IDisposable
                 : $"http://{a}:{p}/onvif/device_service")
             .ToArray();
     }
+
+    /// <summary>What the camera's own port table (Baichuan msg 37) says about ONVIF: a bare
+    /// address is probed on that port first; "off" changes the advice when discovery fails.</summary>
+    public void NoteReportedService(int? port, bool? enabled)
+    {
+        _reportedOff = enabled == false;
+        if (port is > 0 and < 65536 && _candidates.Length > 1)
+            _candidates = BuildCandidates(_bare, ProbeOrder(port, _probePorts ?? new[] { 8000, 80 }));
+    }
+
+    /// <summary>The reported port first, then the usual ones, without repeats.</summary>
+    internal static int[] ProbeOrder(int? reported, IReadOnlyList<int> defaults) =>
+        (reported is { } r ? new[] { r } : Array.Empty<int>()).Concat(defaults).Distinct().ToArray();
+
+    internal IReadOnlyList<string> Candidates => _candidates;
 
     public void Dispose() => _http.Dispose();
 
@@ -697,10 +717,15 @@ public sealed partial class OnvifClient : IDisposable
         if (!_failLogged && !_generic)
         {
             _failLogged = true;
-            Log.Info($"{_tag}: ONVIF imaging fallback unavailable — {reason}. If this camera has no Reolink " +
-                     "HTTP API, check that ONVIF is enabled on it (Reolink app > Settings > Network > Advanced > " +
-                     "ONVIF/Port Settings), and if ONVIF is on a non-standard port set 'onvif_address' " +
-                     $"(e.g. \"{HostOf(_deviceUrl)}:8000\"). Retrying in {retryIn.TotalMinutes:0} min.");
+            var tried = _candidates.Length > 1 ? $" (tried {string.Join(", ", _candidates.Select(Authority))})" : "";
+            Log.Info(_reportedOff
+                ? $"{_tag}: ONVIF imaging fallback unavailable — the camera reports ONVIF as disabled. If this " +
+                  "camera has no Reolink HTTP API, enable ONVIF in the PORTS tab of its settings (or Reolink app > " +
+                  $"Settings > Network > Advanced > Port Settings). Retrying in {retryIn.TotalMinutes:0} min."
+                : $"{_tag}: ONVIF imaging fallback unavailable — {reason}{tried}. If this camera has no Reolink " +
+                  "HTTP API, check that ONVIF is enabled on it (the PORTS tab of its settings, or Reolink app > " +
+                  "Settings > Network > Advanced > Port Settings), and if ONVIF is on another port set 'onvif_address' " +
+                  $"(e.g. \"{HostOf(_deviceUrl)}:8000\"). Retrying in {retryIn.TotalMinutes:0} min.");
         }
         else if (!_failLogged)
         {

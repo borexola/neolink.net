@@ -160,6 +160,10 @@ public sealed class CameraService : ILiveCameraSource
     private volatile CancellationTokenSource? _activeStream; // the live session's CTS, to interrupt on suspend
     private bool _sleepHintLogged;
     private bool _scanLogged; // "wake-capture watching" said once
+    /// <summary>The camera resets this second connection at login while a sibling streams: one client at a time.</summary>
+    private bool _oneConnection;
+    private int _loginResets; // consecutive ones while a sibling streams; one or two are a transient
+    private static readonly TimeSpan OneConnectionRetry = TimeSpan.FromMinutes(5);
     // Wake-capture forensics (issue #44). A "self-wake" that is really OUR probe
     // waking the camera looks identical in the log to a real motion wake — both
     // read "camera woke itself". These carry the evidence that tells them apart
@@ -239,6 +243,12 @@ public sealed class CameraService : ILiveCameraSource
     public string Name => _config.Name;
     public StreamKind Kind => _kind;
     public IBcCamera? LiveCamera => _live;
+    /// <summary>Video frames are arriving on this stream's session.</summary>
+    public bool ReceivingMedia { get; private set; }
+    /// <summary>The sibling stream of this camera that is receiving media, by name; null when none (startup wiring).</summary>
+    public Func<string?>? StreamingSibling { get; set; }
+    /// <summary>Told the camera's own service-port table once it is read (startup wiring).</summary>
+    public Action<IReadOnlyList<ServicePortState>>? ServicesAudited { get; set; }
 
     /// <summary>
     /// Exactly ONE service per camera runs the wake-capture probe loop (set during
@@ -834,11 +844,31 @@ public sealed class CameraService : ILiveCameraSource
                     _sleepHintLogged = true;
                     hint = " (a sleeping battery camera is unreachable until it wakes itself — PIR motion or the Reolink app)";
                 }
+                // A login reset while a sibling stream of the same camera is receiving media:
+                // the camera takes one client at a time (NVR-kit models), said once.
+                bool loginReset = !gotFrames && ex is IOException
+                                  && ex.Message.Contains($"waiting for message ID {Bc.BcConstants.MsgIdLogin}");
+                if (loginReset && StreamingSibling?.Invoke() is { } sibling && ++_loginResets >= 3)
+                {
+                    if (!_oneConnection)
+                        Log.Warn($"{Tag}: the camera resets this connection at login while its {sibling} stream is up: " +
+                                 "it allows one client at a time. Set this camera's Stream to the one stream you need " +
+                                 "(camera editor, or \"stream\": \"mainStream\" in config.json) to stop these retries; " +
+                                 $"meanwhile this stream is tried every {OneConnectionRetry.TotalMinutes:0} min");
+                    _oneConnection = true;
+                }
+                else if (!loginReset)
+                {
+                    _oneConnection = false; // any other failure is an ordinary outage again
+                    _loginResets = 0;
+                }
                 // Privacy-mode churn (dark camera closing the connection) is expected
                 // and already announced once as a warning — keep the per-retry line at
                 // Debug so it doesn't flood the log.
                 if (_privacyLoop)
                     Log.Debug($"{Tag}: privacy reconnect: {Log.Flatten(ex)}; retrying in {backoff.TotalSeconds:0}s");
+                else if (_oneConnection)
+                    Log.Debug($"{Tag}: {Log.Flatten(ex)}; one-connection camera, retrying in {OneConnectionRetry.TotalMinutes:0} min");
                 else
                     Log.Error($"{Tag}: {Log.Flatten(ex)}; retrying in {backoff.TotalSeconds:0}s{hint}");
 
@@ -860,7 +890,7 @@ public sealed class CameraService : ILiveCameraSource
 
             try
             {
-                await Task.Delay(backoff, ct).ConfigureAwait(false);
+                await Task.Delay(_oneConnection ? OneConnectionRetry : backoff, ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -1209,6 +1239,9 @@ public sealed class CameraService : ILiveCameraSource
                 if (++frames == 1)
                 {
                     Log.Info($"{Tag}: receiving media");
+                    ReceivingMedia = true;
+                    _oneConnection = false;
+                    _loginResets = 0;
                     // Media flowing = definitely not private. Heals a stale flag
                     // when the wake happened while we were reconnecting (the
                     // "off" push can be missed across a connection swap).
@@ -1320,6 +1353,7 @@ public sealed class CameraService : ILiveCameraSource
         finally
         {
             _live = null;
+            ReceivingMedia = false;
             _activeStream = null;
             _hub.SourceStopped(); // stale GOP must not prime viewers while we're down
             ReportWakeDiag();
@@ -1579,6 +1613,7 @@ public sealed class CameraService : ILiveCameraSource
             _servicesAudited = true;
             Log.Info($"{Tag}: camera services (live): " + string.Join(" · ", ports.Select(s =>
                 $"{s.Service} {s.Port?.ToString() ?? "?"}{(s.Enabled == false ? " OFF" : "")}")));
+            ServicesAudited?.Invoke(ports);
             // Missing block or no enable flag = not provably off — never warn on those.
             bool Off(string svc) => ports.FirstOrDefault(s => s.Service == svc)?.Enabled == false;
             bool httpUsable = !Off("http") || !Off("https");

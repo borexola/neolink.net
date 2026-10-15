@@ -601,6 +601,9 @@ foreach (var cam in config.Cameras)
         if (main) AddStream(StreamKind.Main, "mainStream", alsoRoot: true);
         if (sub) AddStream(StreamKind.Sub, "subStream", alsoRoot: !main);
         if (ext) AddStream(StreamKind.Extern, "externStream", alsoRoot: !main && !sub);
+        // A login reset while a sibling streams means the camera takes one client at a time.
+        foreach (var s in camServices)
+            s.StreamingSibling = () => camServices.FirstOrDefault(o => o != s && o.ReceivingMedia)?.Kind.ToString();
 
         // Control commands (capabilities, PTZ, LED, ...) ride the primary stream's
         // connection — cameras have session limits, so no extra login is spent.
@@ -621,6 +624,13 @@ foreach (var cam in config.Cameras)
             ?? (string.IsNullOrWhiteSpace(cam.Host) ? null : cam.Host);
         var onvif = onvifAddr == null ? null
             : new OnvifClient(onvifAddr, cam.Username, cam.Password, cam.Name);
+        // The camera's own port table leads the ONVIF probe (Reolink's 8000 is only the usual case).
+        if (onvif != null)
+            foreach (var s in camServices)
+                s.ServicesAudited = ports =>
+                {
+                    if (ports.FirstOrDefault(p => p.Service == "onvif") is { } o) onvif.NoteReportedService(o.Port, o.Enabled);
+                };
         var primary = primaryService
             ?? throw new InvalidOperationException($"camera '{cam.Name}' has no streams");
         // All stream services: the camera is online if ANY session is live (a

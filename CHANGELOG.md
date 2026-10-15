@@ -25,6 +25,8 @@ in the README). Paste the matching section below into the GitHub release.
 - **SD recordings the camera damaged while recording now play:** when the browser's decoder gives up on one, the server re-encodes it with the damage concealed, as VLC and the Reolink app do.
 - **Timeline: an event clip cut short by a dropped stream ends where its video ends** instead of freezing on the last frame while the cursor moves on.
 - **Self-wake log lines are one short line;** the probe evidence behind them moved to debug level.
+- **ONVIF fallback probes the port the camera reports** (its own port table) before the usual 8000 and 80, its failure line lists every port tried, and a camera that reports ONVIF off is told to enable it rather than to set an address.
+- **Cameras that allow one connection at a time** (NVR-kit models): when the second stream's login is reset while the first streams, the log says so once and names the Stream setting to use, instead of an error every 15 s.
 
 ## 1.1.1
 
