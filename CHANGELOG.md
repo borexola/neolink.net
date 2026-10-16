@@ -4,39 +4,39 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
-## Unreleased
+## 1.2.0
+
+Cameras without an HTTP API get their settings and SD-card playback over Baichuan, event search moves into a dialog and gets much smarter, and two new camera-side behaviours ship switched off.
 
 ### Added
 
 - **Camera settings over Baichuan (beta):** SD recording on/off, automatic reboot, PTZ guard position and patrols, privacy masks, doorbell chimes (volume, light, silent mode) and smart-detection rule sensitivity, with no camera HTTP API needed.
 - **Cameras without an HTTP API get picture sliders, speaker volume, PTZ presets and AI sensitivity** over Baichuan, in the panel and in Home Assistant.
-- **Object left / object taken events** from the camera's item rules record, notify and reach Home Assistant as their own opt-in event types.
 - **SD-card playback for cameras without an HTTP API (beta),** such as the Lumus, over Baichuan.
 - **Encrypted SD recordings** play after you enter the recording password in the SD view; the password is kept in memory only.
-- **Camera clocks can be corrected from the server** (Server settings, Recording tab, off by default): when on, a camera clock that drifts or loses its date is set on connect, which matters for cameras with no backup clock or blocked NTP.
+- **Object left / object taken events** from the camera's item rules record, notify and reach Home Assistant as their own opt-in event types.
 - **Battery cameras: the seconds before Neolink connected (beta).** After each event, the camera's own recording is fetched from its SD card, kept beside Neolink's clip and played first; off by default, switched on under the camera's Recording tab.
 - **Timeline: an SD card switch** plays that camera copy for the seconds before Neolink began recording; off by default and remembered per account, as Events only now is too.
-- **Server settings say why config.json can't be written** (wrong owner or permissions, read-only mount, missing file) instead of silently disabling the camera editor.
+- **Camera clocks can be corrected from the server** (Server settings, Recording tab, off by default): when on, a camera clock that drifts or loses its date is set as the camera connects, which matters for cameras with no backup clock or blocked NTP.
 - **Reasoning effort for AI descriptions:** the AI settings can send reasoning_effort (none to high) to OpenAI-style servers, and "none" also switches thinking off on Ollama. Not sent by default, since servers that don't know the field reject the request.
+- **Server settings say why config.json can't be written** (wrong owner or permissions, read-only mount, missing file) instead of silently disabling the camera editor.
 
 ### Changed
 
 - **Advanced search replaces the search bar on the Events page:** a dialog takes the question plus a period and the camera, review and threat filters, pre-filled from the list (the last 24 hours when no dates are set). Only events in that period reach the AI model, so searches answer much faster; a wide period gets a warning.
-- **Search reads a one-letter typo of an event-type word as the word** ("ars" finds cars), and a query that already names a type skips the AI translate call.
-- **Search treats visitors, guests and strangers as people** (they used to mean a doorbell ring, which hid person events), and an inflected word matches its other forms ("arriving" finds "arrives").
-- **With a model configured, search reads every described event in the period,** with its camera, time and detection tags, instead of only the events whose tag matched a word in the question. A person the camera tagged as motion is found by its description.
+- **Search understands more:** a one-letter typo of an event-type word reads as the word ("ars" finds cars), visitors, guests and strangers are people, and an inflected word matches its other forms ("arriving" finds "arrives"). With a model configured, every described event in the period is read with its camera, time and detection tags, so a person the camera tagged as motion is still found by its description.
+- **Home Assistant gains entities on existing cameras:** Object left and Object taken sensors on every camera, and Volume, picture, PTZ preset and AI sensitivity controls on cameras without an HTTP API. Nothing is renamed or removed.
 
 ### Fixed
-
-- **Events page on phones:** the Events/Live and Server/SD card switches no longer collapse out of the toolbar, and filter chips stay on one line.
 
 - **Floodlight brightness and auto mode on cameras that never showed them** (the Duo Floodlight, and spotlights without an HTTP API such as the Lumus): Neolink asked with a message id these firmwares don't have.
 - **SD recordings load much faster:** they are fetched with the camera's uncapped Playback command instead of Download, which the camera caps at 1 MB/s. Clips the camera won't serve over HTTP (a Video Doorbell with RTMP off) come over Baichuan instead.
 - **SD recordings the camera damaged while recording now play:** when the browser's decoder gives up on one, the server re-encodes it with the damage concealed, as VLC and the Reolink app do.
 - **Timeline: an event clip cut short by a dropped stream ends where its video ends** instead of freezing on the last frame while the cursor moves on.
-- **Self-wake log lines are one short line;** the probe evidence behind them moved to debug level.
-- **ONVIF fallback probes the port the camera reports** (its own port table) before the usual 8000 and 80, its failure line lists every port tried, and a camera that reports ONVIF off is told to enable it rather than to set an address.
+- **Events page on phones:** the Events/Live and Server/SD card switches no longer collapse out of the toolbar, and filter chips stay on one line.
 - **Cameras that allow one connection at a time** (NVR-kit models): when the second stream's login is reset while the first streams, the log says so once and names the Stream setting to use, instead of an error every 15 s. Retries back off from 15 s to 5 min and happen at once when the other stream stops.
+- **ONVIF fallback probes the port the camera reports** (its own port table) before the usual 8000 and 80, its failure line lists every port tried, and a camera that reports ONVIF off is told to enable it rather than to set an address.
+- **Self-wake log lines are one short line;** the probe evidence behind them moved to debug level.
 
 ## 1.1.1
 
