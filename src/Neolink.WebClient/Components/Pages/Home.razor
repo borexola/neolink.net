@@ -1990,6 +1990,32 @@
                         </div>
                     }
 
+                    @if (_settingsTab == "recording" && _clock != null)
+                    {
+                        @* Opt-in: nothing is written to a camera's clock unless asked. *@
+                        <div class="campanel-section">
+                            <div class="campanel-section-title">@UiIcon.Render("clock", 13) @T["CAMERA CLOCKS"]</div>
+                            <div class="notice small">
+                                @T["Some cameras have no backup clock or cannot reach NTP, so their SD recordings and overlays carry the wrong time. When on, each camera's clock is read as it connects (at most once every 12 hours) and set from this server's when it is more than 10 seconds off or has lost its date; the camera's own time zone and daylight saving are kept. A camera that is already connected is checked at its next connection."]
+                            </div>
+                            <div class="control-row">
+                                <span>@T["Correct camera clocks"]</span>
+                                <button class="chip @(_clock.Enabled ? "" : "chip-off")" disabled="@_clockBusy"
+                                        title="@(_clock.Enabled ? T["Camera clocks are set from this server (click to stop)"] : T["Camera clocks are left alone (click to correct them from this server)"])"
+                                        @onclick="() => SaveClockAsync(!_clock.Enabled)">
+                                    @(_clock.Enabled ? T["on"] : T["off"])</button>
+                            </div>
+                            @if (_clock.Enabled)
+                            {
+                                <div class="notice warn small">@T["Make sure this server's own clock and time zone are right: every camera will follow them."]</div>
+                            }
+                            @if (_clockStatus != null)
+                            {
+                                <div class="notice small error">@_clockStatus</div>
+                            }
+                        </div>
+                    }
+
                     @if (_settingsTab == "recording" && _adminConfig != null && !_adminHasRecording)
                     {
                         <div class="campanel-section">
@@ -2516,6 +2542,20 @@
                                     <button class="chip @(_ai.NoThink ? "" : "chip-off")"
                                             title="@T["Asks reasoning models to answer directly (the /no_think convention), much faster on local hardware. Think-blocks are stripped from answers either way."]"
                                             @onclick="() => _ai.NoThink = !_ai.NoThink">@(_ai.NoThink ? T["on"] : T["off"])</button></div>
+                                @if (_ai.Provider != "anthropic")
+                                {
+                                    @* Opt-in: servers that don't know the field answer 400. *@
+                                    <div class="control-row"><span>@T["Reasoning effort"]</span>
+                                        <select class="event-filter" @bind="_ai.ReasoningEffort"
+                                                title="@T["Sent as reasoning_effort to OpenAI-style servers (llama.cpp, LM Studio, OpenAI reasoning models); 'none' also switches thinking off on Ollama. A server that does not know the field rejects every request, so leave it unsent unless yours accepts it."]">
+                                            <option value="">@T["not sent"]</option>
+                                            <option value="none">@T["none"]</option>
+                                            <option value="minimal">@T["minimal"]</option>
+                                            <option value="low">@T["low"]</option>
+                                            <option value="medium">@T["medium"]</option>
+                                            <option value="high">@T["high"]</option>
+                                        </select></div>
+                                }
                                 <div class="control-row"><span>@T["Answer timeout (seconds)"]</span>
                                     <input class="ret-input" type="number" min="5" max="600"
                                            title="@T["How long one description may take before it is abandoned; local models on modest hardware can genuinely need minutes."]"
@@ -3611,6 +3651,7 @@
         anthropicApiKey = string.IsNullOrEmpty(_aiAnthropicKey) ? null : _aiAnthropicKey,
         prompt = _ai.Prompt,
         noThink = _ai.NoThink,
+        reasoningEffort = _ai.ReasoningEffort,
         sampleEverySeconds = _ai.SampleEverySeconds,
         maxFrames = _ai.MaxFrames,
         timeoutSeconds = _ai.TimeoutSeconds,
@@ -3664,6 +3705,9 @@
 
     private ApiDetect? _detect;
     private string? _detectStatus;
+    private ApiCameraClock? _clock;
+    private bool _clockBusy;
+    private string? _clockStatus;
     private bool _detectBusy;
 
     /// <summary>
@@ -3751,6 +3795,25 @@
         bool waiting = _detect is { Enabled: true } d && d.Assets.State != "ready";
         if (_detect != null && !watching && !waiting) return;
         await RefreshDetectAsync();
+    }
+
+    private async Task SaveClockAsync(bool enabled)
+    {
+        if (_clock == null || _clockBusy) return;
+        _clockBusy = true;
+        _clockStatus = null;
+        try
+        {
+            var req = ApiRequest(HttpMethod.Put, "/api/admin/camera-clock");
+            req.Content = JsonContent.Create(new { enabled });
+            using var res = await Http.SendAsync(req);
+            if (res.IsSuccessStatusCode)
+                _clock = await res.Content.ReadFromJsonAsync<ApiCameraClock>() ?? _clock;
+            else
+                _clockStatus = T.F("Could not save: HTTP {0}", (int)res.StatusCode);
+        }
+        catch (Exception ex) { _clockStatus = T.F("Could not save: {0}", ex.Message); }
+        finally { _clockBusy = false; }
     }
 
     private async Task SaveDetectAsync(Action<ApiDetect> change)
@@ -5147,6 +5210,7 @@
         // no longer an admin, and a stale arm prompt must never reopen primed.
         _emg = null; _emgStatus = null; _emgArmConfirm = false; _emgConfig = false; _emgAdvanced = false;
         _detectStatus = null;
+        _clock = null; _clockStatus = null;
         // Non-admins (and open installs) get the Connection tab; the admin-only
         // tabs and their loads are skipped entirely.
         if (!_authAdmin)
@@ -5166,6 +5230,13 @@
             }
         }
         catch { /* notifications section just stays hidden */ }
+        try
+        {
+            using var cres = await Http.SendAsync(ApiRequest(HttpMethod.Get, "/api/admin/camera-clock"));
+            if (cres.IsSuccessStatusCode)
+                _clock = await cres.Content.ReadFromJsonAsync<ApiCameraClock>();
+        }
+        catch { /* the camera clocks section just stays hidden */ }
         try
         {
             using var ares = await Http.SendAsync(ApiRequest(HttpMethod.Get, "/api/admin/ai"));

@@ -379,6 +379,8 @@ var emergency = new Neolink.Notifications.EmergencyMode(emergencyStore,
 // Live object boxes (preview): the detector itself runs in the browser, so the
 // server only stores the switch and keeps the files the page loads.
 var detectStore = new Neolink.Detect.DetectStore(stateDir);
+var cameraClockStore = new Neolink.Streaming.CameraClockStore(stateDir);
+Neolink.Streaming.CameraClock.Store = cameraClockStore;
 var detectAssets = new Neolink.Detect.DetectAssets(stateDir);
 // Housekeeping, on the hour like the recordings' own: a feature switched off
 // should not go on holding 35 MB of state dir. Not done the moment it is switched
@@ -603,7 +605,11 @@ foreach (var cam in config.Cameras)
         if (ext) AddStream(StreamKind.Extern, "externStream", alsoRoot: !main && !sub);
         // A login reset while a sibling streams means the camera takes one client at a time.
         foreach (var s in camServices)
-            s.StreamingSibling = () => camServices.FirstOrDefault(o => o != s && o.ReceivingMedia)?.Kind.ToString();
+        {
+            var self = s;
+            self.StreamingSibling = () => camServices.FirstOrDefault(o => o != self && o.ReceivingMedia)?.Kind.ToString();
+            self.MediaStopped = () => { foreach (var o in camServices) if (o != self) o.SiblingStopped(); };
+        }
 
         // Control commands (capabilities, PTZ, LED, ...) ride the primary stream's
         // connection — cameras have session limits, so no extra login is spent.
@@ -1153,6 +1159,7 @@ if (config.WebPort > 0)
         Ai = aiStore,
         Emergency = emergency,
         Detect = (detectStore, detectAssets),
+        CameraClock = cameraClockStore,
         AiPending = aiDescriber != null ? aiDescriber.IsPending : null,
         Logs = logBuffer,
         // Graceful shutdown; docker's restart policy (systemd, or the HA

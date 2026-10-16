@@ -1505,5 +1505,17 @@
  "PERIOD": "OKRES",
  "Search the rolling last 24 hours": "Szukaj w ostatnich 24 godzinach",
  "Searching…": "Szukanie…",
- "{0} days is a wide period; every event in it is read. Narrow it for a faster answer.": "{0} dni to szeroki okres; czytane jest każde zdarzenie. Zawęź go, aby uzyskać szybszą odpowiedź."
+ "{0} days is a wide period; every event in it is read. Narrow it for a faster answer.": "{0} dni to szeroki okres; czytane jest każde zdarzenie. Zawęź go, aby uzyskać szybszą odpowiedź.",
+ "CAMERA CLOCKS": "ZEGARY KAMER",
+ "Correct camera clocks": "Koryguj zegary kamer",
+ "Camera clocks are set from this server (click to stop)": "Zegary kamer są ustawiane z tego serwera (kliknij, aby przestać)",
+ "Camera clocks are left alone (click to correct them from this server)": "Zegary kamer pozostają nietknięte (kliknij, aby korygować je z tego serwera)",
+ "Make sure this server's own clock and time zone are right: every camera will follow them.": "Upewnij się, że zegar i strefa czasowa tego serwera są poprawne: każda kamera będzie je stosować.",
+ "Some cameras have no backup clock or cannot reach NTP, so their SD recordings and overlays carry the wrong time. When on, each camera's clock is read as it connects (at most once every 12 hours) and set from this server's when it is more than 10 seconds off or has lost its date; the camera's own time zone and daylight saving are kept. A camera that is already connected is checked at its next connection.": "Niektóre kamery nie mają zegara podtrzymywanego ani dostępu do NTP, więc ich nagrania na SD i nakładki mają zły czas. Gdy włączone, zegar każdej kamery jest odczytywany przy łączeniu (najwyżej raz na 12 godzin) i ustawiany według tego serwera, gdy różni się o ponad 10 sekund lub utracił datę; strefa czasowa i czas letni kamery pozostają bez zmian. Kamera już połączona jest sprawdzana przy następnym połączeniu.",
+ "Reasoning effort": "Wysiłek rozumowania",
+ "not sent": "nie wysyłane",
+ "none": "brak",
+ "minimal": "minimalny",
+ "medium": "średni",
+ "Sent as reasoning_effort to OpenAI-style servers (llama.cpp, LM Studio, OpenAI reasoning models); 'none' also switches thinking off on Ollama. A server that does not know the field rejects every request, so leave it unsent unless yours accepts it.": "Wysyłane jako reasoning_effort do serwerów w stylu OpenAI (llama.cpp, LM Studio, modele rozumujące OpenAI); 'brak' wyłącza też myślenie w Ollama. Serwer, który nie zna tego pola, odrzuca każde żądanie, więc nie wysyłaj go, chyba że Twój je akceptuje."
 }

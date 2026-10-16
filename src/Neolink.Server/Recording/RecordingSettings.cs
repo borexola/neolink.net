@@ -55,7 +55,7 @@ public sealed record CameraRecordingSettings(bool Events, bool Continuous, List<
     // the endpoint and format).
     bool WebhookEvents = false,
     // Fetch the camera's own recording of each event from its SD card (the seconds
-    // before Neolink connected). Null = on for battery cameras, off otherwise.
+    // before Neolink connected). Null = off.
     bool? SdFill = null)
 {
     /// <summary>Known detection labels (what the UI offers as event-type filters).</summary>

@@ -1505,5 +1505,17 @@
  "PERIOD": "PERIODE",
  "Search the rolling last 24 hours": "Zoeken in de afgelopen 24 uur",
  "Searching…": "Zoeken…",
- "{0} days is a wide period; every event in it is read. Narrow it for a faster answer.": "{0} dagen is een ruime periode; elke gebeurtenis erin wordt gelezen. Verklein hem voor een sneller antwoord."
+ "{0} days is a wide period; every event in it is read. Narrow it for a faster answer.": "{0} dagen is een ruime periode; elke gebeurtenis erin wordt gelezen. Verklein hem voor een sneller antwoord.",
+ "CAMERA CLOCKS": "CAMERAKLOKKEN",
+ "Correct camera clocks": "Cameraklokken corrigeren",
+ "Camera clocks are set from this server (click to stop)": "Cameraklokken worden vanaf deze server gezet (klik om te stoppen)",
+ "Camera clocks are left alone (click to correct them from this server)": "Cameraklokken blijven ongemoeid (klik om ze vanaf deze server te corrigeren)",
+ "Make sure this server's own clock and time zone are right: every camera will follow them.": "Zorg dat de klok en tijdzone van deze server kloppen: elke camera volgt ze.",
+ "Some cameras have no backup clock or cannot reach NTP, so their SD recordings and overlays carry the wrong time. When on, each camera's clock is read as it connects (at most once every 12 hours) and set from this server's when it is more than 10 seconds off or has lost its date; the camera's own time zone and daylight saving are kept. A camera that is already connected is checked at its next connection.": "Sommige camera's hebben geen reserveklok of bereiken NTP niet, waardoor hun SD-opnames en overlays de verkeerde tijd dragen. Indien aan wordt de klok van elke camera gelezen wanneer hij verbindt (hoogstens eens per 12 uur) en op die van deze server gezet zodra hij meer dan 10 seconden afwijkt of zijn datum kwijt is; de tijdzone en zomertijd van de camera blijven behouden. Een camera die al verbonden is, wordt bij zijn volgende verbinding gecontroleerd.",
+ "Reasoning effort": "Redeneerinspanning",
+ "not sent": "niet verzonden",
+ "none": "geen",
+ "minimal": "minimaal",
+ "medium": "gemiddeld",
+ "Sent as reasoning_effort to OpenAI-style servers (llama.cpp, LM Studio, OpenAI reasoning models); 'none' also switches thinking off on Ollama. A server that does not know the field rejects every request, so leave it unsent unless yours accepts it.": "Verzonden als reasoning_effort naar OpenAI-achtige servers (llama.cpp, LM Studio, OpenAI-redeneermodellen); 'geen' zet ook het denken uit op Ollama. Een server die het veld niet kent, weigert elk verzoek; laat het dus niet verzonden tenzij de jouwe het accepteert."
 }

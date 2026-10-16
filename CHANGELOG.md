@@ -13,10 +13,11 @@ in the README). Paste the matching section below into the GitHub release.
 - **Object left / object taken events** from the camera's item rules record, notify and reach Home Assistant as their own opt-in event types.
 - **SD-card playback for cameras without an HTTP API (beta),** such as the Lumus, over Baichuan.
 - **Encrypted SD recordings** play after you enter the recording password in the SD view; the password is kept in memory only.
-- **Camera clocks are corrected on connect** when they drift or lose their date, which matters for cameras with no backup clock or blocked NTP.
-- **Battery cameras: the seconds before Neolink connected (beta).** After each event, the camera's own recording is fetched from its SD card, kept beside Neolink's clip and played first; on by default for battery cameras, under the camera's Recording tab.
+- **Camera clocks can be corrected from the server** (Server settings, Recording tab, off by default): when on, a camera clock that drifts or loses its date is set on connect, which matters for cameras with no backup clock or blocked NTP.
+- **Battery cameras: the seconds before Neolink connected (beta).** After each event, the camera's own recording is fetched from its SD card, kept beside Neolink's clip and played first; off by default, switched on under the camera's Recording tab.
 - **Timeline: an SD card switch** plays that camera copy for the seconds before Neolink began recording; off by default and remembered per account, as Events only now is too.
 - **Server settings say why config.json can't be written** (wrong owner or permissions, read-only mount, missing file) instead of silently disabling the camera editor.
+- **Reasoning effort for AI descriptions:** the AI settings can send reasoning_effort (none to high) to OpenAI-style servers, and "none" also switches thinking off on Ollama. Not sent by default, since servers that don't know the field reject the request.
 
 ### Changed
 
@@ -35,7 +36,7 @@ in the README). Paste the matching section below into the GitHub release.
 - **Timeline: an event clip cut short by a dropped stream ends where its video ends** instead of freezing on the last frame while the cursor moves on.
 - **Self-wake log lines are one short line;** the probe evidence behind them moved to debug level.
 - **ONVIF fallback probes the port the camera reports** (its own port table) before the usual 8000 and 80, its failure line lists every port tried, and a camera that reports ONVIF off is told to enable it rather than to set an address.
-- **Cameras that allow one connection at a time** (NVR-kit models): when the second stream's login is reset while the first streams, the log says so once and names the Stream setting to use, instead of an error every 15 s.
+- **Cameras that allow one connection at a time** (NVR-kit models): when the second stream's login is reset while the first streams, the log says so once and names the Stream setting to use, instead of an error every 15 s. Retries back off from 15 s to 5 min and happen at once when the other stream stops.
 
 ## 1.1.1
 

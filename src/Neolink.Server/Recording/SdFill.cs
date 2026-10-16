@@ -106,13 +106,8 @@ public sealed class SdFill
         lock (_cams) _cams[camera] = new Cam { Control = control, Battery = battery, Hold = hold };
     }
 
-    /// <summary>The per-camera switch; unset means on for battery cameras only.</summary>
-    public bool Enabled(string camera)
-    {
-        Cam? cam;
-        lock (_cams) _cams.TryGetValue(camera, out cam);
-        return _settings.Get(camera).SdFill ?? (cam != null && cam.Battery());
-    }
+    /// <summary>The per-camera switch; off until the camera's Recording tab turns it on.</summary>
+    public bool Enabled(string camera) => _settings.Get(camera).SdFill ?? false;
 
     /// <summary>Detached: the event pump never waits for the card.</summary>
     public void OnEventClosed(EventRecord rec)

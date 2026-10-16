@@ -206,9 +206,9 @@ address. Repeat the power-cycle, or switch to A1.
 - **The camera's own SD card has the full event**: it records locally the
   instant it wakes, pre-roll included. Neolink fetches that copy over
   Baichuan once the event ends, while the camera is still awake (it is never
-  woken for it), keeps it beside its own clip and plays it first. On by
-  default for battery cameras, under the camera's Recording tab; needs a
-  mounted card with SD recording on.
+  woken for it), keeps it beside its own clip and plays it first. Off by
+  default; switch it on under the camera's Recording tab. Needs a mounted
+  card with SD recording on.
   The timeline's **SD card** switch (beta, off by default, remembered per
   account) plays that copy for the seconds before Neolink's own recording
   began; Neolink's footage always wins where both exist.

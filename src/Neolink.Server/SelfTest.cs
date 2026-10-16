@@ -1024,6 +1024,16 @@ public static class SelfTest
             Assert(!Streaming.CameraControl.SupportFlag(null, "ptzMode"), "no Support xml = unsupported");
         });
 
+        Test("one-connection camera: retries back off to 5 min", () =>
+        {
+            Assert(Streaming.CameraService.OneConnectionDelay(3) == TimeSpan.FromSeconds(15), "first wait is 15 s");
+            Assert(Streaming.CameraService.OneConnectionDelay(4) == TimeSpan.FromSeconds(30), "then 30 s");
+            Assert(Streaming.CameraService.OneConnectionDelay(5) == TimeSpan.FromSeconds(60), "then 1 min");
+            Assert(Streaming.CameraService.OneConnectionDelay(8) == TimeSpan.FromMinutes(5), "capped at 5 min");
+            Assert(Streaming.CameraService.OneConnectionDelay(40) == TimeSpan.FromMinutes(5), "never overflows");
+            Assert(Streaming.CameraService.OneConnectionDelay(1) == TimeSpan.FromSeconds(15), "below the threshold stays at 15 s");
+        });
+
         Test("floodlight task id: 438 when answered, else the firmware's 289", () =>
         {
             // Every analysed IPC firmware defines GET_FLOODLIGHT_TASK as 289; none has 438.
@@ -1168,6 +1178,24 @@ public static class SelfTest
                    && files[0].Start == new DateTime(2026, 10, 9, 10, 15, 0), "entry, 64-bit size and times parse");
             var dl = BcCameraCommands.BuildDownload(files[0].Raw);
             AssertEq((string?)dl.Element("FileInfo")?.Element("name") ?? "", "RecM02_a.mp4");
+        });
+
+        Test("camera clock: the opt-in persists and defaults to off", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                Assert(!new Streaming.CameraClockStore(dir).Enabled, "off until switched on");
+                new Streaming.CameraClockStore(dir).Enabled = true;
+                Assert(new Streaming.CameraClockStore(dir).Enabled, "the switch survives a restart");
+                File.WriteAllText(Path.Combine(dir, "camera-clock.json"), "{garbage");
+                Assert(!new Streaming.CameraClockStore(dir).Enabled, "an unreadable file means off");
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
         });
 
         Test("camera clock: drift is fixed, zone and DST offsets are kept", () =>
@@ -2741,6 +2769,10 @@ public static class SelfTest
                     Recording.EventSearch.Parse("people", cams, DateTime.Now), store, 2000);
                 Assert(hits.Any(h => h.Id == old.Id),
                     "an undated search reaches past the newest thousand events");
+                hits = Recording.EventSearch.Execute(
+                    Recording.EventSearch.Parse("red driveway", cams, DateTime.Now), store);
+                Assert(hits.Count == 1 && hits[0].Id == b.Id,
+                    "keyword scoring skips events with no description instead of failing on them");
 
                 var oldRed = store.Create("TestCam", DateTime.UtcNow.AddDays(-35), new[] { "person" });
                 oldRed.AiDescription = "A person in a red coat crosses the lawn.";

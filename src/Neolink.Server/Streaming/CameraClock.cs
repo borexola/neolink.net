@@ -12,10 +12,13 @@ internal static class CameraClock
 {
     private static readonly ConcurrentDictionary<string, DateTime> LastCheck = new(StringComparer.OrdinalIgnoreCase);
     private static readonly TimeSpan Interval = TimeSpan.FromHours(12);
+    /// <summary>The server-wide opt-in; nothing is written while it is unset or off.</summary>
+    public static CameraClockStore? Store { get; set; }
 
     /// <summary>Checks the camera's clock at most every 12 h per camera and corrects it when it is off.</summary>
     public static async Task MaybeSyncAsync(string camera, IBcCamera session, CancellationToken ct)
     {
+        if (Store?.Enabled != true) return;
         var now = DateTime.UtcNow;
         if (LastCheck.TryGetValue(camera, out var last) && now - last < Interval) return;
         LastCheck[camera] = now; // claims the round for the camera's other streams

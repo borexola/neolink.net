@@ -1505,5 +1505,17 @@
  "PERIOD": "PÉRIODE",
  "Search the rolling last 24 hours": "Chercher dans les dernières 24 heures",
  "Searching…": "Recherche…",
- "{0} days is a wide period; every event in it is read. Narrow it for a faster answer.": "{0} jours, c'est une période large ; chaque événement est lu. Réduisez-la pour une réponse plus rapide."
+ "{0} days is a wide period; every event in it is read. Narrow it for a faster answer.": "{0} jours, c'est une période large ; chaque événement est lu. Réduisez-la pour une réponse plus rapide.",
+ "CAMERA CLOCKS": "HORLOGES DES CAMÉRAS",
+ "Correct camera clocks": "Corriger les horloges des caméras",
+ "Camera clocks are set from this server (click to stop)": "Les horloges des caméras sont réglées depuis ce serveur (cliquer pour arrêter)",
+ "Camera clocks are left alone (click to correct them from this server)": "Les horloges des caméras ne sont pas touchées (cliquer pour les corriger depuis ce serveur)",
+ "Make sure this server's own clock and time zone are right: every camera will follow them.": "Vérifiez que l'horloge et le fuseau de ce serveur sont justes : toutes les caméras les suivront.",
+ "Some cameras have no backup clock or cannot reach NTP, so their SD recordings and overlays carry the wrong time. When on, each camera's clock is read as it connects (at most once every 12 hours) and set from this server's when it is more than 10 seconds off or has lost its date; the camera's own time zone and daylight saving are kept. A camera that is already connected is checked at its next connection.": "Certaines caméras n'ont pas d'horloge de secours ou n'atteignent pas NTP, si bien que leurs enregistrements SD et incrustations portent une heure fausse. Si activé, l'horloge de chaque caméra est lue lorsqu'elle se connecte (au plus une fois toutes les 12 heures), puis réglée sur celle de ce serveur dès qu'elle s'écarte de plus de 10 secondes ou a perdu sa date ; le fuseau et l'heure d'été de la caméra sont conservés. Une caméra déjà connectée est vérifiée à sa prochaine connexion.",
+ "Reasoning effort": "Effort de raisonnement",
+ "not sent": "non envoyé",
+ "none": "aucun",
+ "minimal": "minimal",
+ "medium": "moyen",
+ "Sent as reasoning_effort to OpenAI-style servers (llama.cpp, LM Studio, OpenAI reasoning models); 'none' also switches thinking off on Ollama. A server that does not know the field rejects every request, so leave it unsent unless yours accepts it.": "Envoyé comme reasoning_effort aux serveurs de type OpenAI (llama.cpp, LM Studio, modèles de raisonnement OpenAI) ; 'aucun' désactive aussi la réflexion sur Ollama. Un serveur qui ne connaît pas le champ rejette toutes les requêtes : ne l'envoyez que si le vôtre l'accepte."
 }

@@ -1025,7 +1025,7 @@ public sealed class AiDescriber
             // — no interleaving possible, so the per-frame labels join the text as
             // a numbered list instead (in the same order as the images array).
             var labels = frames.Where(f => f.Label != null).Select(f => f.Label!).ToList();
-            payload = new Dictionary<string, object>
+            var ollama = new Dictionary<string, object>
             {
                 ["model"] = cfg.OllamaModel.Trim(),
                 ["messages"] = new object[]
@@ -1046,6 +1046,9 @@ public sealed class AiDescriber
                 // request burns the whole timeout.
                 ["options"] = new { temperature = 0.2, num_predict = 1024 },
             };
+            // Ollama's own switch for thinking models (Qwen3, DeepSeek-R1); older servers ignore it.
+            if (cfg.ReasoningEffort == "none") ollama["think"] = false;
+            payload = ollama;
         }
         else
         {
@@ -1065,7 +1068,7 @@ public sealed class AiDescriber
                 });
             }
             // Only fields every OpenAI-compatible server understands — vendor
-            // extensions get 400s from strict ones.
+            // extensions get 400s from strict ones. reasoning_effort is opt-in for that reason.
             var oai = new Dictionary<string, object>
             {
                 ["messages"] = new object[]
@@ -1081,6 +1084,8 @@ public sealed class AiDescriber
             };
             if (!string.IsNullOrWhiteSpace(cfg.Model))
                 oai["model"] = cfg.Model.Trim();
+            if (cfg.ReasoningEffort.Length > 0)
+                oai["reasoning_effort"] = cfg.ReasoningEffort;
             payload = oai;
         }
 

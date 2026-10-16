@@ -144,6 +144,8 @@ public sealed class WebApiOptions
     /// <summary>Live object boxes (preview): the settings store and the files the
     /// browser's detector loads. Null when the feature is not wired.</summary>
     public (Neolink.Detect.DetectStore Store, Neolink.Detect.DetectAssets Assets)? Detect { get; init; }
+    /// <summary>The opt-in for correcting camera clocks from this server.</summary>
+    public Neolink.Streaming.CameraClockStore? CameraClock { get; init; }
     /// <summary>Is this event's AI description queued or in flight right now?
     /// (AiDescriber.IsPending — lets the UI say "describing…" instead of nothing.)</summary>
     public Func<string, bool>? AiPending { get; init; }
@@ -277,6 +279,7 @@ public static class WebApi
     /// with nulls or omits the whole map.</summary>
     private sealed record EmergencyRequest(bool? Enabled, bool? Email, bool? Webhook,
         bool? Siren, bool? Lights, Dictionary<string, EmergencyCameraRequest>? Cameras);
+    private sealed record CameraClockRequest(bool Enabled);
     /// <summary>Live object boxes: null = unchanged. Groups is set whenever present,
     /// so an empty list means "back to the default set".</summary>
     private sealed record DetectRequest(bool? Enabled, int? MinConfidence, int? Fps, List<string>? Groups,
@@ -300,7 +303,7 @@ public static class WebApi
         string? OllamaEndpoint, string? OllamaModel,
         string? AnthropicEndpoint, string? AnthropicModel, string? AnthropicApiKey,
         string? Prompt, bool? NoThink, int? MaxFrames, int? TimeoutSeconds,
-        int? SampleEverySeconds = null);
+        int? SampleEverySeconds = null, string? ReasoningEffort = null);
     private sealed record CredentialsRequest(string? Username, string? Password, string? Language = null);
     private sealed record LanguageRequest(string? Language);
     /// <summary>Partial like the AI request: null fields keep their stored value.</summary>
@@ -1730,6 +1733,7 @@ public static class WebApi
                     prompt = s.Prompt,
                     defaultPrompt = Neolink.Ai.AiSettings.DefaultPrompt,
                     noThink = s.NoThink,
+                    reasoningEffort = s.ReasoningEffort,
                     sampleEverySeconds = s.SampleEverySeconds,
                     maxFrames = s.MaxFrames,
                     timeoutSeconds = s.TimeoutSeconds,
@@ -1759,6 +1763,7 @@ public static class WebApi
                     AnthropicModel = (req.AnthropicModel ?? cur.AnthropicModel).Trim(),
                     Prompt = req.Prompt ?? cur.Prompt,
                     NoThink = req.NoThink ?? cur.NoThink,
+                    ReasoningEffort = (req.ReasoningEffort ?? cur.ReasoningEffort).Trim().ToLowerInvariant(),
                     SampleEverySeconds = Math.Clamp(req.SampleEverySeconds ?? cur.SampleEverySeconds, 1, 600),
                     MaxFrames = Math.Max(1, req.MaxFrames ?? cur.MaxFrames),
                     TimeoutSeconds = Math.Clamp(req.TimeoutSeconds ?? cur.TimeoutSeconds, 5, 600),
@@ -1889,6 +1894,21 @@ public static class WebApi
                     return next;
                 }, CancellationToken.None);
                 return Results.Json(ShapeEmergency());
+            });
+        }
+
+        // ------------------------------------------------------- camera clocks (opt-in)
+
+        if (o.CameraClock is { } clockStore)
+        {
+            app.MapGet("/api/admin/camera-clock", (HttpContext ctx) =>
+                AdminOnly(ctx) ?? Results.Json(new { enabled = clockStore.Enabled }));
+            app.MapPut("/api/admin/camera-clock", (CameraClockRequest req, HttpContext ctx) =>
+            {
+                if (AdminOnly(ctx) is { } denied) return denied;
+                clockStore.Enabled = req.Enabled;
+                Log.Info($"Camera clock correction switched {(req.Enabled ? "on" : "off")}");
+                return Results.Json(new { enabled = clockStore.Enabled });
             });
         }
 
@@ -4126,10 +4146,10 @@ public static class WebApi
                     // The passive wake tap that replaces 24/7 on those cameras —
                     // self-wake footage lands on the timeline at zero battery cost.
                     wakeTimeline = s.WakeTimeline,
-                    // The camera's own copy of each event from its SD card: on by
-                    // default for battery cameras; the panel offers it to those only.
+                    // The camera's own copy of each event from its SD card: off until
+                    // switched on; the panel offers it to battery cameras only.
                     sdFillAvailable = cam.SleepFriendly?.Invoke() == true || s.SdFill == true,
-                    sdFill = s.SdFill ?? (cam.SleepFriendly?.Invoke() == true),
+                    sdFill = s.SdFill ?? false,
                     // Always the EFFECTIVE list (never null): unset means the default
                     // set, which excludes the opt-in perimeter labels — the UI chips
                     // must show those as off until the user ticks them.

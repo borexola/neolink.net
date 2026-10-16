@@ -146,6 +146,11 @@ public sealed class AiSettings
     /// &lt;think&gt; blocks stripped either way; this saves the time they take.</summary>
     public bool NoThink { get; set; } = true;
 
+    /// <summary>reasoning_effort for OpenAI-style servers ("none" also sets Ollama's
+    /// think:false); "" = not sent, the only safe default for servers that reject it.</summary>
+    public string ReasoningEffort { get; set; } = "";
+    public static readonly string[] ReasoningEfforts = { "none", "minimal", "low", "medium", "high" };
+
     /// <summary>Sampling density: one frame about every N seconds (1–600), AS
     /// THE SOURCE ALLOWS — the stream tap can only keep keyframes, which arrive
     /// at the camera's GOP cadence (typically one per 2-4s), so values below
@@ -197,6 +202,7 @@ public sealed class AiSettings
         ApiKeyEnc = ApiKeyEnc,
         Prompt = Prompt,
         NoThink = NoThink,
+        ReasoningEffort = ReasoningEffort,
         SampleEverySeconds = SampleEverySeconds,
         MaxFrames = MaxFrames,
         TimeoutSeconds = TimeoutSeconds,
@@ -356,6 +362,7 @@ public sealed class AiStore
             };
             incoming.Provider = incoming.UsesOllama ? "ollama"
                 : incoming.UsesAnthropic ? "anthropic" : "openai"; // normalize unknowns
+            incoming.ReasoningEffort = AiSettings.ReasoningEfforts.Contains(incoming.ReasoningEffort) ? incoming.ReasoningEffort : "";
             incoming.SampleEverySeconds = Math.Clamp(incoming.SampleEverySeconds, 1, 600);
             incoming.MaxFrames = Math.Max(1, incoming.MaxFrames);
             incoming.TimeoutSeconds = Math.Clamp(incoming.TimeoutSeconds, 5, 600);

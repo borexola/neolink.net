@@ -901,10 +901,12 @@ public static class EventSearch
     {
         HashSet<string>? words = null;
         if (e.AiDescription is { } d)
+        {
             words = new HashSet<string>(
                 Regex.Split(d.ToLowerInvariant(), "[^a-z0-9]+").Select(Spelling), StringComparer.Ordinal);
             // Stems too, so "arriving" finds "arrives" and "walked" finds "walking".
             words.UnionWith(words.Select(Stem).ToList());
+        }
         // The model's object inventory, whole entries and their words alike, so
         // "white van" is findable as the phrase and as either half of it.
         HashSet<string>? objects = null;

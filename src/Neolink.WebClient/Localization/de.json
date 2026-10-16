@@ -1505,5 +1505,17 @@
  "PERIOD": "ZEITRAUM",
  "Search the rolling last 24 hours": "Die letzten 24 Stunden durchsuchen",
  "Searching…": "Suche…",
- "{0} days is a wide period; every event in it is read. Narrow it for a faster answer.": "{0} Tage sind ein weiter Zeitraum; jedes Ereignis darin wird gelesen. Für eine schnellere Antwort eingrenzen."
+ "{0} days is a wide period; every event in it is read. Narrow it for a faster answer.": "{0} Tage sind ein weiter Zeitraum; jedes Ereignis darin wird gelesen. Für eine schnellere Antwort eingrenzen.",
+ "CAMERA CLOCKS": "KAMERA-UHREN",
+ "Correct camera clocks": "Kamera-Uhren stellen",
+ "Camera clocks are set from this server (click to stop)": "Kamera-Uhren werden von diesem Server gestellt (klicken zum Beenden)",
+ "Camera clocks are left alone (click to correct them from this server)": "Kamera-Uhren bleiben unangetastet (klicken, um sie von diesem Server stellen zu lassen)",
+ "Make sure this server's own clock and time zone are right: every camera will follow them.": "Stellen Sie sicher, dass Uhr und Zeitzone dieses Servers stimmen: jede Kamera folgt ihnen.",
+ "Some cameras have no backup clock or cannot reach NTP, so their SD recordings and overlays carry the wrong time. When on, each camera's clock is read as it connects (at most once every 12 hours) and set from this server's when it is more than 10 seconds off or has lost its date; the camera's own time zone and daylight saving are kept. A camera that is already connected is checked at its next connection.": "Manche Kameras haben keine Pufferuhr oder erreichen kein NTP, sodass ihre SD-Aufnahmen und Einblendungen die falsche Zeit tragen. Wenn an, wird die Uhr jeder Kamera beim Verbinden gelesen (höchstens alle 12 Stunden) und von der dieses Servers gestellt, sobald sie mehr als 10 Sekunden abweicht oder ihr Datum verloren hat; Zeitzone und Sommerzeit der Kamera bleiben erhalten. Eine bereits verbundene Kamera wird bei ihrer nächsten Verbindung geprüft.",
+ "Reasoning effort": "Denkaufwand",
+ "not sent": "nicht gesendet",
+ "none": "keiner",
+ "minimal": "minimal",
+ "medium": "mittel",
+ "Sent as reasoning_effort to OpenAI-style servers (llama.cpp, LM Studio, OpenAI reasoning models); 'none' also switches thinking off on Ollama. A server that does not know the field rejects every request, so leave it unsent unless yours accepts it.": "Wird als reasoning_effort an OpenAI-artige Server gesendet (llama.cpp, LM Studio, OpenAI-Reasoning-Modelle); 'keiner' schaltet auch bei Ollama das Denken ab. Ein Server, der das Feld nicht kennt, lehnt jede Anfrage ab; daher nur senden, wenn Ihrer es akzeptiert."
 }

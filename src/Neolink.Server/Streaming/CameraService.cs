@@ -164,6 +164,23 @@ public sealed class CameraService : ILiveCameraSource
     private bool _oneConnection;
     private int _loginResets; // consecutive ones while a sibling streams; one or two are a transient
     private static readonly TimeSpan OneConnectionRetry = TimeSpan.FromMinutes(5);
+    private volatile CancellationTokenSource? _oneConnWait; // the current one-connection wait, cut short by a sibling stopping
+
+    /// <summary>15 s doubling per further login reset, capped at 5 min: a transient
+    /// clears in under a minute, a true one-client camera settles at the cap.</summary>
+    internal static TimeSpan OneConnectionDelay(int loginResets)
+    {
+        int steps = Math.Clamp(loginResets - 3, 0, 5); // 15 s << 5 is already past the cap
+        var d = TimeSpan.FromSeconds(15 << steps);
+        return d < OneConnectionRetry ? d : OneConnectionRetry;
+    }
+
+    /// <summary>A sibling stream just stopped: its slot is free, so try now instead of waiting out the delay.</summary>
+    public void SiblingStopped()
+    {
+        if (!_oneConnection) return;
+        try { _oneConnWait?.Cancel(); } catch (ObjectDisposedException) { }
+    }
     // Wake-capture forensics (issue #44). A "self-wake" that is really OUR probe
     // waking the camera looks identical in the log to a real motion wake — both
     // read "camera woke itself". These carry the evidence that tells them apart
@@ -247,6 +264,8 @@ public sealed class CameraService : ILiveCameraSource
     public bool ReceivingMedia { get; private set; }
     /// <summary>The sibling stream of this camera that is receiving media, by name; null when none (startup wiring).</summary>
     public Func<string?>? StreamingSibling { get; set; }
+    /// <summary>Called when this stream stops receiving media (startup wiring: nudges the siblings).</summary>
+    public Action? MediaStopped { get; set; }
     /// <summary>Told the camera's own service-port table once it is read (startup wiring).</summary>
     public Action<IReadOnlyList<ServicePortState>>? ServicesAudited { get; set; }
 
@@ -854,7 +873,8 @@ public sealed class CameraService : ILiveCameraSource
                         Log.Warn($"{Tag}: the camera resets this connection at login while its {sibling} stream is up: " +
                                  "it allows one client at a time. Set this camera's Stream to the one stream you need " +
                                  "(camera editor, or \"stream\": \"mainStream\" in config.json) to stop these retries; " +
-                                 $"meanwhile this stream is tried every {OneConnectionRetry.TotalMinutes:0} min");
+                                 $"meanwhile this stream is retried with growing waits up to {OneConnectionRetry.TotalMinutes:0} min, " +
+                                 "and at once when the other stream stops");
                     _oneConnection = true;
                 }
                 else if (!loginReset)
@@ -868,7 +888,7 @@ public sealed class CameraService : ILiveCameraSource
                 if (_privacyLoop)
                     Log.Debug($"{Tag}: privacy reconnect: {Log.Flatten(ex)}; retrying in {backoff.TotalSeconds:0}s");
                 else if (_oneConnection)
-                    Log.Debug($"{Tag}: {Log.Flatten(ex)}; one-connection camera, retrying in {OneConnectionRetry.TotalMinutes:0} min");
+                    Log.Debug($"{Tag}: {Log.Flatten(ex)}; one-connection camera, retrying in {OneConnectionDelay(_loginResets).TotalSeconds:0}s");
                 else
                     Log.Error($"{Tag}: {Log.Flatten(ex)}; retrying in {backoff.TotalSeconds:0}s{hint}");
 
@@ -890,7 +910,19 @@ public sealed class CameraService : ILiveCameraSource
 
             try
             {
-                await Task.Delay(_oneConnection ? OneConnectionRetry : backoff, ct).ConfigureAwait(false);
+                if (_oneConnection)
+                {
+                    // The wait ends early when a sibling stream stops: that is the slot opening.
+                    using var nudge = new CancellationTokenSource();
+                    using var both = CancellationTokenSource.CreateLinkedTokenSource(ct, nudge.Token);
+                    _oneConnWait = nudge;
+                    try { await Task.Delay(OneConnectionDelay(_loginResets), both.Token).ConfigureAwait(false); }
+                    catch (OperationCanceledException) when (nudge.IsCancellationRequested && !ct.IsCancellationRequested)
+                    { Log.Debug($"{Tag}: the other stream stopped; trying this one now"); }
+                    finally { _oneConnWait = null; }
+                }
+                else
+                    await Task.Delay(backoff, ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -1353,7 +1385,9 @@ public sealed class CameraService : ILiveCameraSource
         finally
         {
             _live = null;
+            bool wasReceiving = ReceivingMedia;
             ReceivingMedia = false;
+            if (wasReceiving) MediaStopped?.Invoke();
             _activeStream = null;
             _hub.SourceStopped(); // stale GOP must not prime viewers while we're down
             ReportWakeDiag();

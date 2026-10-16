@@ -319,6 +319,9 @@ public sealed class ApiEmergency
     public Dictionary<string, ApiEmergencyCamera> Overrides { get; set; } = new();
 }
 
+/// <summary>GET/PUT /api/admin/camera-clock: the server-wide opt-in for correcting camera clocks.</summary>
+public sealed record ApiCameraClock(bool Enabled);
+
 /// <summary>The state of the files the browser's detector needs: "ready",
 /// "missing", "downloading" (with a percentage) or "failed" (with the reason).</summary>
 public sealed class ApiDetectAssets
@@ -437,6 +440,8 @@ public sealed class ApiAiSettings
     public string Prompt { get; set; } = "";
     public string DefaultPrompt { get; set; } = "";
     public bool NoThink { get; set; } = true;
+    /// <summary>reasoning_effort to send; "" = not sent.</summary>
+    public string ReasoningEffort { get; set; } = "";
     /// <summary>One frame about every N seconds, as the source allows (the stream
     /// tap can't sample faster than the camera's keyframe cadence).</summary>
     public int SampleEverySeconds { get; set; } = 2;
