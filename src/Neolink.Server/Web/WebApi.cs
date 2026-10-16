@@ -3735,10 +3735,12 @@ public static class WebApi
 
             // Natural-language search. Deterministic first (labels, camera names,
             // date phrases parse locally; leftover words match the stored AI
-            // descriptions); only a query with leftovers spends ONE LLM call, and
-            // solely to translate the phrase into the same structured plan.
-            // Without q this reports AI availability (the search bar's icon).
-            app.MapGet("/api/events/search", async (string? q, int? limit, HttpContext ctx, CancellationToken ct) =>
+            // descriptions). The dialog's period and filters (from, to, cameras,
+            // unreviewed, levels) pin the pool, so the model only ever reads that
+            // slice. Without q this reports AI availability (the search icon).
+            app.MapGet("/api/events/search", async (string? q, int? limit, string? from, string? to,
+                [Microsoft.AspNetCore.Mvc.FromQuery(Name = "cameras")] string? cams, bool? unreviewed, string? levels,
+                HttpContext ctx, CancellationToken ct) =>
             {
                 bool aiAvailable = o.Ai?.Enabled == true;
                 if (string.IsNullOrWhiteSpace(q))
@@ -3750,16 +3752,24 @@ public static class WebApi
                 var names = cameras.Select(c => c.Name).Where(n => only == null || only.Contains(n)).ToList();
                 var plan = Neolink.Recording.EventSearch.Parse(q, names, DateTime.Now);
                 bool usedAi = false;
-                if ((!plan.Structured || plan.StrayDigits) && aiAvailable)
+                if (plan.WantsTranslate && aiAvailable)
                 {
                     var raw = await Neolink.Ai.AiDescriber.CompleteTextAsync(o.Ai!,
-                        Neolink.Recording.EventSearch.TranslateSystemPrompt(names, DateTime.Now), q, ct);
+                        Neolink.Recording.EventSearch.TranslateSystemPrompt(names, DateTime.Now),
+                        plan.Intended(q), ct);
                     if (Neolink.Recording.EventSearch.ParseTranslated(raw, names, DateTime.Now) is { } tplan)
                     {
                         usedAi = true;
                         plan = Neolink.Recording.EventSearch.Merge(plan, tplan);
                     }
                 }
+                static DateTime? Local(string? s) =>
+                    DateTime.TryParse(s, System.Globalization.CultureInfo.InvariantCulture,
+                        System.Globalization.DateTimeStyles.AssumeLocal, out var d) ? d : null;
+                static List<string> Csv(string? s) =>
+                    (s ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+                plan.Bound(Local(from), Local(to), Csv(cams).Where(names.Contains).ToList(),
+                    unreviewed == true, Csv(levels));
                 // Descriptive queries with AI: the model reads the candidates'
                 // actual descriptions and picks the matches — keyword scoring is
                 // only the fallback (no AI, or the model's reply was unusable).
@@ -3778,18 +3788,29 @@ public static class WebApi
                         judgeCts.CancelAfter(TimeSpan.FromSeconds(70));
                         var picked = new List<Neolink.Recording.EventRecord>();
                         bool allReplies = true;
-                        foreach (var chunk in pool.Chunk(30))
+                        // Chunks run a few at a time: a hosted model answers them
+                        // together, a local one queues them with nothing lost.
+                        using var lanes = new SemaphoreSlim(3);
+                        var intended = plan.Intended(q);
+                        var verdicts = await Task.WhenAll(pool.Chunk(30).Select(async chunk =>
                         {
-                            var reply = await Neolink.Ai.AiDescriber.CompleteTextAsync(o.Ai!,
-                                Neolink.Recording.EventSearch.JudgeSystemPrompt(),
-                                Neolink.Recording.EventSearch.JudgeUserPrompt(q, chunk), judgeCts.Token);
-                            var idx = Neolink.Recording.EventSearch.ParseJudge(reply, chunk.Length);
-                            // One failed or garbled chunk poisons the whole verdict:
-                            // partial judging silently hides matches, keyword scoring
-                            // does not.
-                            if (idx == null) { allReplies = false; break; }
-                            picked.AddRange(idx.Select(i => chunk[i - 1]));
-                        }
+                            await lanes.WaitAsync(judgeCts.Token);
+                            try
+                            {
+                                if (!allReplies) return null;
+                                var reply = await Neolink.Ai.AiDescriber.CompleteTextAsync(o.Ai!,
+                                    Neolink.Recording.EventSearch.JudgeSystemPrompt(),
+                                    Neolink.Recording.EventSearch.JudgeUserPrompt(intended, chunk), judgeCts.Token);
+                                var idx = Neolink.Recording.EventSearch.ParseJudge(reply, chunk.Length);
+                                // One failed or garbled chunk poisons the whole verdict:
+                                // partial judging silently hides matches, keyword scoring
+                                // does not.
+                                if (idx == null) { allReplies = false; return null; }
+                                return idx.Select(i => chunk[i - 1]).ToList();
+                            }
+                            finally { lanes.Release(); }
+                        }));
+                        foreach (var v in verdicts) if (v != null) picked.AddRange(v);
                         if (allReplies)
                         {
                             judged = true;

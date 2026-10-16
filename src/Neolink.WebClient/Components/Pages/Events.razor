@@ -124,6 +124,10 @@
             <button class="chip @(_selectMode ? "chip-active" : "")"
                     title="@(_selectMode ? T["Leave selection mode without deleting"] : T["Pick multiple events to delete at once"])"
                     @onclick="ToggleSelectModeAsync">@UiIcon.Render("trash", 13) @T["Delete…"]</button>
+            @* The sparkle only once a model is configured; a magnifier otherwise. *@
+            <button class="chip ev-adv-btn @(_searchResults != null ? "chip-active" : "")"
+                    title="@(_searchAi ? T["AI search is on: complex phrases use your local AI"] : T["AI is not configured: structured search only (type, camera, date)"])"
+                    @onclick="OpenAdvancedAsync">@UiIcon.Render(_searchAi ? "sparkles" : "zoom", 13) @T["Advanced search"]</button>
         }
         else
         {
@@ -149,66 +153,31 @@
         <button class="icon-btn" title="@T["Refresh"]" @onclick="RefreshCurrentAsync">@UiIcon.Render("refresh", 14)</button>
     </div>
 
-    @if (!_sdMode)
+    @if (!_sdMode && _searchResults != null)
     {
-        <div class="ev-search-row">
-        <div class="ev-search-head">
-            <span class="ev-search-title">@T["AI Search"]</span>
-        </div>
-        <div class="ev-search">
-            <span class="ev-search-icon @(_searchAi ? "ai" : "")"
-                  title="@(_searchAi ? T["AI search is on: complex phrases use your local AI"] : T["AI is not configured: structured search only (type, camera, date)"])">
-                @UiIcon.Render(_searchAi ? "sparkles" : "zoom", 15)
-            </span>
-            <span class="ev-search-box">
-                <input class="ev-search-input" placeholder="@T["Search events (try: person in FrontDoor yesterday)"]"
-                       value="@_searchQ" @oninput="OnSearchInputAsync" @onkeydown="OnSearchKeyAsync" />
-                @if (!_searchBusy && (_searchQ.Length > 0 || _searchResults != null))
-                {
-                    <button class="ev-search-clear" title="@T["Clear"]" @onclick="ClearSearch">@UiIcon.Render("x", 13)</button>
-                }
-            </span>
-            @if (_searchBusy)
+        @* The search owns the list until cleared; this strip says what it asked. *@
+        <div class="ev-search-info">
+            <span class="ev-search-q" title="@_searchQ">@UiIcon.Render(_searchUsedAi ? "sparkles" : "zoom", 12) “@_searchQ”</span>
+            <span>@T["Understood as:"]</span>
+            <span class="ev-search-chips">@_searchSummary</span>
+            @if (_searchUsedAi)
             {
-                <span class="btn-spinner"></span>
+                <span class="ev-search-ai">@T["refined by AI"]</span>
             }
+            <span class="event-day-count">@_searchResults.Count</span>
+            <span class="tile-spacer"></span>
+            <button class="chip" title="@T["Change the question, period or filters"]" @onclick="OpenAdvancedAsync">@T["Edit"]</button>
+            <button class="chip" title="@T["Back to the event list"]" @onclick="ClearSearch">@UiIcon.Render("x", 12) @T["Clear"]</button>
         </div>
-        </div>
-        @if (_searchResults == null && !_searchBusy)
+        @if (_searchKwMiss)
         {
-            <div class="ev-search-hint">
-                @T["Search in plain language: event type, camera, time and what happened."]
-                @if (!_searchAi)
-                {
-                    @(" ")@T["Configure a local AI model in the AI settings to unlock description-based matching."]
-                }
-            </div>
+            <div class="notice ev-search-miss">@(_searchJudged
+                ? T.F("The AI reviewed that period but nothing matches {0}; showing everything the other filters allow.", "“" + _searchKwText + "”")
+                : T.F("No event description mentions {0}; showing everything the other filters allow.", "“" + _searchKwText + "”"))</div>
         }
-        @if (_searchError && !_searchBusy)
+        else if (_searchKwPartial)
         {
-            <div class="notice ev-search-miss">@T["The search took too long or failed; try again, or narrow the period."]</div>
-        }
-        @if (_searchResults != null)
-        {
-            <div class="ev-search-info">
-                <span>@T["Understood as:"]</span>
-                <span class="ev-search-chips">@_searchSummary</span>
-                @if (_searchUsedAi)
-                {
-                    <span class="ev-search-ai">@UiIcon.Render("sparkles", 12) @T["refined by AI"]</span>
-                }
-                <span class="event-day-count">@_searchResults.Count</span>
-            </div>
-            @if (_searchKwMiss)
-            {
-                <div class="notice ev-search-miss">@(_searchJudged
-                    ? T.F("The AI reviewed that period but nothing matches {0}; showing everything the other filters allow.", "“" + _searchKwText + "”")
-                    : T.F("No event description mentions {0}; showing everything the other filters allow.", "“" + _searchKwText + "”"))</div>
-            }
-            else if (_searchKwPartial)
-            {
-                <div class="notice ev-search-miss">@T.F("No event description mentions all of {0}; showing the closest matches.", "“" + _searchKwText + "”")</div>
-            }
+            <div class="notice ev-search-miss">@T.F("No event description mentions all of {0}; showing the closest matches.", "“" + _searchKwText + "”")</div>
         }
     }
 
@@ -631,6 +600,97 @@
                         <span>@T["Select an event to play it"]</span>
                     </div>
                 }
+            </div>
+        </div>
+    }
+
+    @if (_advOpen)
+    {
+        @* Advanced search: the question plus the period and filters it runs
+           within. Those bound the server's candidate pool, so the model (when
+           one is configured) reads only that slice. *@
+        <div class="ev-del-backdrop" @onclick="CloseAdvanced">
+            <div class="ev-del-dialog ev-adv-dialog" role="dialog" aria-label="@T["Advanced search"]"
+                 @onclick:stopPropagation="true" @onkeydown="OnAdvKeyAsync">
+                <div class="ev-del-title ev-adv-title">
+                    <span>@UiIcon.Render(_searchAi ? "sparkles" : "zoom", 15) @T["ADVANCED SEARCH"]</span>
+                    <button class="icon-btn" title="@T["Cancel"]" @onclick="CloseAdvanced">✕</button>
+                </div>
+                <input id="ev-adv-q" class="ev-search-input ev-adv-q" placeholder="@T["Search events (try: person in FrontDoor yesterday)"]"
+                       value="@_searchQ" @oninput="e => _searchQ = (string?)e.Value ?? string.Empty" disabled="@_searchBusy" />
+                <div class="ev-adv-hint">
+                    @T["Search in plain language: event type, camera, time and what happened."]
+                    @if (!_searchAi)
+                    {
+                        @(" ")@T["Configure a local AI model in the AI settings to unlock description-based matching."]
+                    }
+                </div>
+                <div class="ev-adv-section">@T["PERIOD"]</div>
+                <div class="ev-adv-row">
+                    <span class="tool-label">@T["FROM"]</span>
+                    <input class="event-filter event-date-input" type="date"
+                           max="@DateTime.Today.ToString("yyyy-MM-dd")"
+                           value="@(_advFrom?.ToString("yyyy-MM-dd") ?? "")"
+                           @onchange="e => SetAdvRange((string?)e.Value, null)" />
+                    <span class="tool-label">@T["TO"]</span>
+                    <input class="event-filter event-date-input" type="date"
+                           max="@DateTime.Today.ToString("yyyy-MM-dd")"
+                           value="@(_advTo?.ToString("yyyy-MM-dd") ?? "")"
+                           @onchange="e => SetAdvRange(null, (string?)e.Value)" />
+                    <button class="chip @(AdvDated ? "chip-off" : "chip-active")" title="@T["Search the rolling last 24 hours"]"
+                            @onclick="() => { _advFrom = _advTo = null; }">↺ 24h</button>
+                </div>
+                @if (AdvWideDays is { } wide)
+                {
+                    <div class="notice ev-search-miss ev-adv-warn">
+                        @(wide == 0
+                            ? T["No first day: every stored event is read. Set one for a faster answer."]
+                            : T.F("{0} days is a wide period; every event in it is read. Narrow it for a faster answer.", wide))
+                    </div>
+                }
+                <div class="ev-adv-section">@T["CAMERAS"]</div>
+                <div class="ev-adv-chips">
+                    <button class="chip @(_advCams.Count == 0 ? "chip-active" : "chip-off")"
+                            @onclick="() => _advCams.Clear()">@T["all cameras"]</button>
+                    @foreach (var c in _cameras)
+                    {
+                        var name = c.Name;
+                        <button class="chip @(_advCams.Contains(name) ? "chip-active" : "chip-off")"
+                                @onclick="() => ToggleAdvCam(name)">@name</button>
+                    }
+                </div>
+                <div class="ev-adv-section">@T["FILTERS"]</div>
+                <div class="ev-adv-chips">
+                    <button class="chip @(_advUnreviewed ? "chip-active" : "chip-off")"
+                            @onclick="() => _advUnreviewed = !_advUnreviewed">@T["unreviewed only"]</button>
+                    @if (AnyAiLevels)
+                    {
+                        @foreach (var lvl in ThreatLevels)
+                        {
+                            var l = lvl;
+                            <button class="chip @(_advHiddenLevels.Contains(l) ? "chip-off" : "chip-active")"
+                                    @onclick="() => ToggleAdvLevel(l)">@T[l]</button>
+                        }
+                    }
+                </div>
+                @if (_searchError && !_searchBusy)
+                {
+                    <div class="notice ev-search-miss">@T["The search took too long or failed; try again, or narrow the period."]</div>
+                }
+                <div class="ev-del-actions">
+                    <button class="chip" @onclick="CloseAdvanced">@T["Cancel"]</button>
+                    <button class="chip ev-adv-go" disabled="@(_searchBusy || _searchQ.Trim().Length < SearchMinChars)"
+                            @onclick="RunSearchAsync">
+                        @if (_searchBusy)
+                        {
+                            <span class="btn-spinner"></span><span>@T["Searching…"]</span>
+                        }
+                        else
+                        {
+                            <span>@UiIcon.Render(_searchAi ? "sparkles" : "zoom", 13) @T["Search"]</span>
+                        }
+                    </button>
+                </div>
             </div>
         </div>
     }
@@ -1059,45 +1119,118 @@
         catch { }
     }
 
-    /// <summary>How long the typing has to stop before the search goes by itself.
-    /// Long enough that an ordinary phrase is typed straight through without firing
-    /// a search per word, short enough not to feel like waiting.</summary>
-    private static readonly TimeSpan SearchPause = TimeSpan.FromSeconds(1);
     /// <summary>One letter is never a question worth asking a language model.</summary>
     private const int SearchMinChars = 2;
-    private CancellationTokenSource? _typedCts;
 
-    /// <summary>Every keystroke restarts the wait; whichever one is still standing
-    /// when the wait runs out does the search. Emptying the box puts the ordinary
-    /// list back at once rather than after a pause.</summary>
-    private async Task OnSearchInputAsync(ChangeEventArgs e)
+    // ---- advanced search dialog: the period and filters the question runs within ----
+    private bool _advOpen;
+    /// <summary>Both null = the rolling last 24 hours, the cheapest slice to read.</summary>
+    private DateTime? _advFrom, _advTo;
+    private bool AdvDated => _advFrom != null || _advTo != null;
+    private readonly HashSet<string> _advCams = new(StringComparer.OrdinalIgnoreCase); // empty = all
+    private bool _advUnreviewed;
+    private readonly HashSet<string> _advHiddenLevels = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>Over a week of events is a lot for a model to read: the day
+    /// count to warn with, 0 for an open start, null when the period is fine.</summary>
+    private int? AdvWideDays
     {
-        _searchQ = (string?)e.Value ?? "";
-        _typedCts?.Cancel();
-        if (_searchQ.Trim().Length < SearchMinChars)
+        get
         {
-            if (_searchResults != null || _searchError) ClearSearch();
-            return;
+            if (!AdvDated) return null;
+            if (_advFrom == null) return 0;
+            int days = ((_advTo ?? DateTime.Today) - _advFrom.Value).Days + 1;
+            return days > 7 ? days : null;
         }
-        var mine = new CancellationTokenSource();
-        _typedCts = mine;
-        try { await Task.Delay(SearchPause, mine.Token); }
-        catch (OperationCanceledException) { return; }
-        if (!mine.IsCancellationRequested) await RunSearchAsync();
     }
 
-    private async Task OnSearchKeyAsync(KeyboardEventArgs e)
+    /// <summary>The list's own period and filters are the dialog's starting point.</summary>
+    private void SeedAdvanced()
     {
-        if (e.Key == "Enter") { _typedCts?.Cancel(); await RunSearchAsync(); }
-        else if (e.Key == "Escape") ClearSearch();
+        _advFrom = _from;
+        _advTo = _to;
+        _advCams.Clear();
+        if (CamFilterActive)
+            foreach (var c in _cameras.Where(c => CamVisible(c.Name))) _advCams.Add(c.Name);
+        _advUnreviewed = _unreviewedOnly;
+        _advHiddenLevels.Clear();
+        foreach (var l in _hiddenLevels) _advHiddenLevels.Add(l);
+    }
+
+    private async Task OpenAdvancedAsync()
+    {
+        // Editing a running search keeps its settings; a fresh one starts from the list.
+        if (_searchResults == null) SeedAdvanced();
+        _searchError = false;
+        _advOpen = true;
+        StateHasChanged();
+        await Task.Yield();
+        try { await JS.InvokeVoidAsync("neolink.focusEl", "ev-adv-q"); } catch { }
+    }
+
+    private void CloseAdvanced()
+    {
+        _advOpen = false;
+        if (_searchBusy)
+        {
+            // Cancelling releases the model; the list stays as it was.
+            _searchGen++;
+            _searchCts?.Cancel();
+            _searchBusy = false;
+        }
+    }
+
+    private void SetAdvRange(string? rawFrom, string? rawTo)
+    {
+        if (rawFrom != null) _advFrom = ParseDay(rawFrom);
+        if (rawTo != null) _advTo = ParseDay(rawTo);
+        if (_advFrom is { } f && _advTo is { } t && t < f)
+        {
+            if (rawFrom != null) _advTo = f; else _advFrom = t;
+        }
+    }
+
+    private void ToggleAdvCam(string name)
+    {
+        if (!_advCams.Remove(name)) _advCams.Add(name);
+        // Every camera picked is the same as no pick at all.
+        if (_advCams.Count == _cameras.Count) _advCams.Clear();
+    }
+
+    private void ToggleAdvLevel(string level)
+    {
+        if (!_advHiddenLevels.Remove(level)) _advHiddenLevels.Add(level);
+        if (_advHiddenLevels.Count == ThreatLevels.Length) _advHiddenLevels.Clear(); // none left = any
+    }
+
+    private async Task OnAdvKeyAsync(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !_searchBusy && _searchQ.Trim().Length >= SearchMinChars) await RunSearchAsync();
+        else if (e.Key == "Escape") CloseAdvanced();
+    }
+
+    /// <summary>The period and filters as the server takes them. The 24-hour
+    /// default is spelled out as a clock range so the server never reads more.</summary>
+    private string AdvancedQuery()
+    {
+        var sb = new System.Text.StringBuilder();
+        DateTime from, to;
+        if (!AdvDated) { from = DateTime.Now.AddHours(-24); to = DateTime.Now.AddMinutes(1); }
+        else { from = _advFrom ?? DateTime.MinValue; to = (_advTo ?? DateTime.Today).AddDays(1); }
+        if (from != DateTime.MinValue) sb.Append("&from=").Append(Uri.EscapeDataString(from.ToString("yyyy-MM-ddTHH:mm")));
+        sb.Append("&to=").Append(Uri.EscapeDataString(to.ToString("yyyy-MM-ddTHH:mm")));
+        if (_advCams.Count > 0) sb.Append("&cameras=").Append(Uri.EscapeDataString(string.Join(",", _advCams)));
+        if (_advUnreviewed) sb.Append("&unreviewed=true");
+        if (_advHiddenLevels.Count > 0)
+            sb.Append("&levels=").Append(string.Join(",", ThreatLevels.Where(l => !_advHiddenLevels.Contains(l))));
+        return sb.ToString();
     }
 
     /// <summary>Runs one of the model's object words as a search, from the chip
-    /// that shows it. The word goes into the box as well, so the result reads as a
-    /// search the user could have typed — and can be edited into a better one.</summary>
+    /// that shows it, within the list's current period and filters. The word is
+    /// the question, so Edit shows it as one the user could have typed.</summary>
     private async Task SearchForAsync(string thing)
     {
-        _typedCts?.Cancel();
+        if (_searchResults == null) SeedAdvanced();
         _searchQ = thing;
         await RunSearchAsync();
     }
@@ -1118,7 +1251,7 @@
         {
             // The AI translate + judge passes can take a while on a local model.
             var res = await GetJsonAsync<ApiEventSearch>(
-                $"/api/events/search?q={Uri.EscapeDataString(q)}&limit=500", timeoutSeconds: 90,
+                $"/api/events/search?q={Uri.EscapeDataString(q)}&limit=500{AdvancedQuery()}", timeoutSeconds: 90,
                 abort: abort);
             // A clear or newer search while this one was in flight wins.
             if (gen != _searchGen) return;
@@ -1128,6 +1261,7 @@
             }
             if (res?.Events != null)
             {
+                _advOpen = false;
                 _searchResults = res.Events;
                 _searchUsedAi = res.Ai;
                 _searchKwMiss = !res.KeywordsMatched;
@@ -1158,7 +1292,6 @@
     private void ClearSearch()
     {
         _searchGen++;
-        _typedCts?.Cancel();
         _searchCts?.Cancel();
         _searchBusy = false;
         _searchError = false;
@@ -1207,7 +1340,7 @@
             using var timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
             while (await timer.WaitForNextTickAsync(_pollCts.Token))
             {
-                if (_sdMode || _showDelete || _delBusy || !_supported) continue;
+                if (_sdMode || _showDelete || _delBusy || _advOpen || !_supported) continue;
                 bool hidden = false;
                 try { hidden = await JS.InvokeAsync<bool>("neolink.pageHidden"); } catch { }
                 if (hidden) continue; // nobody is looking; the first visible tick catches up
@@ -1717,7 +1850,7 @@
         Source()
             // Search results are explicit intent — hidden-camera prefs never trim them.
             .Where(e => _searchResults != null || CamVisible(e.Camera))
-            .Where(e => !_unreviewedOnly || !e.Reviewed)
+            .Where(e => _searchResults != null || !_unreviewedOnly || !e.Reviewed)
             // Only rated events are subject to the threat filter: one with no AI
             // level yet (or ever) is not "at" a hidden level.
             .Where(e => _searchResults != null || e.AiLevel == null || !_hiddenLevels.Contains(e.AiLevel))
@@ -2180,7 +2313,6 @@
         // The detector outlives this page's elements otherwise, looping on a video
         // that is no longer in the document.
         try { await JS.InvokeVoidAsync("neolink.detect", (object?)null); } catch { }
-        _typedCts?.Cancel();
         _searchCts?.Cancel();
         _ongoingCts?.Cancel();
         _pollCts.Cancel();

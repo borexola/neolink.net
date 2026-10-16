@@ -23,14 +23,23 @@ public sealed class EventQuery
     /// <summary>The only date evidence was a bare clock time anchored to today —
     /// weak enough that an AI-supplied day should win the merge.</summary>
     internal bool TimeOnly { get; set; }
+    /// <summary>The query was typed in one of the non-English UI languages.</summary>
+    public bool Foreign { get; internal set; }
+    /// <summary>Only events nobody has opened yet (the list's own filter, carried over).</summary>
+    public bool UnreviewedOnly { get; set; }
+    /// <summary>AI threat levels allowed; empty = any. Unrated events always pass.</summary>
+    public List<string> Levels { get; init; } = new();
+    /// <summary>Typos fixed by the parser (typed, meant), so the judge reads the intended words.</summary>
+    public List<(string From, string To)> Corrections { get; } = new();
 
     /// <summary>The hard filters alone — what the AI judge pool is drawn from.</summary>
     public EventQuery StructuralOnly()
     {
-        var q = new EventQuery { FromLocal = FromLocal, ToLocal = ToLocal };
+        var q = new EventQuery { FromLocal = FromLocal, ToLocal = ToLocal, UnreviewedOnly = UnreviewedOnly };
         q.Labels.AddRange(Labels);
         q.NotLabels.AddRange(NotLabels);
         q.Cameras.AddRange(Cameras);
+        q.Levels.AddRange(Levels);
         return q;
     }
 
@@ -38,13 +47,50 @@ public sealed class EventQuery
     /// Cameras on the result means nothing is left to search, not "every camera".</summary>
     public EventQuery ScopedTo(IReadOnlySet<string> allowed)
     {
-        var q = new EventQuery { FromLocal = FromLocal, ToLocal = ToLocal, StrayDigits = StrayDigits, TimeOnly = TimeOnly };
+        var q = new EventQuery
+        {
+            FromLocal = FromLocal, ToLocal = ToLocal, StrayDigits = StrayDigits, TimeOnly = TimeOnly,
+            Foreign = Foreign, UnreviewedOnly = UnreviewedOnly,
+        };
         q.Labels.AddRange(Labels);
         q.NotLabels.AddRange(NotLabels);
         q.Keywords.AddRange(Keywords);
+        q.Levels.AddRange(Levels);
+        q.Corrections.AddRange(Corrections);
         q.Cameras.AddRange(Cameras.Count > 0 ? Cameras.Where(allowed.Contains) : allowed);
         return q;
     }
+
+    /// <summary>Pins the query inside the dialog's period and filters. A typed date
+    /// narrows within the period; one wholly outside it is taken as meant.</summary>
+    public void Bound(DateTime? from, DateTime? to, IReadOnlyList<string>? cameras,
+        bool unreviewedOnly, IReadOnlyList<string>? levels)
+    {
+        if (from != null || to != null)
+        {
+            var f = FromLocal == null ? from : from == null ? FromLocal : Max(FromLocal.Value, from.Value);
+            var t = ToLocal == null ? to : to == null ? ToLocal : Min(ToLocal.Value, to.Value);
+            if (f == null || t == null || f < t) { FromLocal = f; ToLocal = t; }
+        }
+        if (cameras is { Count: > 0 } && Cameras.Count == 0) Cameras.AddRange(cameras);
+        UnreviewedOnly |= unreviewedOnly;
+        if (levels is { Count: > 0 } && Levels.Count == 0) Levels.AddRange(levels);
+        static DateTime Max(DateTime a, DateTime b) => a > b ? a : b;
+        static DateTime Min(DateTime a, DateTime b) => a < b ? a : b;
+    }
+
+    /// <summary>The query as the user meant it: typos the parser fixed, fixed in the text too.</summary>
+    public string Intended(string query)
+    {
+        foreach (var (from, to) in Corrections)
+            query = Regex.Replace(query, @"\b" + Regex.Escape(from) + @"\b", to, RegexOptions.IgnoreCase);
+        return query;
+    }
+
+    /// <summary>Whether the translate call can still add anything: a label already
+    /// narrows the pool, so plain English leftovers go straight to the judge.</summary>
+    public bool WantsTranslate =>
+        StrayDigits || Foreign || (Keywords.Count > 0 && Labels.Count == 0 && NotLabels.Count == 0);
 
     public bool Structured => Keywords.Count == 0;
     public bool HasStructure =>
@@ -63,13 +109,13 @@ public static class EventSearch
     {
         ["person"] = new[] { "person", "people", "someone", "somebody", "anyone", "anybody", "everyone",
             "everybody", "human", "man", "woman", "lady", "boy", "girl", "guy", "kid", "child", "children",
-            "male", "female" },
+            "male", "female", "visitor", "guest", "stranger" },
         ["vehicle"] = new[] { "vehicle", "car", "truck", "lorry", "van", "suv", "pickup", "sedan",
             "automobile", "motorcycle", "bike", "scooter" },
         ["animal"] = new[] { "animal", "dog", "cat", "pet", "bird", "raccoon", "deer", "fox", "coyote",
             "squirrel", "rabbit", "wildlife", "critter" },
         ["package"] = new[] { "package", "parcel", "delivery" },
-        ["doorbell"] = new[] { "doorbell", "visitor", "rang" },
+        ["doorbell"] = new[] { "doorbell", "rang" },
         ["motion"] = new[] { "motion", "movement" },
         ["crying"] = new[] { "crying", "cry" },
         ["line-crossing"] = new[] { "line-crossing", "crossline", "crossing", "tripwire" },
@@ -175,6 +221,7 @@ public static class EventSearch
         }
         // After camera binding so native camera names stay matchable.
         s = SearchLingo.Normalize(s, out bool dayFirst);
+        q.Foreign = dayFirst;
         s = Regex.Replace(s, @"\bline[\s-]?crossing\b", " line-crossing ");
         // Negations before label extraction: "no cars today" must EXCLUDE
         // vehicles, never filter to them — and lists distribute ("no cars or
@@ -204,15 +251,60 @@ public static class EventSearch
                 continue;
             }
             if (tok.Length < 3 || Filler.Contains(tok)) continue;
-            var label = LabelOf(tok);
+            var word = tok;
+            if (LabelOf(word) == null && !EnglishVocab.Contains(word)
+                && Respell(word, cameraNames) is { } fixedWord)
+            {
+                q.Corrections.Add((word, fixedWord));
+                word = fixedWord;
+            }
+            var label = LabelOf(word);
             if (label != null)
             {
                 if (!q.Labels.Contains(label) && !q.NotLabels.Contains(label)) q.Labels.Add(label);
                 continue;
             }
-            if (!q.Keywords.Contains(tok)) q.Keywords.Add(tok);
+            if (!q.Keywords.Contains(word)) q.Keywords.Add(word);
         }
         return q;
+    }
+
+    /// <summary>One-letter typo against the label words and camera names ("ars" to
+    /// "cars"); null when nothing, or more than one thing, is that close.</summary>
+    internal static string? Respell(string tok, IReadOnlyList<string> cameraNames)
+    {
+        string? found = null;
+        foreach (var cand in LabelWords.Values.SelectMany(v => v).Concat(LabelWords.Keys)
+                     .SelectMany(w => new[] { w, w + "s" })
+                     .Concat(cameraNames.SelectMany(CameraVariants).SelectMany(v => v.Split(' ')))
+                     .Where(c => c.Length >= 3).Distinct())
+        {
+            if (!EditDistance1(tok, cand)) continue;
+            if (found != null && found != cand) return null;
+            found = cand;
+        }
+        return found;
+    }
+
+    private static bool EditDistance1(string a, string b)
+    {
+        if (a == b || Math.Abs(a.Length - b.Length) > 1) return false;
+        if (a.Length == b.Length)
+        {
+            int diff = 0;
+            for (int i = 0; i < a.Length; i++) if (a[i] != b[i] && ++diff > 1) return false;
+            return diff == 1;
+        }
+        var (s, l) = a.Length < b.Length ? (a, b) : (b, a);
+        int i2 = 0, j = 0;
+        bool skipped = false;
+        while (i2 < s.Length && j < l.Length)
+        {
+            if (s[i2] == l[j]) { i2++; j++; }
+            else if (skipped) return false;
+            else { skipped = true; j++; }
+        }
+        return true;
     }
 
     /// <summary>Canonical label for a token, tolerating plurals (dogs→dog,
@@ -771,6 +863,9 @@ public static class EventSearch
         if (q.ToLocal is { } t2) hits = hits.Where(e => e.StartUtc.ToLocalTime() < t2);
         if (q.Labels.Count > 0) hits = hits.Where(e => e.Labels.Any(l => q.Labels.Contains(l)));
         if (q.NotLabels.Count > 0) hits = hits.Where(e => !e.Labels.Any(l => q.NotLabels.Contains(l)));
+        if (q.UnreviewedOnly) hits = hits.Where(e => !e.Reviewed);
+        if (q.Levels.Count > 0)
+            hits = hits.Where(e => e.AiLevel == null || q.Levels.Contains(e.AiLevel, StringComparer.OrdinalIgnoreCase));
         if (q.Keywords.Count == 0)
             return hits.OrderByDescending(e => e.StartUtc).Take(limit).ToList();
         var pool = hits.ToList();
@@ -808,6 +903,8 @@ public static class EventSearch
         if (e.AiDescription is { } d)
             words = new HashSet<string>(
                 Regex.Split(d.ToLowerInvariant(), "[^a-z0-9]+").Select(Spelling), StringComparer.Ordinal);
+            // Stems too, so "arriving" finds "arrives" and "walked" finds "walking".
+            words.UnionWith(words.Select(Stem).ToList());
         // The model's object inventory, whole entries and their words alike, so
         // "white van" is findable as the phrase and as either half of it.
         HashSet<string>? objects = null;
@@ -835,7 +932,7 @@ public static class EventSearch
                 s += 3;
                 found = true;
             }
-            if (words != null && (WordIn(words, k) || JoinedIn(words, k)))
+            if (words != null && (WordIn(words, k) || JoinedIn(words, k) || words.Contains(Stem(k))))
             {
                 s += 2;
                 found = true;
@@ -849,6 +946,18 @@ public static class EventSearch
             if (found) hit++;
         }
         return s;
+    }
+
+    /// <summary>Crude English stem: inflection suffixes and a trailing e dropped,
+    /// applied to both sides so only equal stems ever meet.</summary>
+    internal static string Stem(string w)
+    {
+        if (w.Length >= 6 && w.EndsWith("ing")) w = w[..^3];
+        else if (w.Length >= 5 && w.EndsWith("ed")) w = w[..^2];
+        else if (w.Length >= 5 && w.EndsWith("es")) w = w[..^2];
+        else if (w.Length >= 4 && w.EndsWith("s") && !w.EndsWith("ss")) w = w[..^1];
+        if (w.Length >= 4 && w.EndsWith("e")) w = w[..^1];
+        return w;
     }
 
     private static bool WordIn(HashSet<string> words, string k) =>
@@ -894,7 +1003,11 @@ public static class EventSearch
         {
             FromLocal = parsedDates ? parsed.FromLocal : ai.FromLocal,
             ToLocal = parsedDates ? parsed.ToLocal : ai.ToLocal,
+            Foreign = parsed.Foreign,
+            UnreviewedOnly = parsed.UnreviewedOnly,
         };
+        q.Levels.AddRange(parsed.Levels);
+        q.Corrections.AddRange(parsed.Corrections);
         foreach (var l in parsed.Labels.Concat(ai.Labels))
             if (!q.Labels.Contains(l)) q.Labels.Add(l);
         foreach (var l in parsed.NotLabels)
@@ -974,12 +1087,18 @@ public static class EventSearch
     /// the paraphrases keywords cannot see.</summary>
     public static List<EventRecord> JudgePool(EventQuery q, EventStore store)
     {
-        var structural = Execute(q.StructuralOnly(), store, 10_000)
+        // The camera's own type tag is a hint, not a gate: a "visitor" tagged as
+        // motion still has a description the model can read. Negations stay hard.
+        var relaxed = q.StructuralOnly();
+        relaxed.Labels.Clear();
+        var described = Execute(relaxed, store, 10_000)
             .Where(e => !string.IsNullOrWhiteSpace(e.AiDescription) || e.AiObjects is { Count: > 0 })
             .ToList();
-        var hit = structural.Where(e => Score(e, q.Keywords) > 0).Take(200).ToList();
+        var hit = described.Where(e => Score(e, q.Keywords) > 0).Take(200).ToList();
         var ids = new HashSet<string>(hit.Select(e => e.Id), StringComparer.Ordinal);
-        return hit.Concat(structural.Where(e => !ids.Contains(e.Id))).Take(300).ToList();
+        var typed = described.Where(e => !ids.Contains(e.Id) && e.Labels.Any(q.Labels.Contains)).ToList();
+        ids.UnionWith(typed.Select(e => e.Id));
+        return hit.Concat(typed).Concat(described.Where(e => !ids.Contains(e.Id))).Take(300).ToList();
     }
 
     /// <summary>The judge pass: the model reads real event descriptions and picks
@@ -987,12 +1106,15 @@ public static class EventSearch
     /// keyword matching is not ("gray" never matches "light-colored").</summary>
     public static string JudgeSystemPrompt() =>
         "You match security-camera events against a search query.\n" +
-        "The time, camera and event-type filters are ALREADY applied — judge ONLY whether each event's " +
-        "description fits the descriptive part of the query (colors, clothing, objects, actions, details). " +
+        "The time and camera filters are ALREADY applied. Each event gives its camera, local time, the " +
+        "camera's detection tags, the objects seen and a description; judge whether the event fits what the " +
+        "query asks for (who or what was seen, what happened, colors, clothing, objects, details). The tags " +
+        "are hints: a description showing a person counts as a person even when the tag says motion. " +
         "The query may be in any language.\n" +
         "Be strict: include an event only when its description actually supports the query. A query asking " +
         "for \"red\" does not match \"light-colored\" or \"striped\". Treat synonyms and spelling variants " +
-        "as matches (grey = gray, car = vehicle).\n" +
+        "as matches (grey = gray, car = vehicle), and a different wording of the same action or scene " +
+        "as a match too (arriving = walks up to the door, visitor = a person at the door).\n" +
         "Answer with ONE line: a JSON array of the matching event numbers, e.g. [2,5]. No prose. " +
         "If none match, answer [].";
 
@@ -1004,7 +1126,9 @@ public static class EventSearch
         {
             var d = (chunk[i].AiDescription ?? "").Replace('\n', ' ').Trim();
             if (d.Length > 400) d = d[..400];
-            sb.Append(i + 1).Append(". ");
+            sb.Append(i + 1).Append(". ").Append(chunk[i].Camera).Append(' ')
+                .Append(chunk[i].StartUtc.ToLocalTime().ToString("ddd HH:mm")).Append(", ")
+                .Append(chunk[i].Labels.Count > 0 ? string.Join("/", chunk[i].Labels) : "untagged").Append(": ");
             // What the model listed as visible, ahead of the prose: it is the part
             // of the record that names things plainly.
             if (chunk[i].AiObjects is { Count: > 0 } objs)

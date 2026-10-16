@@ -3355,22 +3355,46 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 .ev-autoplay input { cursor: pointer; margin: 0; }
 
 /* ---- multi-select delete: action bar, row checkboxes, confirm dialog ---- */
-/* Label and bar share one line; on narrow screens the bar wraps below. */
-.ev-search-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin: 10px 0 4px; padding-left: 10px; }
-.ev-search-row .ev-search { flex: 1 1 auto; min-width: 260px; }
-
-/* Phones: the "AI SEARCH" heading is what pushed the field onto a second row.
-   The magnifier (or sparkle, when a local model is configured) already sits
-   inside the field and says the same thing. */
-@media (max-width: 700px) {
-    .ev-search-row { gap: 0; flex-wrap: nowrap; padding-left: 0; }
-    .ev-search-row .ev-search-head { display: none; }
-    .ev-search-row .ev-search { min-width: 0; gap: 6px; padding: 6px 10px; }
-    .ev-search-hint { padding-left: 10px; }
+/* ---- advanced search dialog ---- */
+/* Reads as the page's one real button, not another filter chip. */
+.ev-adv-btn {
+    white-space: nowrap;
+    border: 1.5px solid var(--accent);
+    color: var(--accent);
+    font-weight: 600;
+    padding: 4px 13px;
+    margin-left: 4px;
+    box-shadow: 0 0 0 3px var(--accent-soft);
 }
-.ev-search-head { display: flex; align-items: center; gap: 7px; flex: 0 0 auto; }
-.ev-search-title { font-size: 12px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); white-space: nowrap; }
-.ev-search-hint { font-size: 12px; color: var(--muted); margin: 4px 0 2px; padding-left: 10px; max-width: 640px; }
+.ev-adv-btn:hover { background: var(--accent); color: #fff; }
+.ev-adv-btn.chip-active { background: var(--accent); color: #fff; }
+.ev-adv-dialog { width: min(560px, calc(100vw - 24px)); }
+.ev-del-title.ev-adv-title { color: var(--accent); }
+.ev-adv-q { max-width: none; width: 100%; font-size: 14px; padding: 8px 12px; }
+.ev-adv-hint { font-size: 12px; color: var(--muted); margin: 6px 0 2px; line-height: 1.4; }
+.ev-adv-section {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 2px;
+    color: var(--muted);
+    margin: 14px 0 6px;
+}
+.ev-adv-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ev-adv-row .tool-label { margin-left: 0; }
+.ev-adv-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.ev-adv-warn { padding: 6px 0 0; font-size: 12px; }
+.ev-adv-go {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--accent);
+    color: #fff;
+    border-color: transparent;
+}
+.ev-adv-go:not(:disabled):hover { filter: brightness(1.1); }
+.ev-adv-go:disabled { opacity: 0.5; cursor: default; }
+.ev-adv-go .btn-spinner { border-top-color: #fff; }
+.ev-search-q { display: inline-flex; align-items: center; gap: 4px; color: var(--text); max-width: 40ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Camera multi-select: chip button + checkbox popover. */
 .cam-filter { position: relative; display: inline-flex; }
@@ -3411,31 +3435,6 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     }
     .cam-filter-menu label { font-size: 15px; padding: 4px 0; }
 }
-.ev-search {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex: 0 0 auto;
-    padding: 6px 14px;
-    border-bottom: 1px solid var(--line);
-}
-.ev-search-icon { display: inline-flex; color: var(--muted); flex: 0 0 auto; }
-.ev-search-icon.ai { color: var(--accent); }
-.ev-search-box { position: relative; flex: 1 1 auto; min-width: 0; max-width: 520px; display: flex; }
-.ev-search-box .ev-search-input { max-width: none; width: 100%; padding-right: 30px; }
-.ev-search-clear {
-    position: absolute;
-    right: 6px;
-    top: 50%;
-    transform: translateY(-50%);
-    display: inline-flex;
-    padding: 3px;
-    background: none;
-    border: none;
-    color: var(--muted);
-    cursor: pointer;
-}
-.ev-search-clear:hover { color: var(--text); }
 .ev-search-input {
     flex: 1 1 auto;
     min-width: 0;
@@ -3599,11 +3598,14 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 /* Events ⇄ Live segmented toggle in the toolbar */
 .ev-switch {
     display: inline-flex;
+    flex: 0 0 auto; /* the phone toolbar scrolls; a shrinking switch vanished instead */
     border: 1px solid var(--line);
     border-radius: 999px;
     overflow: hidden;
     background: var(--panel-2);
 }
+/* One line per control in the sideways-scrolling phone toolbar. */
+.ev-toolbar .chip, .ev-toolbar .cam-filter, .ev-toolbar .event-filter { flex: 0 0 auto; white-space: nowrap; }
 .ev-switch-opt {
     padding: 4px 14px;
     font-size: 12px;

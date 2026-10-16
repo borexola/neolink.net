@@ -18,7 +18,16 @@ in the README). Paste the matching section below into the GitHub release.
 - **Timeline: an SD card switch** plays that camera copy for the seconds before Neolink began recording; off by default and remembered per account, as Events only now is too.
 - **Server settings say why config.json can't be written** (wrong owner or permissions, read-only mount, missing file) instead of silently disabling the camera editor.
 
+### Changed
+
+- **Advanced search replaces the search bar on the Events page:** a dialog takes the question plus a period and the camera, review and threat filters, pre-filled from the list (the last 24 hours when no dates are set). Only events in that period reach the AI model, so searches answer much faster; a wide period gets a warning.
+- **Search reads a one-letter typo of an event-type word as the word** ("ars" finds cars), and a query that already names a type skips the AI translate call.
+- **Search treats visitors, guests and strangers as people** (they used to mean a doorbell ring, which hid person events), and an inflected word matches its other forms ("arriving" finds "arrives").
+- **With a model configured, search reads every described event in the period,** with its camera, time and detection tags, instead of only the events whose tag matched a word in the question. A person the camera tagged as motion is found by its description.
+
 ### Fixed
+
+- **Events page on phones:** the Events/Live and Server/SD card switches no longer collapse out of the toolbar, and filter chips stay on one line.
 
 - **Floodlight brightness and auto mode on cameras that never showed them** (the Duo Floodlight, and spotlights without an HTTP API such as the Lumus): Neolink asked with a message id these firmwares don't have.
 - **SD recordings load much faster:** they are fetched with the camera's uncapped Playback command instead of Download, which the camera caps at 1 MB/s. Clips the camera won't serve over HTTP (a Video Doorbell with RTMP off) come over Baichuan instead.

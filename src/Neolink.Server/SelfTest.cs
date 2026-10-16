@@ -2591,8 +2591,8 @@ public static class SelfTest
                 new() { Id = "b", Camera = "c", AiDescription = "A red car." },
             };
             var jp = Recording.EventSearch.JudgeUserPrompt("guy in a gray shirt", jev);
-            Assert(jp.Contains("Query: guy in a gray shirt") && jp.Contains("1. A person in a gray shirt. Second line.")
-                && jp.Contains("2. A red car."), "judge prompt numbers the descriptions");
+            Assert(jp.Contains("Query: guy in a gray shirt") && jp.Contains("1. c ") && jp.Contains("untagged: A person in a gray shirt. Second line.")
+                && jp.Contains("untagged: A red car."), $"judge prompt numbers the descriptions with their metadata: {jp}");
             Assert(Recording.EventSearch.ParseJudge("[2,5]", 6) is [2, 5], "clean judge reply");
             Assert(Recording.EventSearch.ParseJudge("```json\n[1, 3]\n```", 6) is [1, 3], "fenced judge reply");
             Assert(Recording.EventSearch.ParseJudge("Events 2 and 4 match.", 6) is [2, 4], "prose judge reply");
@@ -2619,6 +2619,39 @@ public static class SelfTest
             Assert(p.Labels is ["vehicle"] && p.Keywords.Contains("blue") && p.Keywords.Contains("garage"),
                 "leftover words become keywords");
             Assert(!p.Structured, "keywords mean the AI may refine");
+            Assert(!p.WantsTranslate, "a label plus plain English leftovers skips the translate call");
+            Assert(Recording.EventSearch.Parse("ars entering FrontDoor", cams, now).WantsTranslate == false
+                && Recording.EventSearch.Parse("ars entering FrontDoor", cams, now).Labels is ["vehicle"],
+                "a one-letter typo of a label word is read as the label");
+            var typo = Recording.EventSearch.Parse("ars entering FrontDoor", cams, now);
+            Assert(typo.Intended("ars entering FrontDoor") == "cars entering FrontDoor",
+                "the judge gets the corrected wording");
+            Assert(Recording.EventSearch.Parse("mailman at the door", cams, now).WantsTranslate,
+                "label-less leftovers still ask the model");
+            Assert(Recording.EventSearch.Parse("coches rojos ayer", cams, now).WantsTranslate,
+                "a non-English query still asks the model");
+            Assert(Recording.EventSearch.Respell("cat", cams) == null, "a real word is never respelled");
+            var visit = Recording.EventSearch.Parse("show me all visitors on arriving at my front door", cams, now);
+            Assert(visit.Labels is ["person"] && visit.Cameras is ["FrontDoor"] && visit.Keywords is ["arriving"],
+                $"a visitor is a person, not a doorbell ring; got [{string.Join(",", visit.Labels)}]");
+            Assert(Recording.EventSearch.Stem("arriving") == Recording.EventSearch.Stem("arrives")
+                && Recording.EventSearch.Stem("walked") == Recording.EventSearch.Stem("walking")
+                && Recording.EventSearch.Stem("glass") != Recording.EventSearch.Stem("gla"),
+                "inflections share a stem");
+            Assert(Recording.EventSearch.Respell("xyzzy", cams) == null, "nothing close means no guess");
+            var bounded = Recording.EventSearch.Parse("cars yesterday", cams, now);
+            bounded.Bound(now.Date.AddDays(-3), now.Date.AddDays(1), new[] { "TestCam" }, true, new[] { "yellow" });
+            Assert(bounded.FromLocal == now.Date.AddDays(-1) && bounded.ToLocal == now.Date
+                && bounded.Cameras is ["TestCam"] && bounded.UnreviewedOnly && bounded.Levels is ["yellow"],
+                "a typed day narrows within the dialog's period and the filters carry over");
+            bounded = Recording.EventSearch.Parse("cars yesterday", cams, now);
+            bounded.Bound(now.Date, now.Date.AddDays(1), null, false, null);
+            Assert(bounded.FromLocal == now.Date.AddDays(-1) && bounded.ToLocal == now.Date,
+                "a typed day outside the period is taken as meant");
+            bounded = Recording.EventSearch.Parse("cars in FrontDoor", cams, now);
+            bounded.Bound(now.AddHours(-24), now, new[] { "TestCam" }, false, null);
+            Assert(bounded.Cameras is ["FrontDoor"] && bounded.FromLocal == now.AddHours(-24),
+                "a typed camera beats the dialog's selection; the period applies");
             Assert(p.FromLocal == now.Date.AddDays(-1).AddHours(20) && p.ToLocal == now.Date.AddHours(6),
                 "last night is yesterday 20:00 to 06:00");
 
@@ -2646,10 +2679,27 @@ public static class SelfTest
                 hits = Recording.EventSearch.Execute(
                     Recording.EventSearch.Parse("red driveway", cams, DateTime.Now), store);
                 Assert(hits.Count == 1 && hits[0].Id == b.Id, "keywords match the stored AI description");
+                hits = Recording.EventSearch.Execute(
+                    Recording.EventSearch.Parse("walking", cams, DateTime.Now), store);
+                Assert(hits.Count == 1 && hits[0].Id == a.Id, "an inflected keyword matches by stem");
 
                 hits = Recording.EventSearch.Execute(
                     Recording.EventSearch.Parse("suspicious", cams, DateTime.Now), store);
                 Assert(hits.Count == 1 && hits[0].Id == b.Id, "threat vocabulary reaches the AI level");
+                var lvlQ = Recording.EventSearch.Parse("today", cams, DateTime.Now);
+                lvlQ.Levels.Add("green");
+                hits = Recording.EventSearch.Execute(lvlQ, store);
+                Assert(hits.Count == 1 && hits[0].Id == a.Id, "a level bound keeps unrated events and drops the rest");
+                a.Reviewed = true;
+                store.Save(a);
+                var unrevQ = Recording.EventSearch.Parse("today", cams, DateTime.Now);
+                unrevQ.UnreviewedOnly = true;
+                hits = Recording.EventSearch.Execute(unrevQ, store);
+                Assert(hits.Count == 1 && hits[0].Id == b.Id, "the unreviewed bound applies");
+                Assert(Recording.EventSearch.JudgePool(unrevQ, store).All(e => e.Id != a.Id),
+                    "the judge pool honours the bound too");
+                a.Reviewed = false;
+                store.Save(a);
 
                 hits = Recording.EventSearch.Execute(
                     Recording.EventSearch.Parse("purple in TestCam today", cams, DateTime.Now), store);
@@ -2707,6 +2757,13 @@ public static class SelfTest
                     Recording.EventSearch.Parse("people wearing red", cams, DateTime.Now), store);
                 Assert(jpool.Any(e => e.Id == oldRed.Id),
                     "a keyword-hit event never ages out of the judge pool");
+                jpool = Recording.EventSearch.JudgePool(
+                    Recording.EventSearch.Parse("vehicle reversing today", cams, DateTime.Now), store);
+                Assert(jpool.Any(e => e.Id == b.Id),
+                    "a motion-tagged event with a car in its description still reaches the judge");
+                Assert(Recording.EventSearch.JudgePool(
+                    Recording.EventSearch.Parse("no cars today reversing", cams, DateTime.Now), store)
+                    .All(e => !e.Labels.Contains("vehicle")), "negated types stay out of the judge pool");
             }
             finally
             {
