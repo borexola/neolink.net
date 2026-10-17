@@ -10,7 +10,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 work=$(mktemp -d)
-trap 'kill "${holder:-}" 2>/dev/null; rm -rf "$work"' EXIT
+trap 'kill "${holder:-}" 2>/dev/null || true; rm -rf "$work"' EXIT
 
 # Stub the app: run.sh supervises `dotnet ...`, which must exit cleanly.
 mkdir -p "$work/bin"
