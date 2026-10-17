@@ -1,0 +1,56 @@
+# Host-networking channel of the Neolink.NET add-on, for UDP-only battery
+# cameras. Manifest-only: it runs the stable add-on image of the same version,
+# so `version` must match neolink-addon/config.yaml (tests/check.sh enforces it).
+#
+# Replaces the stable add-on rather than running beside it: 8654 and 8655 bind
+# directly on the Home Assistant host, so the stable add-on must be stopped and
+# its start-on-boot turned off first. The launcher refuses a taken port.
+name: Neolink.NET (host network)
+version: "1.2.0"
+slug: neolink_host
+description: >-
+  Neolink.NET on host networking, for UDP-only battery cameras. Replaces the stable add-on.
+url: https://github.com/borexola/neolink.net
+arch:
+  - amd64
+  - aarch64
+image: ghcr.io/borexola/neolink.net-addon-{arch}
+startup: services
+boot: auto
+hassio_api: true
+services:
+  - mqtt:want
+map:
+  - addon_config:rw
+  - media:rw
+  - share:rw
+# Baichuan-over-UDP carries the client's port inside the packet, so no port
+# mapping can translate it; the app has to sit on the host's own network.
+host_network: true
+ingress: true
+ingress_port: 8655
+panel_icon: mdi:cctv
+panel_title: Neolink.NET host
+webui: http://[HOST]:[PORT:8655]
+watchdog: tcp://[HOST]:[PORT:8655]
+options:
+  cameras: []
+  auto_mqtt: true
+  log_verbose: false
+schema:
+  cameras:
+    - name: str
+      address: str
+      username: str
+      password: password?
+      always_on: bool?
+      channel_id: int(0,255)?
+      stream: list(mainStream|subStream|externStream|both|all)?
+      uid: str?
+      udp: bool?
+      wake_capture: bool?
+      keep_alive_hours: float?
+      http_address: str?
+      onvif_address: str?
+  auto_mqtt: bool
+  log_verbose: bool

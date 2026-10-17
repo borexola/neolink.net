@@ -1,0 +1,29 @@
+configuration:
+  cameras:
+    name: Cameras
+    description: >-
+      A quick way to get cameras running before you open the web UI — NOT the
+      full list. Neolink's own web UI (⚙ → Server settings → Cameras) is the
+      complete editor, and cameras added there do not appear here, so an empty
+      list next to working cameras is normal. Anything you set here wins at
+      every start; anything you leave blank keeps whatever the web UI holds,
+      and removing a camera from this list does not delete it — use the web
+      UI's Delete for that. Each entry needs a name (used in stream URLs and
+      entity names), the camera's address, and its account. always_on keeps a
+      battery camera streaming around the clock (it will drain the battery —
+      pair it with solar/USB power). Behind a Reolink NVR or Home Hub, set
+      channel_id to the camera's channel number starting at 0, or every camera
+      on that address lands on channel 0 and you see the first one repeated.
+      For battery models that only speak UDP, set uid (Reolink app → device
+      info, or the sticker) and turn on udp; wake_capture connects when the
+      camera wakes itself so its events are caught. http_address unlocks
+      picture settings on cameras whose HTTP API is on another address.
+  auto_mqtt:
+    name: Automatic MQTT setup
+    description: >-
+      Wire the connection to Home Assistant's Mosquitto broker add-on
+      automatically at every start. Turn off only if you run your own broker
+      (configure it in config.json or the web UI).
+  log_verbose:
+    name: Verbose logging
+    description: Debug-level logs. Only useful when chasing a problem.

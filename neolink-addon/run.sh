@@ -9,10 +9,11 @@
 set -uo pipefail
 
 # Overridable ONLY so CI can exercise this script against fixtures
-# (tests/check.sh); inside the add-on container neither variable exists and
-# the paths are exactly what they always were.
+# (tests/check.sh); inside the add-on container none of these exist and the
+# paths and the retry wait are exactly what they always were.
 CONFIG=${NEOLINK_CONFIG_PATH:-/config/config.json}
 OPTIONS=${NEOLINK_OPTIONS_PATH:-/data/options.json}
+BUSY_RETRY=${NEOLINK_BUSY_RETRY_SECONDS:-30}
 APP=(dotnet /app/neolink.net.dll --config "$CONFIG")
 
 log() { echo "[addon] $*"; }
@@ -135,9 +136,24 @@ build_config() {
   printf '%s\n' "$base" | jq . > "$CONFIG.tmp" && mv "$CONFIG.tmp" "$CONFIG"
 }
 
+# Under host networking the app's ports are the host's own: a port another
+# service holds (the stable add-on, say) is named here, not crash-looped on.
+refuse_busy_ports() {
+  jq -e . "$CONFIG" >/dev/null 2>&1 || return 0
+  local p
+  for p in $(jq -r '[(if .webui == false then empty else (.web_port // 8655) end), (.bind_port // 8654)] | .[]' "$CONFIG"); do
+    if (exec 3<>"/dev/tcp/127.0.0.1/$p") 2>/dev/null; then
+      log "tcp:$p is already in use on this host. Is another Neolink.NET add-on running? Stop it, turn off its Start on boot, then restart this add-on. Retrying in ${BUSY_RETRY}s."
+      sleep "$BUSY_RETRY"
+      exit 1
+    fi
+  done
+}
+
 mkdir -p /media/neolink 2>/dev/null || true
 
 build_config
+refuse_busy_ports
 if [ "$(jq -r '.log_verbose' "$OPTIONS")" = "true" ]; then APP+=(--verbose); fi
 # The web UI's Restart button exits the process; the add-on's Watchdog toggle
 # (or a docker/systemd restart policy outside HA) starts it again.

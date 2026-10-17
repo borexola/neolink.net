@@ -3,12 +3,12 @@
 # RELEASING: bump `version` to match the vX.Y.Z tag being cut — the Supervisor
 # pulls ghcr.io/borexola/neolink.net-addon-{arch}:<version>, which the docker
 # workflow publishes on every tag. Version here ≠ tag ⇒ users see no update.
+# neolink-host/config.yaml carries the same version (tests/check.sh enforces it).
 name: Neolink.NET
 version: "1.2.0"
 slug: neolink
 description: >-
-  Reolink camera bridge — live RTSP restreaming, a full web UI with recording
-  and timeline review, and native Home Assistant entities over MQTT.
+  Reolink camera bridge: RTSP restreaming, web UI with recording, Home Assistant entities.
 url: https://github.com/borexola/neolink.net
 arch:
   - amd64

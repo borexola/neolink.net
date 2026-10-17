@@ -15,9 +15,7 @@ name: Neolink.NET (beta)
 version: "beta"
 slug: neolink_beta
 description: >-
-  Rolling beta of Neolink.NET — try new features (served in the Home Assistant
-  sidebar via ingress) before they reach a stable release. Installs alongside the
-  stable add-on.
+  Try new features in development. Installs beside the stable add-on; web UI in the sidebar.
 url: https://github.com/borexola/neolink.net
 arch:
   - amd64

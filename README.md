@@ -88,7 +88,9 @@ If the **Mosquitto broker** add-on is installed, the MQTT connection is wired
 up automatically at every start — cameras appear as Home Assistant devices with
 no further setup. Recordings land in `/media/neolink`, so clips show up in HA's
 media browser. Full details in the add-on's Documentation tab
-([neolink-addon/DOCS.md](neolink-addon/DOCS.md)).
+([neolink-addon/DOCS.md](neolink-addon/DOCS.md)). UDP-only battery cameras
+need the **Neolink.NET (host network)** add-on from the same store instead
+([neolink-host/DOCS.md](neolink-host/DOCS.md)).
 
 **Prefer to write the config yourself?** Empty the add-on's camera list
 (`cameras: []`) and it stops touching `cameras` — then edit `config.json` in
@@ -840,7 +842,7 @@ Baichuan **over UDP** instead:
 | `"uid"` | the camera's UID (Reolink app → device info, or the sticker) |
 | `"udp": true` | selects the UDP transport |
 | `"address"` | its LAN IP — give it a DHCP reservation |
-| **host networking** | **in Docker/Podman: `network_mode: host` (compose) or `--network host` (run). Not optional** |
+| **host networking** | **in Docker/Podman: `network_mode: host` (compose) or `--network host` (run); in Home Assistant, the *Neolink.NET (host network)* add-on. Not optional** |
 
 Host networking is required because the Baichuan UDP handshake carries the
 client's port *inside* the packet and discovery relies on LAN broadcast —

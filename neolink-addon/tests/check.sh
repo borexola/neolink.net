@@ -10,18 +10,18 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
+trap 'kill "${holder:-}" 2>/dev/null; rm -rf "$work"' EXIT
 
 # Stub the app: run.sh supervises `dotnet ...`, which must exit cleanly.
 mkdir -p "$work/bin"
-printf '#!/bin/sh\nexit 0\n' > "$work/bin/dotnet"
+printf '#!/bin/sh\ntouch "%s/dotnet.ran"\nexit 0\n' "$work" > "$work/bin/dotnet"
 chmod +x "$work/bin/dotnet"
 
 launch() { # $1 = options fixture
   PATH="$work/bin:$PATH" \
   NEOLINK_CONFIG_PATH="$work/config.json" \
   NEOLINK_OPTIONS_PATH="$1" \
-  bash ../run.sh > /dev/null
+  bash ../run.sh > "$work/launch.log"
 }
 
 fail() { echo "FAIL: $1" >&2; exit 1; }
@@ -244,6 +244,32 @@ assert_cameras '[
   {"name": "nouid", "address": "10.0.0.11", "username": "admin", "password": "p"}
 ]' "udp without a uid is stripped (new and already-stored); udp with a uid is untouched"
 
+# --- 10. A port already in use stops the launcher with a clear line ---------
+# Under host networking the app's ports are the host's; the alternative is a
+# bind-exception crash loop that never says which add-on holds the port.
+if command -v python3 >/dev/null; then
+  python3 -c 'import socket,time; s=socket.socket(); s.bind(("127.0.0.1",0)); s.listen(1); print(s.getsockname()[1], flush=True); time.sleep(120)' > "$work/port" &
+  holder=$!
+  for _ in $(seq 50); do [ -s "$work/port" ] && break; sleep 0.1; done
+  busy=$(cat "$work/port")
+  [ -n "$busy" ] || fail "could not start a listener for the busy-port test"
+  cat > "$work/options.json" <<'JSON'
+{"cameras": [], "auto_mqtt": false, "log_verbose": false}
+JSON
+  printf '{"bind": "0.0.0.0", "web_port": %s, "cameras": []}\n' "$busy" > "$work/config.json"
+  rm -f "$work/dotnet.ran"
+  if NEOLINK_BUSY_RETRY_SECONDS=0 launch "$work/options.json"; then
+    fail "launcher started the app on a port already in use"
+  fi
+  grep -q "tcp:$busy is already in use" "$work/launch.log" \
+    || fail "busy port was not named in the launcher log"
+  [ ! -e "$work/dotnet.ran" ] || fail "app was started despite the busy port"
+  kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null || true
+  echo "ok: a port already in use stops the launcher and names the port"
+else
+  echo "skip: busy-port test (no python3)"
+fi
+
 # --- Changelog: Home Assistant reads CHANGELOG.md from THIS folder (not the
 # repo root) and slices the notes it shows by an exact "## <version>" heading.
 # A version bump without a matching section ships an empty update dialog, and
@@ -255,5 +281,13 @@ ver=$(sed -n 's/^version: *"\?\([^"]*\)"\? *$/\1/p' ../config.yaml | head -1)
 grep -qE "^#* ${ver//./\\.}$" ../CHANGELOG.md \
   || fail "neolink-addon/CHANGELOG.md has no '## $ver' section (HA slices release notes by that heading)"
 echo "ok: changelog has a section for $ver"
+
+# --- Host-network add-on: same image, so the same version and release notes --
+host=../../neolink-host
+hver=$(sed -n 's/^version: *"\?\([^"]*\)"\? *$/\1/p' "$host/config.yaml" | head -1)
+[ "$hver" = "$ver" ] || fail "neolink-host/config.yaml is at '$hver' but neolink-addon is at $ver (both run the same image)"
+grep -qE "^#* ${ver//./\\.}$" "$host/CHANGELOG.md" \
+  || fail "neolink-host/CHANGELOG.md has no '## $ver' section"
+echo "ok: host-network add-on matches $ver"
 
 echo "all launcher checks passed"

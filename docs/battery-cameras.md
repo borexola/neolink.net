@@ -6,7 +6,8 @@
 
 Three setups, pick one. UDP-only models (much of the Argus line never listens
 on TCP) always need `uid` + `"udp": true`, and in Docker **host networking**
-(`network_mode: host`); see [UDP-only models](#udp-only-models).
+(`network_mode: host`), or under Home Assistant the *Neolink.NET (host
+network)* add-on; see [UDP-only models](#udp-only-models).
 
 ## 1. On constant power (solar/USB): `always_on`
 

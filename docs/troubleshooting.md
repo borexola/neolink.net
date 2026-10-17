@@ -40,7 +40,8 @@ matching line.
 - **A UDP camera (`"udp": true`) times out while every other camera works, and
   the discovery sweep ends in `UDP: SILENCE`**: in Docker, the container is on a
   bridge network — UDP-only cameras need `network_mode: host` / `--network host`
-  (see [UDP-only battery models](../README.md#udp-only-battery-models-beta)).
+  (see [UDP-only battery models](../README.md#udp-only-battery-models-beta)); under
+  Home Assistant, install the **Neolink.NET (host network)** add-on instead.
   Read the sweep's `targets:` line to confirm: if the only broadcast address is
   container-internal (`172.x.255.255`) and none is on the camera's subnet, that
   is the cause.
