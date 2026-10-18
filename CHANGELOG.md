@@ -4,6 +4,12 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
+## Unreleased
+
+### Fixed
+
+- **The AI connection test fails fast when the LLM server cannot be reached:** a host that never answers is given up after 10 seconds instead of the full answer timeout, and the error names the host and port.
+
 ## 1.2.0
 
 Cameras without an HTTP API get their settings and SD-card playback over Baichuan, event search moves into a dialog and gets much smarter, and two new camera-side behaviours ship switched off.

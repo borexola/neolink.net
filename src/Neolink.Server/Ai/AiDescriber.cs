@@ -406,7 +406,14 @@ public sealed class AiDescriber
     private readonly Channel<Job> _jobs = Channel.CreateBounded<Job>(
         new BoundedChannelOptions(8) { SingleReader = true });
 
-    private static readonly HttpClient Http = new() { Timeout = Timeout.InfiniteTimeSpan };
+    // Connect bounded separately: a blackholed host would otherwise eat the whole
+    // answer timeout (the OS SYN retry window is ~2 minutes on Linux).
+    private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(10);
+    private static readonly HttpClient Http = new(new SocketsHttpHandler
+    {
+        ConnectTimeout = ConnectTimeout,
+        PooledConnectionIdleTimeout = TimeSpan.FromMinutes(2),
+    }) { Timeout = Timeout.InfiniteTimeSpan };
 
     private readonly AiStore _store;
     private readonly EventStore _events;
@@ -1118,6 +1125,13 @@ public sealed class AiDescriber
                 throw new InvalidOperationException(
                     $"LLM answered {(int)res.StatusCode}: {Excerpt(body)}");
         }
+        // The handler's ConnectTimeout surfaces as a cancellation wrapping a
+        // TimeoutException; tell it apart from the answer timeout above it.
+        catch (TaskCanceledException ex) when (ex.InnerException is TimeoutException && !timeout.IsCancellationRequested)
+        {
+            throw new HttpRequestException(
+                $"No connection to {req.RequestUri?.Host}:{req.RequestUri?.Port} within {ConnectTimeout.TotalSeconds:0}s", ex);
+        }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
             throw new TimeoutException($"LLM did not answer within {cfg.TimeoutSeconds}s");
@@ -1256,8 +1270,9 @@ public sealed class AiDescriber
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
             // The request carried an image; find out whether THAT was the problem —
-            // except after a timeout, where a second full wait would help nobody.
-            if (ex is not TimeoutException)
+            // except after a timeout or when the server was never reached, where a
+            // second wait would help nobody.
+            if (ex is not TimeoutException && !Unreachable(ex))
             {
                 try
                 {
@@ -1272,5 +1287,10 @@ public sealed class AiDescriber
             }
             return (Log.Flatten(ex), null);
         }
+
+        // Transport-level failure (refused, no route, DNS, connect timeout): no
+        // HTTP response was ever received.
+        static bool Unreachable(Exception ex) =>
+            ex is HttpRequestException { InnerException: System.Net.Sockets.SocketException or TimeoutException };
     }
 }
