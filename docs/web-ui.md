@@ -153,12 +153,15 @@ localhost, like two-way talk.
 
 Accounts live on the *Users* tab (admin): the admin manages users and
 passwords, and normal users view, control and review without touching server
-settings. The same tab holds **sign-in protection**, off until you switch it
-on: an account then locks for a set time after a set number of failed
-sign-ins (10 unless changed), and an address that keeps failing across
-accounts (password spraying) is blocked outright. It is opt-in on purpose —
-refusing a valid password is not something an upgrade should start doing by
-itself. Locked-out callers get one generic answer
+settings. The same tab holds **sign-in protection**: an account locks for a
+set time after a set number of failed sign-ins (10 unless changed), and an
+address that keeps failing across accounts (password spraying) is blocked
+outright. The first-run setup switches it on; an install from before it
+existed stays off until you switch it on, since refusing a valid password is
+not something an upgrade should start doing by itself. The first-run setup
+itself only accepts LAN callers (`ui.remote_setup` lifts that), so a server
+exposed before its admin exists cannot be claimed from outside. Locked-out
+callers get one generic answer
 whether the account exists or not, every lock is logged with its source
 address (fail2ban-friendly), and the panel lists live lockouts with an
 "unlock everything now" button. A server restart also clears every lock —

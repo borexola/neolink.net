@@ -4089,6 +4089,10 @@ public static class SelfTest
             AssertEq(Client("::ffff:198.51.100.9", null), "198.51.100.9");
             Assert(Web.LoginGuard.ClientAddress(null, "203.0.113.7") == null,
                 "no peer address means nothing to hold responsible");
+            foreach (var p in new[] { "127.0.0.1", "10.1.2.3", "172.16.0.9", "192.168.1.1", "169.254.1.1", "::1", "fd12::1", "::ffff:10.0.0.1" })
+                Assert(Web.LoginGuard.IsPrivate(System.Net.IPAddress.Parse(p)), $"{p} is private");
+            foreach (var p in new[] { "203.0.113.7", "8.8.8.8", "172.32.0.1", "2001:db8::1", "::ffff:8.8.8.8" })
+                Assert(!Web.LoginGuard.IsPrivate(System.Net.IPAddress.Parse(p)), $"{p} is public");
 
             // Settings persist in users.json, clamped to sane bounds.
             var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
@@ -9973,6 +9977,22 @@ public static class SelfTest
                     AssertEq(bg[0].GetProperty("percent").GetDouble(), 12.5);
                 }
 
+                // Baseline response headers ride on every answer.
+                using (var res = http.GetAsync("/api/auth/status").Result)
+                {
+                    Assert(res.Headers.TryGetValues("Referrer-Policy", out var rp) && rp.First() == "same-origin",
+                        "Referrer-Policy keeps ?token= URLs off other sites");
+                    Assert(res.Headers.TryGetValues("X-Content-Type-Options", out var xc) && xc.First() == "nosniff",
+                        "nosniff header present");
+                }
+
+                // The open first-run door is LAN-only: a public caller (here: the
+                // trusted forwarded hop) is refused until ui.remote_setup allows it.
+                http.DefaultRequestHeaders.Add("X-Forwarded-For", "203.0.113.7");
+                using (var remote = PostRaw(http, "/api/auth/setup", """{"username":"eve","password":"yyyyyyyy"}"""))
+                    AssertEq((int)remote.StatusCode, 403);
+                http.DefaultRequestHeaders.Remove("X-Forwarded-For");
+
                 // First account = the admin; creating it turns authentication ON.
                 var setup = PostJson(http, "/api/auth/setup",
                     """{"username":"admin","password":"correct horse"}""");
@@ -9980,6 +10000,8 @@ public static class SelfTest
                 Assert(setup.GetProperty("admin").GetBoolean(), "first account is the admin");
                 using (var again = PostRaw(http, "/api/auth/setup", """{"username":"x","password":"yyyyyyyy"}"""))
                     AssertEq((int)again.StatusCode, 409); // setup is one-shot
+                Assert(GetJson(http, $"/api/admin/security?token={Uri.EscapeDataString(token)}").GetProperty("enabled").GetBoolean(),
+                    "a fresh install starts with sign-in protection on");
 
                 // The gate: every /api route except the auth handshake now needs a session.
                 AssertEq((int)http.GetAsync("/api/cameras").Result.StatusCode, 401);

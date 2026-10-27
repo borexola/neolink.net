@@ -376,6 +376,7 @@ the original Rust neolink are also accepted.
 | `enabled` / `port` / `bind` | = `webui` / `web_port` / `web_bind` | Grouped aliases of the top-level web options |
 | `state_dir` | config dir | Where the UI's server-side state persists: `users.json` (sign-in accounts) and `settings.json` (per-user layouts/filters/recording switches) |
 | `reset_admin_password` | `false` | Recovery: while `true`, the login screen allows setting a new admin password. Turn it back off after use |
+| `remote_setup` | `false` | The first-run admin setup only accepts LAN addresses; `true` lets a public address do it (set up over a VPN that looks public) |
 | `trickle_speed` | `4` | Playback speed of the review strip's ambient clip previews |
 | `language` | *(none)* | Seeds the default UI language (`en`, `fr`, `de`, `es`, `nl`, `pl`, `pt`) on a server whose state has none yet. Only a seed: the first-run dialog and ⚙ → Language own the setting afterwards (stored in `users.json`, applied live) |
 

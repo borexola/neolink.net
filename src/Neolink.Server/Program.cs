@@ -1144,6 +1144,7 @@ if (config.WebPort > 0)
         Secrets = secretProtector,
         UserStore = userStore,
         ResetAdminPassword = config.EffectiveResetAdminPassword,
+        AllowRemoteSetup = config.Ui.RemoteSetup,
         TrickleSpeed = config.Ui.TrickleSpeed,
         TalkEnabled = config.Ui.Talk,
         ShowBackgroundTasks = config.Ui.ShowBackgroundTasks,

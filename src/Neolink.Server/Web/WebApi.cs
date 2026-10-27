@@ -111,6 +111,8 @@ public sealed class WebApiOptions
     public Neolink.Notifications.SecretProtector? Secrets { get; init; }
     public required UserStore UserStore { get; init; }
     public bool ResetAdminPassword { get; init; }
+    /// <summary>ui.remote_setup: let a public address create the first (admin) account.</summary>
+    public bool AllowRemoteSetup { get; init; }
     public double TrickleSpeed { get; init; } = 4;
     /// <summary>Beta: two-way talk (browser mic → camera speaker). Off unless ui.talk enables it.</summary>
     public bool TalkEnabled { get; init; }
@@ -455,10 +457,13 @@ public static class WebApi
         var app = builder.Build();
 
         // Permissive CORS: this is a LAN streaming API, the web client may be served from anywhere.
+        // Referrer same-origin: media URLs carry ?token=, which must never reach another site.
         app.Use(async (ctx, next) =>
         {
             ctx.Response.Headers["Access-Control-Allow-Origin"] = "*";
             ctx.Response.Headers["Access-Control-Allow-Headers"] = "*";
+            ctx.Response.Headers["Referrer-Policy"] = "same-origin";
+            ctx.Response.Headers["X-Content-Type-Options"] = "nosniff";
             if (ctx.Request.Method == "OPTIONS")
             {
                 ctx.Response.StatusCode = 204;
@@ -567,7 +572,7 @@ public static class WebApi
         });
 
         // First account = the admin; creating it is what turns authentication on.
-        app.MapPost("/api/auth/setup", (CredentialsRequest req) =>
+        app.MapPost("/api/auth/setup", (CredentialsRequest req, HttpContext ctx) =>
         {
             // On a shared demo, whoever creates the admin account owns the server
             // for everyone — and unlocks the whole AdminOnly surface (config,
@@ -577,6 +582,16 @@ public static class WebApi
                 return Results.Json(new { error = "this is a shared demo — accounts are disabled" }, statusCode: 403);
             if (userStore.Enabled)
                 return Results.Json(new { error = "already set up" }, statusCode: 409);
+            // Until the admin exists this is the one open door: a server exposed
+            // before first run must not hand itself to the first scanner that knocks.
+            var from = LoginGuard.ClientAddress(ctx.Connection.RemoteIpAddress, ctx.Request.Headers["X-Forwarded-For"]);
+            if (!o.AllowRemoteSetup && from != null
+                && System.Net.IPAddress.TryParse(from, out var fromIp) && !LoginGuard.IsPrivate(fromIp))
+            {
+                Log.Warn($"First-run setup REFUSED from public address {from}: create the admin from the LAN, " +
+                         "or set ui.remote_setup = true");
+                return Results.Json(new { error = "set up the admin account from the local network" }, statusCode: 403);
+            }
             if (string.IsNullOrWhiteSpace(req.Username) || string.IsNullOrEmpty(req.Password))
                 return Results.Json(new { error = "provide username and password" }, statusCode: 400);
             try
@@ -593,7 +608,11 @@ public static class WebApi
                     userStore.SetDefaultLanguage(language);
                     serverLanguage.Code = language;
                 }
-                Log.Warn($"Web UI authentication ENABLED: admin account '{admin.Name}' created");
+                // A fresh install starts protected; older installs keep their opt-in choice.
+                var guard = userStore.GetSecurity();
+                guard.Enabled = true;
+                userStore.SetSecurity(guard);
+                Log.Warn($"Web UI authentication ENABLED: admin account '{admin.Name}' created; sign-in protection on");
                 return Results.Json(new { token = userStore.IssueToken(admin), user = admin.Name, admin = true });
             }
             catch (ArgumentException ex)

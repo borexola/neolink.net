@@ -89,7 +89,7 @@ public sealed class LoginGuard
     public static string? ClientAddress(IPAddress? peer, string? forwardedFor)
     {
         if (peer == null) return null;
-        if (IsLocalProxy(peer) && !string.IsNullOrWhiteSpace(forwardedFor))
+        if (IsPrivate(peer) && !string.IsNullOrWhiteSpace(forwardedFor))
         {
             // Strictly the trailing entry, never a scan back through the list: an
             // earlier hop is caller-written, so an unparseable last entry means
@@ -106,7 +106,8 @@ public sealed class LoginGuard
     private static string Normalize(IPAddress ip) =>
         (ip.IsIPv4MappedToIPv6 ? ip.MapToIPv4() : ip).ToString();
 
-    private static bool IsLocalProxy(IPAddress ip)
+    /// <summary>Loopback, RFC 1918, link-local or unique-local: an address that cannot have come in from the internet.</summary>
+    public static bool IsPrivate(IPAddress ip)
     {
         if (IPAddress.IsLoopback(ip)) return true;
         if (ip.IsIPv4MappedToIPv6) ip = ip.MapToIPv4();
