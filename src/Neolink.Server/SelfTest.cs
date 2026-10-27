@@ -9932,6 +9932,10 @@ public static class SelfTest
                 AssertEq(Web.WebApi.AllowedOrigin("null", "cams.example", Array.Empty<string>()), null);
                 AssertEq(Web.WebApi.AllowedOrigin("https://ha.example", "cams.example", new[] { "https://ha.example/" }), "https://ha.example");
 
+                // Clickjacking: only the UI itself and ui.cors_origins may frame it.
+                using (var res = http.GetAsync("/api/features").Result)
+                    AssertEq(res.Headers.GetValues("Content-Security-Policy").First(), "frame-ancestors 'self' https://ha.example");
+
                 // Snapshot endpoint: a JPEG from the camera, served through a short
                 // per-camera cache so a poll storm reaches the camera once.
                 using (var snap = http.GetAsync("/api/cameras/snapcam/snapshot.jpg").Result)

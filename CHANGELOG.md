@@ -9,6 +9,7 @@ in the README). Paste the matching section below into the GitHub release.
 ### Security
 
 - **The API no longer answers every site's CORS request:** only the page's own origin and the new `ui.cors_origins` list get CORS headers, so a page on another site cannot read it.
+- **Other sites can no longer frame the web UI** (`Content-Security-Policy: frame-ancestors`); Home Assistant ingress keeps working, and `ui.cors_origins` lists any other site that may embed it.
 
 ## 1.2.0
 

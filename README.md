@@ -374,7 +374,7 @@ the original Rust neolink are also accepted.
 | `enabled` / `port` / `bind` | = `webui` / `web_port` / `web_bind` | Grouped aliases of the top-level web options |
 | `state_dir` | config dir | Where the UI's server-side state persists: `users.json` (sign-in accounts) and `settings.json` (per-user layouts/filters/recording switches) |
 | `reset_admin_password` | `false` | Recovery: while `true`, the login screen allows setting a new admin password. Turn it back off after use |
-| `cors_origins` | `[]` | Other origins (`"https://ha.example:8123"`) whose pages may call the API from a browser. The page's own origin always may; everything else gets no CORS headers |
+| `cors_origins` | `[]` | Other origins (`"https://ha.example:8123"`) whose pages may call the API from a browser or embed the UI in a frame (a Home Assistant *Webpage* card pointing at the direct port needs this; ingress does not). The page's own origin always may; everything else gets no CORS headers and cannot frame it |
 | `trickle_speed` | `4` | Playback speed of the review strip's ambient clip previews |
 | `language` | *(none)* | Seeds the default UI language (`en`, `fr`, `de`, `es`, `nl`, `pl`, `pt`) on a server whose state has none yet. Only a seed: the first-run dialog and ⚙ → Language own the setting afterwards (stored in `users.json`, applied live) |
 

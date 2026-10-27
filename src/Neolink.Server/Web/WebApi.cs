@@ -458,9 +458,13 @@ public static class WebApi
 
         // CORS only for the page's own origin (either scheme) and ui.cors_origins;
         // any other site gets no CORS headers, so its scripts cannot read the API.
+        // Framing is limited the same way (clickjacking): HA ingress frames the UI
+        // from its own origin, so 'self' covers it without any add-on setting.
         var corsOrigins = o.CorsOrigins;
+        var frameAncestors = "frame-ancestors 'self'" + string.Concat(corsOrigins.Select(x => " " + x.TrimEnd('/')));
         app.Use(async (ctx, next) =>
         {
+            ctx.Response.Headers["Content-Security-Policy"] = frameAncestors;
             if (AllowedOrigin(ctx.Request.Headers.Origin, ctx.Request.Host.Value, corsOrigins) is { } origin)
             {
                 ctx.Response.Headers["Access-Control-Allow-Origin"] = origin;
