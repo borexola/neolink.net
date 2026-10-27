@@ -19,6 +19,7 @@ in the README). Paste the matching section below into the GitHub release.
 ### Fixed
 
 - **The AI connection test fails fast when the LLM server cannot be reached:** a host that never answers is given up after 10 seconds instead of the full answer timeout, and the error names the host and port.
+- **Tiles no longer hang on "connecting…" after a camera's `stream` setting changes:** a saved tile on a stream the camera stopped serving switches to one it still serves.
 
 ## 1.2.0
 

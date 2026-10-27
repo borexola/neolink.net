@@ -7067,16 +7067,27 @@
     /// layout outlives the config that built it, and such a tile keeps asking for a
     /// snapshot that 404s forever. Never runs on an empty camera list — that is a
     /// server that has not answered properly, not a config with nothing in it. The
-    /// tile and its span stay, so the grid keeps its shape.</summary>
+    /// tile and its span stay, so the grid keeps its shape. A tile on a stream the
+    /// camera no longer serves (its stream setting changed) moves to one it does.</summary>
     private void PruneMissingCameras()
     {
         if (_cameras.Count == 0) return;
         for (int i = 0; i < _slots.Count; i++)
         {
             var slot = _slots[i];
-            if (slot.Camera == null
-                || _cameras.Any(c => string.Equals(c.Name, slot.Camera, StringComparison.OrdinalIgnoreCase)))
+            if (slot.Camera == null) continue;
+            var cam = _cameras.FirstOrDefault(c => string.Equals(c.Name, slot.Camera, StringComparison.OrdinalIgnoreCase));
+            if (cam != null)
+            {
+                // An unserved path 404s on /api/stream and the player sits on "connecting…" forever.
+                if (slot.Path != null && !cam.Streams.Any(s => s.Path == slot.Path)
+                    && DefaultStream(cam) is { } fallback)
+                {
+                    slot.Kind = fallback.Kind;
+                    slot.Path = fallback.Path;
+                }
                 continue;
+            }
             slot.Camera = slot.Kind = slot.Path = null;
             if (_maxIndex == i)
             {

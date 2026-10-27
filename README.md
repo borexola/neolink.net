@@ -6,7 +6,7 @@
 
 Neolink.NET is for Reolink IP cameras that talk the proprietary "Baichuan" protocol on
 TCP port 9000 instead of standard RTSP/ONVIF (B800/D800, B400/D400, E1, Lumus, 510A,
-Duo, TrackMix, and many others).
+Duo, TrackMix, Argus Solar, Solar Floodlight, and many others).
 
 Your NVR software (**Frigate**, Blue Iris, Home Assistant, Shinobi, VLC, ffmpeg, …) connects to
 Neolink.NET, which logs into the camera, demuxes its media stream, and re-serves it as
@@ -800,6 +800,10 @@ onvif:
 hardware, but sleep behavior varies by model and is still being tuned against
 field logs — open an issue with the `[wake-diag]` log lines if yours
 misbehaves.
+
+**Confirmed working:** Argus Solar, Argus Eco Pro (UDP), and Duo 2 Battery
+with DNS wake hints
+([#66](https://github.com/borexola/neolink.net/issues/66)).
 
 The short version:
 

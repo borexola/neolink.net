@@ -3,6 +3,10 @@
 > **Beta, under active development.** Validated on real hardware (Argus
 > line, battery doorbells), still being tuned. If something misbehaves, open
 > an issue with the `[wake-diag]` log lines; that evidence drives the fixes.
+>
+> **Confirmed working:** Argus Solar, Argus Eco Pro (UDP), and Duo 2 Battery
+> (firmware v3.0.0.3725, DNS wake hints via `pushx.reolink.com`,
+> [#66](https://github.com/borexola/neolink.net/issues/66)).
 
 Three setups, pick one. UDP-only models (much of the Argus line never listens
 on TCP) always need `uid` + `"udp": true`, and in Docker **host networking**
