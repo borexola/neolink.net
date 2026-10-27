@@ -644,6 +644,9 @@ Only the browser-facing traffic (the page, the live-video WebSocket, event
 clips/thumbnails) traverses the proxy, so your TLS certificate only needs to
 be valid for the browser.
 
+Before the proxy faces the internet, go through the checklist in
+[docs/web-ui.md → Exposing it to the internet](docs/web-ui.md#exposing-it-to-the-internet).
+
 ## Home Assistant (MQTT)
 
 > ### 📖 Full guide: **[docs/home-assistant.md](docs/home-assistant.md)** —

@@ -170,6 +170,29 @@ fresh address by sending the header themselves. A proxy that adds no such
 header leaves every sign-in looking like the proxy, in which case account
 lockouts carry the load and the per-address block is best left off.
 
+## Exposing it to the internet
+
+The safest way to reach your cameras from outside is a VPN (WireGuard,
+Tailscale, your router's own) into the LAN: nothing is published, and the
+rest of this list does not apply. If you do publish the web UI, go through
+this before opening the port:
+
+1. **Create the admin account first**, from the LAN, before the server is
+   reachable from outside: until it exists, the first visitor is offered the
+   server.
+2. **Switch sign-in protection on** (⚙ → Users): lockouts after failed
+   sign-ins, and a block on addresses that spray passwords.
+3. **Put a TLS reverse proxy in front** (see the README's reverse-proxy
+   section) and forward only the proxy's HTTPS port. The UI port (8655)
+   itself stays on the LAN: session tokens travel in media URLs, and plain
+   HTTP would show them to every network in between.
+4. **Keep RTSP off the internet.** Do not forward the RTSP port (8654); if
+   you must, set RTSP `users` so every stream needs a password. The ONVIF
+   and wake-hint ports have no business being public at all.
+5. **Leave `ui.cors_origins` empty** unless another site of yours embeds or
+   scripts the UI; it is the only thing that lets a foreign page frame it or
+   read the API.
+
 ## Language
 
 The UI ships in English, French, German, Spanish, Dutch, Polish and
