@@ -8,6 +8,7 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Changed
 
+- **Big camera walls come up faster:** tiles start on the first primed frame and catch up at speed instead of decoding the whole backlog before painting, the wall attaches in one call, tile stills are browser-cached for their freshness window, and the review strip's previews wait until the tiles are live. The stats panel counts playback-rate changes.
 - **Live view runs closer to real time:** the player's cushion starts at 0.35 s instead of 1 s and only grows when the link actually stutters, and the server no longer holds each frame back until the next one arrives.
 
 ### Security

@@ -4262,12 +4262,17 @@
     {
         if (firstRender)
         {
-            try { _coarsePointer = await JS.InvokeAsync<bool>("neolink.isCoarse"); } catch { }
+            // The three JS reads are independent of everything else: issued together,
+            // they cost one round trip instead of three on the way to the first tile.
+            var coarse = JS.InvokeAsync<bool>("neolink.isCoarse").AsTask();
+            var notif = JS.InvokeAsync<string>("neolink.notifState").AsTask();
+            var shell = JS.InvokeAsync<bool>("neolink.isShell").AsTask();
             await LoadPersistedAsync();
             _loaded = true;
             await RefreshAuthAsync();
-            try { _notifPerm = await JS.InvokeAsync<string>("neolink.notifState"); } catch { }
-            try { _isShell = await JS.InvokeAsync<bool>("neolink.isShell"); } catch { }
+            try { _coarsePointer = await coarse; } catch { }
+            try { _notifPerm = await notif; } catch { }
+            try { _isShell = await shell; } catch { }
             await LoadAlertPrefsAsync();
             await RefreshDetectAsync();
             await RefreshCamerasAsync();
@@ -8096,6 +8101,12 @@
         // very pass is already protected from waking its camera.
         bool battChanged = SyncBatteryTiles();
         int upper = Math.Max(_slots.Count, _attached.Count == 0 ? 0 : _attached.Keys.Max() + 1);
+        // Every attach/detach of this pass goes to JS as ONE call: a round trip per
+        // tile is what made a twenty-tile wall come up one tile at a time. The
+        // bookkeeping is applied only once that call has succeeded.
+        var ops = new List<object>();
+        var detaching = new List<int>();
+        var attaching = new List<(int Index, string Url)>();
         for (int i = 0; i < upper; i++)
         {
             // Locked: force every tile to detach — a signed-out user sees no video.
@@ -8121,36 +8132,36 @@
             _attached.TryGetValue(i, out var current);
             if (desired == current) continue;
 
-            if (current != null)
-            {
-                await JS.InvokeVoidAsync("neolink.detach", $"vid-{i}");
-                _attached.Remove(i);
-            }
             if (desired != null)
             {
-                await JS.InvokeVoidAsync("neolink.attach", $"vid-{i}", desired);
-                _attached[i] = desired;
-                // The budget runs from ATTACH, not from the first frame: the camera
-                // is held awake from the moment the server connects, so that is the
-                // honest start of the cost.
-                if (_batt.TryGetValue(i, out var b)) b.AttachedUtc = DateTime.UtcNow;
+                ops.Add(new { id = $"vid-{i}", url = desired }); // attach replaces any current player
+                attaching.Add((i, desired));
+            }
+            else
+            {
+                ops.Add(new { id = $"vid-{i}", url = (string?)null });
+                detaching.Add(i);
             }
         }
 
         // The quick-view pop-up has its own player, independent of the grid slots.
         string? quick = (!Locked && _quickView != null) ? WsUrl(_quickView) : null;
         if (quick != _quickAttached)
+            ops.Add(new { id = QuickVideoId, url = quick });
+
+        if (ops.Count > 0)
         {
-            if (_quickAttached != null)
+            await JS.InvokeVoidAsync("neolink.attachMany", ops);
+            foreach (var i in detaching) _attached.Remove(i);
+            foreach (var (i, url) in attaching)
             {
-                await JS.InvokeVoidAsync("neolink.detach", QuickVideoId);
-                _quickAttached = null;
+                _attached[i] = url;
+                // The budget runs from ATTACH, not from the first frame: the camera
+                // is held awake from the moment the server connects, so that is the
+                // honest start of the cost.
+                if (_batt.TryGetValue(i, out var b)) b.AttachedUtc = DateTime.UtcNow;
             }
-            if (quick != null)
-            {
-                await JS.InvokeVoidAsync("neolink.attach", QuickVideoId, quick);
-                _quickAttached = quick;
-            }
+            if (quick != _quickAttached) _quickAttached = quick;
         }
 
         // This runs from OnAfterRender, so a tile that only just became known as a

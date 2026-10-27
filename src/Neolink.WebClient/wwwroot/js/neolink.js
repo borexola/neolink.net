@@ -281,10 +281,16 @@
                     const span = end - b.start(last);
                     if (this.msgGaps.length >= 1 && span >= this.latencyTarget) {
                         this.started = true;
-                        this.seek(Math.max(b.start(last), end - this.latencyTarget), 2000);
+                        // Start ON the primed keyframe: seeking into the GOP decodes every
+                        // frame up to that point before the first one paints, and twenty
+                        // tiles doing that at once is the start-up stutter. The catch-up
+                        // below closes the gap at speed instead.
+                        this.catchingUp = span > this.latencyTarget + 0.5;
+                        this.startedAt = performance.now();
+                        this.seek(b.start(last), 2000);
                         // If playback is refused (autoplay policy), clear `started` so the
                         // next delivery retries instead of freezing on the first frame.
-                        this.video.play().catch(() => { this.started = false; });
+                        this.video.play().catch(() => { this.started = false; this.catchingUp = false; });
                     }
                     return;
                 }
@@ -300,16 +306,40 @@
                 // Safari's pipeline visibly janks on higher playback rates, so the
                 // ManagedMediaSource path drifts back more softly.
                 const chase = this.mms ? 1.05 : 1.1;
-                if (ahead > this.latencyTarget + 2) {
+                // The prime may still be arriving when playback starts, so a gap that
+                // opens in the first seconds counts as start-up footage too.
+                if (!this.catchingUp && ahead > this.latencyTarget + 0.5 && performance.now() - this.startedAt < 5000)
+                    this.catchingUp = true;
+                if (this.catchingUp) {
+                    // Fast-forward through the primed footage. The rate is modest and
+                    // scaled to the wall: the decoders are shared, and a wall that cannot
+                    // sustain it would skip instead of catching up. A catch-up that drags
+                    // on ends in ONE resync rather than running fast indefinitely.
+                    if (ahead <= this.latencyTarget + 0.1 || performance.now() - this.startedAt > 12000) {
+                        if (ahead > this.latencyTarget + 0.5) { this.bump('resync'); this.seek(end - this.latencyTarget); }
+                        this.catchingUp = false;
+                        this.setRate(1.0);
+                    } else {
+                        this.setRate(this.mms || Object.keys(players).length >= 6 ? 1.25 : 1.5);
+                    }
+                } else if (ahead > this.latencyTarget + 2) {
                     this.bump('resync');
                     this.seek(end - this.latencyTarget); // hard resync
-                    this.video.playbackRate = 1.0;
-                } else if (ahead > this.latencyTarget + 0.25) {
-                    this.video.playbackRate = chase;  // drift back gently, invisibly
-                } else if (this.video.playbackRate !== 1.0 && ahead <= this.latencyTarget + 0.05) {
-                    this.video.playbackRate = 1.0;
+                    this.setRate(1.0);
+                } else if (ahead > this.latencyTarget + 0.5) {
+                    this.setRate(chase);  // drift back gently, invisibly
+                } else if (this.video.playbackRate !== 1.0 && ahead <= this.latencyTarget + 0.1) {
+                    this.setRate(1.0);
                 }
             } catch { }
+        }
+
+        /// Every rate change is a small hiccup in the pipeline, so they are counted
+        /// (the stats panel shows them) and never repeated for the same value.
+        setRate(r) {
+            if (this.video.playbackRate === r) return;
+            this.video.playbackRate = r;
+            this.rateFlips = (this.rateFlips || 0) + 1;
         }
 
         /// Moves the playhead and opens the quiet window the seek's own 'waiting' falls into.
@@ -376,6 +406,7 @@
                 dropped: q ? q.droppedVideoFrames : null,
                 corrupted: q ? q.corruptedVideoFrames : null,
                 ahead, target: this.latencyTarget, floor: this.latencyFloor, rate: v.playbackRate,
+                catchingUp: !!this.catchingUp, rateFlips: this.rateFlips || 0,
                 readyState: v.readyState, live: v.dataset.live === '1',
                 bytes: this.bytes, fragments: this.msgCount,
                 maxGap: this.msgGaps.length ? Math.max(...this.msgGaps) : null,
@@ -395,6 +426,7 @@
             this.sb = null;
             this.queue = [];
             this.started = false;
+            this.catchingUp = false;
             try { this.video.playbackRate = 1.0; } catch { }
             delete this.video.dataset.live;
             if (this.video.src) {
@@ -490,7 +522,7 @@
                 dropPct >= 2 ? 'bad' : dropPct >= 0.5 ? 'warn' : ''],
             ['buffer', s.ahead == null ? '—' : `${s.ahead.toFixed(2)} s ahead / ${s.target.toFixed(2)} s target (floor ${s.floor.toFixed(2)} s)`,
                 s.ahead != null && s.ahead < 0.15 ? 'warn' : ''],
-            ['speed', `${s.rate.toFixed(2)}×${s.rate > 1.001 ? ' (catching up)' : ''}`, s.rate > 1.001 ? 'warn' : ''],
+            ['speed', `${s.rate.toFixed(2)}×${s.rate > 1.001 ? ' (catching up)' : ''} · ${s.rateFlips} rate change(s)`, s.rate > 1.001 ? 'warn' : ''],
             ['bitrate', bps == null ? 'measuring…' : `${nerdRate(bps)} · avg ${nerdRate(avgBps)}`],
             ['received', `${nerdBytes(s.bytes)} in ${nerdDur(s.session)}`],
             ['delivery', `${s.fragments.toLocaleString()} fragments · widest gap ${s.maxGap == null ? '—' : s.maxGap.toFixed(2) + ' s'}`],
@@ -792,6 +824,14 @@
         // `suspend` RELEASES their decoders (a phone has very few, and the event
         // player needs one); the src is stashed so the next call restores it.
         trickle(speed, suspend) {
+            // Live tiles get the decoders first: while one is still connecting in
+            // the seconds after an attach, the strip's clips wait their turn.
+            if (!suspend && performance.now() - (this._attachedAt || -1e9) < 6000
+                && document.querySelector('video[id^="vid-"]:not([data-live])')) {
+                clearTimeout(this._trickleLater);
+                this._trickleLater = setTimeout(() => this.trickle(speed, suspend), 500);
+                return;
+            }
             document.querySelectorAll('video[data-trickle]').forEach(v => {
                 if (suspend) {
                     if (!v.dataset.trickleSrc && v.getAttribute('src')) {
@@ -1872,6 +1912,13 @@
             this.detach(videoId);
             const video = document.getElementById(videoId);
             if (video) players[videoId] = new Player(video, wsUrl);
+        },
+        // A whole wall in one interop round trip; a null url detaches.
+        attachMany(items) {
+            this._attachedAt = performance.now();
+            for (const it of items) {
+                if (it.url) this.attach(it.id, it.url); else this.detach(it.id);
+            }
         },
         detach(videoId) {
             const p = players[videoId];

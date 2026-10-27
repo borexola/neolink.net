@@ -2577,9 +2577,12 @@ public static class WebApi
                 ctx.Response.Headers["X-Snapshot-Age"] = ((long)age.TotalSeconds).ToString();
                 if (age.TotalSeconds > maxAge)
                     ctx.Response.Headers["X-Snapshot-Stale"] = "true";
-                // The server-side cache is the only cache: a browser/HA re-fetch
-                // must reach it, not a stored copy with the same URL.
-                ctx.Response.Headers.CacheControl = "no-store";
+                // The browser may keep it for what is left of the freshness the caller
+                // asked for (never longer than this server would serve it itself); a
+                // stale stand-in is never stored.
+                ctx.Response.Headers.CacheControl = age.TotalSeconds > maxAge
+                    ? "no-store"
+                    : $"private, max-age={(int)Math.Max(0, maxAge - age.TotalSeconds)}";
                 return Results.Bytes(c.Jpeg, "image/jpeg");
             }
 
@@ -2651,7 +2654,7 @@ public static class WebApi
                 {
                     snapCache[cam.Name] = (jpeg!, DateTime.UtcNow);
                     ctx.Response.Headers["X-Snapshot-Age"] = "0";
-                    ctx.Response.Headers.CacheControl = "no-store";
+                    ctx.Response.Headers.CacheControl = $"private, max-age={(int)maxAge}";
                     return Results.Bytes(jpeg!, "image/jpeg");
                 }
                 // A non-Reolink camera that HAS a snapshot but returned nothing this
