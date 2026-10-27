@@ -211,8 +211,8 @@ recording, notifications and Home Assistant continue to follow the camera.
   camera or other viewers
 
 **Web UI (optional, built in)** — full tour in [docs/web-ui.md](docs/web-ui.md)
-- Live low-latency video (~1 s, fMP4 over WebSocket + MSE — no plugins, no
-  transcoding), live audio, opt-in **two-way talk**
+- Live low-latency video (well under a second on a LAN, fMP4 over WebSocket +
+  MSE — no plugins, no transcoding), live audio, opt-in **two-way talk**
 - Camera wall with five layouts (Grid, Focus, Mosaic, Theater, Free),
   per-tile stream choice, maximize and fullscreen
 - **Camera settings & controls** discovered from the camera itself: PTZ,
@@ -865,7 +865,7 @@ behavior and made this support work
 > camera settings panel, events/timeline/export, SD-card playback, PWA
 > install, browser alerts, two-way talk, studio layout.
 
-The built-in browser UI is a multi-camera wall with ~1 s live video (fMP4
+The built-in browser UI is a multi-camera wall with sub-second live video (fMP4
 over WebSocket — no plugins, no transcoding), an event review strip, a synced
 multi-camera timeline with export, and per-camera settings discovered from
 the camera itself. It installs as an app (PWA), works behind a TLS reverse

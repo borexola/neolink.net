@@ -5,9 +5,10 @@ on `web_port` (default 8655) or turn it off with `"webui": false`.
 
 ## Live viewing
 
-- Video arrives as **fMP4 over WebSocket + Media Source Extensions** — ~1 s
-  latency for cameras that deliver per-frame, a little more for cameras that
-  batch whole GOPs (an adaptive jitter buffer measures each stream's cadence).
+- Video arrives as **fMP4 over WebSocket + Media Source Extensions** — a
+  ~0.35 s cushion for cameras that deliver per-frame (it grows only if the
+  link stutters), more for cameras that batch whole GOPs (an adaptive jitter
+  buffer measures each stream's cadence).
 - **Audio** for AAC cameras: streams start muted (browser autoplay rules), the
   speaker button unmutes; event clips and 24/7 recordings carry audio too.
   ADPCM-only cameras play audio via RTSP only.

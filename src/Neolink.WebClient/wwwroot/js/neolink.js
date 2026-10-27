@@ -17,8 +17,12 @@
     // Latency tuning: like VLC, keep a jitter buffer between the live edge and the
     // playhead. Cameras deliver video anywhere from per-frame to whole multi-second
     // GOP batches, so the cushion adapts to the observed delivery cadence: it must
-    // always cover the gap between two network deliveries.
-    const MIN_LATENCY = 1.0;   // floor for the adaptive target (s)
+    // always cover the gap between two network deliveries. The floor starts low
+    // and rises a notch on every real underrun, so a jittery link earns itself a
+    // bigger cushion instead of stuttering, and a clean LAN keeps the small one.
+    const MIN_LATENCY = 0.35;  // starting floor for the adaptive target (s)
+    const MAX_FLOOR = 1.0;     // the floor stops rising here (s)
+    const FLOOR_STEP = 0.25;   // raised per underrun (s)
     const MAX_LATENCY = 12.0;  // ceiling (s)
 
     // ---- desktop-shell cooperation: stop live video while nobody can see it ----
@@ -60,7 +64,11 @@
             this.ws = null;
             this.timer = null;
             this.started = false;
+            this.latencyFloor = MIN_LATENCY;
             this.latencyTarget = MIN_LATENCY;
+            // Our own seeks and a fresh start fire 'waiting' too; underruns inside
+            // this window don't count against the cushion.
+            this.quietUntil = 0;
             this.msgGaps = [];
             this.lastMsgAt = 0;
             this.msgCount = 0;
@@ -73,7 +81,13 @@
                 this.video.dataset.live = '1';
                 this.video.dataset.everLive = '1';
             };
-            this.onWaiting = () => { this.bump('stall'); this.jumpGap(); };
+            // Footage waiting past a hole is a gap to hop; nothing buffered ahead
+            // is a real underrun, so the cushion was too thin.
+            this.onWaiting = () => {
+                this.bump('stall');
+                if (!this.jumpGap() && this.started && !document.hidden && performance.now() > this.quietUntil)
+                    this.raiseFloor();
+            };
             video.addEventListener('playing', this.onPlaying);
             video.addEventListener('waiting', this.onWaiting);
             // Session totals for the stats panel — the same events as `diag`, but
@@ -124,7 +138,7 @@
                         this.msgGaps.push(now - this.lastMsgAt);
                         if (this.msgGaps.length > 10) this.msgGaps.shift();
                         const maxGap = Math.max(...this.msgGaps);
-                        this.latencyTarget = Math.min(MAX_LATENCY, Math.max(MIN_LATENCY, maxGap * 1.25 + 0.3));
+                        this.latencyTarget = Math.min(MAX_LATENCY, Math.max(this.latencyFloor, maxGap * 1.25 + 0.3));
                     }
                     this.lastMsgAt = now;
                     this.msgCount++;
@@ -267,7 +281,7 @@
                     const span = end - b.start(last);
                     if (this.msgGaps.length >= 1 && span >= this.latencyTarget) {
                         this.started = true;
-                        this.video.currentTime = Math.max(b.start(last), end - this.latencyTarget);
+                        this.seek(Math.max(b.start(last), end - this.latencyTarget), 2000);
                         // If playback is refused (autoplay policy), clear `started` so the
                         // next delivery retries instead of freezing on the first frame.
                         this.video.play().catch(() => { this.started = false; });
@@ -286,32 +300,47 @@
                 // Safari's pipeline visibly janks on higher playback rates, so the
                 // ManagedMediaSource path drifts back more softly.
                 const chase = this.mms ? 1.05 : 1.1;
-                if (ahead > this.latencyTarget + 5) {
+                if (ahead > this.latencyTarget + 2) {
                     this.bump('resync');
-                    this.video.currentTime = end - this.latencyTarget; // hard resync
+                    this.seek(end - this.latencyTarget); // hard resync
                     this.video.playbackRate = 1.0;
-                } else if (ahead > this.latencyTarget + 1) {
+                } else if (ahead > this.latencyTarget + 0.25) {
                     this.video.playbackRate = chase;  // drift back gently, invisibly
-                } else if (this.video.playbackRate !== 1.0) {
+                } else if (this.video.playbackRate !== 1.0 && ahead <= this.latencyTarget + 0.05) {
                     this.video.playbackRate = 1.0;
                 }
             } catch { }
         }
 
+        /// Moves the playhead and opens the quiet window the seek's own 'waiting' falls into.
+        seek(t, quietMs = 1000) {
+            this.quietUntil = performance.now() + quietMs;
+            this.video.currentTime = t;
+        }
+
+        /// A real underrun: thicken the cushion one step, up to the old fixed 1 s.
+        raiseFloor() {
+            if (this.latencyFloor >= MAX_FLOOR) return;
+            this.latencyFloor = Math.min(MAX_FLOOR, this.latencyFloor + FLOOR_STEP);
+            this.latencyTarget = Math.max(this.latencyTarget, this.latencyFloor);
+        }
+
         // Seek over a hole in the buffered ranges (caused by dropped frames upstream).
+        // True when it hopped.
         jumpGap() {
-            if (!this.sb) return;
+            if (!this.sb) return false;
             try {
                 const b = this.sb.buffered;
                 const t = this.video.currentTime;
                 for (let i = 0; i < b.length; i++) {
                     if (b.start(i) > t + 0.01 && b.start(i) - t < 10) {
                         this.bump('hop');
-                        this.video.currentTime = b.start(i) + 0.05;
-                        return;
+                        this.seek(b.start(i) + 0.05);
+                        return true;
                     }
                 }
             } catch { }
+            return false;
         }
 
         setStatus(text) {
@@ -346,7 +375,7 @@
                 frames: q ? q.totalVideoFrames : null,
                 dropped: q ? q.droppedVideoFrames : null,
                 corrupted: q ? q.corruptedVideoFrames : null,
-                ahead, target: this.latencyTarget, rate: v.playbackRate,
+                ahead, target: this.latencyTarget, floor: this.latencyFloor, rate: v.playbackRate,
                 readyState: v.readyState, live: v.dataset.live === '1',
                 bytes: this.bytes, fragments: this.msgCount,
                 maxGap: this.msgGaps.length ? Math.max(...this.msgGaps) : null,
@@ -459,7 +488,7 @@
             ['frames', s.frames == null ? 'not reported'
                 : `${s.frames.toLocaleString()} decoded · ${s.dropped.toLocaleString()} dropped (${dropPct.toFixed(2)}%)`,
                 dropPct >= 2 ? 'bad' : dropPct >= 0.5 ? 'warn' : ''],
-            ['buffer', s.ahead == null ? '—' : `${s.ahead.toFixed(2)} s ahead / ${s.target.toFixed(2)} s target`,
+            ['buffer', s.ahead == null ? '—' : `${s.ahead.toFixed(2)} s ahead / ${s.target.toFixed(2)} s target (floor ${s.floor.toFixed(2)} s)`,
                 s.ahead != null && s.ahead < 0.15 ? 'warn' : ''],
             ['speed', `${s.rate.toFixed(2)}×${s.rate > 1.001 ? ' (catching up)' : ''}`, s.rate > 1.001 ? 'warn' : ''],
             ['bitrate', bps == null ? 'measuring…' : `${nerdRate(bps)} · avg ${nerdRate(avgBps)}`],

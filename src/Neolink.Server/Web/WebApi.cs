@@ -4999,15 +4999,18 @@ public static class WebApi
         {
             // Cameras deliver video in buffers that may hold anything from a single frame
             // to a whole multi-second GOP. MSE requires exactly one frame per MP4 sample,
-            // so each buffer is split into access units. A buffer's true time span is only
-            // known when the NEXT buffer arrives (its RTP delta), so hold one buffer back
-            // and spread the measured delta evenly across its frames. All fragments of a
-            // buffer go out as one WebSocket message.
+            // so each buffer is split into access units. A single-frame buffer goes out
+            // at once, lasting as long as the interval before it (the decode timeline
+            // advances by the same amount, so it stays gapless). A multi-frame buffer's
+            // span is only known when the NEXT buffer arrives (its RTP delta), so it is
+            // held back and the delta spread evenly across its frames. All fragments of
+            // a buffer go out as one WebSocket message.
             const uint NominalFrame = 3000;  // ~1/30s @ 90 kHz
             long lastIndex = -1;
             bool waitKeyframe = true;
             bool haveTs = false;
             uint prevTs = 0;
+            int prevCount = 1;               // frames in the previous buffer
             ulong decodeTime = 0;
             uint sequence = 1;
             FMp4.AccessUnits? pending = null;
@@ -5087,19 +5090,26 @@ public static class WebApi
                     waitKeyframe = false;
                 }
 
-                if (haveTs && pending != null)
+                uint delta = NominalFrame;
+                if (haveTs)
                 {
-                    uint delta = unchecked(v.RtpTs - prevTs);
+                    delta = unchecked(v.RtpTs - prevTs);
                     if (delta == 0 || delta > 30 * FMp4.Timescale)
-                        delta = (uint)(NominalFrame * pending.Count); // clock garbage: assume ~30fps
-                    await FlushPendingAsync(delta).ConfigureAwait(false);
+                        delta = (uint)(NominalFrame * prevCount); // clock garbage: assume ~30fps
+                    if (pending != null)
+                        await FlushPendingAsync(delta).ConfigureAwait(false);
                 }
+                else
+                    prevCount = 1;
                 prevTs = v.RtpTs;
                 haveTs = true;
 
                 var aus = FMp4.SplitAccessUnitsRaw(codec, v.AnnexB);
-                if (aus.Count > 0)
-                    pending = aus;
+                if (aus.Count == 0) continue;
+                pending = aus;
+                if (aus.Count == 1)
+                    await FlushPendingAsync(delta / (uint)prevCount).ConfigureAwait(false);
+                prevCount = aus.Count;
             }
         }
         catch (OperationCanceledException) { }
