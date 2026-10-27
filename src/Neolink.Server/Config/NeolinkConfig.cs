@@ -349,6 +349,7 @@ public sealed class NeolinkConfig
                 // UI-only settings
                 case "statedir": config.Ui.StateDir = prop.Value.GetString(); break;
                 case "resetadminpassword": config.Ui.ResetAdminPassword = prop.Value.GetBoolean(); break;
+                case "corsorigins": config.Ui.CorsOrigins = prop.Value.EnumerateArray().Select(x => x.GetString() ?? "").ToList(); break;
                 case "tricklespeed": config.Ui.TrickleSpeed = prop.Value.GetDouble(); break;
                 case "talk": config.Ui.Talk = prop.Value.GetBoolean(); break;
                 case "showbackgroundtasks": config.Ui.ShowBackgroundTasks = prop.Value.GetBoolean(); break;
@@ -428,6 +429,7 @@ public sealed class NeolinkConfig
             config.WebBind = MiniToml.GetString(ui, "bind") ?? config.WebBind;
             config.Ui.StateDir = MiniToml.GetString(ui, "state_dir");
             config.Ui.ResetAdminPassword = MiniToml.GetBool(ui, "reset_admin_password") ?? false;
+            config.Ui.CorsOrigins = MiniToml.GetStringList(ui, "cors_origins") ?? new();
             if (MiniToml.GetInt(ui, "trickle_speed") is { } ts) config.Ui.TrickleSpeed = ts;
             config.Ui.Talk = MiniToml.GetBool(ui, "talk") ?? false;
             config.Ui.ShowBackgroundTasks = MiniToml.GetBool(ui, "show_background_tasks") ?? true;
@@ -869,6 +871,8 @@ public sealed class UiConfig
     public string? StateDir { get; set; }
     /// <summary>Recovery: while true, the login screen allows setting a new admin password.</summary>
     public bool ResetAdminPassword { get; set; }
+    /// <summary>Other origins (scheme://host[:port]) allowed to call the API from a browser or frame the UI.</summary>
+    public List<string> CorsOrigins { get; set; } = new();
     /// <summary>Playback rate of the review-strip's ambient clip previews.</summary>
     public double TrickleSpeed { get; set; } = 4;
     /// <summary>Beta: two-way talk (browser microphone → camera speaker). Off by default.</summary>

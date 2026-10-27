@@ -29,6 +29,10 @@
     // password WITHOUT the old one. Set it back to false right after use!
     "reset_admin_password": false,
 
+    // Other sites whose pages may call the API from a browser (the UI's own
+    // origin always may). Empty unless something else embeds or scripts it.
+    // "cors_origins": ["https://ha.example:8123"],
+
     // Playback speed of the ambient clip previews in the review strip.
     "trickle_speed": 4,
 

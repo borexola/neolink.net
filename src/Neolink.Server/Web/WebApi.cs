@@ -111,6 +111,8 @@ public sealed class WebApiOptions
     public Neolink.Notifications.SecretProtector? Secrets { get; init; }
     public required UserStore UserStore { get; init; }
     public bool ResetAdminPassword { get; init; }
+    /// <summary>ui.cors_origins: other origins (scheme://host[:port]) allowed to call the API from a browser.</summary>
+    public IReadOnlyList<string> CorsOrigins { get; init; } = Array.Empty<string>();
     public double TrickleSpeed { get; init; } = 4;
     /// <summary>Beta: two-way talk (browser mic → camera speaker). Off unless ui.talk enables it.</summary>
     public bool TalkEnabled { get; init; }
@@ -454,11 +456,17 @@ public static class WebApi
         }
         var app = builder.Build();
 
-        // Permissive CORS: this is a LAN streaming API, the web client may be served from anywhere.
+        // CORS only for the page's own origin (either scheme) and ui.cors_origins;
+        // any other site gets no CORS headers, so its scripts cannot read the API.
+        var corsOrigins = o.CorsOrigins;
         app.Use(async (ctx, next) =>
         {
-            ctx.Response.Headers["Access-Control-Allow-Origin"] = "*";
-            ctx.Response.Headers["Access-Control-Allow-Headers"] = "*";
+            if (AllowedOrigin(ctx.Request.Headers.Origin, ctx.Request.Host.Value, corsOrigins) is { } origin)
+            {
+                ctx.Response.Headers["Access-Control-Allow-Origin"] = origin;
+                ctx.Response.Headers["Access-Control-Allow-Headers"] = "*";
+                ctx.Response.Headers.Append("Vary", "Origin");
+            }
             if (ctx.Request.Method == "OPTIONS")
             {
                 ctx.Response.StatusCode = 204;
@@ -4752,6 +4760,23 @@ public static class WebApi
             result.Sort((x, y) => string.CompareOrdinal(x.File, y.File));
         }
         return result;
+    }
+
+    /// <summary>The Origin to echo in CORS headers: the page's own host on either
+    /// scheme, or a ui.cors_origins entry. Null means no CORS headers at all.</summary>
+    internal static string? AllowedOrigin(string? origin, string? host, IReadOnlyList<string> extra)
+    {
+        if (string.IsNullOrEmpty(origin) || !Uri.TryCreate(origin, UriKind.Absolute, out var o)
+            || (o.Scheme != "http" && o.Scheme != "https"))
+            return null;
+        var own = new HostString(host ?? "");
+        int ownPort = own.Port ?? (o.Scheme == "https" ? 443 : 80);
+        if (string.Equals(o.Host, own.Host, StringComparison.OrdinalIgnoreCase) && o.Port == ownPort)
+            return origin;
+        foreach (var e in extra)
+            if (string.Equals(e.TrimEnd('/'), origin, StringComparison.OrdinalIgnoreCase))
+                return origin;
+        return null;
     }
 
     /// <summary>The base URL the server's own Blazor circuits use to reach the API:

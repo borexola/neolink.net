@@ -9870,6 +9870,7 @@ public static class SelfTest
                     ConfigPath = Path.Combine(dir, "config.json"),
                     RestartRequested = () => { },
                     Viewers = viewers,
+                    CorsOrigins = new[] { "https://ha.example" },
                 }, cts.Token);
 
                 using var http = new HttpClient
@@ -9908,12 +9909,28 @@ public static class SelfTest
                 AssertEq(stream.GetProperty("path").GetString()!, "/apicam/mainStream");
                 AssertEq(stream.GetProperty("rtspPort").GetInt32(), 8654);
 
-                // CORS preflight short-circuits (the web client may be served from anywhere).
-                using (var preflight = http.Send(new HttpRequestMessage(HttpMethod.Options, "/api/cameras")))
+                // CORS: the page's own origin (either scheme) and ui.cors_origins are
+                // echoed back; any other site gets no CORS headers at all.
+                string? Cors(string? origin, HttpMethod? method = null)
                 {
-                    AssertEq((int)preflight.StatusCode, 204);
-                    AssertEq(preflight.Headers.GetValues("Access-Control-Allow-Origin").First(), "*");
+                    var req = new HttpRequestMessage(method ?? HttpMethod.Options, "/api/cameras");
+                    if (origin != null) req.Headers.Add("Origin", origin);
+                    using var res = http.Send(req);
+                    if (method == null) AssertEq((int)res.StatusCode, 204); // preflight still short-circuits
+                    return res.Headers.TryGetValues("Access-Control-Allow-Origin", out var v) ? v.First() : null;
                 }
+                AssertEq(Cors($"http://127.0.0.1:{port}"), $"http://127.0.0.1:{port}");
+                AssertEq(Cors($"https://127.0.0.1:{port}"), $"https://127.0.0.1:{port}");
+                AssertEq(Cors("https://ha.example"), "https://ha.example");
+                AssertEq(Cors("https://HA.example", HttpMethod.Get), "https://HA.example");
+                AssertEq(Cors("http://evil.example"), null);
+                AssertEq(Cors("http://evil.example", HttpMethod.Get), null);
+                AssertEq(Cors($"http://127.0.0.1:{port + 1}"), null);
+                AssertEq(Cors(null), null);
+                AssertEq(Web.WebApi.AllowedOrigin("https://cams.example", "cams.example:443", Array.Empty<string>()), "https://cams.example");
+                AssertEq(Web.WebApi.AllowedOrigin("http://[::1]:8655", "[::1]:8655", Array.Empty<string>()), "http://[::1]:8655");
+                AssertEq(Web.WebApi.AllowedOrigin("null", "cams.example", Array.Empty<string>()), null);
+                AssertEq(Web.WebApi.AllowedOrigin("https://ha.example", "cams.example", new[] { "https://ha.example/" }), "https://ha.example");
 
                 // Snapshot endpoint: a JPEG from the camera, served through a short
                 // per-camera cache so a poll storm reaches the camera once.

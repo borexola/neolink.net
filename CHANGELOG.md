@@ -4,6 +4,12 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
+## Unreleased
+
+### Security
+
+- **The API no longer answers every site's CORS request:** only the page's own origin and the new `ui.cors_origins` list get CORS headers, so a page on another site cannot read it.
+
 ## 1.2.0
 
 Cameras without an HTTP API get their settings and SD-card playback over Baichuan, event search moves into a dialog and gets much smarter, and two new camera-side behaviours ship switched off.
