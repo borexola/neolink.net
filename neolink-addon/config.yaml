@@ -5,7 +5,7 @@
 # workflow publishes on every tag. Version here ≠ tag ⇒ users see no update.
 # neolink-host/config.yaml carries the same version (tests/check.sh enforces it).
 name: Neolink.NET
-version: "1.2.0"
+version: "1.2.1"
 slug: neolink
 description: >-
   Reolink camera bridge: RTSP restreaming, web UI with recording, Home Assistant entities.

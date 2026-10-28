@@ -3,6 +3,31 @@
 Release notes for the Neolink.NET Home Assistant add-on. Home Assistant shows
 the sections between your installed version and the update on offer.
 
+## 1.2.1
+
+A host-network Home Assistant add-on for UDP-only battery cameras, faster camera walls and live view, and safer defaults for a server set up while exposed.
+
+### Added
+
+- **Neolink.NET (host network) Home Assistant add-on** for UDP-only battery cameras (Argus line, Solar Floodlight). Same image and version as the stable add-on; install it instead of, not beside, the stable one.
+- **The add-ons refuse to start on a port another service holds** and say which, instead of crash-looping.
+
+### Changed
+
+- **Big camera walls come up faster:** tiles paint on the first frame and catch up at speed, stills are cached, and event previews wait until the tiles are live.
+- **Live view runs closer to real time:** the cushion starts at 0.35 s instead of 1 s and only grows if the link stutters.
+
+### Security
+
+- **First-run admin setup only accepts LAN callers** (`ui.remote_setup` lifts that).
+- **Sign-in protection is switched on by the first-run setup;** existing installs keep their setting.
+- Responses carry `Referrer-Policy: same-origin` and `X-Content-Type-Options: nosniff`, so tokened media URLs never leak to other sites.
+
+### Fixed
+
+- **The AI connection test gives up on an unreachable LLM server after 10 s** and names the host and port.
+- **Tiles no longer hang on "connecting…" after a camera's `stream` setting changes:** they switch to a stream the camera still serves.
+
 ## 1.2.0
 
 Cameras without an HTTP API get their settings and SD-card playback over Baichuan, event search moves into a dialog and gets much smarter, and two new camera-side behaviours ship switched off.

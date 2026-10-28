@@ -4,23 +4,30 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
-## Unreleased
+## 1.2.1
+
+A host-network Home Assistant add-on for UDP-only battery cameras, faster camera walls and live view, and safer defaults for a server set up while exposed.
+
+### Added
+
+- **Neolink.NET (host network) Home Assistant add-on** for UDP-only battery cameras (Argus line, Solar Floodlight). Same image and version as the stable add-on; install it instead of, not beside, the stable one.
+- **The add-ons refuse to start on a port another service holds** and say which, instead of crash-looping.
 
 ### Changed
 
-- **Big camera walls come up faster:** tiles start on the first primed frame and catch up at speed instead of decoding the whole backlog before painting, the wall attaches in one call, tile stills are browser-cached for their freshness window, and the review strip's previews wait until the tiles are live. The stats panel counts playback-rate changes.
-- **Live view runs closer to real time:** the player's cushion starts at 0.35 s instead of 1 s and only grows when the link actually stutters, and the server no longer holds each frame back until the next one arrives.
+- **Big camera walls come up faster:** tiles paint on the first frame and catch up at speed, stills are cached, and event previews wait until the tiles are live.
+- **Live view runs closer to real time:** the cushion starts at 0.35 s instead of 1 s and only grows if the link stutters.
 
 ### Security
 
-- **The first-run admin setup only accepts LAN callers** (`ui.remote_setup` lifts that), so a server exposed before its admin exists cannot be claimed from the internet.
+- **First-run admin setup only accepts LAN callers** (`ui.remote_setup` lifts that).
 - **Sign-in protection is switched on by the first-run setup;** existing installs keep their setting.
-- Every response now carries `Referrer-Policy: same-origin` and `X-Content-Type-Options: nosniff`, so media URLs with a token never leak to other sites.
+- Responses carry `Referrer-Policy: same-origin` and `X-Content-Type-Options: nosniff`, so tokened media URLs never leak to other sites.
 
 ### Fixed
 
-- **The AI connection test fails fast when the LLM server cannot be reached:** a host that never answers is given up after 10 seconds instead of the full answer timeout, and the error names the host and port.
-- **Tiles no longer hang on "connecting…" after a camera's `stream` setting changes:** a saved tile on a stream the camera stopped serving switches to one it still serves.
+- **The AI connection test gives up on an unreachable LLM server after 10 s** and names the host and port.
+- **Tiles no longer hang on "connecting…" after a camera's `stream` setting changes:** they switch to a stream the camera still serves.
 
 ## 1.2.0
 

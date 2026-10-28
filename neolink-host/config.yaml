@@ -6,7 +6,7 @@
 # directly on the Home Assistant host, so the stable add-on must be stopped and
 # its start-on-boot turned off first. The launcher refuses a taken port.
 name: Neolink.NET (host network)
-version: "1.2.0"
+version: "1.2.1"
 slug: neolink_host
 description: >-
   Neolink.NET on host networking, for UDP-only battery cameras. Replaces the stable add-on.
