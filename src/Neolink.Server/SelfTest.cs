@@ -6,6 +6,7 @@ using System.Text;
 using System.Threading.Channels;
 using Neolink.Bc;
 using Neolink.Config;
+using Neolink.WebClient;
 using Neolink.Demo;
 using Neolink.Media;
 using Neolink.Protocol;
@@ -1694,6 +1695,117 @@ public static class SelfTest
         Test("bcudp wake-capture liveness probe (reachable vs silent)", () =>
         {
             RunWakeProbe().GetAwaiter().GetResult();
+        });
+
+        Test("camera relocation: subnet helpers and LAN-scan parsing", () =>
+        {
+            var ip = System.Net.IPAddress.Parse("10.0.1.77");
+            var mask = System.Net.IPAddress.Parse("255.255.255.0");
+            Assert(UdpDiscovery.SameSubnet(ip, System.Net.IPAddress.Parse("10.0.1.200"), mask), "same /24");
+            Assert(!UdpDiscovery.SameSubnet(ip, System.Net.IPAddress.Parse("10.0.2.1"), mask), "other /24");
+            var hosts = UdpDiscovery.SubnetHosts(ip).ToList();
+            AssertEq(hosts.Count, 254);
+            AssertEq(hosts[0].ToString(), "10.0.1.1");
+            AssertEq(hosts[^1].ToString(), "10.0.1.254");
+            Assert(!UdpDiscovery.SubnetHosts(System.Net.IPAddress.IPv6Loopback).Any(), "IPv6 yields nothing");
+
+            // The scan sweeps each local /24 without the host's own address, capped
+            // so a /16 cannot turn into 65k connects.
+            UdpDiscovery.LocalNet Net(string ip, string iface = "eth0", bool gw = true, System.Net.IPAddress? m = null) =>
+                new(System.Net.IPAddress.Parse(ip), m ?? mask, iface, gw);
+            var nets = new[]
+            {
+                Net("192.168.1.10"),
+                Net("192.168.1.11"), // same subnet twice: deduplicated
+                Net("10.0.0.5", m: System.Net.IPAddress.Parse("255.255.0.0")),
+                Net("172.17.0.1", iface: "docker0", gw: false),
+            };
+            var sweep = LanScan.SweepTargets(nets).ToList();
+            AssertEq(sweep.Count, 254 - 2 + 253);
+            Assert(!sweep.Contains(System.Net.IPAddress.Parse("192.168.1.10")), "own address skipped");
+            Assert(!sweep.Contains(System.Net.IPAddress.Parse("192.168.1.11")), "every own address is skipped");
+            Assert(!sweep.Any(ip => ip.GetAddressBytes()[0] == 172), "container bridges are not swept");
+            // Bridges and gateway-less interfaces must not eat the cap before the real LAN.
+            var many = Enumerable.Range(0, 8).Select(i => Net($"10.{i}.0.1", iface: $"br-{i}", gw: false))
+                .Append(Net("192.168.2.1", iface: "wg0", gw: false))
+                .Append(Net("192.168.1.1", iface: "eth0", gw: true)).ToList();
+            var capped = LanScan.SweepTargets(many).ToList();
+            AssertEq(capped.Count, 2 * 253);
+            Assert(capped[0].ToString() == "192.168.1.2", "the interface with a gateway is swept first");
+            AssertEq(LanScan.SweepTargets(Enumerable.Range(0, 10).Select(i => Net($"10.{i}.0.1"))).Count(), 2048);
+
+            // Ranges asked for (a camera VLAN this host is not on) come first and in full;
+            // the local /24 and a configured camera's /24 are deduplicated against them.
+            var extra = new[] { ScanRange.Subnet(System.Net.IPAddress.Parse("10.1.1.0"), 24),
+                                ScanRange.Subnet(System.Net.IPAddress.Parse("10.1.1.9"), 24),
+                                ScanRange.Subnet(System.Net.IPAddress.Parse("192.168.1.3"), 24) };
+            var routed = LanScan.SweepTargets(new[] { Net("192.168.1.10") }, extra).ToList();
+            AssertEq(routed.Count, 254 + 253);
+            AssertEq(routed[0].ToString(), "10.1.1.1");
+            AssertEq(routed[253].ToString(), "10.1.1.254");
+            Assert(!routed.Contains(System.Net.IPAddress.Parse("192.168.1.10")), "own address still skipped");
+            var typedOnly = LanScan.SweepTargets(new[] { Net("192.168.1.10") }, extra.Take(1), localToo: false).ToList();
+            AssertEq(typedOnly.Count, 254);
+            Assert(!LanScan.SweepTargets(new[] { Net("10.1.1.10") }, extra.Take(1), localToo: false)
+                .Contains(System.Net.IPAddress.Parse("10.1.1.10")), "own address skipped inside a typed range");
+
+            AssertEq(ScanRange.Subnet(System.Net.IPAddress.Parse("10.1.4.0"), 22).Count, 1022);
+            AssertEq(ScanRange.Subnet(System.Net.IPAddress.Parse("10.1.5.7"), 22).Hosts().First().ToString(), "10.1.4.1");
+            AssertEq(ScanRange.Subnet(System.Net.IPAddress.Parse("10.1.1.7"), 32).Hosts().Single().ToString(), "10.1.1.7");
+            AssertEq(ScanRange.Subnet(System.Net.IPAddress.Parse("10.1.1.1"), 31).Count, 2);
+
+            AssertEq(ScanRange.Parse("10.1.1.0/24", out var why), ScanRange.Subnet(System.Net.IPAddress.Parse("10.1.1.0"), 24));
+            AssertEq(ScanRange.Parse(" 10.1.1.5 ", out why)?.Count, 254);
+            AssertEq(ScanRange.Parse("10.1.1.10-10.1.1.60", out why)?.Count, 51);
+            AssertEq(ScanRange.Parse("10.1.1.10-60", out why)?.Hosts().Last().ToString(), "10.1.1.60");
+            Assert(ScanRange.Parse("10.1.1.60-10", out why) == null && why!.Contains("ends before"), "backwards range is refused");
+            Assert(ScanRange.Parse("10.1.0.0/16", out why) == null && why!.Contains("/21"), "too wide is refused");
+            Assert(ScanRange.Parse("10.1.0.1-10.1.255.1", out why) == null && why!.Contains("/21"), "too wide a range is refused");
+            Assert(ScanRange.Parse("10.1.1.0/33", out why) == null && why!.Contains("prefix"), "bad prefix is refused");
+            Assert(ScanRange.Parse("garage", out why) == null && why!.Contains("not an IPv4"), "a name is refused");
+            Assert(ScanRange.Parse("fe80::1/64", out why) == null, "IPv6 is refused");
+            AssertEq(ScanRange.ParseList("10.1.1.0/24, 10.1.2.0/24; 10.1.3.5", out why)?.Count, 3);
+            Assert(ScanRange.ParseList("  ", out why) == null && why!.Contains("Enter"), "an empty list is refused");
+            Assert(ScanRange.ParseList("10.1.1.0/24, nope", out why) == null && why!.Contains("nope"), "the bad entry is named");
+
+            var (model, name) = LanScan.ParseScopes(
+                "onvif://www.onvif.org/name/Reolink%20Driveway onvif://www.onvif.org/hardware/RLC-810A");
+            AssertEq(model, "RLC-810A");
+            AssertEq(name, "Reolink Driveway");
+            AssertEq(LanScan.ParseScopes("onvif://www.onvif.org/Profile/Streaming"), ((string?)null, (string?)null));
+        });
+
+        Test("camera relocation: learned identity persists, renames and is forgotten", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-ident-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var store = new Web.CameraStateStore(dir);
+                AssertEq(store.Identity("Gate"), ((string?)null, (string?)null));
+                store.SetIdentity("Gate", uid: "95270000ABCDEFGH", lastHost: "192.168.1.20");
+                store.SetIdentity("Gate", lastHost: "192.168.1.34"); // null uid keeps the stored one
+                store.SetIdentity("Gate"); // nothing to record: no write, no entry churn
+                AssertEq(new Web.CameraStateStore(dir).Identity("gate"), ((string?)"95270000ABCDEFGH", (string?)"192.168.1.34"));
+
+                store.Rename("Gate", "Front gate");
+                AssertEq(store.Identity("Gate"), ((string?)null, (string?)null));
+                AssertEq(store.Identity("Front gate"), ((string?)"95270000ABCDEFGH", (string?)"192.168.1.34"));
+
+                // A camera with no identity renamed onto a stale entry must not inherit its UID.
+                store.SetIdentity("Old", uid: "95270000ZZZZZZZZ");
+                store.Rename("Fresh", "Old");
+                AssertEq(store.Identity("Old"), ((string?)null, (string?)null));
+
+                store.Forget("Front gate");
+                AssertEq(new Web.CameraStateStore(dir).Identity("Front gate"), ((string?)null, (string?)null));
+                Assert(!File.ReadAllText(Path.Combine(dir, "camera-state.json")).Contains("95270000"),
+                    "a deleted camera's UID leaves the file");
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
         });
 
         Test("camera discovery sweep: ONVIF parse + recommendation table", () =>
@@ -12259,6 +12371,11 @@ public static class SelfTest
         // camera would keep retrying D2C_C_R for ~9 s after every 5 s poll.
         for (int i = 0; i < 40 && gotDisc == 0; i++) await Task.Delay(50);
         Assert(gotDisc > 0, "wake probe releases its session with a polite C2D_DISC");
+        // Relocation uses the same hello: the endpoint that answered is the camera's address.
+        var located = await UdpDiscovery.LocateAsync(uid, new[] { System.Net.IPAddress.Loopback },
+            TimeSpan.FromSeconds(8), cts.Token, logTag: "udptest", camPort: camPort);
+        Assert(located != null && located.Address.Equals(System.Net.IPAddress.Loopback) && located.Port == camPort,
+            "locate returns the endpoint the camera answered from");
         cts.Cancel();
         try { await responder; } catch { }
     }

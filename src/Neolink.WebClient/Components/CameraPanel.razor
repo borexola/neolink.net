@@ -116,7 +116,8 @@
             @if (!string.IsNullOrEmpty(_caps?.Version?.Hardware)) { <span class="devbar-item"><span class="devbar-k">@T["Hardware"]</span>@_caps!.Version!.Hardware</span> }
             @if (!string.IsNullOrEmpty(_caps?.Version?.Serial)) { <span class="devbar-item"><span class="devbar-k">@T["Serial"]</span>@_caps!.Version!.Serial</span> }
             @if (!string.IsNullOrEmpty(Camera?.Address)) { <span class="devbar-item" title="@T["Configured network address"]"><span class="devbar-k">@T["Address"]</span>@Camera!.Address</span> }
-            @if (Camera?.Udp == true) { <span class="devbar-item" title="@T["Connected over UDP (Baichuan-over-UDP), beta support for battery-only models"]"><span class="devbar-k">@T["Transport"]</span>UDP <span class="beta-tag">@T["BETA"]</span></span> }
+            @if (!string.IsNullOrEmpty(Camera?.CurrentAddress)) { <span class="devbar-item" title="@T["The camera moved to this address; Settings → Cameras → \"Use new address\" writes it to config.json"]"><span class="devbar-k">@T["Now at"]</span>@Camera!.CurrentAddress</span> }
+            @if (Camera?.Udp == true) { <span class="devbar-item" title="@T["Connected over UDP (Baichuan-over-UDP), used by battery-only models"]"><span class="devbar-k">@T["Transport"]</span>UDP</span> }
             @if (Camera?.Battery is { } bat) { <span class="devbar-item" title="@(T.F("Battery-powered camera: {0}%", bat.Percent) + (bat.Charging ? T[", charging"] : ""))"><span class="devbar-k">@T["Battery"]</span><span class="devbar-batt">@UiIcon.RenderBattery(bat.Percent, 13)@(bat.Charging ? UiIcon.Render("bolt", 11) : default)</span>@bat.Percent%</span> }
             @if ((Camera?.WifiSignal ?? _http?.WifiSignal) is { } link)
             {

@@ -479,6 +479,25 @@ warnings with fill-date forecasts, and AES-256-GCM footage encryption.
 > limitation, and the reference Reolink libraries recommend the same. Passwords
 > over 31 characters can fail for the same reason.
 
+### Finding cameras and following IP changes
+
+- **Auto discover.** Settings → Cameras → *Auto discover…* scans a subnet or
+  address range (the server's own by default, a camera VLAN if you type it)
+  for plug-in Reolink cameras, with model and name where ONVIF is on; *Add…*
+  fills in the add-camera form, so the password is all you type. Battery
+  models never answer a scan: add those by UID (see the battery guide).
+- **A camera that gets a new IP is followed.** At the first login Neolink.NET
+  asks each camera for its UID and remembers it (`camera-state.json`). When
+  the configured address stops answering, it asks the LAN which camera has
+  that UID — a UID-keyed discovery hello, no credentials sent — and connects
+  to wherever it answers from. `config.json` is not touched: the camera
+  settings and the camera list show *now at &lt;address&gt;* with a
+  **Use new address** button that writes it to the file. Cameras connected
+  over UDP need none of this (they are found by UID on every connect). If a
+  camera will not report its UID, set `uid` in its config entry.
+- In Docker both need host networking (`--network host`): a bridged container
+  gets no broadcasts or multicast.
+
 ### Enable HTTP and ONVIF on the camera for the full feature set
 
 Neolink.NET streams and records over Baichuan (port 9000), which needs nothing

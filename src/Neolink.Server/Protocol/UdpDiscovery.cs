@@ -220,10 +220,36 @@ public static class UdpDiscovery
         }
         var targets = ip != null ? new[] { ip } : BroadcastTargets();
         if (targets.Length == 0) return false;
+        return await FindAsync(targets, broadcast: ip == null, uid, timeout, ct, logTag, camPorts)
+            .ConfigureAwait(false) != null;
+    }
 
+    /// <summary>Where the camera with this UID answers now: hellos go to the last-known addresses,
+    /// every local broadcast, and host by host over a last-known /24 that is not local (a routed VLAN).</summary>
+    internal static async Task<IPEndPoint?> LocateAsync(string uid, IEnumerable<IPAddress> lastKnown, TimeSpan timeout,
+        CancellationToken ct, string? logTag = null, int? camPort = null)
+    {
+        var camPorts = camPort is { } cp ? new[] { cp } : CameraPorts;
+        var targets = new List<IPAddress>();
+        foreach (var known in lastKnown.Where(k => k.AddressFamily == AddressFamily.InterNetwork))
+        {
+            targets.Add(known);
+            if (camPort == null && !OnLocalSubnet(known)) targets.AddRange(SubnetHosts(known));
+        }
+        if (camPort == null) targets.AddRange(BroadcastTargets());
+        return await FindAsync(targets.Distinct().ToArray(), broadcast: camPort == null, uid, timeout, ct, logTag, camPorts)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>The shared hello loop: C2D_C to every target once a second until a D2C_C_R
+    /// (released again with a C2D_DISC) or the timeout; returns the endpoint that answered.</summary>
+    private static async Task<IPEndPoint?> FindAsync(IPAddress[] targets, bool broadcast, string uid, TimeSpan timeout,
+        CancellationToken ct, string? logTag, int[] camPorts)
+    {
+        if (targets.Length == 0) return null;
         var udp = BindClientSocket();
-        if (udp == null) return false;
-        if (ip == null) udp.EnableBroadcast = true;
+        if (udp == null) return null;
+        if (broadcast) udp.EnableBroadcast = true;
 
         using (udp)
         {
@@ -287,12 +313,12 @@ public static class UdpDiscovery
                             try { await udp.SendAsync(disc, r.RemoteEndPoint, CancellationToken.None).ConfigureAwait(false); }
                             catch { /* best effort */ }
                         }
-                        return true;
+                        return r.RemoteEndPoint;
                     }
                 }
             }
             catch (OperationCanceledException) { }
-            return false;
+            return null;
         }
     }
 
@@ -425,12 +451,30 @@ public static class UdpDiscovery
 
     internal static IEnumerable<IPAddress> LocalDirectedBroadcasts()
     {
+        foreach (var n in LocalNetworks())
+            yield return DirectedBroadcast(n.Address, n.Mask);
+    }
+
+    /// <summary>One local IPv4 network: the interface's address and mask, its name, and
+    /// whether it has an IPv4 gateway (the one the real LAN is usually behind).</summary>
+    internal sealed record LocalNet(IPAddress Address, IPAddress Mask, string Interface, bool HasGateway);
+
+    /// <summary>Every up, non-loopback IPv4 interface address with its mask
+    /// (link-local and /32 addresses left out: no camera lives there).</summary>
+    internal static IEnumerable<LocalNet> LocalNetworks()
+    {
         foreach (var ni in SafeInterfaces())
         {
             if (ni.OperationalStatus != OperationalStatus.Up) continue;
             if (ni.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
             IEnumerable<UnicastIPAddressInformation> unicasts;
-            try { unicasts = ni.GetIPProperties().UnicastAddresses; }
+            bool gateway;
+            try
+            {
+                var props = ni.GetIPProperties();
+                unicasts = props.UnicastAddresses;
+                gateway = props.GatewayAddresses.Any(g => g.Address.AddressFamily == AddressFamily.InterNetwork);
+            }
             catch { continue; }
             foreach (var ua in unicasts)
             {
@@ -442,9 +486,31 @@ public static class UdpDiscovery
                 if (mask == null || mask.GetAddressBytes() is not { Length: 4 } mb) continue;
                 // A /32 (mask 255.255.255.255) has no broadcast; skip it.
                 if (mb is [255, 255, 255, 255]) continue;
-                yield return DirectedBroadcast(ua.Address, mask);
+                yield return new LocalNet(ua.Address, mask, ni.Name, gateway);
             }
         }
+    }
+
+    /// <summary>True when a broadcast from this host reaches <paramref name="ip"/>.</summary>
+    internal static bool OnLocalSubnet(IPAddress ip) =>
+        LocalNetworks().Any(n => SameSubnet(n.Address, ip, n.Mask));
+
+    internal static bool SameSubnet(IPAddress a, IPAddress b, IPAddress mask)
+    {
+        var ab = a.GetAddressBytes(); var bb = b.GetAddressBytes(); var mb = mask.GetAddressBytes();
+        if (ab.Length != 4 || bb.Length != 4 || mb.Length != 4) return false;
+        for (int i = 0; i < 4; i++) if ((ab[i] & mb[i]) != (bb[i] & mb[i])) return false;
+        return true;
+    }
+
+    /// <summary>The 254 usable hosts of an address's /24 — the unicast sweep for a
+    /// camera subnet this host is not on, where a broadcast would not be routed.</summary>
+    internal static IEnumerable<IPAddress> SubnetHosts(IPAddress ip)
+    {
+        var b = ip.GetAddressBytes();
+        if (b.Length != 4) yield break;
+        for (int h = 1; h <= 254; h++)
+            yield return new IPAddress(new[] { b[0], b[1], b[2], (byte)h });
     }
 
     /// <summary>Directed broadcast of a subnet: host bits all set (ip | ~mask).

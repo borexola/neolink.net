@@ -35,6 +35,20 @@ browser fullscreen. Signed-in accounts keep their layouts, tiles and filters
 server-side, so they follow you across browsers; signed-out browsers fall
 back to localStorage.
 
+## Adding cameras
+
+Settings → Cameras edits `config.json` in place. **Auto discover…** opens a
+dialog that scans a subnet (`10.1.1.0/24`), an address range
+(`10.1.1.10-60`) or several, comma-separated, up to a /21 each; it starts with
+the server's own subnet and always adds the subnet of every configured camera.
+Each plug-in Reolink camera found is listed by its Baichuan port and, where
+ONVIF is on, with its model and name (asked of each address directly, so a
+camera VLAN the server is not on answers too); **Add…** closes the dialog and
+opens the add-camera form with the address and name filled in. Battery
+cameras do not answer a scan — add those by UID. A camera whose IP has changed
+is followed automatically and shows *now at …* with a **Use new address**
+button that updates the file.
+
 ## Camera settings & controls
 
 The ⚙ panel next to each camera is built from what the camera itself

@@ -63,7 +63,15 @@ public sealed record WebCameraInfo(string Name, List<WebStreamInfo> Streams, ICa
     /// <summary>The configured network address (host, or host:port when non-default) —
     /// shown on the camera-settings identity strip. Null for generic RTSP cameras
     /// (their address lives in the stream URL) or when unknown.</summary>
-    public string? Address { get; init; }
+    public string? Address { get; set; }
+
+    /// <summary>The address in use right now — differs from <see cref="Address"/> after the
+    /// camera was followed to a new IP. Null for cameras that have no network address.</summary>
+    public Func<string?>? LiveAddress { get; init; }
+
+    /// <summary>The live address when it differs from the configured one, else null.</summary>
+    public string? MovedTo =>
+        LiveAddress?.Invoke() is { } live && !string.Equals(live, Address, StringComparison.OrdinalIgnoreCase) ? live : null;
 
     /// <summary>Baichuan-over-UDP transport (beta): UDP-only battery models
     /// (Argus family). Surfaced so the UI can badge these cameras as beta.</summary>
@@ -258,6 +266,8 @@ public static class WebApi
         uint? Framerate, uint? Bitrate);
     private sealed record ReviewRequest(bool? Reviewed);
     private sealed record EventDeleteRequest(List<string>? Ids, bool? Estimate);
+    /// <summary>POST /api/admin/discover body: subnets to sweep besides the local ones.</summary>
+    private sealed record DiscoverRequest(List<string>? Subnets);
     /// <summary>Notification settings update. Password is WRITE-ONLY: null keeps the
     /// stored one, "" clears it, a value sets it. It is never returned by GET.</summary>
     private sealed record NotificationRequest(bool? Enabled, string? Recipient,
@@ -1051,6 +1061,11 @@ public static class WebApi
                         // The UID is NOT secret (it's on the camera's sticker) but it
                         // identifies the device, so it only ever goes to an admin.
                         uid = c.Uid,
+                        // What the running server learned: the UID the camera reported at
+                        // login, and the address it was followed to when its IP changed.
+                        learnedUid = o.CameraState?.Identity(c.Name).Uid,
+                        currentAddress = cameras.FirstOrDefault(w =>
+                            string.Equals(w.Name, c.Name, StringComparison.OrdinalIgnoreCase))?.MovedTo,
                         alwaysOn = c.AlwaysOn == null ? "auto" : c.AlwaysOn.Value ? "true" : "false",
                         stream = c.Stream,
                         // May carry its own "user:pass@" now, so it is masked like
@@ -1188,6 +1203,9 @@ public static class WebApi
                         // Write-only password: null keeps whatever the file has.
                         if (req.Password != null)
                             ConfigEditor.Set(cam, "password", req.Password.Length == 0 ? null : req.Password);
+                        if (cam["password"] is not System.Text.Json.Nodes.JsonValue pw
+                            || !pw.TryGetValue<string>(out var pwText) || pwText.Length == 0)
+                            throw new FormatException("a password is required for a Reolink camera");
                         if (req.ChannelId is { } chan)
                             ConfigEditor.Set(cam, "channel_id", chan == 0 ? null : chan);
                         if (req.HttpAddress != null)
@@ -1274,6 +1292,105 @@ public static class WebApi
             {
                 return Results.Json(new { error = $"config.json is not writable: {ex.Message}" }, statusCode: 409);
             }
+        });
+
+        // Writes the address a relocated camera was followed to into config.json.
+        // The running server already uses it, so no restart is needed.
+        app.MapPost("/api/admin/cameras/{name}/adopt-address", (string name, HttpContext ctx) =>
+        {
+            if (AdminOnly(ctx) is { } denied) return denied;
+            var live = cameras.FirstOrDefault(w => string.Equals(w.Name, name, StringComparison.OrdinalIgnoreCase));
+            if (live?.MovedTo is not { } address)
+                return Results.Json(new { error = "this camera has not moved; its address in config.json is the one in use" }, statusCode: 400);
+            try
+            {
+                ConfigEditor.Apply(o.ConfigPath, root =>
+                {
+                    var cam = ConfigEditor.FindCamera(ConfigEditor.Cameras(root), name)
+                        ?? throw new FormatException($"unknown camera \"{name}\"");
+                    ConfigEditor.Set(cam, "address", address);
+                });
+                live.Address = address; // config and live agree again: no more "moved"
+                Log.Warn($"config.json camera \"{name}\" address set to {address} via the web UI by '{SessionName(ctx)}'");
+                return Results.Json(new { ok = true, address });
+            }
+            catch (FormatException ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: 400);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return Results.Json(new { error = $"config.json is not writable: {ex.Message}" }, statusCode: 409);
+            }
+        });
+
+        // Auto discover: what the dialog starts with — the server's own /24s.
+        app.MapGet("/api/admin/discover", (HttpContext ctx) =>
+        {
+            if (AdminOnly(ctx) is { } denied) return denied;
+            var subnets = UdpDiscovery.LocalNetworks()
+                .Where(n => !LanScan.IsVirtual(n.Interface)).OrderByDescending(n => n.HasGateway)
+                .Select(n => { var b = n.Address.GetAddressBytes(); return $"{b[0]}.{b[1]}.{b[2]}.0/24"; })
+                .Distinct().ToList();
+            return Results.Json(new { subnets });
+        });
+
+        // Auto discover: plug-in cameras only — battery models answer nothing but their UID.
+        // Sweeps the ranges in the request (the local /24s when there are none) and the
+        // /24 of every configured camera, so a camera VLAN this host is not on is covered.
+        app.MapPost("/api/admin/discover", async (DiscoverRequest? req, HttpContext ctx) =>
+        {
+            if (AdminOnly(ctx) is { } denied) return denied;
+            var extra = new List<Neolink.WebClient.ScanRange>();
+            foreach (var text in req?.Subnets ?? new())
+            {
+                if (string.IsNullOrWhiteSpace(text)) continue;
+                if (Neolink.WebClient.ScanRange.Parse(text, out var why) is { } range) extra.Add(range);
+                else return Results.Json(new { error = why }, statusCode: 400);
+            }
+            bool localToo = extra.Count == 0;
+            // Which configured entry an address belongs to: the configured host, or
+            // the one a camera was followed to.
+            List<CameraConfig> configured;
+            try { configured = NeolinkConfig.Load(o.ConfigPath).Cameras; }
+            catch { configured = new(); }
+            var liveAddresses = cameras.Select(w => w.LiveAddress?.Invoke()?.Split(':')[0]).ToList();
+            foreach (var host in configured.Select(c => c.Host).Concat(liveAddresses))
+                if (host != null && System.Net.IPAddress.TryParse(host, out var ip)
+                    && ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+                    extra.Add(Neolink.WebClient.ScanRange.Subnet(ip, 24));
+
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted);
+            cts.CancelAfter(TimeSpan.FromSeconds(25));
+            List<LanScan.Found> found;
+            using (var job = BackgroundTasks.Begin("Looking for cameras"))
+            {
+                try { found = await LanScan.RunAsync(cts.Token, detail => job.Report(detail), extra, localToo); }
+                catch (OperationCanceledException) when (!ctx.RequestAborted.IsCancellationRequested)
+                {
+                    return Results.Json(new { error = "the scan timed out" }, statusCode: 504);
+                }
+            }
+            string? ConfiguredAs(System.Net.IPAddress ip)
+            {
+                var s = ip.ToString();
+                return configured.FirstOrDefault(c => string.Equals(c.Host, s, StringComparison.OrdinalIgnoreCase))?.Name
+                    ?? cameras.FirstOrDefault(w => w.LiveAddress?.Invoke() is { } la
+                        && string.Equals(la.Split(':')[0], s, StringComparison.OrdinalIgnoreCase))?.Name;
+            }
+            Log.Info($"[discover] LAN scan by '{SessionName(ctx)}': {found.Count} camera(s) found");
+            return Results.Json(new
+            {
+                found = found.Select(f => new
+                {
+                    address = f.Address.ToString(),
+                    model = f.Model,
+                    name = f.Name,
+                    baichuan = f.Baichuan,
+                    onvif = f.Onvif,
+                    configuredAs = ConfiguredAs(f.Address),
+                }).ToList(),
+            });
         });
 
         app.MapDelete("/api/admin/cameras/{name}", (string name, HttpContext ctx) =>
@@ -2196,6 +2313,8 @@ public static class WebApi
                 // The configured host (for the settings identity strip) — already
                 // known to anyone who can reach this API; not sensitive on a LAN.
                 address = c.Address,
+                // Set only after the camera was followed to a new IP (config.json still says `address`).
+                currentAddress = c.MovedTo,
                 // Baichuan-over-UDP transport (beta) — the UI badges these cameras.
                 udp = c.Udp,
                 // 24/7 footage being written right now (drives the UI's REC badge)

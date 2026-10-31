@@ -246,7 +246,24 @@ public static class CameraProbe
     /// matches (empty when nothing answers — as most battery cams won't).</summary>
     private static async Task<List<(string XAddrs, string Scopes)>> OnvifProbeAsync(Func<string, string> P, CancellationToken ct)
     {
-        var matches = new List<(string, string)>();
+        var matches = (await WsDiscoverAsync(TimeSpan.FromSeconds(3), ct,
+                m => Log.Info(P($"onvif: reply from {m.From} — service {m.XAddrs}; scopes {m.Scopes}")))
+            .ConfigureAwait(false)).Select(m => (m.XAddrs, m.Scopes)).ToList();
+        if (matches.Count == 0)
+            Log.Info(P("onvif: no reply (WS-Discovery not answered — typical for battery-only models)"));
+        return matches;
+    }
+
+    /// <summary>One WS-Discovery answer: who sent it, its device-service URL and the telling scopes.</summary>
+    internal sealed record WsMatch(IPAddress From, string XAddrs, string Scopes);
+
+    /// <summary>Multicasts one WS-Discovery Probe (and unicasts it to each of
+    /// <paramref name="unicast"/>, which multicast does not reach across subnets) and
+    /// collects every ProbeMatch that arrives within <paramref name="window"/>.</summary>
+    internal static async Task<List<WsMatch>> WsDiscoverAsync(TimeSpan window, CancellationToken ct,
+        Action<WsMatch>? onMatch = null, IEnumerable<IPAddress>? unicast = null)
+    {
+        var matches = new List<WsMatch>();
         var msgId = $"urn:uuid:{Guid.NewGuid()}";
         var probe =
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" +
@@ -265,26 +282,37 @@ public static class CameraProbe
             await udp.SendAsync(bytes, new IPEndPoint(IPAddress.Parse("239.255.255.250"), 3702), ct).ConfigureAwait(false);
 
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(TimeSpan.FromSeconds(3));
+            cts.CancelAfter(window);
+            if (unicast != null)
+                _ = Task.Run(async () =>
+                {
+                    foreach (var ip in unicast)
+                    {
+                        if (cts.IsCancellationRequested) break;
+                        try { await udp.SendAsync(bytes, new IPEndPoint(ip, 3702), cts.Token).ConfigureAwait(false); }
+                        catch (OperationCanceledException) { break; }
+                        catch (ObjectDisposedException) { break; }
+                        catch (SocketException) { /* no route: nothing there */ }
+                    }
+                }, CancellationToken.None);
             while (!cts.IsCancellationRequested)
             {
                 UdpReceiveResult r;
                 try { r = await udp.ReceiveAsync(cts.Token).ConfigureAwait(false); }
                 catch (OperationCanceledException) { break; }
                 catch (SocketException) { continue; }
-                foreach (var m in ParseOnvifMatches(Encoding.UTF8.GetString(r.Buffer)))
+                foreach (var (xaddrs, scopes) in ParseOnvifMatches(Encoding.UTF8.GetString(r.Buffer)))
                 {
+                    var m = new WsMatch(r.RemoteEndPoint.Address, xaddrs, scopes);
                     matches.Add(m);
-                    Log.Info(P($"onvif: reply from {r.RemoteEndPoint} — service {m.XAddrs}; scopes {m.Scopes}"));
+                    onMatch?.Invoke(m);
                 }
             }
         }
         catch (Exception ex)
         {
-            Log.Debug(P($"onvif: probe error {Log.Flatten(ex)}"));
+            Log.Debug($"[discover] onvif: probe error {Log.Flatten(ex)}");
         }
-        if (matches.Count == 0)
-            Log.Info(P("onvif: no reply (WS-Discovery not answered — typical for battery-only models)"));
         return matches;
     }
 

@@ -41,7 +41,7 @@ public sealed class ReolinkHttpApi : IDisposable
     private static readonly TimeSpan LeaseMargin = TimeSpan.FromSeconds(60);
 
     private readonly HttpClient _http;
-    private readonly string _apiUrl;
+    private string _apiUrl;
     private readonly string _username;
     private readonly string _password;
     private readonly byte _channelId;
@@ -53,12 +53,21 @@ public sealed class ReolinkHttpApi : IDisposable
     /// <param name="address">"host", "host:port" or a full "http(s)://host[:port]" URL.</param>
     public ReolinkHttpApi(string address, string username, string? password, byte channelId)
     {
-        var baseUrl = (address.Contains("://") ? address : $"http://{address}").TrimEnd('/');
-        _apiUrl = $"{baseUrl}/api.cgi";
+        _apiUrl = ApiUrl(address);
         _username = username;
         _password = password ?? "";
         _channelId = channelId;
         _http = new HttpClient(NewHandler()) { Timeout = RequestTimeout };
+    }
+
+    private static string ApiUrl(string address) =>
+        (address.Contains("://") ? address : $"http://{address}").TrimEnd('/') + "/api.cgi";
+
+    /// <summary>The camera was followed to a new address: point the API there and drop the token.</summary>
+    public void Rehost(string address)
+    {
+        _apiUrl = ApiUrl(address);
+        _token = null; // the old host's session is worthless; the next call logs in afresh
     }
 
     /// <summary>Connection hygiene for camera HTTP. A Wi-Fi camera drops idle

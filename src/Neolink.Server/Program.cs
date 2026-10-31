@@ -594,6 +594,8 @@ foreach (var cam in config.Cameras)
                 cameraState.LastWakeHintUtc(cam.Name),
                 utc => cameraState.SetLastWakeHintUtc(cam.Name, utc));
             service.SetSuspended(cameraState.Suspended(cam.Name)); // restore persisted suspend
+            (service.KnownUid, service.LastKnownHost) = cameraState.Identity(cam.Name);
+            service.IdentitySeen = (uid, host) => cameraState.SetIdentity(cam.Name, uid, host);
             primaryService ??= service;
             camServices.Add(service);
             tasks.Add(Task.Run(() => RunCameraGuardedAsync(service, $"{cam.Name} ({kind})", shutdown.Token)));
@@ -630,6 +632,13 @@ foreach (var cam in config.Cameras)
             ?? (string.IsNullOrWhiteSpace(cam.Host) ? null : cam.Host);
         var onvif = onvifAddr == null ? null
             : new OnvifClient(onvifAddr, cam.Username, cam.Password, cam.Name);
+        // A followed camera takes its derived HTTP/ONVIF endpoints along; explicit overrides stay.
+        foreach (var s in camServices)
+            s.HostChanged = host =>
+            {
+                if (cam.HttpAddress == null) httpApi?.Rehost(host);
+                if (cam.OnvifAddress == null) onvif?.Rehost(host);
+            };
         // The camera's own port table leads the ONVIF probe (Reolink's 8000 is only the usual case).
         if (onvif != null)
             foreach (var s in camServices)
@@ -865,6 +874,10 @@ foreach (var cam in config.Cameras)
         // on-demand recording session per camera (UI button ≡ HA Record switch).
         {
             EventRecorder = eventRecorder, Address = camAddress, Udp = cam.Udp,
+            // Read live: a relocated camera's host changes in place.
+            LiveAddress = cam.IsGenericRtsp || cam.Demo ? null
+                : () => string.IsNullOrWhiteSpace(cam.Host) ? null
+                    : cam.Port is 9000 or 0 ? cam.Host : $"{cam.Host}:{cam.Port}",
             // A non-Reolink camera's detections depend on an ONVIF event service
             // that has to be asked, so its answer is a probe rather than a constant.
             EventsProbe = onvifEvents == null ? null : () => onvifEvents.EverSubscribed,

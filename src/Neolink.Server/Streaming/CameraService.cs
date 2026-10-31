@@ -241,6 +241,28 @@ public sealed class CameraService : ILiveCameraSource
     private static readonly TimeSpan ProbeEvery = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan ProbeWindow = TimeSpan.FromMinutes(15);
 
+    // Following a camera whose IP changed: after two connects in a row that never
+    // reached it, ask the LAN for its UID (no credentials) at most this often per camera.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTime> _relocateLast = new();
+    private static readonly TimeSpan RelocateEvery = TimeSpan.FromMinutes(2);
+    private static readonly TimeSpan RelocateTimeout = TimeSpan.FromSeconds(6);
+    private int _connectFailures;
+    private bool _sessionReached;   // the TCP/UDP connect of the current attempt succeeded
+    private bool _uidRead;          // msg 114 asked once per service
+    private bool _noUidLogged;
+    private volatile string? _learnedUid;
+
+    /// <summary>The UID learned at an earlier login (camera-state.json), restored at startup.</summary>
+    public string? KnownUid { get; set; }
+    /// <summary>Where the camera last answered from (camera-state.json), restored at startup.</summary>
+    public string? LastKnownHost { get; set; }
+    /// <summary>Called with the UID the camera reports and/or the address it answered from (null = unchanged).</summary>
+    public Action<string?, string?>? IdentitySeen { get; set; }
+    /// <summary>Called with the new host after the camera was followed to another address.</summary>
+    public Action<string>? HostChanged { get; set; }
+    /// <summary>The UID this camera is known by: configured, else learned at login.</summary>
+    public string? Uid => _config.Uid ?? _learnedUid ?? KnownUid;
+
     public CameraService(CameraConfig config, StreamKind kind, IMediaSink hub, TimeSpan startupDelay,
         TimeSpan? hintTrustWindow = null, DateTime? lastWakeHintUtc = null,
         Action<DateTime>? persistWakeHint = null)
@@ -898,6 +920,13 @@ public sealed class CameraService : ILiveCameraSource
                 // and log the exchange (UID masked, no credentials).
                 if (_config.UdpProbe && !gotFrames && !ct.IsCancellationRequested)
                     _sweepProvedAwake = await MaybeUdpProbeAsync(ct).ConfigureAwait(false);
+
+                // A connect that never reached the camera: maybe its IP changed. Not for a UDP
+                // camera (found by UID anyway) nor a sleeping one (the hellos would wake it).
+                if (!_sessionReached && !_config.Udp && !SleepFriendly && !ct.IsCancellationRequested
+                    && ++_connectFailures >= 2
+                    && await MaybeRelocateAsync(ct).ConfigureAwait(false))
+                    backoff = MinBackoff;
             }
             finally
             {
@@ -970,6 +999,123 @@ public sealed class CameraService : ILiveCameraSource
             Log.Warn($"{Tag}: [discover] sweep crashed: {Log.Flatten(ex)}");
         }
         return false;
+    }
+
+    /// <summary>Asks the camera for its UID once (msg 114) and records it with the
+    /// address it answered from. Background work: never fails or delays the session.</summary>
+    private async Task LearnIdentityAsync(IBcCamera camera, CancellationToken ct)
+    {
+        string? uid = null;
+        var host = camera.RemoteIp?.ToString();
+        if (!_uidRead)
+        {
+            try
+            {
+                var el = await camera.GetRawAsync(Bc.BcConstants.MsgIdGetUid, "Uid",
+                    timeout: TimeSpan.FromSeconds(3), ct: ct).ConfigureAwait(false);
+                _uidRead = true;
+                uid = el?.Element("uid")?.Value?.Trim();
+                static string Mask(string u) => UdpDiscovery.MaskUid(u, u);
+                if (string.IsNullOrEmpty(uid))
+                {
+                    if (string.IsNullOrEmpty(_config.Uid))
+                        Log.Info($"{Tag}: the camera did not report its UID; set \"uid\" in its config entry " +
+                                 "(Reolink app → device info) so a changed IP address can be followed");
+                }
+                else if (_config.Uid is { Length: > 0 } cfg && !string.Equals(cfg, uid, StringComparison.OrdinalIgnoreCase))
+                {
+                    // Not the camera the config describes: keep the configured identity.
+                    Log.Warn($"{Tag}: the camera at {host} reports UID {Mask(uid)}, config.json says {Mask(cfg)} — " +
+                             "a different camera answers at this address; check the address and uid");
+                    uid = null;
+                }
+                else
+                {
+                    if (KnownUid is { Length: > 0 } known && !string.Equals(known, uid, StringComparison.OrdinalIgnoreCase))
+                        Log.Warn($"{Tag}: the camera at {host} reports UID {Mask(uid)}, last time it was {Mask(known)} — " +
+                                 "a replaced camera? Following the new one");
+                    else if (!string.Equals(uid, _config.Uid ?? KnownUid, StringComparison.OrdinalIgnoreCase))
+                        Log.Info($"{Tag}: camera UID learned ({Mask(uid)}) — a changed IP address can now be followed");
+                    _learnedUid = uid;
+                }
+            }
+            catch (OperationCanceledException) { return; }
+            catch (Exception ex) { _uidRead = true; Log.Debug($"{Tag}: UID query failed: {Log.Flatten(ex)}"); }
+        }
+        try { IdentitySeen?.Invoke(uid, host); }
+        catch (Exception ex) { Log.Warn($"{Tag}: could not persist camera identity ({ex.Message})"); }
+    }
+
+    /// <summary>True when the configured host names <paramref name="ip"/> (a literal or a resolving DNS name).</summary>
+    private async Task<bool> ConfiguredHostIsAsync(System.Net.IPAddress ip, CancellationToken ct)
+    {
+        if (System.Net.IPAddress.TryParse(_config.Host, out var literal)) return literal.Equals(ip);
+        try
+        {
+            return (await System.Net.Dns.GetHostAddressesAsync(_config.Host, ct).ConfigureAwait(false)).Contains(ip);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch { return false; }
+    }
+
+    /// <summary>Finds the camera by UID and follows it in memory when it answers from another
+    /// address; config.json is left for the user. True when the address changed.</summary>
+    private async Task<bool> MaybeRelocateAsync(CancellationToken ct)
+    {
+        var uid = Uid;
+        if (string.IsNullOrWhiteSpace(uid))
+        {
+            if (!_noUidLogged)
+            {
+                _noUidLogged = true;
+                Log.Info($"{Tag}: cannot look for the camera at another address — its UID is not known " +
+                         "(learned at the first successful login, or set \"uid\" in its config entry)");
+            }
+            return false;
+        }
+        var now = DateTime.UtcNow;
+        bool due = false;
+        _relocateLast.AddOrUpdate(_config.Name, _ => { due = true; return now; },
+            (_, last) => { if (now - last < RelocateEvery) return last; due = true; return now; });
+        if (!due) return false;
+
+        var known = new List<System.Net.IPAddress>();
+        if (ResolveProbeTarget() is { } probe) known.Add(probe);
+        if (System.Net.IPAddress.TryParse(LastKnownHost ?? "", out var last)) known.Add(last);
+        Log.Info($"{Tag}: looking for the camera by its UID on the LAN (its address may have changed)");
+        System.Net.IPEndPoint? found;
+        try
+        {
+            found = await UdpDiscovery.LocateAsync(uid, known, RelocateTimeout, ct, Tag).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            Log.Debug($"{Tag}: locate failed: {Log.Flatten(ex)}");
+            return false;
+        }
+        if (found == null)
+        {
+            Log.Info($"{Tag}: no camera with this UID answered on the LAN");
+            return false;
+        }
+        var address = found.Address.ToString();
+        if (await ConfiguredHostIsAsync(found.Address, ct).ConfigureAwait(false))
+        {
+            Log.Info($"{Tag}: the camera answers discovery at its configured address {address}, " +
+                     "so the failure is not an address change");
+            return false;
+        }
+        var was = _config.Host;
+        _config.Host = address;
+        _connectFailures = 0;
+        Log.Warn($"{Tag}: the camera moved — it answers at {address}, config.json says {was}. Following it; " +
+                 "click \"Use new address\" in the camera editor (or edit config.json) to make it permanent");
+        try { HostChanged?.Invoke(address); }
+        catch (Exception ex) { Log.Warn($"{Tag}: could not move the camera's HTTP/ONVIF endpoints ({ex.Message})"); }
+        try { IdentitySeen?.Invoke(null, address); }
+        catch (Exception ex) { Log.Warn($"{Tag}: could not persist camera address ({ex.Message})"); }
+        return true;
     }
 
     // The diagnostic sweep reached the camera after a failed connect: one-shot
@@ -1097,6 +1243,7 @@ public sealed class CameraService : ILiveCameraSource
 
         // UDP transport (opt-in) for battery-only cameras that never
         // listen on TCP; everything after connect is identical to the TCP path.
+        _sessionReached = false;
         Note(_config.Udp
             ? $"{Tag}: connecting over UDP to " +
               $"{(string.IsNullOrWhiteSpace(_config.Host) ? "the UID via broadcast discovery" : _config.Host)} (uid set)"
@@ -1108,12 +1255,14 @@ public sealed class CameraService : ILiveCameraSource
         // Remember where discovery found it, so the non-waking liveness scan (ICMP)
         // has an address for a UID-only camera that has no configured host.
         if (camera.RemoteIp is { } ip) _lastCameraIp = ip;
+        _sessionReached = true;
 
         Note($"{Tag}: logging in as '{_config.Username}'");
         await camera.LoginAsync(_config.Username, _config.Password, ct,
             BcLoginMode.From(_config.MaxEncryption, _config.LegacyLogin)).ConfigureAwait(false);
         var res = camera.DeviceInfo;
         Note($"{Tag}: logged in{(res != null && res.Width > 0 ? $", camera reports {res.Width}x{res.Height}" : "")}");
+        _connectFailures = 0;
 
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _activeStream = linked; // let SetSuspended interrupt this session at once
@@ -1145,6 +1294,8 @@ public sealed class CameraService : ILiveCameraSource
         // need no video subscription. That's what makes the on-demand hold below
         // free: sensors, detections and the settings panel all keep working.
         _live = camera;
+        // Off the critical path: the UID query must not delay the first frame.
+        _ = Task.Run(() => LearnIdentityAsync(camera, linked.Token), CancellationToken.None);
         // One "held awake by …" line per session (then hourly if it never lets go),
         // so flickering demand can't turn the diagnostic into a flood.
         _lastHoldLog = default;

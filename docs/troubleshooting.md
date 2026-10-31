@@ -8,6 +8,18 @@ matching line.
 - **`503 Service Unavailable` on DESCRIBE / web tiles stuck on "connecting…"**: the
   camera is not connected yet (wrong address/credentials, camera booting) — check the
   service logs.
+- **"the camera moved — it answers at … config.json says …"**: the camera's IP
+  changed (DHCP) and Neolink.NET followed it by UID. Click **Use new address**
+  in Settings → Cameras to write it to `config.json`, or give the camera a DHCP
+  reservation. **"cannot look for the camera at another address — its UID is
+  not known"**: it never logged in since this feature arrived; set `uid` in its
+  config entry (Reolink app → device info). In Docker following and *Auto
+  discover* need `--network host`.
+- **Auto discover finds nothing on another subnet** (cameras on an IoT VLAN):
+  type that subnet in the dialog. The sweep and the ONVIF query are sent to
+  each address directly, so plain routing is enough; an mDNS repeater on the
+  router changes nothing (ONVIF discovery is 239.255.255.250:3702, not mDNS).
+  A camera listed without model or name has ONVIF off.
 - **"authentication failed … retrying in 30s"**: the camera rejected the configured
   username/password. Cameras also reject transiently while rebooting or when their user
   table is full, so the bridge keeps retrying at a slow pace. Five wrong attempts can

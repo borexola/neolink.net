@@ -46,9 +46,15 @@ public sealed class CameraStateStore
         /// <summary>Absolute UTC time of the last received wake hint; never reset on restart.</summary>
         public DateTime? LastWakeHintUtc { get; set; }
 
+        /// <summary>The UID the camera reported at login — what finds it again when its IP changes.</summary>
+        public string? Uid { get; set; }
+        /// <summary>Where the camera last answered; config.json's address wins until it stops working.</summary>
+        public string? LastHost { get; set; }
+
         [System.Text.Json.Serialization.JsonIgnore]
         public bool IsDefault => !Suspended && AiTypes == null && Doorbell == null
-                                 && Zones is not { Count: > 0 } && LastWakeHintUtc == null;
+                                 && Zones is not { Count: > 0 } && LastWakeHintUtc == null
+                                 && Uid == null && LastHost == null;
     }
 
     /// <summary>One locally-kept detection zone: Table is Cols*Rows characters, row
@@ -201,6 +207,36 @@ public sealed class CameraStateStore
         }
     }
 
+    /// <summary>What the camera told us about itself: the learned UID and the address it last answered from.</summary>
+    public (string? Uid, string? LastHost) Identity(string camera)
+    {
+        lock (_gate)
+        {
+            return _state.TryGetValue(camera, out var s) ? (s.Uid, s.LastHost) : (null, null);
+        }
+    }
+
+    /// <summary>Records the UID and/or last address; null keeps what is stored, and only a change writes.</summary>
+    public void SetIdentity(string camera, string? uid = null, string? lastHost = null)
+    {
+        uid = string.IsNullOrWhiteSpace(uid) ? null : uid.Trim();
+        lastHost = string.IsNullOrWhiteSpace(lastHost) ? null : lastHost.Trim();
+        if (uid == null && lastHost == null) return;
+        lock (_gate)
+        {
+            if (!_state.TryGetValue(camera, out var s))
+                _state[camera] = s = new CameraState();
+            bool changed = false;
+            if (uid != null && !string.Equals(s.Uid, uid, StringComparison.Ordinal)) { s.Uid = uid; changed = true; }
+            if (lastHost != null && !string.Equals(s.LastHost, lastHost, StringComparison.OrdinalIgnoreCase))
+            {
+                s.LastHost = lastHost;
+                changed = true;
+            }
+            if (changed) Save();
+        }
+    }
+
     /// <summary>The grid to offer a camera that keeps no zone of its own. Cells are
     /// square-ish over the picture: the rows are fixed and the columns follow the
     /// stream's aspect, so a 16:9 camera gets 32x18 and a 4:3 one 24x18. An unknown
@@ -270,9 +306,11 @@ public sealed class CameraStateStore
                 _wakeHintNames[alias] = null;
             _wakeHintNames.TryAdd(camera, null);
             if (!_state.TryGetValue(camera, out var s)
-                || (s.Zones == null && s.LastWakeHintUtc == null)) return;
+                || (s.Zones == null && s.LastWakeHintUtc == null && s.Uid == null && s.LastHost == null)) return;
             s.Zones = null;
             s.LastWakeHintUtc = null;
+            s.Uid = null;
+            s.LastHost = null;
             if (s.IsDefault) _state.Remove(camera);
             Save();
         }
@@ -290,12 +328,15 @@ public sealed class CameraStateStore
                 _wakeHintNames[alias] = to;
             _wakeHintNames.TryAdd(from, to);
             if (!_state.TryGetValue(from, out var s)
-                || (s.Zones is not { Count: > 0 } && s.LastWakeHintUtc == null))
+                || (s.Zones is not { Count: > 0 } && s.LastWakeHintUtc == null && s.Uid == null && s.LastHost == null))
             {
-                // Even an unhinted source must not inherit a stale destination hint.
-                if (_state.TryGetValue(to, out var stale) && stale.LastWakeHintUtc != null)
+                // Even an unhinted source must not inherit a stale destination hint or identity.
+                if (_state.TryGetValue(to, out var stale)
+                    && (stale.LastWakeHintUtc != null || stale.Uid != null || stale.LastHost != null))
                 {
                     stale.LastWakeHintUtc = null;
+                    stale.Uid = null;
+                    stale.LastHost = null;
                     if (stale.IsDefault) _state.Remove(to);
                     Save();
                 }
@@ -303,14 +344,19 @@ public sealed class CameraStateStore
             }
             var zones = s.Zones;
             var hint = s.LastWakeHintUtc;
+            var (uid, lastHost) = (s.Uid, s.LastHost);
             s.Zones = null;
             s.LastWakeHintUtc = null;
+            s.Uid = null;
+            s.LastHost = null;
             if (s.IsDefault) _state.Remove(from);
             if (!_state.TryGetValue(to, out var dest))
                 _state[to] = dest = new CameraState();
             if (zones is { Count: > 0 }) dest.Zones = zones;
             // Trust belongs to the renamed camera, not a previous camera at the destination.
             dest.LastWakeHintUtc = hint;
+            dest.Uid = uid;
+            dest.LastHost = lastHost;
             Save();
         }
     }

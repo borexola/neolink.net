@@ -35,6 +35,7 @@ public static class BcConstants
     public const uint MsgIdVersion = 80;
     public const uint MsgIdPing = 93;
     public const uint MsgIdGetGeneral = 104;
+    public const uint MsgIdGetUid = 114;               // GET_UID_CFG_V20: reply <Uid><uid>…</uid></Uid>
     public const uint MsgIdSetGeneral = 105;
     public const uint MsgIdSnap = 109;
     public const uint MsgIdStreamInfoList = 146;

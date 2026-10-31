@@ -343,7 +343,7 @@
             <div class="events-bar" id="events-bar" style="height:@(_stripHeight)px">
                 <div class="events-rail">
                     <span class="events-rail-label">@T["Detected"]</span>
-                    <span class="events-rail-count" title="@T["Unreviewed events (after filters)"]">@strip.Count</span>
+                    <span class="events-rail-count" title="@(_eventsTruncated ? T["Unreviewed events (after filters); older ones are not loaded"] : T["Unreviewed events (after filters)"])">@strip.Count@(_eventsTruncated ? "+" : "")</span>
                     <div class="events-rail-actions">
                         <button class="rail-btn @(_showStripFilter ? "open" : "")"
                                 title="@T["Filter which events appear here"]" @onclick="() => _showStripFilter = !_showStripFilter">
@@ -1713,7 +1713,7 @@
                     </div>
 
                     <div class="campanel-section">
-                        <div class="campanel-section-title">@T["WAKE HINTS (BATTERY CAMERAS)"] <span class="beta-tag">@T["BETA"]</span></div>
+                        <div class="campanel-section-title">@T["WAKE HINTS (BATTERY CAMERAS)"]</div>
                         <div class="notice small">
                             @((MarkupString)T["Instant wake signals from the moment a battery camera calls Reolink's push service for a PIR event; recipes in <code>docs/battery-cameras.md</code>. <b>Syslog</b>: an OPNsense/pfSense router forwards its firewall log here. <b>Push decoy</b>: the camera's own push is steered to this host: a router NAT redirect of the camera's outbound 443 (recommended), or a DNS override pointing <code>pushx.reolink.com</code> here (Reolink app notifications stop for those cameras either way). Blank ports leave a source off."])
                         </div>
@@ -1772,8 +1772,20 @@
                                 @foreach (var cam in _adminCams)
                                 {
                                     <div class="control-row">
-                                        <span><b>@cam.Name</b>&nbsp;<span class="event-sub">@(cam.Type == "rtsp" ? T["generic RTSP"] : $"Reolink · {cam.Address}")</span></span>
+                                        <span><b>@cam.Name</b>&nbsp;<span class="event-sub">@(cam.Type == "rtsp" ? T["generic RTSP"] : $"Reolink · {cam.Address}")</span>
+                                            @if (cam.CurrentAddress != null)
+                                            {
+                                                <span class="event-sub"> · @T.F("now at {0}", cam.CurrentAddress)</span>
+                                            }
+                                        </span>
                                         <span class="row-actions">
+                                            @if (cam.CurrentAddress != null)
+                                            {
+                                                @* The camera was followed to a new IP; this writes it to config.json. *@
+                                                <button class="chip chip-active" disabled="@(!_adminCamsWritable || _camAdoptBusy)"
+                                                        title="@T.F("Write {0} into config.json as this camera's address", cam.CurrentAddress)"
+                                                        @onclick="() => AdoptAddressAsync(cam.Name)">@T["Use new address"]</button>
+                                            }
                                             @* Tests the SAVED settings — no need to open the editor
                                                (or touch a field) just to check a camera is reachable.
                                                Works without write access: it changes nothing. *@
@@ -1808,8 +1820,64 @@
                                 }
                                 <div class="settings-foot-btns">
                                     <span class="tile-spacer"></span>
+                                    <button class="chip" disabled="@_lanScanBusy" title="@T["Look for Reolink cameras on a subnet and fill in the add-camera form"]"
+                                            @onclick="OpenDiscoverAsync">@T["Auto discover…"]</button>
                                     <button class="chip chip-active" disabled="@(!_adminCamsWritable)" @onclick="AddCamera">@T["Add camera…"]</button>
                                 </div>
+                                @if (_discoverOpen)
+                                {
+                                    <div class="ev-del-backdrop" @onclick="CloseDiscover">
+                                        <div class="ev-del-dialog ev-adv-dialog" role="dialog" aria-label="@T["Auto discover"]"
+                                             @onclick:stopPropagation="true" @onkeydown="OnDiscoverKeyAsync">
+                                            <div class="ev-del-title ev-adv-title">
+                                                <span>@UiIcon.Render("zoom", 15) @T["AUTO DISCOVER"]</span>
+                                                <button class="icon-btn" title="@T["Close"]" @onclick="CloseDiscover">✕</button>
+                                            </div>
+                                            <div class="ev-adv-hint">@T["Finds plug-in Reolink cameras by their Baichuan port and, where ONVIF is on, their model and name. Battery cameras never answer: add those by UID."]</div>
+                                            <div class="ev-adv-section">@T["SUBNETS TO SCAN"]</div>
+                                            <input id="discover-subnets" class="notif-input ev-adv-q @(_lanScanSubnetError != null ? "input-error" : "")"
+                                                   placeholder="10.1.1.0/24, 10.1.2.10-60" disabled="@_lanScanBusy"
+                                                   value="@_lanScanSubnets" @oninput="e => SetDiscoverSubnets((string?)e.Value)" />
+                                            @if (_lanScanSubnetError != null) { <div class="field-error">@_lanScanSubnetError</div> }
+                                            <div class="ev-adv-hint">@T["A subnet (10.1.1.0/24), a range (10.1.1.10-10.1.1.60 or 10.1.1.10-60) or several, comma-separated; up to a /21 each. The subnet of every configured camera is scanned as well."]</div>
+                                            @if (_lanScan != null)
+                                            {
+                                                <div class="ev-adv-section">@T["FOUND"]</div>
+                                                @foreach (var f in _lanScan)
+                                                {
+                                                    <div class="control-row">
+                                                        <span><b>@f.Address</b>&nbsp;<span class="event-sub">@LanScanLabel(f)</span></span>
+                                                        <span class="row-actions">
+                                                            @if (ConfiguredAs(f) is { } cfgName)
+                                                            {
+                                                                <span class="event-sub">@T.F("configured as \"{0}\"", cfgName)</span>
+                                                            }
+                                                            else
+                                                            {
+                                                                <button class="chip chip-active" disabled="@(!_adminCamsWritable)"
+                                                                        @onclick="() => AddFromScan(f)">@T["Add…"]</button>
+                                                            }
+                                                        </span>
+                                                    </div>
+                                                }
+                                                @if (_lanScan.Count == 0)
+                                                {
+                                                    <div class="notice small">@T["No camera answered on these subnets. In Docker the scan needs host networking (--network host)."]</div>
+                                                }
+                                                else
+                                                {
+                                                    <div class="notice small">@T["A camera found only by its Baichuan port has no model or name until you log in (its ONVIF is off)."]</div>
+                                                }
+                                            }
+                                            @if (_lanScanError != null) { <div class="field-error">@_lanScanError</div> }
+                                            <div class="ev-del-actions">
+                                                <button class="chip" @onclick="CloseDiscover">@T["Close"]</button>
+                                                <button class="chip chip-active" disabled="@(_lanScanBusy || _lanScanSubnetError != null)"
+                                                        @onclick="ScanLanAsync">@(_lanScanBusy ? T["Scanning…"] : T["Scan"])</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                }
                             }
                             else
                             {
@@ -1836,9 +1904,10 @@
                                                placeholder="admin" @bind="e.Username" @bind:event="oninput" /></div>
                                     @if (CamUsernameError != null) { <div class="field-error">@CamUsernameError</div> }
                                     <div class="control-row"><span>@T["Password"]</span>
-                                        <input class="notif-input" type="password" autocomplete="new-password"
+                                        <input class="notif-input @(CamPasswordError != null ? "input-error" : "")" type="password" autocomplete="new-password"
                                                placeholder="@(e.HasPassword ? T["•••• stored (blank keeps it)"] : T["camera password"])"
-                                               @bind="e.Password" /></div>
+                                               @bind="e.Password" @bind:event="oninput" /></div>
+                                    @if (CamPasswordError != null) { <div class="field-error">@CamPasswordError</div> }
                                     <div class="control-row"><span>@T["HTTP address (blank = derived)"]</span>
                                         <input class="notif-input" placeholder="@T["usually blank"]" @bind="e.HttpAddress" /></div>
                                     <div class="control-row"><span>@T["Channel (NVR only; 0 = standalone)"]</span>
@@ -1867,6 +1936,14 @@
                                                placeholder="@T["95270000ABCDEFGH (from the app or the sticker)"]"
                                                @bind="e.Uid" @bind:event="oninput" /></div>
                                     @if (CamUidError != null) { <div class="field-error">@CamUidError</div> }
+                                    @if (e.LearnedUid != null && string.IsNullOrWhiteSpace(e.Uid))
+                                    {
+                                        <div class="notice small">@T.F("Learned from the camera at login: {0}. Leave this blank to keep using it.", e.LearnedUid)</div>
+                                    }
+                                    else if (e.LearnedUid != null && !string.Equals(e.LearnedUid, e.Uid.Trim(), StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        <div class="notice small error">@T.F("The camera at this address reports a different UID: {0}. Check the address, or that this is the right camera.", e.LearnedUid)</div>
+                                    }
                                     <div class="control-row"><span>@T["Connect over UDP"]</span>
                                         <select class="event-filter" value="@(e.Udp ? "true" : "false")"
                                                 @onchange='ev => e.Udp = (string?)ev.Value == "true"'>
@@ -3293,6 +3370,9 @@
 
     // Recorded events (populated when the server has recording enabled)
     private readonly List<ApiEvent> _events = new();
+    private const int EventFetchLimit = 500;
+    /// <summary>The fetch came back full, so counts are a floor ("500+").</summary>
+    private bool _eventsTruncated;
     private bool _eventsSupported;
     private bool _continuousSupported;
     private double _trickleSpeed = 4;
@@ -5331,6 +5411,8 @@
         public bool HasPassword;
         // Optional per-camera settings (Reolink/Baichuan entries).
         public string Uid = "";
+        /// <summary>What the running server learned from the camera itself (read-only).</summary>
+        public string? LearnedUid;
         public string OnvifAddress = "";
         public string AlwaysOn = "auto";   // "auto" | "true" | "false"
         public string Stream = "both";
@@ -5407,6 +5489,144 @@
         _camEdit = new CamEdit();
     }
 
+    // ---- LAN scan: fills the add form from a found camera; the password is all that is left to type ----
+
+    private List<ApiLanCamera>? _lanScan;
+    private string _lanScanSubnets = "";
+    private string? _lanScanSubnetError, _lanScanError;
+    private bool _lanScanBusy, _camAdoptBusy, _discoverOpen;
+
+    /// <summary>Opens the dialog; an earlier scan's list is kept, so Add → save → reopen
+    /// shows the rest without scanning again.</summary>
+    private async Task OpenDiscoverAsync()
+    {
+        _lanScanError = null;
+        _camTestResult = null;
+        _discoverOpen = true;
+        if (string.IsNullOrWhiteSpace(_lanScanSubnets))
+        {
+            try
+            {
+                using var res = await Http.SendAsync(ApiRequest(HttpMethod.Get, "/api/admin/discover"));
+                if (res.IsSuccessStatusCode)
+                    _lanScanSubnets = string.Join(", ", (await res.Content.ReadFromJsonAsync<ApiLanScanDefaults>())?.Subnets ?? new());
+            }
+            catch { /* the box stays empty; the user types a subnet */ }
+        }
+        SetDiscoverSubnets(_lanScanSubnets);
+        try { await JS.InvokeVoidAsync("neolink.focusEl", "discover-subnets"); } catch { }
+    }
+
+    private void CloseDiscover() => _discoverOpen = false;
+
+    private async Task OnDiscoverKeyAsync(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape") CloseDiscover();
+        else if (e.Key == "Enter" && !_lanScanBusy && _lanScanSubnetError == null) await ScanLanAsync();
+    }
+
+    /// <summary>Validates as you type, with the same parser the server uses.</summary>
+    private void SetDiscoverSubnets(string? text)
+    {
+        _lanScanSubnets = text ?? "";
+        ScanRange.ParseList(_lanScanSubnets, out var why);
+        _lanScanSubnetError = why == null ? null : T[why];
+    }
+
+    /// <summary>Which configured camera a found address belongs to, from the current list
+    /// rather than the scan's snapshot, so one just added stops being offered.</summary>
+    private string? ConfiguredAs(ApiLanCamera f)
+    {
+        static string HostOf(string? a) => a == null ? "" : a.Split(':')[0];
+        return _adminCams?.FirstOrDefault(c => string.Equals(HostOf(c.Address), f.Address, StringComparison.OrdinalIgnoreCase)
+                                               || string.Equals(HostOf(c.CurrentAddress), f.Address, StringComparison.OrdinalIgnoreCase))?.Name
+               ?? f.ConfiguredAs;
+    }
+
+    private string LanScanLabel(ApiLanCamera f)
+    {
+        var parts = new List<string>();
+        if (f.Model != null) parts.Add(f.Model);
+        if (f.Name != null && f.Name != f.Model) parts.Add(f.Name);
+        parts.Add(f.Baichuan && f.Onvif ? T["Baichuan + ONVIF"] : f.Baichuan ? T["Baichuan port open"] : T["ONVIF only"]);
+        return string.Join(" · ", parts);
+    }
+
+    private async Task ScanLanAsync()
+    {
+        if (_lanScanBusy) return;
+        SetDiscoverSubnets(_lanScanSubnets);
+        if (_lanScanSubnetError != null) return;
+        _lanScanBusy = true;
+        _lanScanError = null;
+        try
+        {
+            var subnets = _lanScanSubnets.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var req = ApiRequest(HttpMethod.Post, "/api/admin/discover");
+            req.Content = JsonContent.Create(new { subnets });
+            using var res = await Http.SendAsync(req);
+            if (res.StatusCode == System.Net.HttpStatusCode.BadRequest)
+            {
+                _lanScanSubnetError = await ApiErrorAsync(res) ?? T["Not a subnet (use 10.1.1.0/24)"];
+                return;
+            }
+            if (!res.IsSuccessStatusCode)
+            {
+                _lanScanError = await ApiErrorAsync(res) ?? T.F("Scan failed ({0})", (int)res.StatusCode);
+                return;
+            }
+            _lanScan = (await res.Content.ReadFromJsonAsync<ApiLanScan>())?.Found ?? new();
+        }
+        catch (Exception ex)
+        {
+            _lanScanError = ex.Message;
+        }
+        finally
+        {
+            _lanScanBusy = false;
+        }
+    }
+
+    /// <summary>Closes the dialog and opens the add form with the found address and name.</summary>
+    private void AddFromScan(ApiLanCamera f)
+    {
+        _discoverOpen = false;
+        AddCamera();
+        _camEdit!.Address = f.Address;
+        var name = f.Name ?? f.Model ?? "";
+        // Keep the suggested name usable as an RTSP path and a folder name.
+        name = new string(name.Where(ch => !char.IsControl(ch) && !"/\\:*?\"<>|".Contains(ch)).ToArray()).Trim();
+        if (name.Length > 64) name = name[..64];
+        if (_adminCams?.Any(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase)) == true) name = "";
+        _camEdit.Name = name;
+    }
+
+    /// <summary>Writes the address a relocated camera was followed to into config.json.</summary>
+    private async Task AdoptAddressAsync(string name)
+    {
+        if (_camAdoptBusy) return;
+        _camAdoptBusy = true;
+        try
+        {
+            using var res = await Http.SendAsync(
+                ApiRequest(HttpMethod.Post, $"/api/admin/cameras/{Uri.EscapeDataString(name)}/adopt-address"));
+            _camTestOk = res.IsSuccessStatusCode;
+            _camTestResult = res.IsSuccessStatusCode
+                ? $"{name}: {T["config.json now has the camera's new address; no restart needed."]}"
+                : await ApiErrorAsync(res) ?? T.F("Update failed ({0})", (int)res.StatusCode);
+            if (res.IsSuccessStatusCode) await LoadAdminCamerasAsync();
+        }
+        catch (Exception ex)
+        {
+            _camTestOk = false;
+            _camTestResult = ex.Message;
+        }
+        finally
+        {
+            _camAdoptBusy = false;
+        }
+    }
+
     private void EditCamera(ApiAdminCamera cam)
     {
         _camTestResult = null;
@@ -5424,6 +5644,7 @@
             RtspSub = cam.RtspSub ?? "",
             HasPassword = cam.HasPassword,
             Uid = cam.Uid ?? "",
+            LearnedUid = cam.LearnedUid,
             OnvifAddress = cam.OnvifAddress ?? "",
             AlwaysOn = cam.AlwaysOn ?? "auto",
             Stream = cam.Stream ?? "both",
@@ -5486,6 +5707,11 @@
         _camEdit is { Type: "reolink" } e && string.IsNullOrWhiteSpace(e.Username)
             ? "A username is required (usually admin)." : null;
 
+    /// <summary>Blank keeps a stored password; a camera without one needs it typed.</summary>
+    private string? CamPasswordError =>
+        _camEdit is { Type: "reolink", HasPassword: false } e && e.Password.Length == 0
+            ? "A password is required." : null;
+
     private string? CamRtspError
     {
         get
@@ -5544,7 +5770,7 @@
     }
 
     private string? CamFormError =>
-        CamNameError ?? CamAddressError ?? CamUsernameError ?? CamRtspError ?? CamUidError ?? CamPtzError;
+        CamNameError ?? CamAddressError ?? CamUsernameError ?? CamPasswordError ?? CamRtspError ?? CamUidError ?? CamPtzError;
 
     /// <summary>The test has nothing to dial only when there is neither an address
     /// nor a UID-over-UDP to find the camera by. A UDP camera with a UID is testable
@@ -6539,7 +6765,7 @@
             // tab opened in the background seeds the same history it would shown.
             bool alertsOnly = _pageHidden && _alertSeenSeeded;
             using var res = await Http.SendAsync(ApiRequest(HttpMethod.Get,
-                alertsOnly ? "/api/events?limit=50" : "/api/events?limit=500"));
+                alertsOnly ? "/api/events?limit=50" : $"/api/events?limit={EventFetchLimit}"));
             if (res.StatusCode == System.Net.HttpStatusCode.Unauthorized)
             {
                 _authEnabled = true;
@@ -6557,6 +6783,7 @@
             {
                 _events.Clear();
                 if (list != null) _events.AddRange(list);
+                _eventsTruncated = list != null && list.Count >= EventFetchLimit;
                 // Keep an open player in sync (the clip appears once an ongoing event closes).
                 if (_playEvent != null)
                     _playEvent = _events.FirstOrDefault(e => e.Id == _playEvent.Id) ?? _playEvent;

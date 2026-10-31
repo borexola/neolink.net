@@ -4,6 +4,13 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
+## Unreleased
+
+### Added
+
+- **Auto discover** in Settings → Cameras scans a subnet or address range (the server's own by default) plus the subnet of every configured camera, shows each plug-in Reolink camera with its model and name where ONVIF is on, and fills in the add-camera form. Battery cameras are still added by UID.
+- **A camera that gets a new IP is followed.** Neolink.NET learns each camera's UID at login and, when the configured address stops answering, finds the camera by UID and connects there; **Use new address** writes it to config.json.
+
 ## 1.2.1
 
 A host-network Home Assistant add-on for UDP-only battery cameras, faster camera walls and live view, and safer defaults for a server set up while exposed.

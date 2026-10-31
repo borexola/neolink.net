@@ -61,7 +61,7 @@ public sealed partial class OnvifClient : IDisposable
 
     private readonly HttpClient _http;
     private volatile string[] _candidates;   // device-service URLs to try, in order
-    private readonly string _bare;           // the address as given, for rebuilding the candidates
+    private string _bare;                    // the address as given, for rebuilding the candidates
     private readonly IReadOnlyList<int>? _probePorts;
     private bool _reportedOff;               // the camera's own port table says ONVIF is disabled
     private string _deviceUrl;               // the candidate currently being tried / that worked
@@ -248,6 +248,16 @@ public sealed partial class OnvifClient : IDisposable
         _reportedOff = enabled == false;
         if (port is > 0 and < 65536 && _candidates.Length > 1)
             _candidates = BuildCandidates(_bare, ProbeOrder(port, _probePorts ?? new[] { 8000, 80 }));
+    }
+
+    /// <summary>The camera was followed to a new address: probe it afresh on the same ports.</summary>
+    public void Rehost(string address)
+    {
+        _bare = address;
+        _candidates = BuildCandidates(address, _probePorts);
+        _deviceUrl = _candidates[0];
+        _ready = false;
+        _retryAfter = default;
     }
 
     /// <summary>The reported port first, then the usual ones, without repeats.</summary>

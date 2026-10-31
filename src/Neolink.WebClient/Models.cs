@@ -23,7 +23,7 @@ public sealed record ApiStream(string Kind, string Path, bool Ready, string? Cod
 public sealed record ApiCamera(string Name, bool Online, List<ApiStream> Streams, bool Recording = false,
     bool Asleep = false, ApiBattery? Battery = null, ApiOnDemand? OnDemand = null, bool Privacy = false,
     bool Suspended = false, bool CanSuspend = false, string? Address = null, bool Udp = false,
-    ApiWifi? WifiSignal = null, bool Sleeps = false);
+    ApiWifi? WifiSignal = null, bool Sleeps = false, string? CurrentAddress = null);
 
 /// <summary>How a camera is attached to the network, normalized by the server.
 /// <c>Kind</c> is "wifi" (with a 0-4 <c>Level</c> for the icon and the reading
@@ -238,9 +238,17 @@ public sealed record ApiAdminCamera(string Name, string Type, string? Address, s
     bool HasPassword, int ChannelId, string? HttpAddress, string? RtspMain, string? RtspSub,
     string? Uid = null, string? AlwaysOn = null, string? Stream = null, string? OnvifAddress = null,
     bool Record = true, bool Udp = false, bool UdpProbe = false, bool WakeCapture = false,
-    double KeepAliveHours = 0, string? PtzMode = null, int? PtzPort = null, string? PtzOff = null, bool PtzOpen = false);
+    double KeepAliveHours = 0, string? PtzMode = null, int? PtzPort = null, string? PtzOff = null, bool PtzOpen = false,
+    string? LearnedUid = null, string? CurrentAddress = null);
 public sealed record ApiAdminCameras(bool Writable, List<ApiAdminCamera> Cameras, ApiAdminPtz? Ptz = null,
     string? WriteProblem = null);
+
+/// <summary>GET /api/admin/discover — the server's own subnets, what the dialog starts with.</summary>
+public sealed record ApiLanScanDefaults(List<string> Subnets);
+/// <summary>POST /api/admin/discover — plug-in cameras found on the LAN.</summary>
+public sealed record ApiLanScan(List<ApiLanCamera> Found);
+public sealed record ApiLanCamera(string Address, string? Model, string? Name, bool Baichuan, bool Onvif,
+    string? ConfiguredAs);
 
 /// <summary>What the camera editor checks a PTZ port against: the shared ONVIF port, the RTSP and web
 /// ports, whether it binds to loopback only, and whether any RTSP users exist.</summary>
