@@ -268,17 +268,31 @@ public sealed class EventStore
     internal static double? ClipLength(Stream file)
     {
         Span<byte> head = stackalloc byte[8];
+        Span<byte> wide = stackalloc byte[8];
         var be = System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian;
         for (long at = 0; at + 8 <= file.Length;)
         {
             file.Position = at;
             if (file.Read(head) < 8) return null;
             long size = be(head);
-            if (size == 1 || size < 8) return null; // 64-bit sizes never come from the clip writer
+            if (size == 1)
+            {
+                // 64-bit "largesize": the free span of a classic-finalized file past 4 GB.
+                if (file.Read(wide) < 8) return null;
+                size = (long)System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(wide);
+            }
+            if (size < 8) return null;
             if (head[4..].SequenceEqual("moov"u8))
             {
                 if (size > 64 * 1024 * 1024) return null;
-                var moov = new byte[size];
+                // The mvhd leads the moov, so a small probe usually answers without
+                // pulling the sample tables (hundreds of KB on a long segment).
+                var moov = new byte[Math.Min(size, 4096)];
+                file.Position = at;
+                file.ReadExactly(moov);
+                var fromProbe = Media.Mp4Pipe.MoovSeconds(moov);
+                if (fromProbe != null || moov.Length == size) return fromProbe;
+                moov = new byte[size];
                 file.Position = at;
                 file.ReadExactly(moov);
                 return Media.Mp4Pipe.MoovSeconds(moov);
@@ -439,13 +453,25 @@ public sealed class EventStore
 
     // ------------------------------------------------------------------ continuous recordings
 
-    /// <summary>Path for a new continuous-recording segment starting now (creates the day dir).</summary>
+    /// <summary>Path for a new continuous-recording segment starting now (creates the day dir).
+    /// A taken name moves to the next free second: the hour that repeats when clocks go
+    /// back must not overwrite the first pass.</summary>
     public string NewSegmentPath(string camera, DateTime local)
     {
-        var dir = Path.Combine(_root, SafeName(camera), $"{local:yyyy-MM-dd}", "continuous");
-        Directory.CreateDirectory(dir);
-        return Path.Combine(dir, $"{local:HH-mm-ss}.mp4");
+        for (int bump = 0; bump < 3600; bump++)
+        {
+            var at = local.AddSeconds(bump);
+            if (SegmentExists(camera, at)) continue;
+            var dir = Path.Combine(_root, SafeName(camera), $"{at:yyyy-MM-dd}", "continuous");
+            Directory.CreateDirectory(dir);
+            return Path.Combine(dir, $"{at:HH-mm-ss}.mp4");
+        }
+        throw new IOException($"no free segment name for {camera} within an hour of {local:HH:mm:ss}");
     }
+
+    private bool SegmentExists(string camera, DateTime local) =>
+        ContinuousRoots.Any(root => File.Exists(Path.Combine(root, SafeName(camera),
+            $"{local:yyyy-MM-dd}", "continuous", $"{local:HH-mm-ss}.mp4")));
 
     /// <summary>The live root plus the archive (when configured): everywhere
     /// continuous footage can live. The timeline reads both transparently.</summary>
@@ -480,12 +506,12 @@ public sealed class EventStore
     }
 
     /// <summary>Segment files of one day (live and archived merged), oldest first:
-    /// (file name, size in bytes, seconds of media). The duration comes from the
-    /// file's mtime minus the start encoded in its name — free during enumeration,
-    /// preserved by the archive mover, and it keeps growing for the file still
-    /// being written. The timeline uses it to size coverage truthfully: a segment
-    /// cut short (camera suspended/offline) must not claim minutes it doesn't
-    /// have, or the cursor is sent past the end of the media.</summary>
+    /// (file name, size in bytes, seconds of media). A closed segment's length is
+    /// read from its MP4 header (cached by size and mtime); a file without one — still
+    /// being written, or never finalized — falls back to mtime minus the start in its
+    /// name. The timeline uses it to size coverage truthfully: a segment cut short
+    /// (camera suspended/offline) must not claim minutes it doesn't have, or the
+    /// cursor is sent past the end of the media.</summary>
     public List<(string File, long Size, double Seconds)> ListSegments(string camera, string date)
     {
         if (!IsDayName(date)) return new List<(string, long, double)>();
@@ -500,7 +526,9 @@ public sealed class EventStore
             {
                 if (!IsSegmentName(f.Name) || seen.ContainsKey(f.Name)) continue;
                 double seconds = 0;
-                if (haveDay && TimeSpan.TryParseExact(Path.GetFileNameWithoutExtension(f.Name),
+                if (SegmentHeaderSeconds(f) is { } fromHeader)
+                    seconds = fromHeader;
+                else if (haveDay && TimeSpan.TryParseExact(Path.GetFileNameWithoutExtension(f.Name),
                         @"hh\-mm\-ss", null, out var start))
                     seconds = Math.Max(0, (f.LastWriteTime - (day + start)).TotalSeconds);
                 seen[f.Name] = (f.Length, seconds);
@@ -508,6 +536,34 @@ public sealed class EventStore
         }
         return seen.OrderBy(kv => kv.Key)
             .Select(kv => (kv.Key, kv.Value.Size, kv.Value.Seconds)).ToList();
+    }
+
+    /// <summary>Header lengths by path, keyed on size+mtime so a grown file is re-read.</summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (long Length, DateTime MTime, double? Seconds)>
+        _segmentSeconds = new();
+    private const int SegmentSecondsCacheLimit = 20_000;
+
+    /// <summary>Seconds in a segment's mvhd; null when it has none yet (open or unfinalized file).</summary>
+    private double? SegmentHeaderSeconds(FileInfo f)
+    {
+        // Under write (the writer flushes at least per GOP): no header length yet.
+        if (DateTime.UtcNow - f.LastWriteTimeUtc < TimeSpan.FromSeconds(15)) return null;
+        if (_segmentSeconds.TryGetValue(f.FullName, out var hit)
+            && hit.Length == f.Length && hit.MTime == f.LastWriteTimeUtc)
+            return hit.Seconds;
+        double? seconds = null;
+        try
+        {
+            using var file = FootageVault.OpenReadUnbuffered(f.FullName);
+            if (ClipLength(file) is { } s && s > 0) seconds = s;
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"{f.FullName}: cannot read segment length: {ex.Message}");
+        }
+        if (_segmentSeconds.Count >= SegmentSecondsCacheLimit) _segmentSeconds.Clear();
+        _segmentSeconds[f.FullName] = (f.Length, f.LastWriteTimeUtc, seconds);
+        return seconds;
     }
 
     /// <summary>Absolute path of one segment (live first, then archive); strict name validation (no traversal).</summary>

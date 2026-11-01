@@ -24,6 +24,7 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Fixed
 
+- **Footage lengths come from the file itself,** so the timeline stays right across a daylight-saving change, and a new segment never overwrites one with the same name.
 - **Retention only deletes folders Neolink wrote,** so dated folders of your own in a shared recording root survive.
 - **A Windows path such as `E:/recordings` is refused on Linux** instead of becoming a folder under the working directory.
 - **Viewers that vanish are dropped:** RTSP and live-view connections that stop answering no longer hold a battery camera awake.

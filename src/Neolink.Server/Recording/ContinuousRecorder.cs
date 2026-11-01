@@ -246,12 +246,13 @@ public sealed class ContinuousRecorder
                         Log.Info($"{_camera}: storage has room again — continuous recording resumes");
                         _fullLogged = false;
                     }
-                    var startedAt = DateTime.Now;
+                    string path;
                     try
                     {
                         // Never blocks on disk: the file is opened and written by the
                         // writer's own background thread.
-                        writer = ClipWriter.TryCreate(_store.NewSegmentPath(_camera, startedAt), hub);
+                        path = _store.NewSegmentPath(_camera, DateTime.Now);
+                        writer = ClipWriter.TryCreate(path, hub);
                     }
                     catch (Exception ex)
                     {
@@ -261,7 +262,7 @@ public sealed class ContinuousRecorder
                         continue;
                     }
                     if (writer == null) continue; // codec parameters not known yet
-                    _active = new ActiveInfo($"{startedAt:yyyy-MM-dd}", $"{startedAt:HH-mm-ss}.mp4", writer);
+                    _active = new ActiveInfo(Directory.GetParent(path)!.Parent!.Name, Path.GetFileName(path), writer);
                     gap = false; // fresh file: this keyframe is a clean start
                 }
 

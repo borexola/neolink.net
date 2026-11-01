@@ -1370,6 +1370,10 @@ public static class SelfTest
             AssertEq(Recording.EventStore.ClipLength(new MemoryStream(file)), (double?)12.3);
             var fragmented = Box("ftyp", "isom"u8.ToArray()).Concat(Box("moof", new byte[16])).Concat(Box("mdat", new byte[64])).ToArray();
             Assert(Recording.EventStore.ClipLength(new MemoryStream(fragmented)) == null, "a fragmented file has no length to read");
+            // A classic-finalized segment past 4 GB spans its fragments with a 64-bit free box.
+            var wideFree = U32(1).Concat("free"u8.ToArray()).Concat(new byte[4]).Concat(U32(16 + 500)).Concat(new byte[500]).ToArray();
+            var wide = Box("ftyp", "isom"u8.ToArray()).Concat(wideFree).Concat(Box("moov", mvhd)).ToArray();
+            AssertEq(Recording.EventStore.ClipLength(new MemoryStream(wide)), (double?)12.3);
         });
 
         Test("SD fill picks the card recording nearest the event start", () =>
@@ -3764,6 +3768,45 @@ public static class SelfTest
                 var listedSeg = store2.ListSegments("cam1", segDay)
                     .Single(s => s.File == Path.GetFileName(newSeg));
                 AssertEq((long)listedSeg.Seconds, 600L);
+
+                // A finalized segment carries its length in the mvhd, and that wins
+                // over the mtime estimate — which goes negative in the hour that
+                // repeats when clocks go back.
+                static byte[] SegBox(string type, params byte[][] parts)
+                {
+                    var body = parts.SelectMany(b => b).ToArray();
+                    var box = new byte[8 + body.Length];
+                    System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(box, (uint)box.Length);
+                    System.Text.Encoding.ASCII.GetBytes(type).CopyTo(box, 4);
+                    body.CopyTo(box, 8);
+                    return box;
+                }
+                static byte[] SegU32(uint v) { var b = new byte[4]; System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(b, v); return b; }
+                var segMvhd = SegBox("mvhd", new byte[4], SegU32(0), SegU32(0), SegU32(1000), SegU32(12_300));
+                // Yesterday at midday: never "under write" (mtime < 15 s old), and
+                // no zone's daylight-saving gap falls there.
+                var closedDay = DateTime.Now.Date.AddDays(-1);
+                var closedSeg = store2.NewSegmentPath("cam1", closedDay.AddHours(12).AddMinutes(30));
+                AssertEq(Path.GetFileName(closedSeg), "12-30-00.mp4");
+                File.WriteAllBytes(closedSeg, SegBox("ftyp", "isom"u8.ToArray())
+                    .Concat(SegBox("free", new byte[500])).Concat(SegBox("moov", segMvhd)).ToArray());
+                File.SetLastWriteTime(closedSeg, closedDay.AddHours(12));
+                var closedDayName = $"{closedDay:yyyy-MM-dd}";
+                Assert(Math.Abs(store2.ListSegments("cam1", closedDayName).Single().Seconds - 12.3) < 1e-9,
+                    "closed segment length read from its header");
+                // A rewritten file (same path, new size) is not served from the cache.
+                File.WriteAllText(closedSeg, "x");
+                File.SetLastWriteTime(closedSeg, closedDay.AddHours(12).AddMinutes(35));
+                AssertEq((long)store2.ListSegments("cam1", closedDayName).Single().Seconds, 300L);
+
+                // A segment name already on disk is never handed out again: the
+                // repeated hour takes the next free second, and the first file survives.
+                var secondPass = store2.NewSegmentPath("cam1", closedDay.AddHours(12).AddMinutes(30));
+                AssertEq(Path.GetFileName(secondPass), "12-30-01.mp4");
+                Assert(File.ReadAllText(closedSeg) == "x", "existing segment untouched");
+                File.WriteAllText(secondPass, "y");
+                AssertEq(Path.GetFileName(store2.NewSegmentPath("cam1", closedDay.AddHours(12).AddMinutes(30))), "12-30-02.mp4");
+                Directory.Delete(Path.Combine(dir, "cam1", closedDayName), recursive: true);
 
                 // The exact boundary: a day EXACTLY retention-days old is kept
                 // (deletion needs strictly older) — "keep 7 days" never eats day 7.

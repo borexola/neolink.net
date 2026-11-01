@@ -63,11 +63,14 @@ public static class FootageVault
     /// behavior). Seekable both ways, so HTTP range serving just works.</summary>
     public static Stream OpenRead(string path) => Open(path, writable: false);
 
+    /// <summary>Opens footage for a few small reads (a header probe): no read-ahead buffer.</summary>
+    public static Stream OpenReadUnbuffered(string path) => Open(path, writable: false, bufferSize: 1);
+
     /// <summary>Opens footage for in-place repair (crash recovery), sniffing the
     /// format like <see cref="OpenRead"/>.</summary>
     public static Stream OpenReadWrite(string path) => Open(path, writable: true);
 
-    private static Stream Open(string path, bool writable)
+    private static Stream Open(string path, bool writable, int bufferSize = 1 << 20)
     {
         // Sniff with a positional read on the raw handle: a buffered FileStream
         // would fill its whole buffer (a 1 MB read at the file head) just to
@@ -91,7 +94,7 @@ public static class FootageVault
                 // (file smaller than the magic) leaves the handle's pointer at the
                 // end, and a stream served from there writes 0 of Length bytes —
                 // Kestrel turns that mismatch into a 500.
-                return new FileStream(handle, access, bufferSize: writable ? 1 : 1 << 20) { Position = 0 };
+                return new FileStream(handle, access, bufferSize: writable ? 1 : bufferSize) { Position = 0 };
             }
             if (_master == null)
                 throw new InvalidDataException(
