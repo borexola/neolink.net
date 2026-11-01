@@ -1791,6 +1791,43 @@ public static class SelfTest
             AssertEq(LanScan.ParseScopes("onvif://www.onvif.org/Profile/Streaming"), ((string?)null, (string?)null));
         });
 
+        Test("lan scan: only a host that answers the Baichuan hello is a camera", () =>
+        {
+            // Three boxes with port "9000" open: a camera, a silent service and a chatty non-camera.
+            static System.Net.Sockets.TcpListener Listen(Func<System.Net.Sockets.TcpClient, Task> serve)
+            {
+                var l = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+                l.Start();
+                _ = Task.Run(async () => { using var c = await l.AcceptTcpClientAsync(); await serve(c); });
+                return l;
+            }
+            static async Task Reply(System.Net.Sockets.TcpClient c, byte[] bytes)
+            {
+                var s = c.GetStream();
+                if (await s.ReadAsync(new byte[64]) == 0) return; // the hello, whatever its length
+                await s.WriteAsync(bytes);
+                await Task.Delay(200);
+            }
+            var header = new byte[20];
+            BinaryPrimitives.WriteUInt32LittleEndian(header, BcConstants.MagicHeader);
+            var camera = Listen(c => Reply(c, header));
+            var silent = Listen(c => Task.Delay(3000));
+            var chatty = Listen(c => Reply(c, Encoding.ASCII.GetBytes("HTTP/1.1 400 Bad Request\r\n\r\n")));
+            try
+            {
+                async Task<bool> Probe(System.Net.Sockets.TcpListener l)
+                {
+                    using var tcp = new System.Net.Sockets.TcpClient();
+                    await tcp.ConnectAsync((System.Net.IPEndPoint)l.LocalEndpoint);
+                    return await LanScan.AnswersBaichuanAsync(tcp, CancellationToken.None);
+                }
+                Assert(Probe(camera).GetAwaiter().GetResult(), "a Baichuan header marks a camera");
+                Assert(!Probe(silent).GetAwaiter().GetResult(), "a silent port is not a camera");
+                Assert(!Probe(chatty).GetAwaiter().GetResult(), "another protocol is not a camera");
+            }
+            finally { camera.Stop(); silent.Stop(); chatty.Stop(); }
+        });
+
         Test("camera relocation: learned identity persists, renames and is forgotten", () =>
         {
             var dir = Path.Combine(Path.GetTempPath(), $"neolink-ident-{Guid.NewGuid():N}");
@@ -1841,6 +1878,15 @@ public static class SelfTest
             Assert(matches[0].Scopes.Contains("/name/Reolink") && matches[0].Scopes.Contains("/hardware/RLC-810A")
                 && !matches[0].Scopes.Contains("/Profile/"), "keeps identifying scopes, drops noise");
             Assert(!CameraProbe.ParseOnvifMatches("not xml").Any(), "garbage yields no matches");
+            // Only a video transmitter counts; a printer's ProbeMatch (any other Types) is noise.
+            string Typed(string types) => soap.Replace("<d:ProbeMatch>", $"<d:ProbeMatch><d:Types>{types}</d:Types>");
+            Assert(CameraProbe.ParseOnvifMatches(Typed("dn:NetworkVideoTransmitter tds:Device")).Any(), "a camera is kept");
+            Assert(!CameraProbe.ParseOnvifMatches(Typed("wsdp:Device wprt:PrintDeviceType")).Any(), "a printer is dropped");
+            // The datagram source wins over a second interface's XAddr; a lone relay XAddr is kept.
+            var from = System.Net.IPAddress.Parse("192.168.1.50");
+            AssertEq(LanScan.AddressOf(new CameraProbe.WsMatch(from,
+                "http://192.168.2.9/onvif/device_service http://192.168.1.50/onvif/device_service", ""))!.ToString(), "192.168.1.50");
+            AssertEq(LanScan.AddressOf(new CameraProbe.WsMatch(from, "http://10.9.9.9/onvif/device_service", ""))!.ToString(), "10.9.9.9");
 
             // Recommendation decision table, most-specific first.
             var http = new CameraProbe.HttpResult(true, "Argus", "v3.0");

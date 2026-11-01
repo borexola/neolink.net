@@ -7,19 +7,23 @@ using Neolink.WebClient;
 
 namespace Neolink;
 
-/// <summary>Auto discover: a TCP sweep of the Baichuan port over the ranges asked for (or
+/// <summary>Auto discover: a Baichuan hello to port 9000 over the ranges asked for (or
 /// each local /24) and the /24 of every configured camera, plus ONVIF WS-Discovery for
 /// model and name — multicast, and unicast to every swept host so routed subnets answer
 /// too. Battery models answer neither; they are found by UID only.</summary>
 public static class LanScan
 {
-    /// <summary>One device found: Baichuan port open and/or ONVIF answered.</summary>
+    /// <summary>One device found: answered the Baichuan hello and/or ONVIF.</summary>
     public sealed record Found(IPAddress Address, string? Model, string? Name, bool Baichuan, bool Onvif);
 
     private const int BaichuanPort = 9000;
     private const int MaxSweepHosts = 2048;
     private static readonly TimeSpan ConnectTimeout = TimeSpan.FromMilliseconds(800);
+    private static readonly TimeSpan ReplyTimeout = TimeSpan.FromMilliseconds(1500);
     private static readonly TimeSpan OnvifWindow = TimeSpan.FromSeconds(3);
+    // The header-only login upgrade every session opens with; a camera answers it with a Baichuan header.
+    private static readonly byte[] Hello = Bc.BcCodec.Serialize(
+        Protocol.BcCamera.BuildLoginUpgrade(0, 0, "admin", null, Protocol.BcLoginMode.Default), new Bc.EncryptionState());
 
     /// <param name="ranges">Ranges to sweep: the ones typed in and each configured camera's /24.</param>
     /// <param name="localToo">Sweep the local /24s as well (when nothing was typed in).</param>
@@ -91,14 +95,19 @@ public static class LanScan
         return (Blank(model) ? null : model, Blank(name) ? null : name);
     }
 
-    /// <summary>The address in the device-service URL — the camera's own view of
-    /// itself, which beats the datagram source behind a relay or an alias.</summary>
-    private static IPAddress? AddressOf(CameraProbe.WsMatch m)
+    /// <summary>The datagram source when the device lists it, else the first device-service
+    /// address (a relay or alias); a second interface's address is never a second camera.</summary>
+    internal static IPAddress? AddressOf(CameraProbe.WsMatch m)
     {
-        var first = m.XAddrs.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
-        return first != null && Uri.TryCreate(first, UriKind.Absolute, out var u)
-               && IPAddress.TryParse(u.Host, out var ip) && ip.AddressFamily == AddressFamily.InterNetwork
-            ? ip : null;
+        IPAddress? first = null;
+        foreach (var x in m.XAddrs.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (!Uri.TryCreate(x, UriKind.Absolute, out var u) || !IPAddress.TryParse(u.Host, out var ip)
+                || ip.AddressFamily != AddressFamily.InterNetwork) continue;
+            if (ip.Equals(m.From)) return ip;
+            first ??= ip;
+        }
+        return first;
     }
 
     private static async Task<List<IPAddress>> OpenBaichuanAsync(List<IPAddress> hosts, CancellationToken ct)
@@ -113,12 +122,31 @@ public static class LanScan
                 try
                 {
                     await tcp.ConnectAsync(ip, BaichuanPort, cts.Token).ConfigureAwait(false);
-                    open.Add(ip);
                 }
                 catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
-                catch { /* closed, filtered or nobody there */ }
+                catch { return; /* closed, filtered or nobody there */ }
+                if (await AnswersBaichuanAsync(tcp, token).ConfigureAwait(false)) open.Add(ip);
             }).ConfigureAwait(false);
         return open.ToList();
+    }
+
+    /// <summary>Whether the connected host answers the login hello with a Baichuan header:
+    /// an open port 9000 alone is any NAS, Portainer or MinIO.</summary>
+    internal static async Task<bool> AnswersBaichuanAsync(TcpClient tcp, CancellationToken ct)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(ReplyTimeout);
+        try
+        {
+            var stream = tcp.GetStream();
+            await stream.WriteAsync(Hello, cts.Token).ConfigureAwait(false);
+            var head = new byte[4];
+            await stream.ReadExactlyAsync(head, cts.Token).ConfigureAwait(false);
+            var magic = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(head);
+            return magic is Bc.BcConstants.MagicHeader or Bc.BcConstants.MagicHeaderRev;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch { return false; }
     }
 
     private static bool Blank(string? s) => string.IsNullOrWhiteSpace(s);

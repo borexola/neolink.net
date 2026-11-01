@@ -327,6 +327,9 @@ public static class CameraProbe
         catch { yield break; }
         foreach (var pm in doc.Descendants().Where(e => e.Name.LocalName == "ProbeMatch"))
         {
+            // Printers and PCs answer WS-Discovery too; only a video transmitter is a camera.
+            var types = pm.Descendants().FirstOrDefault(e => e.Name.LocalName == "Types")?.Value;
+            if (types != null && !types.Contains("NetworkVideoTransmitter", StringComparison.OrdinalIgnoreCase)) continue;
             var xaddrs = pm.Descendants().FirstOrDefault(e => e.Name.LocalName == "XAddrs")?.Value.Trim() ?? "";
             var scopes = pm.Descendants().FirstOrDefault(e => e.Name.LocalName == "Scopes")?.Value.Trim() ?? "";
             // Keep the scopes that name the device (model/hardware/name), drop noise.
