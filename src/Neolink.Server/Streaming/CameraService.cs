@@ -243,10 +243,28 @@ public sealed class CameraService : ILiveCameraSource
 
     // Following a camera whose IP changed: after two connects in a row that never
     // reached it, ask the LAN for its UID (no credentials) at most this often per camera.
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTime> _relocateLast = new();
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (DateTime Last, TimeSpan Interval)> _relocate = new();
     // Replaced-camera locate in flight per camera name, shared by its main and sub stream services.
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Lazy<Task<string?>>> _replacedCheck = new();
     private static readonly TimeSpan RelocateEvery = TimeSpan.FromMinutes(2);
+    private static readonly TimeSpan RelocateMax = TimeSpan.FromHours(1);
+
+    /// <summary>One look per interval per camera; stamps the attempt when due.</summary>
+    internal static bool RelocateDue(string camera, DateTime now)
+    {
+        bool due = false;
+        _relocate.AddOrUpdate(camera, _ => { due = true; return (now, RelocateEvery); },
+            (_, s) => { if (now - s.Last < s.Interval) return s; due = true; return (now, s.Interval); });
+        return due;
+    }
+
+    /// <summary>A miss doubles the interval (2 min → 1 h): a camera that stays down is not swept forever.</summary>
+    internal static TimeSpan RelocateMissed(string camera) =>
+        _relocate.AddOrUpdate(camera, _ => (DateTime.UtcNow, RelocateEvery),
+            (_, s) => (s.Last, s.Interval * 2 > RelocateMax ? RelocateMax : s.Interval * 2)).Interval;
+
+    /// <summary>The camera answered: the next failure starts over at the short interval.</summary>
+    internal static void RelocateReset(string camera) => _relocate.TryRemove(camera, out _);
     private static readonly TimeSpan RelocateTimeout = TimeSpan.FromSeconds(6);
     private int _connectFailures;
     private bool _sessionReached;   // the TCP/UDP connect of the current attempt succeeded
@@ -1110,11 +1128,7 @@ public sealed class CameraService : ILiveCameraSource
             }
             return false;
         }
-        var now = DateTime.UtcNow;
-        bool due = false;
-        _relocateLast.AddOrUpdate(_config.Name, _ => { due = true; return now; },
-            (_, last) => { if (now - last < RelocateEvery) return last; due = true; return now; });
-        if (!due) return false;
+        if (!RelocateDue(_config.Name, DateTime.UtcNow)) return false;
 
         var known = new List<System.Net.IPAddress>();
         if (ResolveProbeTarget() is { } probe) known.Add(probe);
@@ -1129,16 +1143,19 @@ public sealed class CameraService : ILiveCameraSource
         catch (Exception ex)
         {
             Log.Debug($"{Tag}: locate failed: {Log.Flatten(ex)}");
+            RelocateMissed(_config.Name);
             return false;
         }
         if (found == null)
         {
-            Log.Info($"{Tag}: no camera with this UID answered on the LAN");
+            var next = RelocateMissed(_config.Name);
+            Log.Info($"{Tag}: no camera with this UID answered on the LAN; next look in {next.TotalMinutes:0} min");
             return false;
         }
         var address = found.Address.ToString();
         if (await ConfiguredHostIsAsync(found.Address, ct).ConfigureAwait(false))
         {
+            RelocateMissed(_config.Name);
             Log.Info($"{Tag}: the camera answers discovery at its configured address {address}, " +
                      "so the failure is not an address change");
             return false;
@@ -1153,6 +1170,7 @@ public sealed class CameraService : ILiveCameraSource
         var was = _config.Host;
         _config.Host = address;
         _connectFailures = 0;
+        RelocateReset(_config.Name);
         Log.Warn($"{Tag}: the camera moved — it answers at {address}, config.json says {was}. Following it; " +
                  "click \"Use new address\" in the camera editor (or edit config.json) to make it permanent");
         try { HostChanged?.Invoke(address); }
@@ -1306,6 +1324,7 @@ public sealed class CameraService : ILiveCameraSource
         var res = camera.DeviceInfo;
         Note($"{Tag}: logged in{(res != null && res.Width > 0 ? $", camera reports {res.Width}x{res.Height}" : "")}");
         _connectFailures = 0;
+        RelocateReset(_config.Name);
 
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _activeStream = linked; // let SetSuspended interrupt this session at once

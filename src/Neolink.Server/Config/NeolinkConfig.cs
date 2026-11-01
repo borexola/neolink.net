@@ -108,6 +108,7 @@ public sealed class NeolinkConfig
 
     // Old working-directory-relative folders already warned about (Load runs per request).
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _moveWarned = new();
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _windowsPathWarned = new();
 
     // ------------------------------------------------------------------ JSON
 
@@ -757,10 +758,13 @@ public sealed class NeolinkConfig
 
         if (Recording != null)
         {
+            // Not fatal: the server must come up so the admin can fix it in Settings → Storage.
+            // The value then resolves like any relative path, so footage stays where it is.
             if (!OperatingSystem.IsWindows())
                 foreach (var (key, p) in new[] { ("path", Recording.Path), ("clips_path", Recording.ClipsPath), ("archive_path", Recording.ArchivePath) })
-                    if (IsWindowsOnlyPath(p))
-                        throw new FormatException($"recording.{key} '{p}' is a Windows path; on this system use one like /recordings");
+                    if (IsWindowsOnlyPath(p) && _windowsPathWarned.TryAdd(p, 0))
+                        Log.Warn($"recording.{key} '{p}' is a Windows path, which this system treats as a folder name — " +
+                                 "set one like /recordings in Settings → Storage");
             if (Recording.RetentionDays < 0)
                 throw new FormatException("recording.retention_days must be >= 0 (0 = keep forever)");
             if (Recording.PreSeconds is < 0 or > 30)

@@ -468,14 +468,6 @@ public static class SelfTest
             rejected = false;
             try { NeolinkConfig.Load(tmpBad); } catch (FormatException) { rejected = true; }
             Assert(rejected, "wake_hints.bind must be an IP -> config rejected");
-            // A drive-letter path off Windows would land as a relative folder; refuse it.
-            if (!OperatingSystem.IsWindows())
-            {
-                File.WriteAllText(tmpBad, """{ "recording": { "path": "E:/tmp/recordings" }, "cameras": [] }""");
-                rejected = false;
-                try { NeolinkConfig.Load(tmpBad); } catch (FormatException) { rejected = true; }
-                Assert(rejected, "Windows recording path off Windows -> config rejected");
-            }
             // A relative path means beside config.json, not the working directory.
             File.WriteAllText(tmpBad, """{ "recording": { "path": "recordings" }, "cameras": [] }""");
             AssertEq(NeolinkConfig.Load(tmpBad).Recording!.Path, Path.Combine(Path.GetDirectoryName(tmpBad)!, "recordings"));
@@ -1725,6 +1717,26 @@ public static class SelfTest
             RunWakeProbe().GetAwaiter().GetResult();
         });
 
+        Test("camera relocation: repeated misses back off to an hour", () =>
+        {
+            // A camera that stays down must not have its subnet swept every 2 min
+            // forever: each miss doubles the wait, a hit starts over.
+            var cam = $"backoff-{Guid.NewGuid():N}";
+            var t0 = new DateTime(2026, 11, 1, 12, 0, 0, DateTimeKind.Utc);
+            Assert(Streaming.CameraService.RelocateDue(cam, t0), "first look is due at once");
+            Assert(!Streaming.CameraService.RelocateDue(cam, t0.AddMinutes(1)), "not again within the interval");
+            AssertEq(Streaming.CameraService.RelocateMissed(cam), TimeSpan.FromMinutes(4));
+            Assert(!Streaming.CameraService.RelocateDue(cam, t0.AddMinutes(3)), "a miss stretched the wait");
+            Assert(Streaming.CameraService.RelocateDue(cam, t0.AddMinutes(4)), "due after the longer wait");
+            var wait = TimeSpan.Zero;
+            for (int i = 0; i < 12; i++) wait = Streaming.CameraService.RelocateMissed(cam);
+            AssertEq(wait, TimeSpan.FromHours(1));
+            Streaming.CameraService.RelocateReset(cam);
+            Assert(Streaming.CameraService.RelocateDue(cam, t0.AddMinutes(5)), "a hit starts over at once");
+            AssertEq(Streaming.CameraService.RelocateMissed(cam), TimeSpan.FromMinutes(4));
+            Streaming.CameraService.RelocateReset(cam);
+        });
+
         Test("camera relocation: subnet helpers and LAN-scan parsing", () =>
         {
             var ip = System.Net.IPAddress.Parse("10.0.1.77");
@@ -1936,6 +1948,27 @@ public static class SelfTest
             finally
             {
                 File.Delete(tmp);
+            }
+        });
+
+        Test("a Windows storage path on Linux is a warning, not a startup failure", () =>
+        {
+            if (OperatingSystem.IsWindows()) return;
+            // 1.2.1 wrote under "<cwd>/E:/recordings" without a word. The server must
+            // still start (a crash loop leaves no UI to fix the path) and keep the
+            // folder the footage is already in.
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            var tmp = Path.Combine(dir, "config.json");
+            File.WriteAllText(tmp, """{ "web_port": 8655, "cameras": [], "recording": { "path": "E:/recordings" } }""");
+            try
+            {
+                var cfg = NeolinkConfig.Load(tmp); // must not throw
+                AssertEq(cfg.Recording!.Path, Path.Combine(dir, "E:", "recordings"));
+            }
+            finally
+            {
+                Directory.Delete(dir, recursive: true);
             }
         });
 
