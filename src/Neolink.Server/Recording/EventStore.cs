@@ -725,11 +725,8 @@ public sealed class EventStore
                             continue;
                         if (archiveEvents && retentionDays > 0 && day < eventCutoff)
                         {
-                            long b = Directory.EnumerateDirectories(dayDir)
-                                .Where(e => !Path.GetFileName(e)!.Equals("continuous", StringComparison.OrdinalIgnoreCase))
-                                .Sum(TreeSize);
-                            if (b > 0 || Directory.EnumerateDirectories(dayDir)
-                                    .Any(e => !Path.GetFileName(e)!.Equals("continuous", StringComparison.OrdinalIgnoreCase)))
+                            long b = Directory.EnumerateDirectories(dayDir).Where(IsEventEntry).Sum(TreeSize);
+                            if (b > 0 || Directory.EnumerateDirectories(dayDir).Any(IsEventEntry))
                             {
                                 halves++;
                                 bytes += b;
@@ -777,8 +774,15 @@ public sealed class EventStore
                 if (!DateTime.TryParseExact(Path.GetFileName(dayDir), "yyyy-MM-dd",
                         null, System.Globalization.DateTimeStyles.None, out var day) || day >= cutoff)
                     continue;
-                DropIndexEntriesUnder(dayDir);
-                if (DeleteTree(dayDir)) removed++;
+                bool any = false;
+                foreach (var half in Directory.EnumerateDirectories(dayDir)
+                             .Where(e => IsEventEntry(e) || Path.GetFileName(e)!.Equals("continuous", StringComparison.OrdinalIgnoreCase)))
+                {
+                    DropIndexEntriesUnder(half);
+                    any |= DeleteTree(half);
+                }
+                TryDeleteIfEmpty(dayDir);
+                if (any) removed++;
             }
             TryDeleteIfEmpty(cameraDir);
         }
@@ -793,7 +797,7 @@ public sealed class EventStore
         foreach (var entry in Directory.EnumerateDirectories(dayDir))
         {
             var half = Path.GetFileName(entry)!;
-            if (half.Equals("continuous", StringComparison.OrdinalIgnoreCase)) continue;
+            if (!IsEventEntry(entry)) continue;
             var target = Path.Combine(_archiveRoot!, camName, dayName, half);
             if (!MoveTree(entry, target, onBytes)) continue;
             any = true;
@@ -885,18 +889,23 @@ public sealed class EventStore
         return total;
     }
 
+    /// <summary>A day folder's event half that Neolink wrote: the detections tree or a
+    /// pre-migration event folder. Retention leaves anything else in a shared root alone.</summary>
+    internal static bool IsEventEntry(string entry) =>
+        Path.GetFileName(entry)!.Equals("detections", StringComparison.OrdinalIgnoreCase)
+        || File.Exists(Path.Combine(entry, "event.json"));
+
     /// <summary>
     /// Deletes a day's event storage — the detections tree plus any pre-migration
-    /// event folders (everything except "continuous") — dropping the index entries
-    /// that pointed inside each successfully removed tree.
+    /// event folders — dropping the index entries that pointed inside each
+    /// successfully removed tree.
     /// </summary>
     private int DeleteEventEntries(string dayDir)
     {
         int removed = 0;
         foreach (var entry in Directory.EnumerateDirectories(dayDir))
         {
-            if (Path.GetFileName(entry)!.Equals("continuous", StringComparison.OrdinalIgnoreCase))
-                continue;
+            if (!IsEventEntry(entry)) continue;
             if (!DeleteTree(entry)) continue;
             removed++;
             lock (_gate)

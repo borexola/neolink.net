@@ -43,6 +43,15 @@ storage-trend.json
 bookmarks.json
 detect.json
 detect-assets/
+#   camera-clock.json  per-camera clock corrections
+#   emergency*.json    emergency-mode settings and live state
+#   sd-listings.json   cached SD-card recording lists
+#   settings.migrated-* one-shot migration markers
+camera-clock.json
+emergency.json
+emergency-runtime.json
+sd-listings.json
+settings.migrated-*
 #   desktop.json       the Windows shell's server URL + DPAPI-protected password
 desktop.json
 # ...but the editor's own settings are not ours to hide.

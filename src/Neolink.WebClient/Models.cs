@@ -202,8 +202,10 @@ public sealed record ApiStreamProfiles(List<ApiEncodeProfile> Profiles);
 /// public URL (TLS/hairpin problems) when the target is this very server — they
 /// use this instead. Browser-side URLs (video WS, media elements) keep the page
 /// origin so they DO flow through the proxy.
+/// <see cref="ClientAddressOf"/> names the browser behind a page request, so the
+/// circuit's loopback calls can forward it instead of all looking like 127.0.0.1.
 /// </summary>
-public sealed record LocalApiInfo(string BaseUrl);
+public sealed record LocalApiInfo(string BaseUrl, Func<Microsoft.AspNetCore.Http.HttpContext, string?>? ClientAddressOf = null);
 
 /// <summary>Server capability flags (GET /api/features).</summary>
 public sealed record ApiFeaturesInfo(bool Events, bool Continuous, double TrickleSpeed = 4,

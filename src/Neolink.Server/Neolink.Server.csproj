@@ -28,6 +28,8 @@
 
   <!-- Ship the user's config (and the template) next to the built executable -->
   <ItemGroup>
+    <!-- The Web SDK makes every *.json content; a dev run's state files (users.json, ai.json…) must not ship. -->
+    <Content Remove="**/*.json" />
     <None Include="config.json" CopyToOutputDirectory="PreserveNewest" Condition="Exists('config.json')" />
     <None Include="config.example.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="sample_config.toml" CopyToOutputDirectory="PreserveNewest" Condition="Exists('sample_config.toml')" />

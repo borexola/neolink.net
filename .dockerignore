@@ -7,3 +7,22 @@
 **/config.json
 Dockerfile
 docker-compose.yml
+
+# Runtime state a dev run writes next to config.json; keep in step with .gitignore.
+**/secret.key
+**/users.json
+**/notifications.json
+**/ai.json
+**/settings.json
+**/camera-state.json
+**/storage-trend.json
+**/bookmarks.json
+**/detect.json
+**/detect-assets/
+**/camera-clock.json
+**/emergency.json
+**/emergency-runtime.json
+**/sd-listings.json
+**/settings.migrated-*
+**/desktop.json
+**/*.tar

@@ -55,7 +55,7 @@ public static class ConfigEditor
     /// fingerprint, same-disk flag) — runtime state, not part of the file.</summary>
     public static object Describe(string path, object? encryption = null)
     {
-        var cfg = NeolinkConfig.Load(path);
+        var cfg = NeolinkConfig.Load(path, resolvePaths: false); // the form shows the file's own spelling
         // Load drops unknown keys, and the stash a "Disable recording" leaves
         // behind is one: read it raw so the UI can prefill the enable form.
         string? disabledPath = null;

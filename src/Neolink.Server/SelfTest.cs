@@ -468,6 +468,17 @@ public static class SelfTest
             rejected = false;
             try { NeolinkConfig.Load(tmpBad); } catch (FormatException) { rejected = true; }
             Assert(rejected, "wake_hints.bind must be an IP -> config rejected");
+            // A drive-letter path off Windows would land as a relative folder; refuse it.
+            if (!OperatingSystem.IsWindows())
+            {
+                File.WriteAllText(tmpBad, """{ "recording": { "path": "E:/tmp/recordings" }, "cameras": [] }""");
+                rejected = false;
+                try { NeolinkConfig.Load(tmpBad); } catch (FormatException) { rejected = true; }
+                Assert(rejected, "Windows recording path off Windows -> config rejected");
+            }
+            // A relative path means beside config.json, not the working directory.
+            File.WriteAllText(tmpBad, """{ "recording": { "path": "recordings" }, "cameras": [] }""");
+            AssertEq(NeolinkConfig.Load(tmpBad).Recording!.Path, Path.Combine(Path.GetDirectoryName(tmpBad)!, "recordings"));
             File.Delete(tmpBad);
 
             // push_ports parses from both config dialects, list or single spelling.
@@ -1708,6 +1719,11 @@ public static class SelfTest
             AssertEq(hosts[0].ToString(), "10.0.1.1");
             AssertEq(hosts[^1].ToString(), "10.0.1.254");
             Assert(!UdpDiscovery.SubnetHosts(System.Net.IPAddress.IPv6Loopback).Any(), "IPv6 yields nothing");
+            // Only private /24s are swept: a public or DDNS camera's neighbours are not ours to scan.
+            foreach (var lan in new[] { "10.1.2.3", "172.16.0.9", "172.31.255.1", "192.168.1.20" })
+                Assert(UdpDiscovery.IsPrivateLan(System.Net.IPAddress.Parse(lan)), $"{lan} is a private LAN");
+            foreach (var wan in new[] { "8.8.8.8", "172.32.0.1", "100.64.0.1", "127.0.0.1" })
+                Assert(!UdpDiscovery.IsPrivateLan(System.Net.IPAddress.Parse(wan)), $"{wan} is not swept");
 
             // The scan sweeps each local /24 without the host's own address, capped
             // so a /16 cannot turn into 65k connects.
@@ -3275,6 +3291,60 @@ public static class SelfTest
             Assert(Rtsp.BackchannelReceiver.Depacketize(new byte[] { 0x80, 0x00 }) == null, "runt RTP frame ignored");
         });
 
+        Test("rtsp: huge bodies, too many connections and idle clients are cut off", () =>
+        {
+            var savedIdle = Rtsp.RtspConnection.IdleTimeout;
+            Rtsp.RtspConnection.IdleTimeout = TimeSpan.FromMilliseconds(1500);
+            try
+            {
+                var server = new Rtsp.RtspServer(new Dictionary<string, string>()) { MaxConnections = 2 };
+                int port = FreeTcpPort();
+                using var serverCts = new CancellationTokenSource();
+                _ = Task.Run(() => server.RunAsync("127.0.0.1", port, serverCts.Token));
+
+                System.Net.Sockets.TcpClient Dial()
+                {
+                    for (int attempt = 0; ; attempt++)
+                    {
+                        var c = new System.Net.Sockets.TcpClient(System.Net.Sockets.AddressFamily.InterNetwork);
+                        try { c.Connect(System.Net.IPAddress.Loopback, port); return c; }
+                        catch (System.Net.Sockets.SocketException) when (attempt < 50) { c.Dispose(); Thread.Sleep(100); }
+                    }
+                }
+                // Milliseconds until the server closed the connection.
+                long ClosedAfter(System.Net.Sockets.TcpClient c)
+                {
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    var ns = c.GetStream();
+                    ns.ReadTimeout = 6000;
+                    try { while (ns.Read(new byte[256]) > 0) { } }
+                    catch (IOException) when (sw.ElapsedMilliseconds < 5500) { }
+                    return sw.ElapsedMilliseconds;
+                }
+
+                // A declared 2 GB body closes the connection instead of allocating it.
+                using (var big = Dial())
+                {
+                    big.GetStream().Write(Encoding.ASCII.GetBytes(
+                        "OPTIONS rtsp://127.0.0.1/x RTSP/1.0\r\nCSeq: 1\r\nContent-Length: 2000000000\r\n\r\n"));
+                    Assert(ClosedAfter(big) < 1000, "oversized body closes the connection at once");
+                }
+                Thread.Sleep(300); // the server's own cleanup releases the slot
+
+                using var a = Dial();
+                using var b = Dial();
+                using (var refused = Dial())
+                    Assert(ClosedAfter(refused) < 1000, "a connection over the cap is closed at once");
+                long idle = ClosedAfter(a);
+                Assert(idle is >= 1000 and < 5000, $"an idle client is closed after the session timeout (took {idle} ms)");
+                serverCts.Cancel();
+            }
+            finally
+            {
+                Rtsp.RtspConnection.IdleTimeout = savedIdle;
+            }
+        });
+
         Test("rtsp backchannel: DESCRIBE gate → SETUP → talk end-to-end", () =>
         {
             // A real StreamHub made DESCRIBE-ready with one H264 keyframe (SPS+PPS+IDR)
@@ -3613,6 +3683,13 @@ public static class SelfTest
                 File.WriteAllText(newSeg, "x");
                 store2.Cleanup(retentionDays: 7, continuousRetentionDays: 7);
                 Assert(!Directory.Exists(oldDay), "expired day folder removed entirely");
+                // A shared root's own dated folders are not Neolink's to expire.
+                var foreign = Path.Combine(dir, "Photos", "2000-03-15", "Holiday");
+                Directory.CreateDirectory(foreign);
+                File.WriteAllText(Path.Combine(foreign, "beach.jpg"), "x");
+                store2.Cleanup(retentionDays: 7, continuousRetentionDays: 7);
+                Assert(File.Exists(Path.Combine(foreign, "beach.jpg")), "retention leaves foreign dated folders alone");
+                Directory.Delete(Path.Combine(dir, "Photos"), recursive: true);
                 Assert(File.Exists(newSeg), "recent segment survives retention");
                 Assert(store2.List().Count == 1, "recent event survives retention");
                 Assert(store2.ListContinuousDays("cam1").Count == 1, "recent day listed");
@@ -3970,6 +4047,8 @@ public static class SelfTest
                 var ancient = Path.Combine(arch, "cam1", dayAncient, "continuous");
                 Directory.CreateDirectory(ancient);
                 File.WriteAllText(Path.Combine(ancient, "01-00-00.mp4"), "x");
+                Directory.CreateDirectory(Path.Combine(arch, "Backups", dayAncient, "docs"));
+                File.WriteAllText(Path.Combine(arch, "Backups", dayAncient, "docs", "tax.pdf"), "x");
 
                 var store = new Recording.EventStore(live, clipsRoot: null, archiveRoot: arch);
                 store.Load();
@@ -4008,6 +4087,8 @@ public static class SelfTest
                 Assert(store.SegmentPath("cam1", dayOld, "08-00-00.mp4") != null, "archived segment path resolves");
                 // The ancient archived day fell past the 30-day archive window.
                 Assert(!Directory.Exists(Path.Combine(arch, "cam1", dayAncient)), "expired archive day deleted");
+                Assert(File.Exists(Path.Combine(arch, "Backups", dayAncient, "docs", "tax.pdf")),
+                    "archive retention leaves foreign dated folders alone");
 
                 // A second pass is a no-op (idempotent), and 0 = keep forever.
                 store.Cleanup(_ => new Recording.EventStore.CameraStoragePolicy(
@@ -4281,6 +4362,9 @@ public static class SelfTest
 
         Test("mqtt client: caller cancellation can't touch the socket; a stalled write closes it", () =>
             RunMqttCancelledWrite().GetAwaiter().GetResult());
+
+        Test("mqtt client: a silent broker times out the handshake; a working session resets the backoff", () =>
+            RunMqttSilentBroker().GetAwaiter().GetResult());
 
         Test("server health sensors for Home Assistant", () =>
         {
@@ -10104,6 +10188,13 @@ public static class SelfTest
                 using (var remote = PostRaw(http, "/api/auth/setup", """{"username":"eve","password":"yyyyyyyy"}"""))
                     AssertEq((int)remote.StatusCode, 403);
                 http.DefaultRequestHeaders.Remove("X-Forwarded-For");
+                // Nor can a page on another site claim it through a LAN visitor's browser.
+                using (var xs = new HttpRequestMessage(HttpMethod.Post, "/api/auth/setup"))
+                {
+                    xs.Headers.Add("Origin", "http://evil.example");
+                    xs.Content = new StringContent("""{"username":"eve","password":"yyyyyyyy"}""", Encoding.UTF8, "application/json");
+                    AssertEq((int)http.SendAsync(xs).Result.StatusCode, 403);
+                }
 
                 // First account = the admin; creating it turns authentication ON.
                 var setup = PostJson(http, "/api/auth/setup",
@@ -10312,6 +10403,12 @@ public static class SelfTest
                     .GetProperty("token").GetString()!;
                 AssertEq((int)http.GetAsync($"/api/background?token={Uri.EscapeDataString(viewerTok)}").Result.StatusCode, 403);
                 AssertEq((int)http.GetAsync($"/api/background{tokenQ}").Result.StatusCode, 200);
+                // Controls that stop recording are the admin's, like suspend.
+                foreach (var (ctl, body) in new[] { ("reboot", "{}"), ("privacy", """{"on":true}"""), ("extras/sdrecording", """{"on":false}""") })
+                    using (var res = PostRaw(http, $"/api/cameras/apicam/{ctl}?token={Uri.EscapeDataString(viewerTok)}", body))
+                        AssertEq((int)res.StatusCode, 403);
+                using (var res = PostRaw(http, $"/api/cameras/apicam/privacy{tokenQ}", """{"on":false}"""))
+                    Assert((int)res.StatusCode != 403, "the admin still switches privacy mode");
 
                 // RTSP users from the Users tab: listed by name only, saved to config.json, and refused
                 // wherever the file would not load (or would drop a camera) at the next start.
@@ -11955,6 +12052,48 @@ public static class SelfTest
     /// against the HA Mosquitto add-on, as a clockwork ~2-minute disconnect loop).
     /// The proof of closure is the stub broker seeing EOF — the buggy behavior
     /// left the socket open and kept writing into it.</summary>
+    private static async Task RunMqttSilentBroker()
+    {
+        var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        listener.Start();
+        int port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+        using var runCts = new CancellationTokenSource();
+        var client = new Mqtt.MqttClient(new Mqtt.MqttClientOptions { Host = "127.0.0.1", Port = port, ClientId = "selftest" })
+        { HandshakeTimeout = TimeSpan.FromMilliseconds(300) };
+        var run = Task.Run(() => client.RunAsync(runCts.Token));
+        try
+        {
+            // Accept and say nothing: the client must give up and close, not hang.
+            using (var silent = await listener.AcceptTcpClientAsync().WaitAsync(TimeSpan.FromSeconds(5)))
+            {
+                var ns = silent.GetStream();
+                var buf = new byte[512];
+                await ns.ReadAsync(buf).AsTask().WaitAsync(TimeSpan.FromSeconds(5)); // the CONNECT
+                int n = await ns.ReadAsync(buf).AsTask().WaitAsync(TimeSpan.FromSeconds(3));
+                AssertEq(n, 0); // EOF: the client closed after the handshake timeout
+            }
+            // The retry after that failure, answered: a working session. (Backoff is now 4 s.)
+            using (var ok = await listener.AcceptTcpClientAsync().WaitAsync(TimeSpan.FromSeconds(5)))
+            {
+                var ns = ok.GetStream();
+                await ns.ReadAsync(new byte[512]).AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+                await ns.WriteAsync(new byte[] { 0x20, 0x02, 0x00, 0x00 });
+                for (int i = 0; i < 250 && !client.IsConnected; i++) await Task.Delay(20);
+                Assert(client.IsConnected, "client connected to the stub broker");
+            }
+            // The broker drops it: the reconnect comes after the 2 s minimum, not the grown 4 s.
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            using (await listener.AcceptTcpClientAsync().WaitAsync(TimeSpan.FromSeconds(6))) { }
+            Assert(sw.Elapsed < TimeSpan.FromSeconds(3.5), $"backoff reset after a working session (took {sw.Elapsed.TotalSeconds:0.0}s)");
+        }
+        finally
+        {
+            runCts.Cancel();
+            try { await run.WaitAsync(TimeSpan.FromSeconds(5)); } catch { }
+            listener.Stop();
+        }
+    }
+
     private static async Task RunMqttCancelledWrite()
     {
         var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);

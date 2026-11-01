@@ -11,6 +11,25 @@ in the README). Paste the matching section below into the GitHub release.
 - **Auto discover** in Settings → Cameras scans a subnet or address range (the server's own by default) plus the subnet of every configured camera, shows each plug-in Reolink camera with its model and name where ONVIF is on, and fills in the add-camera form. Battery cameras are still added by UID.
 - **A camera that gets a new IP is followed.** Neolink.NET learns each camera's UID at login and, when the configured address stops answering, finds the camera by UID and connects there; **Use new address** writes it to config.json.
 
+### Changed
+
+- **A relative recording `path` is taken from the config file's folder**, not the working directory (System32 for the Windows service). If footage exists at the old location, the log names both.
+- **Only the admin can reboot a camera, switch privacy mode or turn off its SD recording,** as with suspend: each stops recording.
+
+### Security
+
+- **The LAN-only first-run setup now holds through the web UI**, which used to reach the check as 127.0.0.1, and a page on another site can no longer create the admin through a LAN visitor's browser.
+- **Sign-in protection counts each browser's own address**, so failed UI sign-ins no longer block everyone's sign-in.
+- **The RTSP server refuses oversized requests, caps open connections at 512,** and closes clients that send nothing for 75 s while not playing over TCP.
+
+### Fixed
+
+- **Retention only deletes folders Neolink wrote,** so dated folders of your own in a shared recording root survive.
+- **A Windows path such as `E:/recordings` is refused on Linux** instead of becoming a folder under the working directory.
+- **Viewers that vanish are dropped:** RTSP and live-view connections that stop answering no longer hold a battery camera awake.
+- **MQTT gives up on a broker that never answers the handshake** after 10 s, and reconnects within 2 s after a working session drops.
+- **Local builds no longer copy runtime state** (users.json, ai.json…) into the build output or a locally built Docker image.
+
 ## 1.2.1
 
 A host-network Home Assistant add-on for UDP-only battery cameras, faster camera walls and live view, and safer defaults for a server set up while exposed.

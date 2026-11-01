@@ -57,15 +57,52 @@ public sealed class NeolinkConfig
     /// there the same entry must be refused to their face, not accepted and then
     /// silently discarded at the next boot.
     /// </summary>
-    public static NeolinkConfig Load(string path, bool strict = false)
+    public static NeolinkConfig Load(string path, bool strict = false, bool resolvePaths = true)
     {
         var text = File.ReadAllText(path);
         bool isJson = path.EndsWith(".json", StringComparison.OrdinalIgnoreCase)
                       || text.TrimStart().StartsWith('{');
         var config = isJson ? LoadJson(text, strict) : LoadToml(text, strict);
         config.Validate(strict);
+        if (resolvePaths) config.ResolveStoragePaths(Path.GetDirectoryName(Path.GetFullPath(path))!);
         return config;
     }
+
+    /// <summary>"E:/x" or "\\nas\share": a Windows-only path, which another OS would quietly treat as relative.</summary>
+    internal static bool IsWindowsOnlyPath(string p) =>
+        (p.Length >= 2 && char.IsAsciiLetter(p[0]) && p[1] == ':') || p.StartsWith(@"\\");
+
+    /// <summary>A relative storage path means "beside the config file", never the working
+    /// directory (System32 for the Windows service).</summary>
+    public static string ResolveStoragePath(string p, string configDir) =>
+        Path.IsPathFullyQualified(p) ? p : Path.GetFullPath(p, configDir);
+
+    private void ResolveStoragePaths(string configDir)
+    {
+        if (Recording == null) return;
+        Recording.Path = Resolve(Recording.Path);
+        if (Recording.ClipsPath.Length > 0) Recording.ClipsPath = Resolve(Recording.ClipsPath);
+        if (Recording.ArchivePath.Length > 0) Recording.ArchivePath = Resolve(Recording.ArchivePath);
+
+        string Resolve(string p)
+        {
+            if (p.Length == 0) return p;
+            var full = ResolveStoragePath(p, configDir);
+            var old = Path.GetFullPath(p);
+            if (old != full && !_moveWarned.ContainsKey(old) && HasEntries(old) && _moveWarned.TryAdd(old, 0))
+                Log.Warn($"Recording path '{p}' now means {full} (beside the config file); earlier footage is still in {old}");
+            return full;
+        }
+
+        static bool HasEntries(string dir)
+        {
+            try { return Directory.Exists(dir) && Directory.EnumerateFileSystemEntries(dir).Any(); }
+            catch (Exception) { return false; }
+        }
+    }
+
+    // Old working-directory-relative folders already warned about (Load runs per request).
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _moveWarned = new();
 
     // ------------------------------------------------------------------ JSON
 
@@ -715,6 +752,10 @@ public sealed class NeolinkConfig
 
         if (Recording != null)
         {
+            if (!OperatingSystem.IsWindows())
+                foreach (var (key, p) in new[] { ("path", Recording.Path), ("clips_path", Recording.ClipsPath), ("archive_path", Recording.ArchivePath) })
+                    if (IsWindowsOnlyPath(p))
+                        throw new FormatException($"recording.{key} '{p}' is a Windows path; on this system use one like /recordings");
             if (Recording.RetentionDays < 0)
                 throw new FormatException("recording.retention_days must be >= 0 (0 = keep forever)");
             if (Recording.PreSeconds is < 0 or > 30)

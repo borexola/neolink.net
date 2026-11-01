@@ -42,6 +42,7 @@ public sealed class MqttClient
     private readonly MqttClientOptions _opt;
     private readonly SemaphoreSlim _writeGate = new(1, 1);
     private volatile Stream? _stream;
+    private bool _reachedBroker;    // CONNACK seen in this session
     private int _packetId;
     private DateTime _lastRxUtc;
 
@@ -76,11 +77,14 @@ public sealed class MqttClient
             }
             catch (Exception ex)
             {
+                // A session that reached CONNACK was a working connection: start the backoff over.
+                if (_reachedBroker) backoff = MinBackoff;
                 Log.Warn($"MQTT: {_opt.Host}:{_opt.Port} — {Log.Flatten(ex)}; retrying in {backoff.TotalSeconds:0}s");
             }
             finally
             {
                 _stream = null;
+                _reachedBroker = false;
             }
             try { await Task.Delay(backoff, ct).ConfigureAwait(false); }
             catch (OperationCanceledException) { return; }
@@ -107,21 +111,36 @@ public sealed class MqttClient
         }
         Stream stream = tcp.GetStream();
         if (StreamWrapper != null) stream = StreamWrapper(stream);
-        if (_opt.Tls)
+        byte type;
+        byte[] body;
+        // A broker that accepts TCP and then says nothing must not hang the client.
+        using (var hsCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
         {
-            var ssl = new SslStream(stream, leaveInnerStreamOpen: false,
-                userCertificateValidationCallback: (_, _, _, _) => true); // LAN brokers use self-signed certs
-            await ssl.AuthenticateAsClientAsync(_opt.Host).ConfigureAwait(false);
-            stream = ssl;
+            hsCts.CancelAfter(HandshakeTimeout);
+            try
+            {
+                if (_opt.Tls)
+                {
+                    var ssl = new SslStream(stream, leaveInnerStreamOpen: false,
+                        userCertificateValidationCallback: (_, _, _, _) => true); // LAN brokers use self-signed certs
+                    await ssl.AuthenticateAsClientAsync(new SslClientAuthenticationOptions { TargetHost = _opt.Host },
+                        hsCts.Token).ConfigureAwait(false);
+                    stream = ssl;
+                }
+
+                // CONNECT → CONNACK handshake.
+                var connect = MqttPacket.BuildConnect(_opt.ClientId, _opt.Username, _opt.Password,
+                    (ushort)_opt.KeepAliveSeconds, _opt.WillTopic, _opt.WillPayload, _opt.WillRetain);
+                await stream.WriteAsync(connect, hsCts.Token).ConfigureAwait(false);
+                await stream.FlushAsync(hsCts.Token).ConfigureAwait(false);
+                (type, body) = await ReadPacketAsync(stream, hsCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                throw new IOException($"broker accepted the connection but did not complete the " +
+                                      $"{(_opt.Tls ? "TLS/" : "")}MQTT handshake within {HandshakeTimeout.TotalSeconds:0}s");
+            }
         }
-
-        // CONNECT → CONNACK handshake.
-        var connect = MqttPacket.BuildConnect(_opt.ClientId, _opt.Username, _opt.Password,
-            (ushort)_opt.KeepAliveSeconds, _opt.WillTopic, _opt.WillPayload, _opt.WillRetain);
-        await stream.WriteAsync(connect, ct).ConfigureAwait(false);
-        await stream.FlushAsync(ct).ConfigureAwait(false);
-
-        var (type, body) = await ReadPacketAsync(stream, ct).ConfigureAwait(false);
         if ((type & 0xF0) != MqttPacket.ConnAck)
             throw new IOException($"expected CONNACK, got 0x{type:X2}");
         if (body.Length < 2 || body[1] != 0x00)
@@ -129,6 +148,7 @@ public sealed class MqttClient
 
         _lastRxUtc = DateTime.UtcNow;
         _stream = stream;
+        _reachedBroker = true;
         Log.Info($"MQTT: connected to {_opt.Host}:{_opt.Port} as '{_opt.ClientId}'");
 
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -188,6 +208,9 @@ public sealed class MqttClient
     /// this long; hitting it closes the connection. Internal so the selftest can
     /// shrink it.</summary>
     internal TimeSpan WriteTimeout { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>Cap on TLS + CONNECT/CONNACK. Internal so the selftest can shrink it.</summary>
+    internal TimeSpan HandshakeTimeout { get; set; } = TimeSpan.FromSeconds(10);
 
     private async Task<bool> SendAsync(Stream stream, byte[] packet, CancellationToken ct)
     {

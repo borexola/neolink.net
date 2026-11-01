@@ -279,7 +279,8 @@ public static class CameraProbe
         {
             using var udp = new UdpClient(new IPEndPoint(IPAddress.Any, 0));
             var bytes = Encoding.UTF8.GetBytes(probe);
-            await udp.SendAsync(bytes, new IPEndPoint(IPAddress.Parse("239.255.255.250"), 3702), ct).ConfigureAwait(false);
+            try { await udp.SendAsync(bytes, new IPEndPoint(IPAddress.Parse("239.255.255.250"), 3702), ct).ConfigureAwait(false); }
+            catch (SocketException) { /* no multicast route: the unicast sweep still runs */ }
 
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(window);

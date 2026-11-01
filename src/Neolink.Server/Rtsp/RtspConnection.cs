@@ -17,7 +17,7 @@ public sealed class RtspConnection
     private readonly NetworkStream _stream;
     private readonly RtspServer _server;
     private readonly SemaphoreSlim _writeLock = new(1, 1);
-    private readonly Dictionary<string, RtspSession> _sessions = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, RtspSession> _sessions = new();
     private readonly byte[] _readBuf = new byte[8192];
     private readonly EndPoint? _remote;
     /// <summary>Once-per-process flag for the "Opus requested but no usable ffmpeg" refusal log.</summary>
@@ -31,6 +31,12 @@ public sealed class RtspConnection
     private bool? _describedOpus;
     private int _readLen;
     private int _readPos;
+    private const int MaxBodyBytes = 64 * 1024;
+    private const int MaxHeaders = 100;
+    /// <summary>The advertised session timeout (60 s) plus slack for clients that keep alive at the deadline.</summary>
+    internal static TimeSpan IdleTimeout = TimeSpan.FromSeconds(75);
+    /// <summary>When the client last sent anything: a request, interleaved data or RTCP.</summary>
+    private long _lastActivity = Environment.TickCount64;
 
     /// <summary>The user the last authorized request proved, or null (no login, or none needed).</summary>
     internal string? User { get; private set; }
@@ -46,16 +52,28 @@ public sealed class RtspConnection
         _stream = client.GetStream();
         _server = server;
         _remote = client.Client.RemoteEndPoint;
+        // Notices a peer that vanished (phone left the Wi-Fi) while nothing is being written.
+        try
+        {
+            client.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
+            client.Client.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveTime, 30);
+            client.Client.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveInterval, 10);
+            client.Client.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveRetryCount, 3);
+        }
+        catch (Exception ex) when (ex is SocketException or PlatformNotSupportedException) { }
     }
 
     public async Task RunAsync(CancellationToken ct)
     {
         Log.Debug($"RTSP client connected: {_remote}");
+        using var idleStop = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        _ = IdleWatchAsync(idleStop.Token);
         try
         {
             while (!ct.IsCancellationRequested)
             {
                 int first = await PeekByteAsync(ct).ConfigureAwait(false);
+                Interlocked.Exchange(ref _lastActivity, Environment.TickCount64);
                 if (first < 0) break;
 
                 if (first == '$')
@@ -80,12 +98,38 @@ public sealed class RtspConnection
         catch (ObjectDisposedException) { } // connection killed by the stalled-client guard
         finally
         {
+            idleStop.Cancel();
             foreach (var session in _sessions.Values)
                 session.Stop();
             _sessions.Clear();
             _client.Dispose();
             Log.Debug($"RTSP client disconnected: {_remote}");
         }
+    }
+
+    /// <summary>Closes a connection whose client went quiet past the session timeout, unless it plays
+    /// over TCP: some players send nothing upstream there, and the write-stall guard covers them.</summary>
+    private async Task IdleWatchAsync(CancellationToken ct)
+    {
+        var poll = TimeSpan.FromTicks(Math.Min(TimeSpan.FromSeconds(10).Ticks, IdleTimeout.Ticks / 3));
+        try
+        {
+            while (true)
+            {
+                await Task.Delay(poll, ct).ConfigureAwait(false);
+                var sessions = _sessions.Values.ToArray();
+                if (sessions.Any(s => s.Playing && (s.Video?.Tcp == true || s.Audio?.Tcp == true)))
+                    continue;
+                if (sessions.Any(s => s.DrainUdp()))
+                    Interlocked.Exchange(ref _lastActivity, Environment.TickCount64);
+                if (Environment.TickCount64 - Interlocked.Read(ref _lastActivity) < IdleTimeout.TotalMilliseconds)
+                    continue;
+                Log.Info($"RTSP client {_remote} sent nothing for {IdleTimeout.TotalSeconds:0}s; closing connection");
+                _client.Dispose();
+                return;
+            }
+        }
+        catch (OperationCanceledException) { }
     }
 
     // ------------------------------------------------------------- request parsing
@@ -114,18 +158,27 @@ public sealed class RtspConnection
         }
         var req = new RtspRequest { Method = parts[0].ToUpperInvariant(), Uri = parts[1] };
 
-        while (true)
+        for (int lines = 0; ; lines++)
         {
             var line = await ReadLineAsync(ct).ConfigureAwait(false);
             if (line == null) return null;
             if (line.Length == 0) break;
+            if (lines >= MaxHeaders) return null;
             int colon = line.IndexOf(':');
             if (colon > 0)
                 req.Headers[line[..colon].Trim()] = line[(colon + 1)..].Trim();
         }
 
         if (int.TryParse(req.Header("Content-Length"), out int bodyLen) && bodyLen > 0)
+        {
+            // Read before any auth check, so the client's number must never size an allocation.
+            if (bodyLen > MaxBodyBytes)
+            {
+                Log.Debug($"RTSP request from {_remote} declares a {bodyLen}-byte body; closing");
+                return null;
+            }
             await ReadExactAsync(bodyLen, ct).ConfigureAwait(false); // read and discard
+        }
 
         return req;
     }
@@ -487,7 +540,7 @@ public sealed class RtspConnection
         if (session != null)
         {
             session.Stop();
-            _sessions.Remove(session.Id);
+            _sessions.TryRemove(session.Id, out _);
         }
         await RespondAsync(req, 200, "OK", sessionId: session?.Id, ct: ct).ConfigureAwait(false);
     }
@@ -726,6 +779,28 @@ internal sealed class RtspSession
     }
 
     public void FeedBackchannel(byte[] rtpPacket) => _backchannel?.OnRtp(rtpPacket);
+
+    /// <summary>Discards what the client sent to this session's UDP ports (RTCP reports);
+    /// true when there was any, which proves the client is still there.</summary>
+    public bool DrainUdp()
+    {
+        bool any = false;
+        var buf = new byte[2048];
+        foreach (var sock in new[] { Video?.UdpSocket, Video?.UdpRtcpSocket, Audio?.UdpSocket, Audio?.UdpRtcpSocket })
+        {
+            if (sock == null) continue;
+            try
+            {
+                while (sock.Available > 0)
+                {
+                    sock.Receive(buf);
+                    any = true;
+                }
+            }
+            catch (Exception ex) when (ex is SocketException or ObjectDisposedException) { }
+        }
+        return any;
+    }
 
     public void Play(CancellationToken ct)
     {

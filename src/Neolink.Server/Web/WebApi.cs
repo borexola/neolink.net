@@ -450,10 +450,13 @@ public static class WebApi
             // The old blanket 15s sat BELOW legitimate handler times — an SD file
             // search or a slow feature sweep got cancelled client-side and the UI
             // showed "Cannot reach http://127.0.0.1:8655" for its own server.
-            builder.Services.AddSingleton(_ => new HttpClient { Timeout = TimeSpan.FromSeconds(100) });
+            // One client per circuit over a shared pool, so each carries its own browser's X-Forwarded-For.
+            var uiHandler = new SocketsHttpHandler();
+            builder.Services.AddScoped(_ => new HttpClient(uiHandler, disposeHandler: false) { Timeout = TimeSpan.FromSeconds(100) });
             // Circuits must talk to THIS server via loopback, never back out through
             // a reverse proxy's public URL (TLS/hairpin failures behind HAProxy etc.).
-            builder.Services.AddSingleton(new Neolink.WebClient.LocalApiInfo(LoopbackBase(bindAddr, port)));
+            builder.Services.AddSingleton(new Neolink.WebClient.LocalApiInfo(LoopbackBase(bindAddr, port),
+                ctx => LoginGuard.ClientAddress(ctx.Connection.RemoteIpAddress, ctx.Request.Headers["X-Forwarded-For"])));
             // The UI language: one live singleton for the server default (so
             // changing it never needs a restart) and one per-circuit translator,
             // which is the granularity the setting actually has — one tab of one
@@ -482,7 +485,12 @@ public static class WebApi
             await next();
         });
 
-        app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(20) });
+        // A viewer that vanished (no pong) is dropped, so it stops holding a battery camera awake.
+        app.UseWebSockets(new WebSocketOptions
+        {
+            KeepAliveInterval = TimeSpan.FromSeconds(20),
+            KeepAliveTimeout = TimeSpan.FromSeconds(20),
+        });
 
         // ------------------------------------------------------------ web-UI accounts
 
@@ -601,6 +609,14 @@ public static class WebApi
                 Log.Warn($"First-run setup REFUSED from public address {from}: create the admin from the LAN, " +
                          "or set ui.remote_setup = true");
                 return Results.Json(new { error = "set up the admin account from the local network" }, statusCode: 403);
+            }
+            // CORS is open, so a page on another site must not claim the server through a LAN visitor's browser.
+            var origin = ctx.Request.Headers.Origin.ToString();
+            if (origin.Length > 0 && !(Uri.TryCreate(origin, UriKind.Absolute, out var originUri)
+                    && string.Equals(originUri.Authority, ctx.Request.Host.Value, StringComparison.OrdinalIgnoreCase)))
+            {
+                Log.Warn($"First-run setup REFUSED from cross-site origin {origin}");
+                return Results.Json(new { error = "set up the admin account from this server's own page" }, statusCode: 403);
             }
             if (string.IsNullOrWhiteSpace(req.Username) || string.IsNullOrEmpty(req.Password))
                 return Results.Json(new { error = "provide username and password" }, statusCode: 400);
@@ -894,9 +910,11 @@ public static class WebApi
                 // which time nobody is watching: reject it while the admin is here.
                 if (req.Recording?.Path is { Length: > 0 } recPath)
                 {
+                    if (!OperatingSystem.IsWindows() && NeolinkConfig.IsWindowsOnlyPath(recPath))
+                        throw new FormatException($"storage path '{recPath}' is a Windows path; on this system use one like /recordings");
                     try
                     {
-                        var full = Path.GetFullPath(recPath);
+                        var full = NeolinkConfig.ResolveStoragePath(recPath, Path.GetDirectoryName(Path.GetFullPath(o.ConfigPath))!);
                         Directory.CreateDirectory(full);
                         var probe = Path.Combine(full, ".neolink-write-test");
                         File.WriteAllBytes(probe, Array.Empty<byte>());
@@ -1357,7 +1375,7 @@ public static class WebApi
             var liveAddresses = cameras.Select(w => w.LiveAddress?.Invoke()?.Split(':')[0]).ToList();
             foreach (var host in configured.Select(c => c.Host).Concat(liveAddresses))
                 if (host != null && System.Net.IPAddress.TryParse(host, out var ip)
-                    && ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+                    && UdpDiscovery.IsPrivateLan(ip)) // a public or DDNS camera's neighbours are not ours to scan
                     extra.Add(Neolink.WebClient.ScanRange.Subnet(ip, 24));
 
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted);
@@ -2386,14 +2404,17 @@ public static class WebApi
             return Results.Json(new { error = "authentication required" }, statusCode: 401);
         }
 
+        // adminReason: set for controls that stop the camera recording, which only the admin may do.
         async Task<IResult> ExecAsync(string name, HttpContext ctx, bool mutating,
-            Func<ICameraControl, CancellationToken, Task<IResult>> action)
+            Func<ICameraControl, CancellationToken, Task<IResult>> action, string? adminReason = null)
         {
             var cam = cameras.FirstOrDefault(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase));
             if (cam == null)
                 return Results.Json(new { error = $"unknown camera '{name}'" }, statusCode: 404);
             if (mutating && CheckAuth(ctx, cam) is { } denied)
                 return denied;
+            if (adminReason != null && userStore.Enabled && !IsAdmin(ctx))
+                return Results.Json(new { error = $"admin only — {adminReason}" }, statusCode: 403);
             try
             {
                 return await action(cam.Control, ctx.RequestAborted);
@@ -2859,7 +2880,7 @@ public static class WebApi
             {
                 await control.RebootAsync(reqCt);
                 return Results.Json(new { ok = true });
-            }));
+            }, adminReason: "a reboot stops recording"));
 
         // The camera's own service-port table (Baichuan msg 37). Queried LIVE on
         // every request — the answer is the camera's actual state right now,
@@ -2979,7 +3000,7 @@ public static class WebApi
                 await control.SetPrivacyModeAsync(req.On.Value, reqCt);
                 NudgeHa(name);
                 return Results.Json(new { ok = true, on = req.On });
-            }));
+            }, adminReason: "privacy mode blacks out recording"));
 
         // Suspend (beta): a Neolink-side "off" switch. Suspending drops Neolink's
         // connection and holds it closed, so the camera can't be VIEWED or RECORDED
@@ -3562,7 +3583,7 @@ public static class WebApi
                     return Results.Json(new { error = "provide on (bool)" }, statusCode: 400);
                 await control.SetSdRecordingAsync(on, reqCt);
                 return Results.Json(new { ok = true });
-            }));
+            }, adminReason: "it switches the camera's own recording"));
 
         app.MapPost("/api/cameras/{name}/extras/autoreboot", (string name, AutoRebootRequest req, HttpContext ctx) =>
             ExecAsync(name, ctx, mutating: true, async (control, reqCt) =>

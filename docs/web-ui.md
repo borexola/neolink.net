@@ -167,7 +167,8 @@ localhost, like two-way talk.
 
 Accounts live on the *Users* tab (admin): the admin manages users and
 passwords, and normal users view, control and review without touching server
-settings. The same tab holds **sign-in protection**: an account locks for a
+settings. Controls that stop recording (suspend, reboot, privacy mode, the
+camera's own SD recording) are the admin's. The same tab holds **sign-in protection**: an account locks for a
 set time after a set number of failed sign-ins (10 unless changed), and an
 address that keeps failing across accounts (password spraying) is blocked
 outright. The first-run setup switches it on; an install from before it

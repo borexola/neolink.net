@@ -1,5 +1,6 @@
 @using Neolink.WebClient.Localization
 @inject Translator T
+@inject HttpClient Http
 
 <Router AppAssembly="typeof(Routes).Assembly">
     <Found Context="routeData">
@@ -14,5 +15,14 @@
     /// circuit agree from the first frame instead of flashing English.</summary>
     [Parameter] public string? Language { get; set; }
 
-    protected override void OnParametersSet() => T.Initialize(Language);
+    /// <summary>The browser's address as the host page saw it; forwarded on this
+    /// circuit's loopback API calls so setup and sign-in checks see the real caller.</summary>
+    [Parameter] public string? ClientAddress { get; set; }
+
+    protected override void OnParametersSet()
+    {
+        T.Initialize(Language);
+        if (ClientAddress != null && !Http.DefaultRequestHeaders.Contains("X-Forwarded-For"))
+            Http.DefaultRequestHeaders.TryAddWithoutValidation("X-Forwarded-For", ClientAddress);
+    }
 }

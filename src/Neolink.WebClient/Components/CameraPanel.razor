@@ -1066,10 +1066,18 @@
                 <div class="campanel-section-title">@UiIcon.Render("archive", 13) @T["SD CARD"] <span class="beta-tag">@T["BETA"]</span></div>
                 <div class="control-row">
                     <span>@T["The camera records to its own SD card"]</span>
-                    <button class="chip @(sdRec ? "" : "chip-off")" disabled="@_extrasBusy"
-                            @onclick='() => ExtrasPostAsync("extras/sdrecording", new { on = !sdRec })'>
-                        @(sdRec ? T["on"] : T["off"])
-                    </button>
+                    @if (!IsAdmin)
+                    {
+                        @* Admin only: it switches the camera's own recording. *@
+                        <span class="chip @(sdRec ? "" : "chip-off")">@(sdRec ? T["on"] : T["off"])</span>
+                    }
+                    else
+                    {
+                        <button class="chip @(sdRec ? "" : "chip-off")" disabled="@_extrasBusy"
+                                @onclick='() => ExtrasPostAsync("extras/sdrecording", new { on = !sdRec })'>
+                            @(sdRec ? T["on"] : T["off"])
+                        </button>
+                    }
                 </div>
             </div>
         }
@@ -1105,7 +1113,12 @@
                 <div class="campanel-section-title">@UiIcon.Render("eye-off", 13) @T["PRIVACY MODE"]</div>
                 <div class="control-row">
                     <span>@T["Camera dark (no video, no detections)"]</span>
-                    @if (_privacyBusy)
+                    @if (!IsAdmin)
+                    {
+                        @* Admin only: privacy mode stops recording. *@
+                        <span class="chip @(_privacyOn == true ? "chip-active" : "chip-off")">@(_privacyOn == true ? T["on"] : T["off"])</span>
+                    }
+                    else if (_privacyBusy)
                     {
                         @* Spinner while the write is in flight — the buttons are gone
                            so a slow camera can't be double-toggled; caps at 10s. *@
@@ -1152,20 +1165,23 @@
         {
             <div class="campanel-section">
                 <div class="campanel-section-title">@UiIcon.Render("wrench", 13) @T["MAINTENANCE"]</div>
-                <div class="control-row">
-                    <span>@T["Restart the camera"]</span>
-                    @if (!_confirmReboot)
-                    {
-                        <button class="chip" @onclick="() => _confirmReboot = true">@T["Reboot…"]</button>
-                    }
-                    else
-                    {
-                        <span class="row-actions">
-                            <button class="chip chip-danger" @onclick="RebootAsync">@T["Confirm reboot"]</button>
-                            <button class="chip" @onclick="() => _confirmReboot = false">@T["Cancel"]</button>
-                        </span>
-                    }
-                </div>
+                @if (IsAdmin)
+                {
+                    <div class="control-row">
+                        <span>@T["Restart the camera"]</span>
+                        @if (!_confirmReboot)
+                        {
+                            <button class="chip" @onclick="() => _confirmReboot = true">@T["Reboot…"]</button>
+                        }
+                        else
+                        {
+                            <span class="row-actions">
+                                <button class="chip chip-danger" @onclick="RebootAsync">@T["Confirm reboot"]</button>
+                                <button class="chip" @onclick="() => _confirmReboot = false">@T["Cancel"]</button>
+                            </span>
+                        }
+                    </div>
+                }
                 @if (_extras?.AutoReboot is { } autoReboot)
                 {
                     <div class="control-row">

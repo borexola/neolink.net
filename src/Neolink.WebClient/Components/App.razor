@@ -28,7 +28,7 @@
 </head>
 
 <body>
-    <Routes @rendermode="InteractiveServer" Language="@InitialLang" />
+    <Routes @rendermode="InteractiveServer" Language="@InitialLang" ClientAddress="@ClientAddress" />
 
     @* Custom reconnect overlay: when this element exists, Blazor toggles its
        state classes (components-reconnect-show/failed/rejected) here instead
@@ -67,6 +67,10 @@
 
 @code {
     [Inject] public ServerLanguage ServerLang { get; set; } = default!;
+    [Inject] public LocalApiInfo Local { get; set; } = default!;
+
+    // Travels in the protected component marker, so the browser cannot rewrite it.
+    private string? ClientAddress => HttpContext is { } ctx ? Local.ClientAddressOf?.Invoke(ctx) : null;
 
     // This page is rendered STATICALLY, before any circuit exists, so it cannot
     // use the scoped Translator — it resolves the language itself and looks

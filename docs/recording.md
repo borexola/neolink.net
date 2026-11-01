@@ -36,7 +36,7 @@ config file (in Docker: the `/config` mount), so they survive restarts:
 
 | Option | Default | Description |
 |---|---|---|
-| `path` | *required* | Storage directory. In Docker, mount a volume here (e.g. `./recordings:/recordings`) |
+| `path` | *required* | Storage directory; a relative path is taken from the config file's folder. In Docker, mount a volume here (e.g. `./recordings:/recordings`) |
 | `clips_path` | = `path` | Optional fast tier: new event clips are written here (point it at an SSD for snappy event playback); continuous footage stays on `path` |
 | `archive_path` | *unset* | Optional cold tier: enables per-camera archiving — aged footage is **moved** here instead of deleted. Use a different (bigger/slower) drive; in Docker, map a second volume (e.g. `-v /mnt/bigdisk:/archive`) |
 | `retention_days` | `7` | Events older than this are deleted (`0` = keep forever) |

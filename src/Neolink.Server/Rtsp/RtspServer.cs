@@ -31,6 +31,10 @@ public sealed class RtspServer
 {
     private readonly Dictionary<string, RtspMount> _mounts = new(StringComparer.OrdinalIgnoreCase);
     private readonly IReadOnlyDictionary<string, string> _users;
+    /// <summary>Open control connections; capped so idle or hostile clients cannot exhaust descriptors.</summary>
+    private int _active;
+    internal int MaxConnections { get; init; } = 512;
+    private long _lastCapLog = -60_000;
 
     public RtspServer(IReadOnlyDictionary<string, string> users)
     {
@@ -94,19 +98,46 @@ public sealed class RtspServer
                 {
                     break;
                 }
-                client.NoDelay = true;
-                var conn = new RtspConnection(client, this);
+                catch (ObjectDisposedException)
+                {
+                    break; // the listener is gone for good
+                }
+                catch (Exception ex)
+                {
+                    // E.g. out of file descriptors: transient, and never a reason to stop serving.
+                    Log.Warn($"RTSP accept failed: {ex.Message}");
+                    try { await Task.Delay(1000, ct).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { break; }
+                    continue;
+                }
+                if (Interlocked.Increment(ref _active) > MaxConnections)
+                {
+                    Interlocked.Decrement(ref _active);
+                    if (Environment.TickCount64 - _lastCapLog > 60_000)
+                    {
+                        _lastCapLog = Environment.TickCount64;
+                        Log.Warn($"RTSP connection limit ({MaxConnections}) reached; refusing {client.Client.RemoteEndPoint}");
+                    }
+                    client.Dispose();
+                    continue;
+                }
                 _ = Task.Run(async () =>
                 {
                     try
                     {
-                        await conn.RunAsync(ct).ConfigureAwait(false);
+                        client.NoDelay = true;
+                        await new RtspConnection(client, this).RunAsync(ct).ConfigureAwait(false);
                     }
                     catch (Exception ex)
                     {
                         Log.Debug($"RTSP connection error: {Log.Flatten(ex)}");
                     }
-                }, ct);
+                    finally
+                    {
+                        client.Dispose();
+                        Interlocked.Decrement(ref _active);
+                    }
+                }, CancellationToken.None);
             }
         }
         finally

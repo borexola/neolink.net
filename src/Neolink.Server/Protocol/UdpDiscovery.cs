@@ -225,7 +225,7 @@ public static class UdpDiscovery
     }
 
     /// <summary>Where the camera with this UID answers now: hellos go to the last-known addresses,
-    /// every local broadcast, and host by host over a last-known /24 that is not local (a routed VLAN).</summary>
+    /// every local broadcast, and host by host over a last-known private /24 that is not local (a routed VLAN).</summary>
     internal static async Task<IPEndPoint?> LocateAsync(string uid, IEnumerable<IPAddress> lastKnown, TimeSpan timeout,
         CancellationToken ct, string? logTag = null, int? camPort = null)
     {
@@ -234,7 +234,7 @@ public static class UdpDiscovery
         foreach (var known in lastKnown.Where(k => k.AddressFamily == AddressFamily.InterNetwork))
         {
             targets.Add(known);
-            if (camPort == null && !OnLocalSubnet(known)) targets.AddRange(SubnetHosts(known));
+            if (camPort == null && IsPrivateLan(known) && !OnLocalSubnet(known)) targets.AddRange(SubnetHosts(known));
         }
         if (camPort == null) targets.AddRange(BroadcastTargets());
         return await FindAsync(targets.Distinct().ToArray(), broadcast: camPort == null, uid, timeout, ct, logTag, camPorts)
@@ -501,6 +501,14 @@ public static class UdpDiscovery
         if (ab.Length != 4 || bb.Length != 4 || mb.Length != 4) return false;
         for (int i = 0; i < 4; i++) if ((ab[i] & mb[i]) != (bb[i] & mb[i])) return false;
         return true;
+    }
+
+    /// <summary>IPv4 RFC 1918 space: the only addresses whose /24 is worth a host-by-host sweep.</summary>
+    internal static bool IsPrivateLan(IPAddress ip)
+    {
+        if (ip.IsIPv4MappedToIPv6) ip = ip.MapToIPv4();
+        var b = ip.GetAddressBytes();
+        return b.Length == 4 && (b[0] == 10 || (b[0] == 172 && b[1] is >= 16 and <= 31) || (b[0] == 192 && b[1] == 168));
     }
 
     /// <summary>The 254 usable hosts of an address's /24 — the unicast sweep for a

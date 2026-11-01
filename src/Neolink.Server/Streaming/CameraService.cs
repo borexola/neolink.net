@@ -244,6 +244,8 @@ public sealed class CameraService : ILiveCameraSource
     // Following a camera whose IP changed: after two connects in a row that never
     // reached it, ask the LAN for its UID (no credentials) at most this often per camera.
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTime> _relocateLast = new();
+    // Replaced-camera locate in flight per camera name, shared by its main and sub stream services.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Lazy<Task<string?>>> _replacedCheck = new();
     private static readonly TimeSpan RelocateEvery = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan RelocateTimeout = TimeSpan.FromSeconds(6);
     private int _connectFailures;
@@ -1032,18 +1034,53 @@ public sealed class CameraService : ILiveCameraSource
                 else
                 {
                     if (KnownUid is { Length: > 0 } known && !string.Equals(known, uid, StringComparison.OrdinalIgnoreCase))
-                        Log.Warn($"{Tag}: the camera at {host} reports UID {Mask(uid)}, last time it was {Mask(known)} — " +
-                                 "a replaced camera? Following the new one");
+                    {
+                        // DHCP may have handed this address to another camera with the same login: look for ours first.
+                        // One locate per camera, so the main and sub stream services reach the same verdict.
+                        var hostBefore = _config.Host;
+                        var locate = _replacedCheck.GetOrAdd(_config.Name,
+                            _ => new(() => FindElsewhereAsync(known, camera.RemoteIp, CancellationToken.None)));
+                        string? elsewhere;
+                        try { elsewhere = await locate.Value.WaitAsync(ct).ConfigureAwait(false); }
+                        finally { _replacedCheck.TryRemove(new(_config.Name, locate)); }
+                        if (elsewhere != null)
+                        {
+                            Log.Warn($"{Tag}: the camera at {host} reports UID {Mask(uid)}, not {Mask(known)}; " +
+                                     $"that camera now answers at {elsewhere}");
+                            if (string.Equals(_config.Host, hostBefore, StringComparison.Ordinal)) FollowTo(elsewhere);
+                            try { _activeStream?.Cancel(); } catch (ObjectDisposedException) { }
+                            return;
+                        }
+                        Log.Warn($"{Tag}: the camera at {host} reports UID {Mask(uid)}, last time it was {Mask(known)}, " +
+                                 "and no camera with that UID answers elsewhere — a replaced camera? Following the new one");
+                    }
                     else if (!string.Equals(uid, _config.Uid ?? KnownUid, StringComparison.OrdinalIgnoreCase))
                         Log.Info($"{Tag}: camera UID learned ({Mask(uid)}) — a changed IP address can now be followed");
                     _learnedUid = uid;
                 }
             }
-            catch (OperationCanceledException) { return; }
+            catch (OperationCanceledException) { _uidRead = false; return; } // ask again next session
             catch (Exception ex) { _uidRead = true; Log.Debug($"{Tag}: UID query failed: {Log.Flatten(ex)}"); }
         }
         try { IdentitySeen?.Invoke(uid, host); }
         catch (Exception ex) { Log.Warn($"{Tag}: could not persist camera identity ({ex.Message})"); }
+    }
+
+    /// <summary>The address the camera with <paramref name="uid"/> answers from, when that is not <paramref name="here"/>.</summary>
+    private async Task<string?> FindElsewhereAsync(string uid, System.Net.IPAddress? here, CancellationToken ct)
+    {
+        try
+        {
+            var found = await UdpDiscovery.LocateAsync(uid, here is null ? [] : [here], RelocateTimeout, ct, Tag)
+                .ConfigureAwait(false);
+            return found == null || found.Address.Equals(here) ? null : found.Address.ToString();
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            Log.Debug($"{Tag}: locate failed: {Log.Flatten(ex)}");
+            return null;
+        }
     }
 
     /// <summary>True when the configured host names <paramref name="ip"/> (a literal or a resolving DNS name).</summary>
@@ -1106,6 +1143,13 @@ public sealed class CameraService : ILiveCameraSource
                      "so the failure is not an address change");
             return false;
         }
+        FollowTo(address);
+        return true;
+    }
+
+    /// <summary>Points this camera at its new address in memory; config.json is left for the user.</summary>
+    private void FollowTo(string address)
+    {
         var was = _config.Host;
         _config.Host = address;
         _connectFailures = 0;
@@ -1115,7 +1159,6 @@ public sealed class CameraService : ILiveCameraSource
         catch (Exception ex) { Log.Warn($"{Tag}: could not move the camera's HTTP/ONVIF endpoints ({ex.Message})"); }
         try { IdentitySeen?.Invoke(null, address); }
         catch (Exception ex) { Log.Warn($"{Tag}: could not persist camera address ({ex.Message})"); }
-        return true;
     }
 
     // The diagnostic sweep reached the camera after a failed connect: one-shot

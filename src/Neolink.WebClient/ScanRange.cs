@@ -13,7 +13,7 @@ public readonly record struct ScanRange(uint First, uint Last)
     /// <summary>The widest range accepted: a /21's usable hosts.</summary>
     public const int MaxHosts = 2046;
 
-    public int Count => (int)(Last - First + 1);
+    public long Count => (long)Last - First + 1;
 
     /// <summary>The usable hosts of a subnet: network and broadcast left out below /31.</summary>
     public static ScanRange Subnet(IPAddress ip, int prefix)
