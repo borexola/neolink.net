@@ -479,6 +479,19 @@ public static class SelfTest
             // A relative path means beside config.json, not the working directory.
             File.WriteAllText(tmpBad, """{ "recording": { "path": "recordings" }, "cameras": [] }""");
             AssertEq(NeolinkConfig.Load(tmpBad).Recording!.Path, Path.Combine(Path.GetDirectoryName(tmpBad)!, "recordings"));
+            // ...unless an older install's footage is already at the working-directory location.
+            var rel = $"neolink-oldrec-{Guid.NewGuid():N}";
+            var oldDir = Path.GetFullPath(rel);
+            Directory.CreateDirectory(oldDir);
+            File.WriteAllText(Path.Combine(oldDir, "x"), "");
+            try
+            {
+                File.WriteAllText(tmpBad, $$"""{ "recording": { "path": "{{rel}}" }, "cameras": [] }""");
+                AssertEq(NeolinkConfig.Load(tmpBad).Recording!.Path, oldDir);
+                Directory.Delete(oldDir, true);
+                AssertEq(NeolinkConfig.Load(tmpBad).Recording!.Path, Path.Combine(Path.GetDirectoryName(tmpBad)!, rel));
+            }
+            finally { if (Directory.Exists(oldDir)) Directory.Delete(oldDir, true); }
             File.Delete(tmpBad);
 
             // push_ports parses from both config dialects, list or single spelling.

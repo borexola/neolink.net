@@ -89,9 +89,14 @@ public sealed class NeolinkConfig
             if (p.Length == 0) return p;
             var full = ResolveStoragePath(p, configDir);
             var old = Path.GetFullPath(p);
-            if (old != full && !_moveWarned.ContainsKey(old) && HasEntries(old) && _moveWarned.TryAdd(old, 0))
-                Log.Warn($"Recording path '{p}' now means {full} (beside the config file); earlier footage is still in {old}");
-            return full;
+            if (old == full || !HasEntries(old)) return full;
+            // Footage already at the working-directory location: keep it in use until it is moved.
+            bool keepOld = !Directory.Exists(full);
+            if (!_moveWarned.ContainsKey(old) && _moveWarned.TryAdd(old, 0))
+                Log.Warn(keepOld
+                    ? $"Recording path '{p}' now means {full} (beside the config file); still using {old} because footage is there — move the folder, or set an absolute path"
+                    : $"Recording path '{p}' now means {full} (beside the config file); earlier footage is still in {old}");
+            return keepOld ? old : full;
         }
 
         static bool HasEntries(string dir)

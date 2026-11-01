@@ -13,7 +13,7 @@ in the README). Paste the matching section below into the GitHub release.
 
 ### Changed
 
-- **A relative recording `path` is taken from the config file's folder**, not the working directory (System32 for the Windows service). If footage exists at the old location, the log names both.
+- **A relative recording `path` is taken from the config file's folder**, not the working directory (System32 for the Windows service). Footage already at the old location stays in use until you move it; the log names both folders.
 - **Only the admin can reboot a camera, switch privacy mode or turn off its SD recording,** as with suspend: each stops recording.
 
 ### Security
