@@ -337,13 +337,13 @@
            and also when the filters hide everything, EXCEPT while the filter
            editor is open: collapsing mid-edit would strand the user with no way
            to undo the click that hid the last visible event. *@
-        @{ var strip = StripEvents.ToList(); }
+        @{ var strip = StripEvents.ToList(); var stripCapped = _eventsTruncated && strip.Count >= EventFetchLimit; }
         @if (_eventsSupported && (strip.Count > 0 || _showStripFilter))
         {
             <div class="events-bar" id="events-bar" style="height:@(_stripHeight)px">
                 <div class="events-rail">
                     <span class="events-rail-label">@T["Detected"]</span>
-                    <span class="events-rail-count" title="@(_eventsTruncated ? T["Unreviewed events (after filters); older ones are not loaded"] : T["Unreviewed events (after filters)"])">@strip.Count@(_eventsTruncated ? "+" : "")</span>
+                    <span class="events-rail-count" title="@(stripCapped ? T["Unreviewed events (after filters); older ones are not loaded"] : T["Unreviewed events (after filters)"])">@strip.Count@(stripCapped ? "+" : "")</span>
                     <div class="events-rail-actions">
                         <button class="rail-btn @(_showStripFilter ? "open" : "")"
                                 title="@T["Filter which events appear here"]" @onclick="() => _showStripFilter = !_showStripFilter">
@@ -3371,7 +3371,7 @@
     // Recorded events (populated when the server has recording enabled)
     private readonly List<ApiEvent> _events = new();
     private const int EventFetchLimit = 500;
-    /// <summary>The fetch came back full, so counts are a floor ("500+").</summary>
+    /// <summary>The fetch came back full; a count that itself hits the limit shows as a floor ("500+").</summary>
     private bool _eventsTruncated;
     private bool _eventsSupported;
     private bool _continuousSupported;
