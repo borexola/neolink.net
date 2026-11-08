@@ -395,7 +395,8 @@ public static class WebApi
         bool? Talk = null, bool? ShowBackgroundTasks = null);
     private sealed record AdminRecordingSettings(string? Path, int? RetentionDays, int? PreSeconds,
         int? PostSeconds, int? MaxClipSeconds, string? Stream, int? SegmentMinutes, int? ContinuousRetentionDays,
-        bool? Encrypt = null, string? ClipsPath = null, string? ArchivePath = null, int? MaxSegmentSizeMb = null);
+        bool? Encrypt = null, string? ClipsPath = null, string? ArchivePath = null, int? MaxSegmentSizeMb = null,
+        bool? DeleteOldestWhenFull = null);
     /// <summary>Password is write-only: null keeps the stored one, a value sets it,
     /// "" removes it. Broker may create the section (that's how MQTT is enabled).</summary>
     private sealed record AdminMqttSettings(int? StatsInterval, string? Broker = null, int? Port = null,
@@ -1036,6 +1037,8 @@ public static class WebApi
                         if (r.ArchivePath != null)
                             ConfigEditor.Set(rec, "archive_path", r.ArchivePath.Length == 0 ? null : r.ArchivePath);
                         if (r.Encrypt != null) ConfigEditor.Set(rec, "encrypt", r.Encrypt);
+                        if (r.DeleteOldestWhenFull != null)
+                            ConfigEditor.Set(rec, "delete_oldest_when_full", r.DeleteOldestWhenFull);
                     }
 
                     if (req.Mqtt is { } m)
@@ -2333,6 +2336,7 @@ public static class WebApi
                         online = s.Online,
                         warn = s.Warn,
                         full = s.Full,
+                        rolling = s.Rolling,
                         forecastState = state,
                         forecastDays = days is { } d ? Math.Round(d, 1) : (double?)null,
                     };

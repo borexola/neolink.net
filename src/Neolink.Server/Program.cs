@@ -336,6 +336,12 @@ if (config.Recording is { } recCfg)
                 ArchiveDeleteDays: s.ArchiveRetentionDays ?? 0);
         }
         tasks.Add(Task.Run(() => store.RunRetentionAsync(PolicyFor, shutdown.Token)));
+        if (recCfg.DeleteOldestWhenFull)
+        {
+            StorageLocations locations = storage;
+            Log.Info("Recording: when a disk runs low, the oldest footage makes room (recording.delete_oldest_when_full)");
+            tasks.Add(Task.Run(() => store.RunDiskPressureAsync(locations, PolicyFor, shutdown.Token)));
+        }
     }
     catch (Exception ex)
     {

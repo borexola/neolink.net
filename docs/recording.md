@@ -47,6 +47,7 @@ config file (in Docker: the `/config` mount), so they survive restarts:
 | `segment_minutes` | `10` | Continuous recording: time limit for one segment file |
 | `max_segment_size_mb` | `256` | Continuous recording: size limit for one segment file — a new file starts at the next keyframe once the segment reaches this size *or* `segment_minutes`, whichever comes first (keeps high-bitrate streams from producing huge files) |
 | `continuous_retention_days` | = `retention_days` | Days to keep continuous footage (`0` = forever) |
+| `delete_oldest_when_full` | `false` | When a recording disk runs low (under 2% free, between 2 and 20 GB), the oldest day of footage goes first — 24/7 segments before event clips, across all cameras — until there is room again, so recording never stops. Cameras with the Archive switch on have theirs moved to the archive instead, while the archive is a separate drive with room; the archive itself is never rolled. Retention by age still applies; with retention `0` (forever) this keeps footage for as long as the disk allows |
 | `encrypt` | `false` | Encrypt new footage at rest (AES-256-GCM) — see [Encrypting footage](#encrypting-footage) |
 
 Everything is fragmented MP4 (H.264/H.265 passthrough, video-only) playable in
@@ -92,8 +93,15 @@ opt-in and existing setups keep behaving exactly as before:
 Capacity is watched for you: when any configured location climbs past **90%
 used**, the web UI shows an amber warning banner; if one actually runs out of
 space, recording to it halts cleanly (no partial files) with a **red** banner
-until space is freed — recording resumes automatically. When split storage is
-configured, the 📈 Monitor page grows a STORAGE section showing every
+until space is freed — recording resumes automatically. With
+`delete_oldest_when_full` on (Server settings → Recording), it never gets that
+far: once a disk is under 2% free (between 2 and 20 GB), the oldest day of
+footage makes room — 24/7 segments before event clips, across all cameras, or a
+move to the archive for cameras with the Archive switch on, while the archive
+has room — and the amber banner stays off for that disk, since nearly full is
+then its normal state. The archive is never rolled: when it fills, footage is
+deleted from the recording disk instead, and its own banner still warns. When split
+storage is configured, the 📈 Monitor page grows a STORAGE section showing every
 location's free space live.
 
 The Monitor also **forecasts when each disk fills**: free space is sampled

@@ -311,6 +311,7 @@ public sealed class NeolinkConfig
                 case "maxsegmentsizemb": rec.MaxSegmentSizeMb = prop.Value.GetInt32(); break;
                 case "continuousretentiondays": rec.ContinuousRetentionDays = prop.Value.GetInt32(); break;
                 case "encrypt": rec.Encrypt = prop.Value.GetBoolean(); break;
+                case "deleteoldestwhenfull": rec.DeleteOldestWhenFull = prop.Value.GetBoolean(); break;
                 default:
                     Log.Warn($"Config: ignoring unknown recording option '{prop.Name}'");
                     break;
@@ -496,6 +497,7 @@ public sealed class NeolinkConfig
                 MaxSegmentSizeMb = (int)(MiniToml.GetInt(rec, "max_segment_size_mb") ?? 256),
                 ContinuousRetentionDays = (int?)MiniToml.GetInt(rec, "continuous_retention_days"),
                 Encrypt = MiniToml.GetBool(rec, "encrypt") ?? false,
+                DeleteOldestWhenFull = MiniToml.GetBool(rec, "delete_oldest_when_full") ?? false,
             };
         }
 
@@ -1045,6 +1047,10 @@ public sealed class RecordingConfig
     /// off. The key is the server secret (NEOLINK_SECRET_KEY or the state dir's
     /// secret.key) — losing it means losing the encrypted footage.</summary>
     public bool Encrypt { get; set; }
+
+    /// <summary>When a recording volume runs low, free the oldest footage instead of
+    /// halting recording (see <see cref="Neolink.Recording.StorageLocations.PressureLowWater"/>).</summary>
+    public bool DeleteOldestWhenFull { get; set; }
 
     public int EffectiveContinuousRetentionDays => ContinuousRetentionDays ?? RetentionDays;
 }

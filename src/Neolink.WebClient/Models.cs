@@ -221,7 +221,7 @@ public sealed record ApiStorageState(string Label, double UsedPercent, bool Full
 /// filling); both null when talking to an older server.</summary>
 public sealed record ApiStorageLocation(string Role, string Label, string Path,
     long TotalBytes, long FreeBytes, double UsedPercent, bool Online, bool Warn, bool Full,
-    string? ForecastState = null, double? ForecastDays = null);
+    string? ForecastState = null, double? ForecastDays = null, bool Rolling = false);
 
 /// <summary>GET /api/admin/config — the editable server settings, plus the live
 /// footage-encryption key report (source, one-way fingerprint — never the key).</summary>

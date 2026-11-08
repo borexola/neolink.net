@@ -6,6 +6,14 @@ in the README). Paste the matching section below into the GitHub release.
 
 ## 1.2.3
 
+### Added
+
+- **Delete the oldest footage when a disk runs low** (Server settings → Recording, off by default): once a recording disk is under 2% free (between 2 and 20 GB), the oldest day of footage makes room — 24/7 segments before event clips, across all cameras — so recording never stops. Cameras with the Archive switch on have theirs moved to the archive instead while it has room; the archive itself is never rolled.
+
+### Fixed
+
+- **An archive move cut off partway no longer loses the footage:** the next pass redoes the copy instead of taking the partial file for a finished one and deleting the original.
+
 ### Security
 
 - **The admin-password reset (`reset_admin_password`) only accepts LAN callers, like first-run setup, and turns itself off after one use.** The flag is written back to `false` in config.json, so a reset you forget about no longer leaves the door open.

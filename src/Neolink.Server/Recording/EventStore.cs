@@ -918,8 +918,10 @@ public sealed class EventStore
                 var target = Path.Combine(dst, Path.GetFileName(file)!);
                 long len = 0;
                 try { len = new FileInfo(file).Length; } catch { }
-                if (File.Exists(target)) File.Delete(file); // already archived earlier
-                else File.Move(file, target);                // cross-volume safe
+                if (File.Exists(target) && new FileInfo(target).Length == len)
+                    File.Delete(file);          // archived whole by an earlier pass
+                else
+                    File.Move(file, target, overwrite: true); // cross-volume safe; redoes a cut-off copy
                 onBytes?.Invoke(len); // per file: real progress on slow cross-volume copies
             }
             TryDeleteIfEmpty(src);
@@ -1097,6 +1099,230 @@ public sealed class EventStore
         if (moved > 0)
             Log.Info($"Recordings: migrated {moved} folder(s)/file(s) to the " +
                      "{camera}/{date}/{detections|continuous} layout");
+    }
+
+    // ------------------------------------------------------------------ disk pressure
+
+    /// <summary>Pass cadence while every volume has room, and right after a pass that freed footage.</summary>
+    internal static TimeSpan PressurePeriod = TimeSpan.FromSeconds(30);
+    internal static TimeSpan PressureRecheck = TimeSpan.FromSeconds(5);
+    /// <summary>A segment written this recently is the recorder's open file: never freed.</summary>
+    internal static TimeSpan OpenSegmentGrace = TimeSpan.FromMinutes(2);
+
+    /// <summary>What one pressure pass freed from one root.</summary>
+    public sealed record PressureRelief(int Segments, int Events, int ArchivedHalves, long Bytes)
+    {
+        public bool Any => Bytes > 0 || Segments + Events + ArchivedHalves > 0;
+    }
+
+    /// <summary>recording.delete_oldest_when_full: every 30 s, a root whose volume is
+    /// under the free-space floor has its oldest footage freed back to the target.</summary>
+    public async Task RunDiskPressureAsync(StorageLocations storage, Func<string, CameraStoragePolicy> policyFor, CancellationToken ct)
+    {
+        var stuck = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        while (!ct.IsCancellationRequested)
+        {
+            bool freed = false;
+            try { freed = RelievePressure(storage, policyFor, stuck); }
+            catch (Exception ex) { Log.Warn($"Storage: disk-pressure pass failed: {Log.Flatten(ex)}"); }
+            try { await Task.Delay(freed ? PressureRecheck : PressurePeriod, ct).ConfigureAwait(false); }
+            catch (OperationCanceledException) { return; }
+        }
+    }
+
+    /// <summary>One pass over every root; true when footage was freed. <paramref name="stuck"/>
+    /// remembers roots that are low with nothing left to free, so that warning logs once.</summary>
+    internal bool RelievePressure(StorageLocations storage, Func<string, CameraStoragePolicy> policyFor, HashSet<string> stuck)
+    {
+        bool any = false;
+        var lowAndEmpty = new List<(string Root, long Free)>();
+        // The archive is never rolled: footage there was kept on purpose, and nothing records to it.
+        foreach (var root in Roots.Where(r => _archiveRoot == null || !SamePath(r, _archiveRoot)))
+        {
+            if (storage.Pressure(root) is not { } p || p.Free >= p.LowWater)
+            {
+                stuck.Remove(root);
+                continue;
+            }
+            // Early archiving only helps when the archive is a different volume, and each move
+            // must leave it above its own floor, or the move just shifts the shortage.
+            Func<long, bool>? archiveCanTake = _archiveRoot == null || storage.LooksSameVolume(root, _archiveRoot)
+                ? null
+                : bytes => storage.Pressure(_archiveRoot) is { } a && a.Free - bytes >= a.LowWater;
+            var relief = FreeOldest(root, p.Target - p.Free,
+                () => storage.Pressure(root) is { } now && now.Free >= p.Target, policyFor, archiveCanTake);
+            if (relief.Any)
+            {
+                any = true;
+                stuck.Remove(root);
+                Log.Info($"Storage: {storage.LabelFor(root)} was down to {SizeText(p.Free)} free; freed {SizeText(relief.Bytes)} of the oldest footage " +
+                         $"({relief.Segments} 24/7 segment(s), {relief.Events} event(s)" +
+                         $"{(relief.ArchivedHalves > 0 ? $", {relief.ArchivedHalves} folder(s) moved to the archive" : "")}), " +
+                         $"now {SizeText(storage.Pressure(root)?.Free ?? 0)} free");
+            }
+            else
+                lowAndEmpty.Add((root, p.Free));
+        }
+        // Warn once per episode, and not when another root on the same volume made the room.
+        foreach (var (root, free) in lowAndEmpty)
+        {
+            if (storage.Pressure(root) is { } now && now.Free >= now.LowWater)
+                stuck.Remove(root);
+            else if (stuck.Add(root))
+                Log.Warn($"Storage: {storage.LabelFor(root)} is down to {SizeText(free)} free and holds nothing older to free; " +
+                         $"recording there stops below {SizeText(StorageLocations.MinFreeBytes)}");
+        }
+        return any;
+    }
+
+    /// <summary>Frees the oldest footage under <paramref name="root"/> (oldest day first; 24/7 segments before
+    /// events) until <paramref name="need"/> bytes are gone or <paramref name="satisfied"/>, whichever comes first.</summary>
+    internal PressureRelief FreeOldest(string root, long need, Func<bool> satisfied,
+        Func<string, CameraStoragePolicy> policyFor, Func<long, bool>? archiveCanTake)
+    {
+        int segments = 0, events = 0, archived = 0;
+        long freed = 0;
+        bool Done() => freed >= need || satisfied();
+        if (_archiveRoot == null || SamePath(root, _archiveRoot)) archiveCanTake = null;
+        var openSince = DateTime.UtcNow - OpenSegmentGrace;
+        var today = DateTime.Now.ToString("yyyy-MM-dd");
+        var exhausted = new HashSet<string>(StringComparer.Ordinal); // days with nothing left we may free
+
+        while (!Done())
+        {
+            // The oldest day holding footage under this root, with every camera that has it.
+            string? day = null;
+            var dayDirs = new List<(string Camera, string Dir)>();
+            foreach (var cameraDir in SafeDirs(root))
+            {
+                foreach (var dayDir in SafeDirs(cameraDir))
+                {
+                    var name = Path.GetFileName(dayDir)!;
+                    if (exhausted.Contains(name) || !IsDayName(name)) continue;
+                    int cmp = day == null ? -1 : string.CompareOrdinal(name, day);
+                    if (cmp > 0 || !HasFootage(dayDir)) continue;
+                    if (cmp < 0)
+                    {
+                        day = name;
+                        dayDirs.Clear();
+                    }
+                    dayDirs.Add((Path.GetFileName(cameraDir)!, dayDir));
+                }
+            }
+            if (day == null) break;
+            long before = freed;
+
+            // 24/7 footage first: this day's segments of every camera, merged oldest first.
+            var files = new List<string>();
+            foreach (var (camera, dayDir) in dayDirs)
+            {
+                var contDir = Path.Combine(dayDir, "continuous");
+                if (!Directory.Exists(contDir)) continue;
+                var segs = SafeFiles(contDir);
+                // Archive-on camera: move the half, unless a segment in it is still being written
+                // (the move would take the open file) or the archive cannot hold it.
+                if (!Done() && archiveCanTake != null && policyFor(camera).ArchiveContinuous
+                    && !segs.Any(f => LastWriteUtc(f) > openSince) && archiveCanTake(TreeSize(contDir)))
+                {
+                    if (MoveTree(contDir, Path.Combine(_archiveRoot!, camera, day, "continuous"), b => freed += b))
+                        archived++;
+                    else
+                        files.AddRange(SafeFiles(contDir)); // whatever the failed move left behind
+                }
+                else
+                    files.AddRange(segs);
+            }
+            foreach (var file in files.OrderBy(Path.GetFileName, StringComparer.Ordinal))
+            {
+                if (Done()) break;
+                try
+                {
+                    var info = new FileInfo(file);
+                    if (info.LastWriteTimeUtc > openSince) continue; // the recorder's open segment
+                    long len = info.Length;
+                    info.Delete();
+                    freed += len;
+                    segments++;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    Log.Warn($"Storage: cannot delete {file}: {ex.Message}");
+                }
+            }
+
+            // Then this day's events, oldest first; the index knows which are still being written.
+            if (!Done())
+            {
+                foreach (var (camera, dayDir) in dayDirs)
+                {
+                    if (!Done() && archiveCanTake != null && policyFor(camera).ArchiveEvents && !HasOngoingUnder(dayDir)
+                        && archiveCanTake(SafeDirs(dayDir).Where(IsEventEntry).Sum(TreeSize))
+                        && ArchiveEventEntries(dayDir, camera, day, b => freed += b))
+                        archived++;
+                }
+                List<string> ids;
+                lock (_gate)
+                {
+                    ids = _byId
+                        .Where(kv => !kv.Value.Record.Ongoing && dayDirs.Any(d =>
+                            kv.Value.Dir.StartsWith(d.Dir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)))
+                        .OrderBy(kv => kv.Value.Record.StartUtc)
+                        .Select(kv => kv.Key)
+                        .ToList();
+                }
+                foreach (var id in ids)
+                {
+                    if (Done()) break;
+                    long size = EventSize(id);
+                    if (!DeleteEvent(id)) continue;
+                    freed += size;
+                    events++;
+                }
+            }
+
+            // Tidy emptied folders, except today's: a recorder may have just made one for its next segment.
+            if (day != today)
+            {
+                foreach (var (_, dayDir) in dayDirs)
+                {
+                    TryDeleteIfEmpty(Path.Combine(dayDir, "continuous"));
+                    TryDeleteIfEmpty(Path.Combine(dayDir, "detections"));
+                    TryDeleteIfEmpty(dayDir);
+                }
+            }
+            if (freed == before) exhausted.Add(day); // only the open segment, ongoing events or foreign files left
+        }
+        return new PressureRelief(segments, events, archived, freed);
+    }
+
+    /// <summary>A day folder with a half Neolink wrote (detections, a legacy event folder, or continuous).</summary>
+    private static bool HasFootage(string dayDir) =>
+        SafeDirs(dayDir).Any(e => IsEventEntry(e)
+            || Path.GetFileName(e)!.Equals("continuous", StringComparison.OrdinalIgnoreCase));
+
+    private bool HasOngoingUnder(string dayDir)
+    {
+        var prefix = dayDir + Path.DirectorySeparatorChar;
+        lock (_gate)
+            return _byId.Values.Any(e => e.Record.Ongoing && e.Dir.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static DateTime LastWriteUtc(string file)
+    {
+        try { return File.GetLastWriteTimeUtc(file); }
+        catch { return DateTime.MaxValue; } // unreadable: treat as live, leave it
+    }
+
+    private static List<string> SafeDirs(string dir)
+    {
+        try { return Directory.EnumerateDirectories(dir).ToList(); }
+        catch { return new List<string>(); }
+    }
+
+    private static List<string> SafeFiles(string dir)
+    {
+        try { return Directory.EnumerateFiles(dir).ToList(); }
+        catch { return new List<string>(); }
     }
 
     /// <summary>Runs retention cleanup once at start and then hourly.</summary>

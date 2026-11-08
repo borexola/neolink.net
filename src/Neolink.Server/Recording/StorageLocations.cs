@@ -28,14 +28,16 @@ public sealed record StorageLocation(StorageRole Role, string Path)
     };
 }
 
-/// <summary>A point-in-time capacity reading of one location's volume.</summary>
+/// <summary>A point-in-time capacity reading of one location's volume. Rolling: the oldest
+/// footage makes room as it fills, so nearly full is its normal state, not a warning.</summary>
 public sealed record StorageStatus(
-    StorageRole Role, string Label, string Path, long TotalBytes, long FreeBytes, bool Online)
+    StorageRole Role, string Label, string Path, long TotalBytes, long FreeBytes, bool Online,
+    bool Rolling = false)
 {
     public double UsedPercent => TotalBytes > 0 ? (TotalBytes - FreeBytes) * 100.0 / TotalBytes : 0;
 
     /// <summary>Near-capacity: the UI shows an amber "getting full" banner.</summary>
-    public bool Warn => Online && TotalBytes > 0 && UsedPercent >= StorageLocations.WarnPercent;
+    public bool Warn => Online && TotalBytes > 0 && UsedPercent >= StorageLocations.WarnPercent && !Rolling;
 
     /// <summary>Effectively full: recording to this tier halts and the UI shows a red banner.</summary>
     public bool Full => Online && TotalBytes > 0 && FreeBytes < StorageLocations.MinFreeBytes;
@@ -57,10 +59,20 @@ public sealed class StorageLocations
     /// One gibibyte comfortably covers a rolling segment plus filesystem slack.</summary>
     public const long MinFreeBytes = 1L * 1024 * 1024 * 1024;
 
+    /// <summary>With delete-oldest on, free space below this makes the oldest footage go:
+    /// 2% of the volume, kept between 2 and 20 GiB so it sits well above <see cref="MinFreeBytes"/>.</summary>
+    public static long PressureLowWater(long totalBytes) => Math.Clamp(totalBytes / 50, 2L << 30, 20L << 30);
+
+    /// <summary>Where a pressure pass stops freeing: twice the floor, so passes stay rare.</summary>
+    public static long PressureTarget(long totalBytes) => PressureLowWater(totalBytes) * 2;
+
     private readonly string _main;
     private readonly string _clips;   // == _main when not separately configured
     private readonly string _archive; // "" when not configured
     private readonly Func<string, (long Total, long Free)?> _probe;
+
+    /// <summary>recording.delete_oldest_when_full: the oldest footage makes room instead of recording halting.</summary>
+    public bool DeleteOldestWhenFull { get; }
 
     /// <param name="probe">Volume sampler for a path (total, free), or null when the
     /// volume can't be read; defaults to <see cref="DriveInfo"/>.</param>
@@ -70,6 +82,7 @@ public sealed class StorageLocations
         _clips = string.IsNullOrWhiteSpace(cfg.ClipsPath) ? _main : Full(cfg.ClipsPath);
         _archive = string.IsNullOrWhiteSpace(cfg.ArchivePath) ? "" : Full(cfg.ArchivePath);
         _probe = probe ?? DefaultProbe;
+        DeleteOldestWhenFull = cfg.DeleteOldestWhenFull;
 
         // Create every distinct tier up front so writers never race on mkdir.
         foreach (var loc in Locations)
@@ -164,8 +177,31 @@ public sealed class StorageLocations
         {
             var v = SafeProbe(l.Path);
             return new StorageStatus(l.Role, l.Label, l.Path,
-                v?.Total ?? 0, v?.Free ?? 0, v.HasValue);
+                v?.Total ?? 0, v?.Free ?? 0, v.HasValue,
+                Rolling: DeleteOldestWhenFull && l.Role != StorageRole.Archive); // the archive is never rolled
         }).ToList();
+
+    /// <summary>A root's free space against the delete-oldest thresholds; null when its volume can't be read.</summary>
+    public (long Free, long LowWater, long Target)? Pressure(string root)
+    {
+        if (SafeProbe(root) is not { } v || v.Total <= 0) return null;
+        return (v.Free, PressureLowWater(v.Total), PressureTarget(v.Total));
+    }
+
+    /// <summary>Two paths that look like one filesystem (the <see cref="SharedVolumeWarnings"/> fingerprint).</summary>
+    public bool LooksSameVolume(string a, string b)
+    {
+        if (PathEquals(Full(a), Full(b))) return true;
+        if (SafeProbe(a) is not { } va || SafeProbe(b) is not { } vb) return false;
+        return va.Total == vb.Total && Math.Abs(va.Free - vb.Free) < 256L << 20;
+    }
+
+    /// <summary>The tier label for a root path ("Recordings", "Archive"...), or the path itself.</summary>
+    public string LabelFor(string root)
+    {
+        var full = Full(root);
+        return Locations.FirstOrDefault(l => PathEquals(l.Path, full))?.Label ?? root;
+    }
 
     /// <summary>Is there room to keep writing to the tier that backs this role?
     /// Unknown/unreadable volumes are treated as writable (fail open — never block

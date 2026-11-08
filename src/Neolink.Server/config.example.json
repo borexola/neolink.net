@@ -72,6 +72,7 @@
   //   "segment_minutes": 10,           // continuous recording: max length of one file
   //   "max_segment_size_mb": 256,      // continuous recording: max size of one file (rolls at whichever hits first)
   //   "continuous_retention_days": 7,  // continuous footage retention (default = retention_days)
+  //   "delete_oldest_when_full": false, // a disk running low frees its oldest footage instead of halting recording
   //   "encrypt": false                 // encrypt new footage at rest (AES-256-GCM). Playback and
   //                                    // old plaintext footage are unaffected. The key is NEOLINK_SECRET_KEY
   //                                    // or the state dir's secret.key — back it up (see README)

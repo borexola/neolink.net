@@ -105,6 +105,7 @@ public static class ConfigEditor
                     maxSegmentSizeMb = cfg.Recording.MaxSegmentSizeMb,
                     continuousRetentionDays = cfg.Recording.ContinuousRetentionDays,
                     encrypt = cfg.Recording.Encrypt,
+                    deleteOldestWhenFull = cfg.Recording.DeleteOldestWhenFull,
                 },
                 // Passwords never leave the server; hasPassword drives the
                 // "stored — blank keeps it" placeholder client-side.

@@ -702,6 +702,10 @@
     /// days, steady → retention is keeping up, measuring/old server → nothing.</summary>
     private string ForecastText(ApiStorageLocation? loc) => loc?.ForecastState switch
     {
+        "filling" when loc.Rolling && loc.ForecastDays is { } d && d < 1 =>
+            " · " + T["fills within a day; the oldest footage then makes room"],
+        "filling" when loc.Rolling && loc.ForecastDays is { } d =>
+            " · " + T.F("fills in ~{0} days; the oldest footage then makes room", d < 10 ? d.ToString("0.#") : Math.Round(d).ToString("0")),
         "filling" when loc.ForecastDays is { } d && d < 1 => " · " + T["fills within a day at the current rate"],
         "filling" when loc.ForecastDays is { } d =>
             " · " + T.F("fills in ~{0} days at the current rate", d < 10 ? d.ToString("0.#") : Math.Round(d).ToString("0")),

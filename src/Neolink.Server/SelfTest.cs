@@ -4080,6 +4080,177 @@ public static class SelfTest
             }
         });
 
+        Test("disk pressure: the oldest footage makes room", () =>
+        {
+            const long GB = 1024L * 1024 * 1024;
+            // Thresholds: 2% of the volume between 2 and 20 GiB; a pass frees back to double that.
+            AssertEq(Recording.StorageLocations.PressureLowWater(50 * GB), 2 * GB);
+            AssertEq(Recording.StorageLocations.PressureLowWater(500 * GB), 10 * GB);
+            AssertEq(Recording.StorageLocations.PressureLowWater(4000 * GB), 20 * GB);
+            AssertEq(Recording.StorageLocations.PressureTarget(500 * GB), 20 * GB);
+            // A rolling volume near capacity is the normal state: no amber warning; FULL still shows.
+            var rolling = new Recording.StorageStatus(Recording.StorageRole.Main, "m", "/x",
+                TotalBytes: 1000 * GB, FreeBytes: 40 * GB, Online: true, Rolling: true);
+            Assert(!rolling.Warn && !rolling.Full, "a rolling volume at 96% does not warn");
+            Assert((rolling with { FreeBytes = GB / 2 }).Full, "a rolling volume under the reserve is still full");
+
+            var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
+            var live = Path.Combine(dir, "live");
+            var arch = Path.Combine(dir, "archive");
+            try
+            {
+                const string d1 = "2026-01-01", d2 = "2026-01-02";
+                var longAgo = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+                void Seg(string root, string cam, string day, string name, int bytes)
+                {
+                    var p = Path.Combine(root, cam, day, "continuous", name);
+                    Directory.CreateDirectory(Path.GetDirectoryName(p)!);
+                    File.WriteAllBytes(p, new byte[bytes]);
+                    File.SetLastWriteTimeUtc(p, longAgo); // closed long ago: fair game
+                }
+                void Ev(string root, string cam, string day, string folder, string startUtc, int clipBytes)
+                {
+                    var p = Path.Combine(root, cam, day, "detections", folder);
+                    Directory.CreateDirectory(p);
+                    File.WriteAllText(Path.Combine(p, "event.json"),
+                        $$"""{"id":"{{cam}}~{{day}}~{{folder}}","camera":"{{cam}}","startUtc":"{{startUtc}}","endUtc":"{{startUtc}}","labels":["person"],"hasClip":true}""");
+                    File.WriteAllBytes(Path.Combine(p, "clip.mp4"), new byte[clipBytes]);
+                }
+                var plain = new Recording.EventStore.CameraStoragePolicy(7, 7);
+                Recording.EventStore.CameraStoragePolicy Plain(string _) => plain;
+
+                // Day 1: two cameras' segments interleave in time; cam1 also has two events.
+                Seg(live, "cam1", d1, "00-00-00.mp4", 1000);
+                Seg(live, "cam2", d1, "00-05-00.mp4", 1000);
+                Seg(live, "cam1", d1, "00-10-00.mp4", 1000);
+                Ev(live, "cam1", d1, "010000-aaaa", $"{d1}T01:00:00Z", 500);
+                Ev(live, "cam1", d1, "020000-bbbb", $"{d1}T02:00:00Z", 500);
+                // Day 2: a closed segment and one the recorder is still writing (fresh mtime).
+                Seg(live, "cam1", d2, "00-00-00.mp4", 1000);
+                var open = Path.Combine(live, "cam1", d2, "continuous", "00-10-00.mp4");
+                File.WriteAllBytes(open, new byte[1000]);
+                // A foreign dated folder in a shared root is never Neolink's to free.
+                var foreign = Path.Combine(live, "Photos", "2000-01-01", "Holiday");
+                Directory.CreateDirectory(foreign);
+                File.WriteAllBytes(Path.Combine(foreign, "beach.jpg"), new byte[5000]);
+
+                var store = new Recording.EventStore(live);
+                store.Load();
+                AssertEq(store.List().Count, 2);
+
+                // 1500 bytes needed: the two oldest segments go, in time order across
+                // cameras (cam1 00:00, then cam2 00:05), not cam1's later 00:10.
+                var r1 = store.FreeOldest(live, 1500, () => false, Plain, archiveCanTake: null);
+                AssertEq(r1.Segments, 2);
+                AssertEq(r1.Events, 0);
+                AssertEq(r1.Bytes, 2000);
+                Assert(!File.Exists(Path.Combine(live, "cam1", d1, "continuous", "00-00-00.mp4")), "oldest segment freed");
+                Assert(!File.Exists(Path.Combine(live, "cam2", d1, "continuous", "00-05-00.mp4")), "next-oldest segment (other camera) freed");
+                Assert(File.Exists(Path.Combine(live, "cam1", d1, "continuous", "00-10-00.mp4")), "a newer segment of the same day kept");
+                AssertEq(store.List().Count, 2); // events wait while the day still has segments
+
+                // A free-space reading that says the volume has room ends the pass at once.
+                Assert(!store.FreeOldest(live, long.MaxValue, () => true, Plain, null).Any, "a satisfied volume frees nothing");
+
+                // 1400 bytes: the day's last segment (1000), then its oldest event (500); the newer event and day 2 wait.
+                var r3 = store.FreeOldest(live, 1400, () => false, Plain, null);
+                AssertEq(r3.Segments, 1);
+                AssertEq(r3.Events, 1);
+                Assert(store.Find($"cam1~{d1}~010000-aaaa") == null, "oldest event freed and unindexed");
+                Assert(store.Find($"cam1~{d1}~020000-bbbb") != null, "newer event kept");
+                Assert(!Directory.Exists(Path.Combine(live, "cam2", d1)), "an emptied camera-day folder is pruned");
+                Assert(File.Exists(Path.Combine(live, "cam1", d2, "continuous", "00-00-00.mp4")), "day 2 untouched while day 1 has footage");
+
+                // Everything it may take: the segment being written, an ongoing event and
+                // the foreign folder are not that.
+                var ongoing = store.Create("cam1", DateTime.UtcNow, new[] { "person" });
+                var r4 = store.FreeOldest(live, long.MaxValue, () => false, Plain, null);
+                AssertEq(r4.Events, 1);
+                AssertEq(r4.Segments, 1);
+                Assert(File.Exists(open), "the segment being written is never freed");
+                Assert(store.Find(ongoing.Id) != null && Directory.Exists(store.EventDir(ongoing)), "an ongoing event is never freed");
+                Assert(File.Exists(Path.Combine(foreign, "beach.jpg")), "foreign files are never freed");
+                Assert(!Directory.Exists(Path.Combine(live, "cam1", d1)), "day 1 gone entirely");
+
+                // A camera with its Archive switch on has the day's halves MOVED to the
+                // archive while the archive can take them; the others are deleted.
+                var live2 = Path.Combine(dir, "live2");
+                Seg(live2, "cam3", d1, "00-00-00.mp4", 1000);
+                Ev(live2, "cam3", d1, "030000-cccc", $"{d1}T03:00:00Z", 500);
+                Seg(live2, "cam4", d1, "00-00-00.mp4", 1000);
+                var store2 = new Recording.EventStore(live2, archiveRoot: arch);
+                store2.Load();
+                var r5 = store2.FreeOldest(live2, long.MaxValue, () => false,
+                    cam => new Recording.EventStore.CameraStoragePolicy(7, 7, ArchiveEvents: cam == "cam3", ArchiveContinuous: cam == "cam3"),
+                    archiveCanTake: _ => true);
+                AssertEq(r5.ArchivedHalves, 2);
+                AssertEq(r5.Segments, 1);
+                var archivedEv = Path.Combine(arch, "cam3", d1, "detections", "030000-cccc");
+                AssertEq(r5.Bytes, 2000 + 500 + new FileInfo(Path.Combine(archivedEv, "event.json")).Length); // moved bytes count too
+                Assert(File.Exists(Path.Combine(arch, "cam3", d1, "continuous", "00-00-00.mp4")), "archive-on segments moved, not deleted");
+                var movedClip = store2.ArtifactPath($"cam3~{d1}~030000-cccc", "clip.mp4");
+                Assert(movedClip != null && movedClip.StartsWith(Path.GetFullPath(arch), StringComparison.OrdinalIgnoreCase),
+                    "archive-on event followed into the archive and still resolves");
+                Assert(!Directory.Exists(Path.Combine(live2, "cam4", d1)), "archive-off camera's footage deleted");
+                // Each half is moved only if the archive can hold it: the 1000-byte segment half
+                // is over the room offered and gets deleted, the smaller event half still moves.
+                var archiveAll = new Recording.EventStore.CameraStoragePolicy(7, 7, ArchiveEvents: true, ArchiveContinuous: true);
+                Seg(live2, "cam3", d2, "00-00-00.mp4", 1000);
+                Ev(live2, "cam3", d2, "040000-dddd", $"{d2}T04:00:00Z", 500);
+                store2.Load();
+                var r6 = store2.FreeOldest(live2, long.MaxValue, () => false, _ => archiveAll, archiveCanTake: bytes => bytes < 800);
+                AssertEq(r6.Segments, 1);
+                AssertEq(r6.ArchivedHalves, 1);
+                Assert(File.Exists(Path.Combine(arch, "cam3", d2, "detections", "040000-dddd", "clip.mp4")), "the half that fits is moved");
+                // With no archive to move to, the same camera's footage is deleted like any other.
+                Seg(live2, "cam3", "2026-01-03", "00-00-00.mp4", 1000);
+                var r7 = store2.FreeOldest(live2, long.MaxValue, () => false, _ => archiveAll, archiveCanTake: null);
+                AssertEq(r7.Segments, 1);
+                AssertEq(r7.ArchivedHalves, 0);
+
+                // The pass itself, driven by the volume probe: each freed segment "returns"
+                // a GiB, and the pass stops as soon as the reading is back above the target.
+                var live3 = Path.Combine(dir, "live3");
+                for (int i = 0; i < 6; i++) Seg(live3, "cam1", d1, $"0{i}-00-00.mp4", 1000);
+                var store3 = new Recording.EventStore(live3);
+                store3.Load();
+                int Left() => Directory.EnumerateFiles(Path.Combine(live3, "cam1", d1, "continuous")).Count();
+                var locs = new Recording.StorageLocations(
+                    new Config.RecordingConfig { Path = live3, DeleteOldestWhenFull = true },
+                    probe: _ => (100 * GB, 2 * GB - 1 + (6 - Left()) * GB)); // low water 2 GiB, target 4 GiB
+                Assert(locs.Sample()[0].Rolling, "the sample carries the rolling flag");
+                var stuck = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                Assert(store3.RelievePressure(locs, Plain, stuck), "a low volume gets relief");
+                AssertEq(Left(), 3);
+                Assert(!store3.RelievePressure(locs, Plain, stuck), "a volume above the floor is left alone");
+                AssertEq(Left(), 3);
+                // Low with nothing older to free: remembered, so the warning logs once.
+                var empty = Path.Combine(dir, "empty");
+                var store4 = new Recording.EventStore(empty);
+                var lowLocs = new Recording.StorageLocations(
+                    new Config.RecordingConfig { Path = empty, DeleteOldestWhenFull = true }, probe: _ => (100 * GB, GB));
+                var stuck2 = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                Assert(!store4.RelievePressure(lowLocs, Plain, stuck2) && stuck2.Count == 1, "a low volume with nothing to free is remembered");
+                Assert(!store4.RelievePressure(lowLocs, Plain, stuck2) && stuck2.Count == 1, "and not re-added");
+                // The archive is never rolled, and never loses its amber warning, however low it runs.
+                var arch2 = Path.Combine(dir, "archive2");
+                Seg(arch2, "cam1", d1, "00-00-00.mp4", 1000);
+                var store5 = new Recording.EventStore(Path.Combine(dir, "empty2"), archiveRoot: arch2);
+                var archLocs = new Recording.StorageLocations(
+                    new Config.RecordingConfig { Path = Path.Combine(dir, "empty2"), ArchivePath = arch2, DeleteOldestWhenFull = true },
+                    probe: _ => (100 * GB, GB));
+                Assert(!store5.RelievePressure(archLocs, Plain, new HashSet<string>()), "a low archive is not relieved");
+                Assert(File.Exists(Path.Combine(arch2, "cam1", d1, "continuous", "00-00-00.mp4")), "archived footage survives disk pressure");
+                var archSample = archLocs.Sample();
+                Assert(archSample.First(s => s.Role == Recording.StorageRole.Main).Rolling, "the recording disk rolls");
+                Assert(!archSample.First(s => s.Role == Recording.StorageRole.Archive).Rolling, "the archive does not");
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+        });
+
         Test("storage forecast: fill projection, steady state, persistence", () =>
         {
             var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");

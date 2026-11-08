@@ -136,7 +136,7 @@
         {
             @* Not dismissible: recording is actually stopped until space is freed. *@
             <div class="storage-banner storage-banner-full">
-                <span class="sec-banner-text">⛔ @T.F("{0} storage is FULL: recording has stopped. Free up space or extend retention/archive settings.", _storage.Label)</span>
+                <span class="sec-banner-text">⛔ @T.F("{0} storage is FULL: recording has stopped. Free up space, extend retention/archive settings, or turn on deleting the oldest footage in the recording settings.", _storage.Label)</span>
                 <div class="sec-banner-actions">
                     <a class="chip" href="monitor">@T["Monitor"]</a>
                 </div>
@@ -2154,6 +2154,10 @@
                                 AdminIntError("recording.maxSegmentSizeMb", 8, 8192))
                             @AdminField(T["Continuous retention (days, blank = event value)"], "recording.continuousRetentionDays", "number",
                                 AdminIntError("recording.continuousRetentionDays", 0, 36500))
+                            @AdminToggle(T["Delete the oldest footage when a disk runs low"], "recording.deleteOldestWhenFull")
+                            <div class="notice small">
+                                @T["When a recording disk runs low on space, the oldest day of footage goes first (24/7 segments before event clips, across all cameras) until there is room again, so recording never stops. Cameras with the Archive switch on have theirs moved to the archive instead. Retention by age still applies. Takes effect after a restart."]
+                            </div>
                             <div class="campanel-divider"></div>
                             @AdminToggle(T["Encrypt footage"], "recording.encrypt")
                             <div class="notice small">
@@ -6265,6 +6269,7 @@
                 case "recording.clipsPath": rec["clipsPath"] = AdminValue(path); break;
                 case "recording.archivePath": rec["archivePath"] = AdminValue(path); break;
                 case "recording.maxSegmentSizeMb": rec["maxSegmentSizeMb"] = Int(path); break;
+                case "recording.deleteOldestWhenFull": rec["deleteOldestWhenFull"] = AdminBool(path); break;
                 case "mqtt.statsInterval": mqtt["statsInterval"] = Int(path); break;
                 case "mqtt.broker": mqtt["broker"] = AdminValue(path); break;
                 case "mqtt.port": mqtt["port"] = Int(path); break;
