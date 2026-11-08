@@ -1150,7 +1150,7 @@
                 else
                 {
                     <div class="notice">
-                        @T["reset_admin_password is enabled in config.json. Set a new admin password below, sign in with it, then turn the flag back off."]
+                        @T["reset_admin_password is enabled in config.json. Set a new admin password below and sign in with it; the flag turns itself off afterwards."]
                     </div>
                     <label>@T["New admin password"]</label>
                     <input type="password" @bind="_resetPass" autocomplete="new-password" />
@@ -4971,8 +4971,8 @@
             _resetPass = "";
             if (admin != null) _loginUser = admin;
             _loginError = admin == null
-                ? T["Password updated; sign in with it now, then set reset_admin_password back to false."]
-                : T.F("Password updated for '{0}'; sign in as that account now, then set reset_admin_password back to false.", admin);
+                ? T["Password updated and reset_admin_password turned off; sign in with it now."]
+                : T.F("Password updated for '{0}' and reset_admin_password turned off; sign in as that account now.", admin);
         }
         catch (Exception ex)
         {

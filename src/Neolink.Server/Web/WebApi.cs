@@ -756,24 +756,70 @@ public static class WebApi
             return Results.Json(ShapeSecurity());
         });
 
-        // Recovery: only while reset_admin_password=true in the config.
-        app.MapPost("/api/auth/reset-admin", (PasswordRequest req) =>
+        // Recovery: only while reset_admin_password=true in the config. LAN-only and
+        // same-origin like first-run setup, and the flag turns itself off after one reset.
+        app.MapPost("/api/auth/reset-admin", async (PasswordRequest req, HttpContext ctx) =>
         {
             if (!resetAdminPassword || !userStore.Enabled)
                 return Results.Json(new { error = "reset not enabled" }, statusCode: 404);
+            var from = LoginGuard.ClientAddress(ctx.Connection.RemoteIpAddress, ctx.Request.Headers["X-Forwarded-For"]);
+            if (!o.AllowRemoteSetup && from != null
+                && System.Net.IPAddress.TryParse(from, out var fromIp) && !LoginGuard.IsPrivate(fromIp))
+            {
+                Log.Warn($"Admin password reset REFUSED from public address {from}: reset it from the LAN, " +
+                         "or set ui.remote_setup = true");
+                return Results.Json(new { error = "reset the admin password from the local network" }, statusCode: 403);
+            }
+            var origin = ctx.Request.Headers.Origin.ToString();
+            if (origin.Length > 0 && !(Uri.TryCreate(origin, UriKind.Absolute, out var originUri)
+                    && string.Equals(originUri.Authority, ctx.Request.Host.Value, StringComparison.OrdinalIgnoreCase)))
+            {
+                Log.Warn($"Admin password reset REFUSED from cross-site origin {origin}");
+                return Results.Json(new { error = "reset the admin password from this server's own page" }, statusCode: 403);
+            }
             var admin = userStore.AdminUser();
-            if (admin == null || string.IsNullOrEmpty(req.Password))
+            if (admin == null)
                 return Results.Json(new { error = "provide password" }, statusCode: 400);
+            // Same lock as sign-in: a blocked caller learns nothing and a flood is paced.
+            var name = LoginGuard.TrackKey(admin.Name);
+            if (loginGuard.Blocked(name, from, out var retryAfter))
+            {
+                ctx.Response.Headers.RetryAfter = retryAfter.ToString();
+                await Task.Delay(Random.Shared.Next(250, 500));
+                return Results.Json(new { error = "too many failed sign-ins — try again later" }, statusCode: 429);
+            }
+            if (string.IsNullOrEmpty(req.Password))
+            {
+                loginGuard.RecordFailure(name, from);
+                return Results.Json(new { error = "provide password" }, statusCode: 400);
+            }
             try
             {
                 userStore.SetPassword(admin.Name, req.Password);
             }
             catch (ArgumentException ex)
             {
+                loginGuard.RecordFailure(name, from);
                 return Results.Json(new { error = ex.Message }, statusCode: 400);
             }
-            Log.Warn($"Admin password for '{admin.Name}' was RESET via reset_admin_password — " +
-                     "set the flag back to false now");
+            loginGuard.RecordSuccess(name);
+            // The door closes behind itself: it needs no credentials, so every minute open is a takeover window.
+            resetAdminPassword = false;
+            try
+            {
+                ConfigEditor.Apply(o.ConfigPath, root =>
+                {
+                    ConfigEditor.Set(ConfigEditor.Section(root, "ui"), "reset_admin_password", false);
+                    ConfigEditor.Set(root, "reset_admin_password", null); // retire the legacy spelling
+                });
+                Log.Warn($"Admin password for '{admin.Name}' was RESET via reset_admin_password; " +
+                         "the flag is off again in config.json");
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"Admin password for '{admin.Name}' was RESET via reset_admin_password. The flag is off " +
+                         $"for this run but config.json could not be updated ({ex.Message}): set it to false yourself");
+            }
             return Results.Json(new { ok = true, user = admin.Name });
         });
 

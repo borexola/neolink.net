@@ -4,6 +4,12 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
+## 1.2.3
+
+### Security
+
+- **The admin-password reset (`reset_admin_password`) only accepts LAN callers, like first-run setup, and turns itself off after one use.** The flag is written back to `false` in config.json, so a reset you forget about no longer leaves the door open.
+
 ## 1.2.2
 
 Auto discovery of cameras on the LAN, cameras followed across an IP change, admin-only recording controls, and recording, security and reliability fixes.

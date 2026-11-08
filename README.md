@@ -375,8 +375,8 @@ the original Rust neolink are also accepted.
 |---|---|---|
 | `enabled` / `port` / `bind` | = `webui` / `web_port` / `web_bind` | Grouped aliases of the top-level web options |
 | `state_dir` | config dir | Where the UI's server-side state persists: `users.json` (sign-in accounts) and `settings.json` (per-user layouts/filters/recording switches) |
-| `reset_admin_password` | `false` | Recovery: while `true`, the login screen allows setting a new admin password. Turn it back off after use |
-| `remote_setup` | `false` | The first-run admin setup only accepts LAN addresses; `true` lets a public address do it (set up over a VPN that looks public) |
+| `reset_admin_password` | `false` | Recovery: while `true`, the login screen allows setting a new admin password from the LAN; the flag turns itself off after one reset |
+| `remote_setup` | `false` | The first-run admin setup and the admin-password reset only accept LAN addresses; `true` lets a public address do them (set up over a VPN that looks public) |
 | `trickle_speed` | `4` | Playback speed of the review strip's ambient clip previews |
 | `language` | *(none)* | Seeds the default UI language (`en`, `fr`, `de`, `es`, `nl`, `pl`, `pt`) on a server whose state has none yet. Only a seed: the first-run dialog and ⚙ → Language own the setting afterwards (stored in `users.json`, applied live) |
 
@@ -406,9 +406,9 @@ a normal user to chosen cameras; the rest vanish from their wall, events,
 timeline and search, and the server refuses them. **Every account
 keeps its own UI settings** — layout, tiles, review-strip filters — stored
 server-side, so people don't fight over one shared view. Forgot the admin
-password? Set `"reset_admin_password": true` in the config, restart, use
-"Reset admin password…" on the login screen, then set the flag back to
-`false`.
+password? Set `"reset_admin_password": true` in the config, restart, and use
+"Reset admin password…" on the login screen from the LAN; the flag turns
+itself off again after one reset.
 
 The admin also gets ⚙ → **Server settings…**: a form that edits most of
 `config.json` (network ports, web UI, recording) and writes it back to the file

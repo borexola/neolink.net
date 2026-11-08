@@ -175,7 +175,9 @@ outright. The first-run setup switches it on; an install from before it
 existed stays off until you switch it on, since refusing a valid password is
 not something an upgrade should start doing by itself. The first-run setup
 itself only accepts LAN callers (`ui.remote_setup` lifts that), so a server
-exposed before its admin exists cannot be claimed from outside. Locked-out
+exposed before its admin exists cannot be claimed from outside; the
+admin-password reset (`ui.reset_admin_password`) is LAN-only the same way and
+the flag turns itself off after one reset. Locked-out
 callers get one generic answer
 whether the account exists or not, every lock is logged with its source
 address (fail2ban-friendly), and the panel lists live lockouts with an

@@ -1133,8 +1133,8 @@ if (config.WebPort > 0)
     if (!userStore.Enabled)
         Log.Info("Web UI authentication is off — create the admin account from the UI to enable it");
     if (config.EffectiveResetAdminPassword)
-        Log.Warn("reset_admin_password is TRUE: anyone reaching the login page can set a new admin " +
-                 "password. Set it back to false as soon as the reset is done!");
+        Log.Warn("reset_admin_password is TRUE: anyone on the LAN reaching the login page can set a new admin " +
+                 "password. The flag turns itself off after one reset.");
 
     // Daily best-effort check for newer releases (feeds the UI's update banner).
     var updates = new UpdateChecker(Version);

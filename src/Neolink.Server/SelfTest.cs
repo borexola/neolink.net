@@ -10205,6 +10205,8 @@ public static class SelfTest
                     ConfigPath = Path.Combine(dir, "config.json"),
                     RestartRequested = () => { },
                     Viewers = viewers,
+                    // The recovery route is exercised below: LAN-only, one-shot.
+                    ResetAdminPassword = true,
                 }, cts.Token);
 
                 using var http = new HttpClient
@@ -10425,6 +10427,38 @@ public static class SelfTest
                     AssertEq((int)bad.StatusCode, 401);
                 var login = PostJson(http, "/api/auth/login", """{"username":"admin","password":"correct horse"}""");
                 Assert(login.GetProperty("token").GetString()!.Length > 20, "login issues a token");
+
+                // Recovery route: LAN-only and same-origin like first-run setup, paced
+                // by the sign-in guard, and the flag turns itself off after one reset.
+                http.DefaultRequestHeaders.Add("X-Forwarded-For", "203.0.113.7");
+                using (var remote = PostRaw(http, "/api/auth/reset-admin", """{"password":"fresh horse"}"""))
+                    AssertEq((int)remote.StatusCode, 403);
+                http.DefaultRequestHeaders.Remove("X-Forwarded-For");
+                using (var xs = new HttpRequestMessage(HttpMethod.Post, "/api/auth/reset-admin"))
+                {
+                    xs.Headers.Add("Origin", "http://evil.example");
+                    xs.Content = new StringContent("""{"password":"fresh horse"}""", Encoding.UTF8, "application/json");
+                    AssertEq((int)http.SendAsync(xs).Result.StatusCode, 403);
+                }
+                using (var empty = PostRaw(http, "/api/auth/reset-admin", """{"password":""}"""))
+                    AssertEq((int)empty.StatusCode, 400);
+                Assert(GetJson(http, "/api/auth/status").GetProperty("resetAvailable").GetBoolean(),
+                    "reset offered while the flag is on");
+                var reset = PostJson(http, "/api/auth/reset-admin", """{"password":"fresh horse"}""");
+                AssertEq(reset.GetProperty("user").GetString()!, "admin");
+                using (var again = PostRaw(http, "/api/auth/reset-admin", """{"password":"fresh horse"}"""))
+                    AssertEq((int)again.StatusCode, 404); // one-shot: the door closed behind the reset
+                Assert(!GetJson(http, "/api/auth/status").GetProperty("resetAvailable").GetBoolean(),
+                    "reset no longer offered");
+                using (var cfgDoc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(dir, "config.json"))))
+                    Assert(cfgDoc.RootElement.GetProperty("ui").GetProperty("reset_admin_password").GetBoolean() == false,
+                        "flag written back off in config.json");
+                AssertEq((int)http.GetAsync($"/api/cameras{tokenQ}").Result.StatusCode, 401); // a reset signs out every session
+                using (var old = PostRaw(http, "/api/auth/login", """{"username":"admin","password":"correct horse"}"""))
+                    AssertEq((int)old.StatusCode, 401);
+                token = PostJson(http, "/api/auth/login", """{"username":"admin","password":"fresh horse"}""")
+                    .GetProperty("token").GetString()!;
+                tokenQ = $"?token={Uri.EscapeDataString(token)}";
 
                 // The admin config report includes the live encryption-key facts:
                 // source, one-way fingerprint (12 hex chars), never the key.
