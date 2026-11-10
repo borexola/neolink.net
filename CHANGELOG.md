@@ -6,6 +6,8 @@ in the README). Paste the matching section below into the GitHub release.
 
 ## 1.2.3
 
+Per-object detection zones and fast camera settings on cameras without an HTTP API, the oldest footage deleted when a disk runs low, and a locked-down admin-password reset.
+
 ### Added
 
 - **Delete the oldest footage when a disk runs low** (Server settings → Recording, off by default): once a recording disk is under 2% free (between 2 and 20 GB), the oldest day of footage makes room — 24/7 segments before event clips, across all cameras — so recording never stops. Cameras with the Archive switch on have theirs moved to the archive instead while it has room; the archive itself is never rolled.

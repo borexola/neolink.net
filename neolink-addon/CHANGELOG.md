@@ -3,6 +3,25 @@
 Release notes for the Neolink.NET Home Assistant add-on. Home Assistant shows
 the sections between your installed version and the update on offer.
 
+## 1.2.3
+
+Per-object detection zones and fast camera settings on cameras without an HTTP API, the oldest footage deleted when a disk runs low, and a locked-down admin-password reset.
+
+### Added
+
+- **Delete the oldest footage when a disk runs low** (Server settings → Recording, off by default): once a recording disk is under 2% free (between 2 and 20 GB), the oldest day of footage makes room — 24/7 segments before event clips, across all cameras — so recording never stops. Cameras with the Archive switch on have theirs moved to the archive instead while it has room; the archive itself is never rolled.
+- **Per-object detection zones on cameras without an HTTP API** (confirmed on the Argus Solar and Lumus 2K): the zone editor shows and saves the camera's own zones, one tab per object type, and each save is read back from the camera. A zone Neolink kept for such a camera is no longer used.
+
+### Fixed
+
+- **An archive move cut off partway no longer loses the footage:** the next pass redoes the copy instead of taking the partial file for a finished one and deleting the original.
+- **The detection-zone editor and live object boxes no longer stall on battery cameras** with "the camera could not be asked". A battery camera with no zones of its own gets one kept by Neolink.
+- **Camera settings open in a second or two on cameras without an HTTP API** (Argus, Lumus) instead of about 30 s, and SD browsing and small snapshots no longer wait on it either. A battery camera that does have one is still asked when its `http_address` is set.
+
+### Security
+
+- **The admin-password reset (`reset_admin_password`) only accepts LAN callers, like first-run setup, and turns itself off after one use.** The flag is written back to `false` in config.json, so a reset you forget about no longer leaves the door open.
+
 ## 1.2.2
 
 Auto discovery of cameras on the LAN, cameras followed across an IP change, admin-only recording controls, and recording, security and reliability fixes.
