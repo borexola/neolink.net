@@ -657,7 +657,7 @@ foreach (var cam in config.Cameras)
         // All stream services: the camera is online if ANY session is live (a
         // viewer watching only the sub stream must not read as "offline"), and
         // commands fall back to whichever session exists.
-        control = new CameraControl(primary, httpApi, camServices, onvif);
+        control = new CameraControl(primary, httpApi, camServices, onvif) { HttpExplicit = cam.HttpAddress != null };
 
         // Two-way talk is opt-in (ui.talk). When on, this camera's RTSP mounts can
         // serve an ONVIF audio backchannel (go2rtc / HA WebRTC) — DESCRIBE still

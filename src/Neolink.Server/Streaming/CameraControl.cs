@@ -437,6 +437,9 @@ public interface ICameraControl
     /// camera-side grid at all), so a save to Neolink needs no word from the editor.</summary>
     bool ZoneNeverOnCamera => CameraHoldsZone == false;
 
+    /// <summary>The camera keeps a zone per AI type and no shared motion grid Neolink can reach.</summary>
+    bool ZonesPerTypeOnly => false;
+
     /// <summary>The zone grid for "md" or an AI type, or null when the camera has none.</summary>
     Task<DetectionZone?> GetDetectionZoneAsync(string type, CancellationToken ct) =>
         Task.FromResult<DetectionZone?>(null);
@@ -1080,6 +1083,46 @@ public sealed class CameraControl : ICameraControl
     /// time — a camera with port 80 closed shouldn't be re-probed on every panel open.</summary>
     private DateTime _httpRetryAt;
 
+    /// <summary>The HTTP API has answered this run, so it is used and its zones win over Baichuan's.</summary>
+    private volatile bool _httpAnswered;
+
+    /// <summary>The HTTP address was configured, not derived: the user says this camera has an API.</summary>
+    public bool HttpExplicit { get; init; }
+
+    private bool BatteryPowered => _sources.Any(s => s.BatteryPowered);
+
+    /// <summary>The HTTP API has never answered and plainly isn't there: no address, a battery model
+    /// (unless its address was set), or 3+ failures (Lumus). Nothing waits on it then.</summary>
+    internal bool HttpAbsent => _httpApi == null
+        || (!_httpAnswered && (_httpFailStreak >= 3 || (!HttpExplicit && BatteryPowered)));
+
+    /// <summary>1 while a background HTTP probe runs.</summary>
+    private int _httpProbing;
+
+    /// <summary>Re-checks an absent HTTP API off the caller's path, at the backoff's pace; an answer brings it back.</summary>
+    private void ProbeHttpLater()
+    {
+        if (_httpApi == null || DateTime.UtcNow < _httpRetryAt || SleepingOnPurpose
+            || Interlocked.Exchange(ref _httpProbing, 1) == 1)
+            return;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await HttpTryAsync<JsonObject?>(async c => await _httpApi.GetImageAsync(c).ConfigureAwait(false),
+                    CancellationToken.None, force: true, probe: true).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Log.Debug($"{CameraName}: background HTTP probe failed ({ex.GetType().Name})");
+            }
+            finally
+            {
+                Volatile.Write(ref _httpProbing, 0);
+            }
+        });
+    }
+
     /// <summary>Whether the one-time "HTTP API unreachable" warning fired for the
     /// current outage. Reset on the first successful call, so a later outage warns
     /// again — users otherwise never learn WHY HTTP-backed features are missing
@@ -1099,7 +1142,7 @@ public sealed class CameraControl : ICameraControl
     private DateTime _httpWarnCooldownUntil;
 
     private async Task<T?> HttpTryAsync<T>(Func<CancellationToken, Task<T?>> op, CancellationToken ct,
-        TimeSpan? timeout = null, bool force = false)
+        TimeSpan? timeout = null, bool force = false, bool probe = false)
     {
         // force = an explicit user action (SD-card browse): it gets its try even
         // while the transport backoff is armed — the user pressed refresh NOW,
@@ -1108,6 +1151,12 @@ public sealed class CameraControl : ICameraControl
         // return "nothing" without sending a packet (see SleepingOnPurpose).
         if (_httpApi == null || (!force && (DateTime.UtcNow < _httpRetryAt || SleepingOnPurpose)))
             return default;
+        // An API that plainly isn't there would only cost the caller a timeout.
+        if (!probe && HttpAbsent)
+        {
+            ProbeHttpLater();
+            return default;
+        }
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         // A call without a live session token pays for a LOGIN round-trip before
         // the command — on a Wi-Fi camera under streaming load (dual-lens Duos)
@@ -1201,6 +1250,7 @@ public sealed class CameraControl : ICameraControl
     private void NoteHttpReachable()
     {
         _httpRetryAt = default;
+        _httpAnswered = true;
         _httpLoginWarned = false;
         _httpFailStreak = 0;
         // An answer proves this camera HAS an HTTP API — undo the "battery models
@@ -1341,6 +1391,34 @@ public sealed class CameraControl : ICameraControl
     public async Task<ImageSettings?> GetImageSettingsAsync(CancellationToken ct) =>
         await HttpOrOnvifImageAsync(ct).ConfigureAwait(false) ?? await BcImageAsync(ct).ConfigureAwait(false);
 
+    /// <summary>Whether ONVIF picture settings have answered this run, or failed without ever answering.</summary>
+    private volatile bool _onvifImagingAnswered, _onvifImagingFailed;
+
+    /// <summary>1 while a background ONVIF imaging probe runs.</summary>
+    private int _onvifProbing;
+
+    /// <summary>Retries ONVIF picture settings off the caller's path (the client keeps its own 5-minute cooldown).</summary>
+    private void ProbeOnvifImagingLater()
+    {
+        if (SleepingOnPurpose || Interlocked.Exchange(ref _onvifProbing, 1) == 1) return;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                if (await GetOnvifImageSettingsAsync(CancellationToken.None).ConfigureAwait(false) != null)
+                    _onvifImagingAnswered = true;
+            }
+            catch (Exception ex)
+            {
+                Log.Debug($"{CameraName}: background ONVIF imaging probe failed ({ex.GetType().Name})");
+            }
+            finally
+            {
+                Volatile.Write(ref _onvifProbing, 0);
+            }
+        });
+    }
+
     private async Task<ImageSettings?> HttpOrOnvifImageAsync(CancellationToken ct)
     {
         var img = await HttpTryAsync<JsonObject?>(async c => await _httpApi!.GetImageAsync(c).ConfigureAwait(false), ct)
@@ -1351,7 +1429,15 @@ public sealed class CameraControl : ICameraControl
         if (img == null)
         {
             if (_onvif == null) return null;
+            // An ONVIF that has never answered is asked off the panel's path; Baichuan fills in meanwhile.
+            if (_onvifImagingFailed && !_onvifImagingAnswered)
+            {
+                ProbeOnvifImagingLater();
+                return null;
+            }
             var onvif = await GetOnvifImageSettingsAsync(ct).ConfigureAwait(false);
+            if (onvif != null) _onvifImagingAnswered = true;
+            else if (!SleepingOnPurpose) _onvifImagingFailed = true;
             // Remember which transport actually served imaging, so a WRITE follows
             // the same road: the Lumus HAS an _httpApi (derived from its host) but
             // it doesn't answer, and a write to it would just fail.
@@ -2300,11 +2386,125 @@ public sealed class CameraControl : ICameraControl
             var cfg = await BcStandInAsync(BcConstants.MsgIdGetAiDetectCfg, "AiDetectCfg", "ai:" + type,
                 (caps, cam) => ChannelSupportValue(caps.Support, cam.ChannelId, "aitype") > 0,
                 ch => BuildAiDetectRead(ch, type), ct).ConfigureAwait(false);
+            if (cfg != null) NoteBcZone(type, cfg);
             if (cfg != null && ParseBcAiSensitivity(type, cfg) is { } one) list.Add(one);
         }
+        LogBcZoneProbeOnce();
         if (list.Count == 0) return null;
         _aiViaBc = true;
         return list;
+    }
+
+    // ------------------------------------------------- detection zones (Baichuan)
+
+    /// <summary>AI types whose zone this camera answered over Baichuan (msg 342).</summary>
+    private readonly HashSet<string> _bcZoneTypes = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>AI types whose unreadable Baichuan grid was already logged.</summary>
+    private readonly HashSet<string> _bcZoneShapeLogged = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Zones come over Baichuan only where HTTP plainly isn't there; one HTTP hiccup must not swap a zone.</summary>
+    private bool BcZonesAllowed => HttpAbsent;
+
+    /// <inheritdoc/>
+    public bool ZonesPerTypeOnly
+    {
+        get
+        {
+            if (!BcZonesAllowed) return false;
+            lock (_bcZoneTypes) return _bcZoneTypes.Count > 0;
+        }
+    }
+
+    /// <summary>Records a type's Baichuan grid when zones may come that way.</summary>
+    private DetectionZone? NoteBcZone(string type, XElement cfg)
+    {
+        if (!BcZonesAllowed || cfg.Element("area") == null) return null;
+        var zone = ParseBcZone(type, cfg);
+        if (zone == null)
+        {
+            lock (_bcZoneShapeLogged)
+                if (!_bcZoneShapeLogged.Add(type)) return null;
+            Log.Info($"{CameraName}: the {type} zone grid is in a form Neolink cannot read, so it is left alone: " +
+                     cfg.ToString(SaveOptions.DisableFormatting));
+            return null;
+        }
+        lock (_bcZoneTypes) _bcZoneTypes.Add(type);
+        NoteAiZoneSupport(type, true);
+        lock (_zoneCache) _zoneCache[type] = zone;
+        return zone;
+    }
+
+    /// <summary>One type's grid over Baichuan, or the last one read while the camera cannot answer.</summary>
+    private async Task<DetectionZone?> BcZoneAsync(string type, CancellationToken ct)
+    {
+        if (!BcAiTypes.Contains(type)) return null;
+        var cfg = await BcStandInAsync(BcConstants.MsgIdGetAiDetectCfg, "AiDetectCfg", "ai:" + type,
+            (caps, cam) => ChannelSupportValue(caps.Support, cam.ChannelId, "aitype") > 0,
+            ch => BuildAiDetectRead(ch, type), ct).ConfigureAwait(false);
+        if (cfg != null && NoteBcZone(type, cfg) is { } zone) return zone;
+        bool known;
+        lock (_bcZoneTypes) known = _bcZoneTypes.Contains(type);
+        lock (_zoneCache)
+            return known && _zoneCache.TryGetValue(type, out var cached) ? cached : null;
+    }
+
+    /// <summary>The grid in an &lt;AiDetectCfg&gt;: base64 of a width x height bitmask, rows from the
+    /// top, most significant bit first, 1 = watched. Null unless it re-encodes to the same text.</summary>
+    internal static DetectionZone? ParseBcZone(string type, XElement cfg)
+    {
+        if (cfg.Element("type")?.Value.Trim() is { Length: > 0 } t && !t.Equals(type, StringComparison.OrdinalIgnoreCase))
+            return null;
+        if (XInt(cfg, "width") is not { } w || XInt(cfg, "height") is not { } h
+            || w is <= 0 or > 256 || h is <= 0 or > 256
+            || cfg.Element("area")?.Value.Trim() is not { Length: > 0 } area)
+            return null;
+        byte[] raw;
+        try { raw = Convert.FromBase64String(area); }
+        catch (FormatException) { return null; }
+        if (raw.Length != (w * h + 7) / 8) return null;
+        var table = new char[w * h];
+        for (int i = 0; i < table.Length; i++)
+            table[i] = (raw[i >> 3] & (0x80 >> (i & 7))) != 0 ? '1' : '0';
+        var zone = new DetectionZone(type, w, h, new string(table));
+        // Set padding bits or a non-canonical encoding would not survive a write.
+        return EncodeBcArea(zone.Table) == area ? zone : null;
+    }
+
+    /// <summary>A '0'/'1' table as the camera's &lt;area&gt; text.</summary>
+    internal static string EncodeBcArea(string table)
+    {
+        var raw = new byte[(table.Length + 7) / 8];
+        for (int i = 0; i < table.Length; i++)
+            if (table[i] == '1') raw[i >> 3] |= (byte)(0x80 >> (i & 7));
+        return Convert.ToBase64String(raw);
+    }
+
+    /// <summary>Writes one type's grid back whole (msg 343), then reads it back: only a grid the
+    /// camera kept counts as saved.</summary>
+    internal static async Task<DetectionZone> WriteBcZoneAsync(IBcCamera camera, string type, string table,
+        CancellationToken ct, TimeSpan? settle = null)
+    {
+        Task<XElement?> ReadAsync() => camera.GetRawAsync(BcConstants.MsgIdGetAiDetectCfg, "AiDetectCfg",
+            BuildAiDetectRead(camera.ChannelId, type), ExtrasTimeout, ct);
+        var cfg = await ReadAsync().ConfigureAwait(false)
+                  ?? throw new NotSupportedException($"the camera reports no {type} detection settings");
+        var current = ParseBcZone(type, cfg)
+                      ?? throw new NotSupportedException($"the camera's {type} zone is in a form Neolink cannot write");
+        if (table.Length != current.Cols * current.Rows || table.Any(ch => ch is not ('0' or '1')))
+            throw new ArgumentException(
+                $"table must be {current.Cols}x{current.Rows} = {current.Cols * current.Rows} cells of '0'/'1'");
+        SetChild(cfg, "area", EncodeBcArea(table));
+        await camera.SetRawAsync(BcConstants.MsgIdSetAiDetectCfg, cfg, ct).ConfigureAwait(false);
+        for (int attempt = 0; ; attempt++)
+        {
+            if (await ReadAsync().ConfigureAwait(false) is { } back && ParseBcZone(type, back) is { } kept
+                && kept.Table == table)
+                return kept;
+            // One second chance: a camera may still be applying the write.
+            if (attempt == 1) throw new InvalidOperationException($"the camera did not keep the new {type} zone");
+            await Task.Delay(settle ?? TimeSpan.FromSeconds(1), ct).ConfigureAwait(false);
+        }
     }
 
     private Task BcPresetCommandAsync(int id, string command, string? name, CancellationToken ct) =>
@@ -2366,7 +2566,7 @@ public sealed class CameraControl : ICameraControl
 
     // ------------------------------------------------- detection zones (HTTP)
 
-    public bool HttpPaused => _httpApi != null && (DateTime.UtcNow < _httpRetryAt || SleepingOnPurpose);
+    public bool HttpPaused => _httpApi != null && (DateTime.UtcNow < _httpRetryAt || SleepingOnPurpose || HttpAbsent);
 
     /// <summary>The last grid read for each type. A zone is near-static config, and
     /// the panel re-reads it on every tab click: without this, one slow answer arms
@@ -2404,13 +2604,18 @@ public sealed class CameraControl : ICameraControl
     }
 
     /// <summary>The detection types with a zone the user can edit separately. "md" is
-    /// always offered — it is the camera's zone, shared or not.</summary>
+    /// offered unless the zones come over Baichuan, which has no shared grid.</summary>
     public IReadOnlyList<string> ZoneTypes()
     {
+        // Over Baichuan there is no shared motion grid, only the per-type ones.
+        var perTypeOnly = ZonesPerTypeOnly;
         lock (_aiZoneTypes)
-            return _aiZoneTypes.Count == 0
-                ? new[] { "md" }
-                : new[] { "md" }.Concat(AiAlarmTypes.Where(_aiZoneTypes.Contains)).ToArray();
+        {
+            var own = AiAlarmTypes.Where(_aiZoneTypes.Contains);
+            return _aiZoneTypes.Count == 0 ? new[] { "md" }
+                : perTypeOnly ? own.ToArray()
+                : new[] { "md" }.Concat(own).ToArray();
+        }
     }
 
     public async Task<DetectionZone?> GetDetectionZoneAsync(string type, CancellationToken ct)
@@ -2419,6 +2624,9 @@ public sealed class CameraControl : ICameraControl
         // failed one arms the backoff that blanks everything else.
         if (type != "md" && _aiAlarmTypes != null && !_aiAlarmTypes.Contains(type))
             return null;
+        // Zones over Baichuan: no shared motion grid there, and an HTTP API that never answered would only cost a timeout.
+        if (ZonesPerTypeOnly)
+            return type == "md" ? null : await BcZoneAsync(type, ct).ConfigureAwait(false);
         // Opening the editor is the user asking NOW, so an armed transport backoff
         // must not silently answer "nothing" — but a battery camera parked asleep
         // still gets radio silence: forcing packets at it would fake a wake edge.
@@ -2474,7 +2682,29 @@ public sealed class CameraControl : ICameraControl
         if (HttpPaused)
             lock (_zoneCache)
                 if (_zoneCache.TryGetValue(type, out var cached)) return cached;
+        // An HTTP API that has never answered: the camera may keep a grid per type over Baichuan.
+        if (BcZonesAllowed)
+        {
+            if (type != "md") return await BcZoneAsync(type, ct).ConfigureAwait(false);
+            foreach (var t in BcAiTypes) await BcZoneAsync(t, ct).ConfigureAwait(false);
+            LogBcZoneProbeOnce();
+        }
         return null;
+    }
+
+    private bool _bcZoneProbeLogged;
+
+    /// <summary>Says once what the Baichuan zone look found, so a camera with no zone shows why.</summary>
+    private void LogBcZoneProbeOnce()
+    {
+        if (_bcZoneProbeLogged || !BcZonesAllowed || AnyLive() == null) return;
+        _bcZoneProbeLogged = true;
+        string[] types;
+        lock (_bcZoneTypes) types = _bcZoneTypes.ToArray();
+        Log.Info(types.Length > 0
+            ? $"{CameraName}: no HTTP API answered, so its detection zones are read over Baichuan ({string.Join(", ", types)})"
+            : $"{CameraName}: no HTTP API answered, and no detection zone grid came over Baichuan either " +
+              "(no AiDetectCfg with an <area>), so this camera's zone cannot be edited yet");
     }
 
     /// <summary>The speculative look for a zone in the legacy Alarm object. It runs
@@ -2513,14 +2743,13 @@ public sealed class CameraControl : ICameraControl
     /// (exactly as it did before zones could be kept on Neolink), so a read that
     /// went wrong is corrected by the next one.</remarks>
     public bool? CameraHoldsZone =>
-        // No HTTP API is no zone path at all — that is knowable without asking.
-        _httpApi == null ? false
-        : _zoneSeen ? true
-        : _zoneAbsent ? false
+        // Without HTTP the only camera-side grids are the per-type ones over Baichuan.
+        ZonesPerTypeOnly || _zoneSeen ? true
+        : _httpApi == null || _zoneAbsent || (HttpAbsent && BatteryPowered) ? false
         : null;
 
     /// <inheritdoc/>
-    public bool ZoneNeverOnCamera => _httpApi == null;
+    public bool ZoneNeverOnCamera => !ZonesPerTypeOnly && (_httpApi == null || (HttpAbsent && BatteryPowered && !_zoneSeen));
 
     private void LogZoneShapeOnce(JsonObject cfg, JsonObject? legacy)
     {
@@ -2545,6 +2774,18 @@ public sealed class CameraControl : ICameraControl
 
     public async Task SetDetectionZoneAsync(string type, string table, CancellationToken ct)
     {
+        // A zone read over Baichuan goes back the same way.
+        if (ZonesPerTypeOnly)
+        {
+            bool known;
+            lock (_bcZoneTypes) known = _bcZoneTypes.Contains(type);
+            if (!known) throw new NotSupportedException($"{CameraName} reports no {type} detection zone");
+            var kept = await WithCameraAsync(c => WriteBcZoneAsync(c, type, table, ct), ct).ConfigureAwait(false);
+            lock (_zoneCache) _zoneCache[type] = kept;
+            Log.Info($"{CameraName}: {type} detection zone written to the camera " +
+                     $"({table.Count(ch => ch == '0')} of {table.Length} cells ignored)");
+            return;
+        }
         if (_httpApi == null)
             throw new NotSupportedException($"detection zones need the camera's HTTP API ('{CameraName}' has none)");
         if (type == "md")
@@ -3413,8 +3654,6 @@ public sealed class CameraControl : ICameraControl
     public string? SdFailure => _sdFailure;
     private readonly HashSet<string> _bcSdLogged = new();
 
-    /// <summary>A battery model that never answered HTTP: its SD card is asked over Baichuan only.</summary>
-    private bool HttpAbsent => _httpApi == null || _httpWarnCooldownUntil == DateTime.MaxValue;
     private static readonly TimeSpan SdBcTimeout = TimeSpan.FromSeconds(10);
 
     private async Task<IReadOnlyList<int>?> BcSdDaysAsync(int year, int month, CancellationToken ct)

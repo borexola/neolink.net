@@ -5801,6 +5801,135 @@ public static class SelfTest
             Assert(Web.CameraStateStore.DefaultZoneGrid(5120, 1552).Cols == 48, "very wide is clamped");
         });
 
+        Test("HTTP that plainly isn't there is not waited on; a battery camera without it holds no zone", () =>
+        {
+            // One server accepts and never answers (a real try would wait out its timeout);
+            // the other hangs up at once (a fast, countable failure).
+            static (System.Net.Sockets.TcpListener L, Func<int> Accepted) Listen(bool hangUp)
+            {
+                var l = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+                l.Start();
+                int n = 0;
+                var held = new List<System.Net.Sockets.TcpClient>();
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        while (true)
+                        {
+                            var c = await l.AcceptTcpClientAsync();
+                            Interlocked.Increment(ref n);
+                            if (hangUp) c.Dispose();
+                            else lock (held) held.Add(c);
+                        }
+                    }
+                    catch (Exception) { } // the listener was stopped
+                });
+                return (l, () => Volatile.Read(ref n));
+            }
+            Streaming.CameraControl Control(System.Net.Sockets.TcpListener l, bool battery, bool explicitHttp = false) =>
+                new(new FakeLiveSource("httpcam", battery),
+                    new Protocol.ReolinkHttpApi($"127.0.0.1:{((System.Net.IPEndPoint)l.LocalEndpoint).Port}", "admin", "pw", 0))
+                { HttpExplicit = explicitHttp };
+
+            var (silent, _) = Listen(hangUp: false);
+            var (hangup, accepted) = Listen(hangUp: true);
+            try
+            {
+                var argus = Control(silent, battery: true);
+                Assert(argus.HttpAbsent, "a battery camera with a derived address has no HTTP API");
+                Assert(argus.CameraHoldsZone == false && argus.ZoneNeverOnCamera
+                       && Web.CameraStateStore.ZoneIsLocal(argus.CameraHoldsZone, "md", argus.ZoneTypes().Count),
+                    "so Neolink keeps its zone, without asking");
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                Assert(argus.GetDetectionZoneAsync("md", CancellationToken.None).GetAwaiter().GetResult() == null
+                       && sw.Elapsed < TimeSpan.FromSeconds(2), "and nothing waits on its HTTP");
+
+                var set = Control(silent, battery: true, explicitHttp: true);
+                Assert(!set.HttpAbsent && set.CameraHoldsZone == null, "an http_address the user set is believed");
+
+                var mains = Control(hangup, battery: false);
+                Assert(!mains.HttpAbsent, "a mains camera is asked");
+                for (int i = 0; i < 3; i++) mains.GetDetectionZoneAsync("md", CancellationToken.None).GetAwaiter().GetResult();
+                Thread.Sleep(200);
+                var tries = accepted();
+                Assert(mains.HttpAbsent && tries > 0, "three failures and never an answer: no HTTP API (Lumus)");
+                Assert(mains.CameraHoldsZone == null, "a mains camera's zone still never moves to Neolink on that alone");
+                mains.GetDetectionZoneAsync("md", CancellationToken.None).GetAwaiter().GetResult();
+                Thread.Sleep(200);
+                AssertEq(accepted(), tries);
+            }
+            finally
+            {
+                silent.Stop();
+                hangup.Stop();
+            }
+        });
+
+        Test("a Baichuan zone grid decodes as the camera's bitmask and re-encodes byte for byte", () =>
+        {
+            static System.Xml.Linq.XElement Cfg(string type, int w, int h, string area) => System.Xml.Linq.XElement.Parse(
+                $"<AiDetectCfg version=\"1.1\"><chn>0</chn><type>{type}</type><sensitivity>60</sensitivity>" +
+                $"<width>{w}</width><height>{h}</height><area>{area}</area></AiDetectCfg>");
+            static Streaming.DetectionZone? Parse(System.Xml.Linq.XElement c) =>
+                Streaming.CameraControl.ParseBcZone((string)c.Element("type")!, c);
+
+            // A known shape, so position and bit order are checked against an outside encoding.
+            var z = Parse(Cfg("dog_cat", 90, 50, ZoneArea90x50));
+            Assert(z is { Cols: 90, Rows: 50 } && z.Table.Count(ch => ch == '1') == 309, "90x50, 309 cells watched");
+            Assert(z!.Table.IndexOf('1') == 4 * 90 + 43, "rows run from the top, cells left to right");
+            Assert(z.Table.Substring(49 * 90, 90).IndexOf('1') == 3 && z.Table.Substring(49 * 90, 90).LastIndexOf('1') == 60,
+                "bits are most significant first (the other order scrambles each row)");
+            AssertEq(Streaming.CameraControl.EncodeBcArea(z.Table), ZoneArea90x50);
+
+            // An untouched type: the whole frame, the last byte's 4 spare bits zero.
+            var all = Parse(Cfg("people", 90, 50, new string('/', 750) + "A="));
+            Assert(all is { Cols: 90, Rows: 50 } && all.Table.All(ch => ch == '1'), "the whole frame is watched");
+
+            Assert(Parse(Cfg("people", 80, 60, "AAAA")) == null, "a grid shorter than width x height is refused");
+            Assert(Parse(Cfg("people", 90, 50, Convert.ToBase64String(Enumerable.Repeat((byte)0xFF, 563).ToArray()))) == null,
+                "set padding bits would not survive a write, so the grid is refused");
+            Assert(Parse(Cfg("people", 0, 50, "AAAA")) == null, "no width, no grid");
+            Assert(Parse(Cfg("people", 2, 2, "!!!!")) == null, "text that is not base64 is refused");
+            Assert(Streaming.CameraControl.ParseBcZone("vehicle", Cfg("people", 90, 50, new string('/', 750) + "A=")) == null,
+                "a reply for another type is ignored");
+        });
+
+        Test("a Baichuan zone write keeps the rest of the config and counts only if it reads back", () =>
+        {
+            var cam = new ZoneCamera();
+            cam.Cfg["dog_cat"] = System.Xml.Linq.XElement.Parse(
+                "<AiDetectCfg version=\"1.1\"><chn>0</chn><type>dog_cat</type><sensitivity>61</sensitivity><stayTime>2</stayTime>" +
+                $"<width>90</width><height>50</height><area>{new string('/', 750)}A=</area></AiDetectCfg>");
+            var drawn = Streaming.CameraControl.ParseBcZone("dog_cat", System.Xml.Linq.XElement.Parse(
+                $"<AiDetectCfg><type>dog_cat</type><width>90</width><height>50</height><area>{ZoneArea90x50}</area></AiDetectCfg>"))!.Table;
+            Streaming.DetectionZone Write(string table) => Streaming.CameraControl
+                .WriteBcZoneAsync(cam, "dog_cat", table, CancellationToken.None, TimeSpan.Zero).GetAwaiter().GetResult();
+
+            var kept = Write(drawn);
+            Assert(kept.Table == drawn && cam.Writes == 1, "the drawn grid is written once and reads back");
+            AssertEq((string?)cam.Cfg["dog_cat"].Element("area"), ZoneArea90x50);
+            Assert((string?)cam.Cfg["dog_cat"].Element("sensitivity") == "61" && (string?)cam.Cfg["dog_cat"].Element("stayTime") == "2",
+                "everything but the grid goes back as read");
+
+            static bool Throws<T>(Action a) where T : Exception
+            {
+                try { a(); return false; }
+                catch (T) { return true; }
+            }
+            cam.Writes = 0;
+            Assert(Throws<ArgumentException>(() => Write("1010")) && cam.Writes == 0,
+                "a grid of the wrong size never reaches the camera");
+            cam.IgnoreWrites = true;
+            Assert(Throws<InvalidOperationException>(() => Write(new string('1', 4500))) && cam.Writes == 1,
+                "a camera that answers but keeps its old grid is a failed save, not a saved one");
+            cam.IgnoreWrites = false;
+            cam.Cfg["dog_cat"].Element("area")!.Value = "AAAA";
+            cam.Writes = 0;
+            Assert(Throws<NotSupportedException>(() => Write(drawn)) && cam.Writes == 0,
+                "a grid Neolink cannot read is never overwritten");
+        });
+
         Test("a stored zone follows a camera that is renamed; nothing else changes", () =>
         {
             var dir = Path.Combine(Path.GetTempPath(), "neolink-selftest-rename-" + Guid.NewGuid().ToString("N"));
@@ -12115,6 +12244,65 @@ public static class SelfTest
             }
             return Task.CompletedTask;
         }
+    }
+
+    /// <summary>A synthetic 90x50 &lt;area&gt; (an Argus Solar's grid size), encoded outside Neolink:
+    /// rows 10-19 cols 5-29, the bottom row cols 3-60, and the lone cell at row 4 col 43.</summary>
+    private const string ZoneArea90x50 =
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" +
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB////AAAAAAAAAAB////AAAAAAAAAAB////AAAAAAAAAAB////AAAAAAAAAAB////AAAAAAAAAAB////AAAAAAAAAA" +
+        "B////AAAAAAAAAAB////AAAAAAAAAAB////AAAAAAAAAAB////AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" +
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" +
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" +
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" +
+        "AAAAAAAAAAAAAAAH/////////gAAAAA=";
+
+    /// <summary>A Baichuan session holding one AiDetectCfg per type; it can be told to ignore writes.</summary>
+    private sealed class ZoneCamera : Protocol.IBcCamera
+    {
+        public readonly Dictionary<string, System.Xml.Linq.XElement> Cfg = new();
+        public bool IgnoreWrites;
+        public int Writes;
+        public byte ChannelId => 0;
+        public Bc.Xml.DeviceInfoXml? DeviceInfo => null;
+        public System.Net.IPAddress? RemoteIp => null;
+        public Task<string> Closed { get; } = new TaskCompletionSource<string>().Task;
+        public Task LoginAsync(string username, string? password, CancellationToken ct, Protocol.BcLoginMode? mode = null) =>
+            Task.CompletedTask;
+        public Task StartVideoAsync(StreamKind stream, ChannelWriter<byte[]> binaryOut, Func<bool>? stallTolerable,
+            CancellationToken ct) => throw new NotSupportedException();
+        public Task PingAsync(CancellationToken ct) => Task.CompletedTask;
+        public Task WatchMotionAsync(Action<MotionPush> onEvent, CancellationToken ct) => throw new NotSupportedException();
+        public Task WatchStatusAsync(Action<StatusPush> onEvent, CancellationToken ct) => throw new NotSupportedException();
+        public Task<byte[]?> SnapAsync(CancellationToken ct) => Task.FromResult<byte[]?>(null);
+        public Task TalkAsync(Bc.Xml.TalkAbilityXml ability, ChannelReader<byte[]> frames, CancellationToken ct) =>
+            throw new NotSupportedException();
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        public Task<BcMessage?> SendCommandAsync(uint msgId, Bc.Xml.BcXmlBody? xml = null, Bc.Xml.ExtensionXml? extension = null,
+            TimeSpan? replyTimeout = null, bool tolerateNoReply = false, CancellationToken ct = default)
+        {
+            var sent = xml?.RawElement("AiDetectCfg") ?? throw new NotSupportedException($"msg {msgId}");
+            var type = (string)sent.Element("type")!;
+            if (msgId == BcConstants.MsgIdGetAiDetectCfg)
+                return Task.FromResult<BcMessage?>(new BcMessage
+                {
+                    Meta = new BcMeta { MsgId = msgId, ResponseCode = 200 },
+                    Xml = Bc.Xml.BcXmlBody.FromRaw(new System.Xml.Linq.XElement(Cfg[type])),
+                });
+            if (msgId != BcConstants.MsgIdSetAiDetectCfg) throw new NotSupportedException($"msg {msgId}");
+            Writes++;
+            if (!IgnoreWrites) Cfg[type] = new System.Xml.Linq.XElement(sent);
+            return Task.FromResult<BcMessage?>(null);
+        }
+    }
+
+    /// <summary>A stream source with no session, battery or mains.</summary>
+    private sealed class FakeLiveSource(string name, bool battery) : Streaming.ILiveCameraSource
+    {
+        public string Name => name;
+        public Protocol.IBcCamera? LiveCamera => null;
+        public bool BatteryPowered => battery;
     }
 
     private class StubCameraControl(string name) : Streaming.ICameraControl

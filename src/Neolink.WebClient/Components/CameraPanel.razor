@@ -2293,7 +2293,7 @@
     /// every model tunes sensitivity per type while governing them all with one zone.</summary>
     private List<(string Key, string Label)> ZoneTypes()
     {
-        var types = _zone?.ZoneTypes;
+        var types = _zone?.ZoneTypes ?? _zoneTypesHint;
         if (types is not { Count: > 1 })
             return new List<(string, string)> { ("md", "Motion") };
         var list = new List<(string, string)>();
@@ -2317,11 +2317,15 @@
         catch { }
     }
 
+    /// <summary>The zone types a 404 named, so a camera with per-type grids only still gets its tabs.</summary>
+    private List<string>? _zoneTypesHint;
+
     private async Task SwitchZoneAsync(string type)
     {
         _zoneType = type;
         _zone = null;
         _zoneError = null;
+        _zoneTypesHint = null;
         _zoneLoading = true;
         StateHasChanged();
         try
@@ -2331,9 +2335,19 @@
                 NewRequest(HttpMethod.Get, $"detectionzone?type={Uri.EscapeDataString(type)}"), cts.Token);
             if (res.IsSuccessStatusCode)
                 _zone = await res.Content.ReadFromJsonAsync<ApiDetectionZone>(cancellationToken: cts.Token);
-            // 404 is "this camera has no such zone" and speaks for itself; anything
-            // else carries a reason the reader can act on (and a retry worth taking).
-            else if (res.StatusCode != System.Net.HttpStatusCode.NotFound)
+            else if (res.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                // 404 is "this camera has no such zone". One that keeps a grid per type only
+                // (no Motion grid) names them, and the editor opens on the first.
+                _zoneTypesHint = await ReadZoneTypesAsync(res, cts.Token);
+                if (_zoneTypesHint is { Count: > 0 } hint && !hint.Contains(type))
+                {
+                    await SwitchZoneAsync(hint[0]);
+                    return;
+                }
+            }
+            // Anything else carries a reason the reader can act on (and a retry worth taking).
+            else
                 _zoneError = await ReadErrorAsync(res) ?? T.F("Request failed ({0})", (int)res.StatusCode);
         }
         catch (OperationCanceledException)
@@ -2347,6 +2361,21 @@
         _zoneLoading = false;
         _zoneNeedsInit = _zone != null;
         StateHasChanged();
+    }
+
+    private static async Task<List<string>?> ReadZoneTypesAsync(HttpResponseMessage res, CancellationToken ct)
+    {
+        try
+        {
+            using var doc = await JsonDocument.ParseAsync(await res.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
+            return doc.RootElement.TryGetProperty("zoneTypes", out var z) && z.ValueKind == JsonValueKind.Array
+                ? z.EnumerateArray().Select(e => e.GetString()).OfType<string>().ToList()
+                : null;
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or OperationCanceledException)
+        {
+            return null;
+        }
     }
 
     private void CloseZone()
@@ -2775,6 +2804,7 @@
         _zoneOpen = _zoneLoading = _zoneSaving = _zoneNeedsInit = false;
         _zone = null;
         _zoneError = null;
+        _zoneTypesHint = null;
         _zoneType = "md";
         // The suspend-warning opt-out loads in the background; until it lands the
         // warning shows, which is the safe default.

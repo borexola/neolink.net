@@ -3456,10 +3456,13 @@ public static class WebApi
                     // the camera has not said.
                     // A Reolink answers exactly as before: 503 only while its API
                     // cannot be asked, 404 otherwise.
-                    return control.HttpPaused || (t == "md" && control.OnvifOnly && control.CameraHoldsZone == null)
+                    // Zones over Baichuan never wait on HTTP. The 404 names the types that do have a grid.
+                    return (control.HttpPaused && !control.ZonesPerTypeOnly)
+                           || (t == "md" && control.OnvifOnly && control.CameraHoldsZone == null)
                         ? Results.Json(new { error = "the camera could not be asked just now (it is asleep, or its HTTP API is backing off after a failure); try again shortly" },
                             statusCode: 503)
-                        : Results.Json(new { error = $"this camera reports no {t} detection zone" }, statusCode: 404);
+                        : Results.Json(new { error = $"this camera reports no {t} detection zone", zoneTypes = control.ZoneTypes() },
+                            statusCode: 404);
                 if (o.CameraState == null)
                     return Results.Json(new { error = $"this camera reports no {t} detection zone" }, statusCode: 404);
                 // Nothing stored yet: hand back an everywhere-watched grid rather

@@ -35,6 +35,9 @@ public interface ILiveCameraSource
     /// Consumers use it to tailor messaging — e.g. "no HTTP API" is the normal
     /// state of a battery model, not an outage. Default: mains-like.</summary>
     bool SleepFriendly => false;
+
+    /// <summary>True once the camera has answered a battery query. Default: mains.</summary>
+    bool BatteryPowered => false;
 }
 
 /// <summary>
