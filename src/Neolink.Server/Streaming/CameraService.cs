@@ -24,7 +24,7 @@ public interface ILiveCameraSource
     void BatteryDetected() { }
 
     /// <summary>Told when an ability flag shows more lenses than the login reply counted. Default: ignore.</summary>
-    void LensesDetected(int lenses, string source) { }
+    void LensesDetected(int lenses) { }
 
     /// <summary>True while this source is deliberately offline so a battery camera
     /// can sleep (sleep-friendly + parked). While EVERY source of a camera says so,
@@ -322,73 +322,61 @@ public sealed class CameraService : ILiveCameraSource
     /// <summary>Which of that many lenses no camera entry covers (startup wiring).</summary>
     public Func<int, IReadOnlyList<int>>? MissingLenses { get; set; }
 
-    /// <summary>A camera's lens count and where it came from; one verdict per camera per run.</summary>
-    internal sealed record LensFacts(int Lenses, string Source);
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, LensFacts> _lensFacts = new();
+    /// <summary>Each camera's lens count, settled once per run.</summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _lensCounts = new();
     private static readonly TimeSpan LensProbeTimeout = TimeSpan.FromSeconds(2);
     private bool? _isNvr; // null until the first login
 
-    /// <summary>The lens count from the login reply or, when that counts one channel, from the
-    /// ability list's sub-channels. Ability says what the list held, for the log.</summary>
-    internal static async Task<(LensFacts Facts, string Ability)> ProbeLensesAsync(IBcCamera camera,
+    /// <summary>The lens count from the login reply or, when that counts one channel, from the ability list's sub-channels.</summary>
+    internal static async Task<int> ProbeLensesAsync(IBcCamera camera,
         Neolink.Bc.Xml.DeviceInfoXml info, CancellationToken ct)
     {
-        if (info.Lenses > 1 || info.IsNvr) return (new(info.Lenses, "its login reply"), "not asked");
+        if (info.Lenses > 1 || info.IsNvr) return info.Lenses;
         try
         {
-            var support = await camera.GetSupportAsync(LensProbeTimeout, ct).ConfigureAwait(false);
-            return CameraControl.SubLenses(support) is > 0 and var extra
-                ? (new(1 + extra, "a sub-channel in its ability list"), $"{extra} sub-channel(s) under channel 0")
-                : (new(1, "its login reply"), support == null ? "empty" : "no sub-channels");
+            return 1 + CameraControl.SubLenses(await camera.GetSupportAsync(LensProbeTimeout, ct).ConfigureAwait(false));
         }
         catch (Exception ex) when (ex is CameraCommandException or TimeoutException)
         {
-            return (new(1, "its login reply"), $"no answer ({ex.Message})");
+            return 1;
         }
     }
 
-    /// <summary>Settles the camera's lens count once per run, logs what it reported and applies it to this session.</summary>
+    /// <summary>Settles the camera's lens count once per run and applies it to this session.</summary>
     private async Task LearnLensesAsync(IBcCamera camera, CancellationToken ct)
     {
         if (camera.DeviceInfo is not { } info) return;
         _isNvr = info.IsNvr;
-        if (!_lensFacts.TryGetValue(_config.Name, out var facts))
+        if (!_lensCounts.TryGetValue(_config.Name, out int lenses))
         {
-            (facts, var ability) = await ProbeLensesAsync(camera, info, ct).ConfigureAwait(false);
-            if (_lensFacts.TryAdd(_config.Name, facts))
-            {
-                Log.Info($"{_config.Name}: channels as the camera reports them: {info.LoginSummary}; ability list: {ability}");
-                AnnounceLenses(facts, info);
-            }
-            else facts = _lensFacts[_config.Name]; // a sibling stream settled it first
+            lenses = await ProbeLensesAsync(camera, info, ct).ConfigureAwait(false);
+            if (_lensCounts.TryAdd(_config.Name, lenses)) AnnounceLenses(lenses, info);
+            else lenses = _lensCounts[_config.Name]; // a sibling stream settled it first
         }
-        info.SetLenses(facts.Lenses);
-        Lenses = facts.Lenses;
+        info.SetLenses(lenses);
+        Lenses = lenses;
     }
 
-    /// <summary>Says how many lenses the camera has and which have no entry, or that this entry's channel is not one of them.</summary>
-    private void AnnounceLenses(LensFacts facts, Neolink.Bc.Xml.DeviceInfoXml? info)
+    /// <summary>Says which lenses have no entry, or that this entry's channel is not one the camera has.</summary>
+    private void AnnounceLenses(int lenses, Neolink.Bc.Xml.DeviceInfoXml? info)
     {
-        if (info is { IsNvr: false, VideoChannels: > 0 } && _config.ChannelId >= Math.Max(facts.Lenses, info.VideoChannels))
+        if (info is { IsNvr: false, VideoChannels: > 0 } && _config.ChannelId >= Math.Max(lenses, info.VideoChannels))
             Log.Warn($"{_config.Name}: channel_id is {_config.ChannelId}, but the camera reports only " +
-                     $"{Math.Max(facts.Lenses, info.VideoChannels)} channel(s), numbered from 0 — that channel may not exist");
-        else if (facts.Lenses > 1)
-            Log.Info($"{_config.Name}: this camera has {facts.Lenses} lenses (from {facts.Source})" +
-                     (MissingLenses?.Invoke(facts.Lenses) is { Count: > 0 } missing
-                         ? $", and channel {string.Join(", ", missing)} has no camera entry — add it in Settings → Cameras " +
-                           "(Add lens), or as a second entry with the same address and that channel_id"
-                         : ""));
+                     $"{Math.Max(lenses, info.VideoChannels)} channel(s), numbered from 0 — that channel may not exist");
+        else if (lenses > 1 && MissingLenses?.Invoke(lenses) is { Count: > 0 } missing)
+            Log.Info($"{_config.Name}: this camera has {lenses} lenses, and channel {string.Join(", ", missing)} has no " +
+                     "camera entry — add it in Settings → Cameras (Add lens), or as a second entry with the same " +
+                     "address and that channel_id");
     }
 
     /// <inheritdoc />
-    public void LensesDetected(int lenses, string source)
+    public void LensesDetected(int lenses)
     {
         if (_isNvr != false || lenses < 2) return; // an NVR's channels are cameras, not lenses
-        if (!_lensFacts.TryGetValue(_config.Name, out var known) || known.Lenses < lenses)
+        if (!_lensCounts.TryGetValue(_config.Name, out int known) || known < lenses)
         {
-            var facts = new LensFacts(lenses, source);
-            _lensFacts[_config.Name] = facts;
-            AnnounceLenses(facts, null);
+            _lensCounts[_config.Name] = lenses;
+            AnnounceLenses(lenses, null);
         }
         if ((Lenses ?? 0) < lenses) Lenses = lenses;
         _live?.DeviceInfo?.SetLenses(lenses);

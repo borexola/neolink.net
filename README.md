@@ -513,10 +513,7 @@ the first lens and `1` for the second.
 - Neolink.NET reads the lens count at login. A lens with no entry gets a line
   in the log and an **Add lens** button in Settings → Cameras, which fills in
   the form with the first entry's address and login.
-- If no button appears, add the second entry by hand. The log line *channels
-  as the camera reports them*, written at each camera's first login, shows
-  what the camera said: include it when reporting a model that is not
-  recognised.
+- If no button appears, add the second entry by hand.
 - Each entry has its own tile, RTSP paths and recordings. On a TrackMix only
   the first lens detects, so the second entry records on the first one's
   detections. Use the first entry for pan/tilt, lights and the siren.

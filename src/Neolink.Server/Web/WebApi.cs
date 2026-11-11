@@ -1751,7 +1751,7 @@ public static class WebApi
                 var di = camera.DeviceInfo;
                 // The same count the running server settles on: login reply, then the ability list.
                 int lenses = di == null ? 1
-                    : (await Streaming.CameraService.ProbeLensesAsync(camera, di, cts.Token)).Facts.Lenses;
+                    : await Streaming.CameraService.ProbeLensesAsync(camera, di, cts.Token);
                 int channels = Math.Max(lenses, di?.VideoChannels ?? 0);
                 return Results.Json(new
                 {

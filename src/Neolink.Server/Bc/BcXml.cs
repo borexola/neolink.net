@@ -225,9 +225,6 @@ public sealed class DeviceInfoXml
         DetectChannels = 1;
     }
 
-    /// <summary>The channel facts exactly as the login reply gave them, for the log.</summary>
-    public string LoginSummary = "";
-
     public static DeviceInfoXml Parse(XElement el)
     {
         var info = new DeviceInfoXml();
@@ -239,9 +236,6 @@ public sealed class DeviceInfoXml
         int video = Count("channelNum"), detect = Count("analogChnNum");
         info.VideoChannels = video > 0 ? video : detect;
         info.DetectChannels = detect > 0 ? detect : video;
-        string Shown(string name) => Text(name) is { Length: > 0 } v ? v : "-";
-        info.LoginSummary = $"type={Shown("type")}/{Shown("typeInfo")}, channelNum={Shown("channelNum")}, " +
-                            $"analogChnNum={Shown("analogChnNum")}";
         var res = el.Element("resolution");
         if (res != null)
         {
@@ -319,10 +313,6 @@ public sealed class StreamInfoXml
 {
     public uint ChannelBits;
     public List<EncodeTableXml> EncodeTables { get; } = new();
-
-    /// <summary>"bits 1: mainStream 3840x2160, subStream 640x360" for the log.</summary>
-    public override string ToString() =>
-        $"bits {ChannelBits}: {string.Join(", ", EncodeTables.Select(t => $"{t.Type} {t.Width}x{t.Height}"))}";
 }
 
 /// <summary>One encode profile: name (e.g. "mainStream"), resolution and the framerate/bitrate options.</summary>

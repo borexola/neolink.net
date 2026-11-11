@@ -10486,10 +10486,6 @@ public static class SelfTest
             Assert(Bc.Xml.DeviceInfoXml.Parse(System.Xml.Linq.XElement.Parse(
                 "<DeviceInfo><type>ipc</type><typeInfo>HOMEHUB</typeInfo></DeviceInfo>")).IsNvr, "or by its typeInfo");
 
-            // The raw login facts are kept for the log, absent ones shown as "-".
-            AssertEq(trackMix.LoginSummary, "type=ipc/IPC, channelNum=2, analogChnNum=1");
-            AssertEq(oneCount.LoginSummary, "type=-/-, channelNum=2, analogChnNum=-");
-
             // A login reply that counts one channel: an ability flag can still reveal the second lens.
             var oneChannel = Bc.Xml.DeviceInfoXml.Parse(System.Xml.Linq.XElement.Parse(
                 "<DeviceInfo><type>ipc</type><channelNum>1</channelNum><analogChnNum>1</analogChnNum></DeviceInfo>"));

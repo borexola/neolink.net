@@ -736,7 +736,7 @@ public sealed class CameraControl : ICameraControl
                     s.BatteryDetected();
             if (SubLenses(support) is > 0 and var extraLenses)
                 foreach (var s in _sources)
-                    s.LensesDetected(1 + extraLenses, "a sub-channel in its ability list");
+                    s.LensesDetected(1 + extraLenses);
             Log.Info($"{CameraName}: capabilities discovered " +
                      $"(ptz={ptz}, led={led}, pir={pir}, battery={battery}, talk={talk}" +
                      $", zoom={zoom}, siren={siren}, floodlight={floodlight}, privacy={privacy}" +
@@ -2016,7 +2016,7 @@ public sealed class CameraControl : ICameraControl
         _abilityLoaded = true;
         if (HasAutoTrackStream(ability))
             foreach (var s in _sources)
-                s.LensesDetected(2, "the HTTP ability supportAutoTrackStream");
+                s.LensesDetected(2);
         return ability;
     }
 
