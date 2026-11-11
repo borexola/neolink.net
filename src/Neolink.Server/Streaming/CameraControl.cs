@@ -1799,7 +1799,9 @@ public sealed class CameraControl : ICameraControl
         {
             var el = await WithCameraAsync(c => c.GetWifiSignalAsync(ct: ct), ct).ConfigureAwait(false);
             var push = el == null ? null : BcCamera.ParseNetInfo(el);
-            if (push?.SignalDbm is { } dbm)
+            var kind = LinkKindOf(push?.NetType);
+            // A reply that names a cable is not a Wi-Fi reading, whatever signal figure rides along.
+            if (kind != 1 && push?.SignalDbm is { } dbm)
             {
                 _bcWifiMisses = 0;
                 var bc = WifiReading.FromDbm(dbm);
@@ -1809,7 +1811,6 @@ public sealed class CameraControl : ICameraControl
             // The camera answered, just not with a signal: if it named its link
             // type, that settles it — a wired camera is not a Wi-Fi camera with a
             // missing reading, and it should never be asked again.
-            var kind = LinkKindOf(push?.NetType);
             if (kind != 0)
             {
                 _linkKind = kind;

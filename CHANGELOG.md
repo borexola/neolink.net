@@ -11,6 +11,14 @@ in the README). Paste the matching section below into the GitHub release.
 - **Dual-lens cameras (TrackMix, the first Duo): the second lens can be added as its own camera.** Neolink reads the lens count at login, says in the log when a lens has no entry, and Settings → Cameras gets an **Add lens** button that reuses the first entry's address and login. A lens without its own detector (the TrackMix telephoto) records on the first lens's detections.
 - **An `rtsp` button in the camera settings dialog copies the camera's RTSP stream link or its snapshot URL.** Pick the stream and, as an admin, the RTSP user to sign in as: the copied link includes that login, which is never shown on screen.
 
+### Changed
+
+- **A stream that never starts now says why in the log:** the camera never answered the request, accepted it but sent no video, or refused it with a code.
+
+### Fixed
+
+- A camera that reports a wired link is shown as wired, even when it also answers the Wi-Fi signal query.
+
 ## 1.2.3
 
 Per-object detection zones and fast camera settings on cameras without an HTTP API, the oldest footage deleted when a disk runs low, and a locked-down admin-password reset.

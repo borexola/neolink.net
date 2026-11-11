@@ -2392,15 +2392,14 @@ public static class WebApi
                     c.Control.ForgetWifiSignal();
                     return null;
                 }
-                var w = c.Control.CachedWifiSignal
-                        ?? (c.WifiSignal?.Invoke() is { } dbm ? WifiReading.FromDbm(dbm) : null);
-                if (w != null) return new { kind = "wifi", level = w.Level, label = w.Label };
-                // No reading: the camera may simply be on a cable. Its own answer
-                // (GetLocalLink) wins; the Baichuan net_type push stands in for
-                // cameras without the HTTP API.
+                // The camera's own word that it is on a cable comes first (GetLocalLink, else the
+                // Baichuan net_type push); a signal figure does not overrule it.
                 bool wired = c.Control.CachedWired
                              ?? CameraControl.LinkKindOf(c.NetType?.Invoke()) == 1;
-                return wired ? new { kind = "wired", level = 0, label = "Wired (Ethernet)" } : null;
+                if (wired) return new { kind = "wired", level = 0, label = "Wired (Ethernet)" };
+                var w = c.Control.CachedWifiSignal
+                        ?? (c.WifiSignal?.Invoke() is { } dbm ? WifiReading.FromDbm(dbm) : null);
+                return w != null ? new { kind = "wifi", level = w.Level, label = w.Label } : null;
             }
 
             var payload = cameras.Where(c => CanSee(ctx, c.Name)).Select(c => new

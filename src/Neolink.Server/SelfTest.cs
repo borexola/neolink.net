@@ -10512,6 +10512,15 @@ public static class SelfTest
                 "{\"abilityChn\":[{\"supportAutoTrackStream\":{\"ver\":0}}]}")!.AsObject()), "ver 0 does not");
             Assert(!Streaming.CameraControl.HasAutoTrackStream(null), "no ability table, no verdict");
 
+            // A stream that never starts says what the camera answered; a two-lens camera's main stream adds the likely cause.
+            AssertEq(Protocol.BcCamera.NoVideoReason("subStream", 0, null, true),
+                "the camera never answered the subStream request for channel 0");
+            AssertEq(Protocol.BcCamera.NoVideoReason("mainStream", 1, 400, false),
+                "the camera refused the mainStream request for channel 1 (code 400)");
+            var held = Protocol.BcCamera.NoVideoReason("mainStream", 0, 200, true);
+            Assert(held.StartsWith("the camera accepted the mainStream request for channel 0 but sent no video for 15s. ")
+                   && held.Contains("another viewer"), "accepted but silent, with the two-lens hint");
+
             // Which lenses of a camera have no entry: entries on the same address (or UID) count, others do not.
             var wide = new CameraConfig { Name = "wide", Username = "admin", Host = "10.0.0.5" };
             var tele = new CameraConfig { Name = "tele", Username = "admin", Host = "10.0.0.5", ChannelId = 1 };

@@ -271,6 +271,14 @@ public sealed class BcCamera : IBcCamera
     public async Task StartVideoAsync(StreamKind stream, ChannelWriter<byte[]> binaryOut,
         Func<bool>? stallTolerable, CancellationToken ct)
     {
+        // Completed on every way out, a failed request included: the reader must see the stream end.
+        try { await PumpVideoAsync(stream, binaryOut, stallTolerable, ct).ConfigureAwait(false); }
+        finally { binaryOut.TryComplete(); }
+    }
+
+    private async Task PumpVideoAsync(StreamKind stream, ChannelWriter<byte[]> binaryOut,
+        Func<bool>? stallTolerable, CancellationToken ct)
+    {
         using var sub = _conn.Subscribe(BcConstants.MsgIdVideo);
 
         // Stream codes/handles as used by the official clients
@@ -311,55 +319,69 @@ public sealed class BcCamera : IBcCamera
             });
         await _conn.SendAsync(startVideo, ct).ConfigureAwait(false);
 
-        try
+        bool holding = false;
+        int? answer = null; // the camera's reply code to the stream request
+        bool media = false;
+        while (!ct.IsCancellationRequested)
         {
-            bool holding = false;
-            while (!ct.IsCancellationRequested)
+            BcMessage msg;
+            try
             {
-                BcMessage msg;
-                try
+                msg = await sub.ReceiveAsync(RxTimeout, ct).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                // No video for 15s. If the camera is dark on purpose (privacy
+                // mode), that is expected — keep the connection (and thus control
+                // commands, e.g. turning privacy off) alive instead of tearing it
+                // down and reconnecting in a loop. A genuine disconnect surfaces
+                // as a socket error, not a timeout, so it still reconnects.
+                if (stallTolerable?.Invoke() == true)
                 {
-                    msg = await sub.ReceiveAsync(RxTimeout, ct).ConfigureAwait(false);
-                }
-                catch (TimeoutException)
-                {
-                    // No video for 15s. If the camera is dark on purpose (privacy
-                    // mode), that is expected — keep the connection (and thus control
-                    // commands, e.g. turning privacy off) alive instead of tearing it
-                    // down and reconnecting in a loop. A genuine disconnect surfaces
-                    // as a socket error, not a timeout, so it still reconnects.
-                    if (stallTolerable?.Invoke() == true)
+                    if (!holding)
                     {
-                        if (!holding)
-                        {
-                            holding = true;
-                            Log.Debug($"{_logTag}: no video — camera is in privacy mode; holding the connection");
-                        }
-                        continue;
+                        holding = true;
+                        Log.Debug($"{_logTag}: no video — camera is in privacy mode; holding the connection");
                     }
-                    // An SD-card transfer on this session starves the video on a thin link: tearing the
-                    // session down would kill the transfer, so the stall is waited out until it ends.
-                    if (Volatile.Read(ref _transfers) > 0)
-                    {
-                        Log.Debug($"{_logTag}: no video while an SD-card transfer runs; holding the connection");
-                        continue;
-                    }
-                    throw new IOException("Video stream stalled (no data for 15s)");
+                    continue;
                 }
-                if (holding)
+                // An SD-card transfer on this session starves the video on a thin link: tearing the
+                // session down would kill the transfer, so the stall is waited out until it ends.
+                if (Volatile.Read(ref _transfers) > 0)
                 {
-                    holding = false;
-                    Log.Debug($"{_logTag}: privacy mode off — video resumed");
+                    Log.Debug($"{_logTag}: no video while an SD-card transfer runs; holding the connection");
+                    continue;
                 }
-                if (msg.Binary is { Length: > 0 } bin)
-                    await binaryOut.WriteAsync(bin, ct).ConfigureAwait(false);
+                throw new IOException(media
+                    ? "Video stream stalled (no data for 15s)"
+                    : NoVideoReason(streamName, _channelId, answer, DeviceInfo is { IsNvr: false, Lenses: > 1 }));
+            }
+            if (holding)
+            {
+                holding = false;
+                Log.Debug($"{_logTag}: privacy mode off — video resumed");
+            }
+            answer ??= msg.Meta.ResponseCode;
+            if (msg.Binary is { Length: > 0 } bin)
+            {
+                media = true;
+                await binaryOut.WriteAsync(bin, ct).ConfigureAwait(false);
             }
         }
-        finally
-        {
-            binaryOut.TryComplete();
-        }
     }
+
+    /// <summary>Why a stream never started, from the camera's reply code to the request (null: no reply).</summary>
+    internal static string NoVideoReason(string stream, byte channel, int? answer, bool multiLens) =>
+        (answer switch
+        {
+            null => $"the camera never answered the {stream} request for channel {channel}",
+            200 => $"the camera accepted the {stream} request for channel {channel} but sent no video for {RxTimeout.TotalSeconds:0}s",
+            _ => $"the camera refused the {stream} request for channel {channel} (code {answer})",
+        })
+        + (multiLens && stream == "mainStream"
+            ? ". Cameras with two lenses give their main streams to only one or two connections at a time: " +
+              "another viewer (Reolink app or client, an NVR, Home Assistant) may be holding it"
+            : "");
 
     /// <summary>
     /// One-shot control command: subscribe to the message ID, send, await the reply.
