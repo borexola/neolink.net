@@ -1073,6 +1073,21 @@ public sealed class CameraConfig
     /// Never parsed from a config file — the demo rig is the only author.</summary>
     public bool Demo { get; init; }
     public byte ChannelId { get; init; }
+
+    /// <summary>True when <paramref name="other"/> is another channel of the same Baichuan device.</summary>
+    public bool SameDevice(CameraConfig other) =>
+        !IsGenericRtsp && !other.IsGenericRtsp
+        && (Host.Length > 0
+            ? Port == other.Port && string.Equals(Host, other.Host, StringComparison.OrdinalIgnoreCase)
+            : !string.IsNullOrEmpty(Uid) && string.Equals(Uid, other.Uid, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>Channels of a camera with <paramref name="lenses"/> lenses that no entry in <paramref name="all"/> covers.</summary>
+    public List<int> MissingLenses(IEnumerable<CameraConfig> all, int lenses)
+    {
+        var have = all.Where(SameDevice).Select(c => (int)c.ChannelId).Append(ChannelId).ToHashSet();
+        return Enumerable.Range(0, Math.Max(0, lenses)).Where(ch => !have.Contains(ch)).ToList();
+    }
+
     public List<string>? PermittedUsers { get; init; }
     /// <summary>
     /// The camera's Reolink HTTP(S) API ("host", "host:port" or full URL), used for

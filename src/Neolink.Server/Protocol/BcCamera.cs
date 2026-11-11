@@ -64,6 +64,23 @@ public sealed class BcCamera : IBcCamera
     public System.Net.IPAddress? RemoteIp => _conn.RemoteEndpoint?.Address;
     public Task<string> Closed => _conn.Closed;
 
+    /// <summary>The channel whose alarm and status pushes cover this one (a second lens shares channel 0's).
+    /// Read per push: an ability flag can reveal the second lens after login.</summary>
+    private byte OwnerChannel
+    {
+        get
+        {
+            byte owner = DeviceInfo?.OwnerChannel(_channelId) ?? _channelId;
+            if (owner != _channelId && LoggedChannelNote.TryAdd($"{_logTag}|owner", 0))
+                Log.Info($"BC {_logTag}: channel {_channelId} has no detector of its own; " +
+                         $"taking channel {owner}'s detections and status");
+            return owner;
+        }
+    }
+
+    /// <summary>Connection tags already told once about a channel mapping or a skipped push.</summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> LoggedChannelNote = new();
+
     // Log tag: with several cameras every one is usually channel 0, so a bare
     // "ch0" is ambiguous in captures — callers pass the camera name instead.
     private readonly string _logTag;
@@ -151,6 +168,8 @@ public sealed class BcCamera : IBcCamera
         if (modernReply.Xml?.DeviceInfo != null)
         {
             DeviceInfo = modernReply.Xml.DeviceInfo;
+            if (modernReply.Xml.StreamInfoList is { StreamInfos.Count: > 0 } streams)
+                DeviceInfo.LoginSummary += $"; streams: {string.Join("; ", streams.StreamInfos)}";
         }
         else if (modernReply.IsEmptyModern)
         {
@@ -397,7 +416,7 @@ public sealed class BcCamera : IBcCamera
         // Opt in to alarm pushes. Some cameras ack the request, some stay silent
         // and just start pushing — tolerate both.
         await SendCommandAsync(BcConstants.MsgIdMotionRequest,
-            extension: new ExtensionXml { ChannelId = _channelId },
+            extension: new ExtensionXml { ChannelId = OwnerChannel },
             replyTimeout: TimeSpan.FromSeconds(5), tolerateNoReply: true, ct: ct).ConfigureAwait(false);
 
         while (!ct.IsCancellationRequested)
@@ -453,10 +472,16 @@ public sealed class BcCamera : IBcCamera
                 Log.Info($"BC {_logTag}: alarm push {list.ToString(SaveOptions.DisableFormatting)}");
             else
                 Log.Debug($"BC {_logTag}: alarm push {list.ToString(SaveOptions.DisableFormatting)}");
+            byte owner = OwnerChannel;
             foreach (var ev in list.Elements("AlarmEvent"))
             {
-                if (uint.TryParse(ev.Element("channelId")?.Value.Trim(), out var ch) && ch != _channelId)
+                if (uint.TryParse(ev.Element("channelId")?.Value.Trim(), out var ch) && ch != owner)
+                {
+                    // On a camera (not an NVR) this shows once which channel its pushes name.
+                    if (DeviceInfo is { IsNvr: false } && LoggedChannelNote.TryAdd($"{_logTag}|skip{ch}", 0))
+                        Log.Info($"BC {_logTag}: alarm push for channel {ch} ignored; this entry takes channel {owner}'s");
                     continue;
+                }
                 onEvent(ParseAlarmEvent(ev));
             }
         }
@@ -528,11 +553,11 @@ public sealed class BcCamera : IBcCamera
             WatchStatusIdAsync(BcConstants.MsgIdNetInfo, "NetInfo", ParseNetInfo, onEvent, ct),
             WatchStatusIdAsync(BcConstants.MsgIdSleepStatus, "sleepStatus", ParseSleepStatus, onEvent, ct),
             WatchStatusIdAsync(BcConstants.MsgIdSirenStatusList, "SirenStatusList",
-                el => ParseStatusList(el, _channelId) is { } on ? new SirenStatusPush(on) : null, onEvent, ct),
+                el => ParseStatusList(el, OwnerChannel) is { } on ? new SirenStatusPush(on) : null, onEvent, ct),
             WatchStatusIdAsync(BcConstants.MsgIdFloodlightStatusList, "FloodlightStatusList",
-                el => ParseStatusList(el, _channelId) is { } on ? new FloodlightStatusPush(on) : null, onEvent, ct),
+                el => ParseStatusList(el, OwnerChannel) is { } on ? new FloodlightStatusPush(on) : null, onEvent, ct),
             WatchStatusIdAsync(BcConstants.MsgIdBatteryInfoList, "BatteryList",
-                el => ParseBatteryList(el, _channelId), onEvent, ct),
+                el => ParseBatteryList(el, OwnerChannel), onEvent, ct),
             WatchSmartAiEventsAsync(ct)
         ).ConfigureAwait(false);
     }

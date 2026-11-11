@@ -1772,7 +1772,7 @@
                                 @foreach (var cam in _adminCams)
                                 {
                                     <div class="control-row">
-                                        <span><b>@cam.Name</b>&nbsp;<span class="event-sub">@(cam.Type == "rtsp" ? T["generic RTSP"] : $"Reolink · {cam.Address}")</span>
+                                        <span><b>@cam.Name</b>&nbsp;<span class="event-sub">@(cam.Type == "rtsp" ? T["generic RTSP"] : $"Reolink · {cam.Address}")@(cam.Type != "rtsp" && cam.ChannelId > 0 ? " · " + T.F("channel {0}", cam.ChannelId) : "")</span>
                                             @if (cam.CurrentAddress != null)
                                             {
                                                 <span class="event-sub"> · @T.F("now at {0}", cam.CurrentAddress)</span>
@@ -1785,6 +1785,13 @@
                                                 <button class="chip chip-active" disabled="@(!_adminCamsWritable || _camAdoptBusy)"
                                                         title="@T.F("Write {0} into config.json as this camera's address", cam.CurrentAddress)"
                                                         @onclick="() => AdoptAddressAsync(cam.Name)">@T["Use new address"]</button>
+                                            }
+                                            @foreach (var lens in cam.MissingLenses ?? new())
+                                            {
+                                                var channel = lens;
+                                                <button class="chip chip-active" disabled="@(!_adminCamsWritable)"
+                                                        title="@T["This camera has more than one lens. Each lens is added as its own camera."]"
+                                                        @onclick="() => AddLens(cam, channel)">@T.F("Add lens {0}", channel + 1)</button>
                                             }
                                             @* Tests the SAVED settings — no need to open the editor
                                                (or touch a field) just to check a camera is reachable.
@@ -1910,7 +1917,7 @@
                                     @if (CamPasswordError != null) { <div class="field-error">@CamPasswordError</div> }
                                     <div class="control-row"><span>@T["HTTP address (blank = derived)"]</span>
                                         <input class="notif-input" placeholder="@T["usually blank"]" @bind="e.HttpAddress" /></div>
-                                    <div class="control-row"><span>@T["Channel (NVR only; 0 = standalone)"]</span>
+                                    <div class="control-row"><span>@T["Channel (0 = first; an NVR channel or a second lens)"]</span>
                                         <input class="ret-input" type="number" min="0" max="255" @bind="e.ChannelId" /></div>
 
                                     <div class="campanel-divider"></div>
@@ -5410,6 +5417,8 @@
         public string Password = "";
         public string HttpAddress = "";
         public int ChannelId;
+        /// <summary>Adding another lens of this configured camera: the server reuses its stored password.</summary>
+        public string? PasswordFrom;
         public string RtspMain = "";
         public string RtspSub = "";
         public bool HasPassword;
@@ -5663,6 +5672,22 @@
         };
     }
 
+    /// <summary>Opens the add form for another lens of a configured camera: same device and login, its own channel.</summary>
+    private void AddLens(ApiAdminCamera cam, int channel)
+    {
+        EditCamera(cam);
+        var e = _camEdit!;
+        e.OriginalName = null;
+        e.PasswordFrom = cam.Name;
+        e.ChannelId = channel;
+        e.Name = $"{cam.Name}_lens{channel + 1}";
+        e.Stream = "both";
+        // A PTZ port or profile belongs to the entry it was set on.
+        e.PtzMode = "off";
+        e.PtzPort = null;
+        e.PtzOff = null;
+    }
+
     private void CancelCameraEdit()
     {
         _camEdit = null;
@@ -5787,7 +5812,8 @@
     private object CamRequestBody(CamEdit e, bool forSave) => new
     {
         originalName = forSave ? e.OriginalName : null,
-        name = forSave ? e.Name.Trim() : e.OriginalName, // the test uses the stored entry for fallbacks
+        name = forSave ? e.Name.Trim() : e.OriginalName ?? e.PasswordFrom, // the test uses the stored entry for fallbacks
+        passwordFrom = forSave ? e.PasswordFrom : null,
         type = e.Type,
         address = e.Type == "reolink" ? e.Address.Trim() : null,
         username = e.Type == "reolink" ? e.Username.Trim() : null,

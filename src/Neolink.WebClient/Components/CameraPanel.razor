@@ -16,6 +16,12 @@
     <div class="campanel-head">
         <span class="dot @(_caps?.Online == true ? "on" : "off")"></span>
         <span class="campanel-title">@CameraName</span>
+        @if (Camera is { Streams.Count: > 0 })
+        {
+            <button class="chip @(_rtspOpen ? "chip-active" : "chip-off") head-suspend"
+                    title="@T["Copy this camera's RTSP stream link"]"
+                    @onclick="ToggleRtspAsync">@UiIcon.Render("link", 11) @T["rtsp"]</button>
+        }
         @* Suspend lives here, right-aligned — one always-reachable control instead
            of a whole section. The privacy warning moved into its confirm card. *@
         @if (Camera?.CanSuspend == true)
@@ -40,6 +46,87 @@
         <button class="icon-btn" title="@T["Close"]" @onclick="CloseAsync">✕</button>
     </div>
 
+    @if (_rtspOpen)
+    {
+        @* The link itself is handed to the browser for the Copy button and never rendered: it carries a password. *@
+        <div class="suspend-confirm rtsp-card" role="dialog" aria-label="@T["RTSP stream link"]">
+            <div class="rtsp-head">
+                <span class="campanel-section-title">@UiIcon.Render("link", 13) @(SnapshotKind ? T["SNAPSHOT LINK"] : T["RTSP STREAM LINK"])</span>
+                <button class="icon-btn" title="@T["Close"]" @onclick="CloseRtspAsync">✕</button>
+            </div>
+            @if (_rtsp == null)
+            {
+                <div class="notice small">@(_rtspError ?? T["Loading…"])</div>
+            }
+            else
+            {
+                <div class="rtsp-grid">
+                    <span class="rtsp-label">@T["Link"]</span>
+                    <span class="row-actions">
+                        <button class="chip @(SnapshotKind ? "" : "chip-active")"
+                                @onclick='() => PickRtspAsync(kind: "rtsp")'>@T["RTSP stream"]</button>
+                        <button class="chip @(SnapshotKind ? "chip-active" : "")"
+                                @onclick='() => PickRtspAsync(kind: "snapshot")'>@T["Snapshot"]</button>
+                    </span>
+                    @if (!SnapshotKind && RtspStreams.Count > 1)
+                    {
+                        <span class="rtsp-label">@T["Stream"]</span>
+                        <span class="row-actions">
+                            @foreach (var stream in RtspStreams)
+                            {
+                                var kind = stream.Kind;
+                                <button class="chip @(RtspStream?.Kind == kind ? "chip-active" : "")"
+                                        @onclick="() => PickRtspAsync(stream: kind)">@StreamLabel(kind)@(stream.Width > 0 ? $" · {stream.Width}×{stream.Height}" : "")</button>
+                            }
+                        </span>
+                    }
+                    @if (_rtsp.Users is { Count: > 1 } rtspUsers)
+                    {
+                        <span class="rtsp-label">@T["Sign in as"]</span>
+                        <select class="event-filter" value="@_rtspUser"
+                                @onchange="e => PickRtspAsync(user: (string?)e.Value)">
+                            @foreach (var u in rtspUsers)
+                            {
+                                <option value="@u">@u</option>
+                            }
+                        </select>
+                    }
+                    @if (SnapshotKind && SnapBases.Count > 1)
+                    {
+                        <span class="rtsp-label">@T["Server address"]</span>
+                        <span class="row-actions">
+                            @foreach (var b in SnapBases)
+                            {
+                                var snapBase = b;
+                                <button class="chip @(SnapBase == snapBase ? "chip-active" : "")"
+                                        @onclick="() => PickRtspAsync(snapBase: snapBase)">@snapBase</button>
+                            }
+                        </span>
+                    }
+                    @if (!SnapshotKind && RtspHosts.Count > 1)
+                    {
+                        <span class="rtsp-label">@T["Server address"]</span>
+                        <span class="row-actions">
+                            @foreach (var h in RtspHosts)
+                            {
+                                var host = h;
+                                <button class="chip @(RtspHost == host ? "chip-active" : "")"
+                                        @onclick="() => PickRtspAsync(host: host)">@host</button>
+                            }
+                        </span>
+                    }
+                </div>
+                <div class="rtsp-copy">
+                    <div class="rtsp-link">@RtspPreview</div>
+                    <button type="button" class="chip chip-active copy-btn" disabled="@(!_rtspReady)"
+                            onclick="neolink.copyHeld(this, 'rtsp')">
+                        <span class="copy-idle">@T["Copy link"]</span><span class="copy-ok">✓ @T["Copied"]</span><span class="copy-fail">@T["Copy failed"]</span>
+                    </button>
+                </div>
+                <div class="ev-adv-hint">@(_rtspError ?? RtspHint)</div>
+            }
+        </div>
+    }
     @if (_confirmSuspend)
     {
         @* Pinned above the scrollable body so it is in view no matter where the
@@ -2887,7 +2974,126 @@
 
     private Task CloseAsync() => OnClose.InvokeAsync();
 
-    public void Dispose() => _disposed = true;
+    // ---- RTSP link dialog ----
+
+    private bool _rtspOpen, _rtspReady;
+    private ApiRtspLink? _rtsp;
+    private string? _rtspError, _rtspStream, _rtspUser, _rtspHost, _snapBase;
+    private string _linkKind = "rtsp"; // or "snapshot"
+
+    private bool SnapshotKind => _linkKind == "snapshot";
+    /// <summary>Where the snapshot link can start (see <see cref="RtspLink.SnapshotBases"/>).</summary>
+    private List<string> SnapBases => RtspLink.SnapshotBases(MediaServer ?? Server, _rtsp?.Host, _rtsp?.WebPort ?? 0);
+    private string? SnapBase => SnapBases.Contains(_snapBase ?? "") ? _snapBase : SnapBases.FirstOrDefault();
+
+    /// <summary>The chosen link with this login ("user:password", or empty for none).</summary>
+    private string LinkWith(string login) => SnapshotKind
+        ? RtspLink.Snapshot(SnapBase ?? "", login, CameraName)
+        : $"rtsp://{(login.Length > 0 ? login + "@" : "")}{RtspAddress}";
+
+    private List<ApiStream> RtspStreams => Camera?.Streams ?? new();
+    private ApiStream? RtspStream => RtspStreams.FirstOrDefault(s => s.Kind == _rtspStream) ?? RtspStreams.FirstOrDefault();
+    private bool RtspWithLogin => _rtsp?.Users is { Count: > 0 };
+    private string? RtspHost => RtspHosts.Contains(_rtspHost ?? "") ? _rtspHost : RtspHosts.FirstOrDefault();
+
+    /// <summary>Addresses the link can name (see <see cref="RtspLink.Hosts"/>).</summary>
+    private List<string> RtspHosts => RtspLink.Hosts(MediaServer ?? Server, _rtsp?.Host);
+
+    /// <summary>The link without its login: what is safe to show.</summary>
+    private string RtspAddress => RtspLink.Address(RtspHost ?? "", _rtsp?.Port ?? 0, RtspStream?.Path ?? "");
+
+    private string RtspPreview => LinkWith(RtspWithLogin ? "••••••" : "");
+
+    private string RtspHint =>
+        RtspWithLogin ? T["The copied link includes the password of this RTSP login. It is never shown here."]
+        : _rtsp?.LoginRequired == true
+            ? T["This camera needs a login for this link, and only an admin can copy it with one included. Add user:password@ after :// yourself."]
+        : !SnapshotKind ? T["This camera's RTSP streams need no login."]
+        : _rtsp?.SnapshotOpen == true ? T["This camera's snapshot needs no login."]
+        : T["Other programs can fetch the snapshot only with an RTSP user's login, and this camera has none. Add an RTSP user in Server settings."];
+
+    private async Task ToggleRtspAsync()
+    {
+        if (_rtspOpen) { await CloseRtspAsync(); return; }
+        _rtspOpen = true;
+        _rtsp = null;
+        _rtspError = null;
+        _rtspReady = false;
+        _linkKind = "rtsp";
+        _rtspStream ??= RtspStreams.FirstOrDefault(s => s.Kind == "mainStream")?.Kind;
+        try
+        {
+            using var res = await Http.SendAsync(NewRequest(HttpMethod.Get, "rtsp-link"));
+            if (!res.IsSuccessStatusCode)
+            {
+                _rtspError = T.F("Request failed ({0})", (int)res.StatusCode);
+                return;
+            }
+            _rtsp = await res.Content.ReadFromJsonAsync<ApiRtspLink>();
+        }
+        catch (Exception ex)
+        {
+            _rtspError = ex.Message;
+            return;
+        }
+        await PickRtspAsync();
+    }
+
+    /// <summary>Applies a choice, then hands the finished link to the browser so Copy works at a click.</summary>
+    private async Task PickRtspAsync(string? stream = null, string? user = null, string? host = null,
+        string? kind = null, string? snapBase = null)
+    {
+        if (_rtsp == null) return;
+        _linkKind = kind ?? _linkKind;
+        _snapBase = snapBase ?? _snapBase;
+        _rtspStream = stream ?? _rtspStream;
+        _rtspHost = host ?? _rtspHost;
+        _rtspUser = user ?? _rtspUser;
+        if (_rtsp.Users?.Contains(_rtspUser ?? "") != true) _rtspUser = _rtsp.Users?.FirstOrDefault();
+        _rtspReady = false;
+        _rtspError = null;
+        var login = "";
+        if (RtspWithLogin)
+        {
+            try
+            {
+                var req = NewRequest(HttpMethod.Post, "rtsp-link");
+                req.Content = JsonContent.Create(new { user = _rtspUser });
+                using var res = await Http.SendAsync(req);
+                if (!res.IsSuccessStatusCode)
+                {
+                    _rtspError = await ReadErrorAsync(res) ?? T.F("Request failed ({0})", (int)res.StatusCode);
+                    return;
+                }
+                login = (await res.Content.ReadFromJsonAsync<ApiRtspLogin>())?.UserInfo ?? "";
+            }
+            catch (Exception ex)
+            {
+                _rtspError = ex.Message;
+                return;
+            }
+        }
+        try
+        {
+            await JS.InvokeVoidAsync("neolink.holdCopyText", "rtsp", LinkWith(login));
+            _rtspReady = true;
+        }
+        catch (JSException ex) { _rtspError = ex.Message; }
+    }
+
+    private async Task CloseRtspAsync()
+    {
+        _rtspOpen = false;
+        _rtspReady = false;
+        try { await JS.InvokeVoidAsync("neolink.holdCopyText", "rtsp", null); }
+        catch (Exception ex) when (ex is JSException or JSDisconnectedException or OperationCanceledException) { }
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        if (_rtspOpen) _ = CloseRtspAsync(); // drop the held link with the panel
+    }
 
     /// <summary>Shows the bottom-of-panel feedback toast; it replaces any current
     /// one and dismisses itself after 5 seconds.</summary>

@@ -734,6 +734,9 @@ public sealed class CameraControl : ICameraControl
             if (battery)
                 foreach (var s in _sources)
                     s.BatteryDetected();
+            if (SubLenses(support) is > 0 and var extraLenses)
+                foreach (var s in _sources)
+                    s.LensesDetected(1 + extraLenses, "a sub-channel in its ability list");
             Log.Info($"{CameraName}: capabilities discovered " +
                      $"(ptz={ptz}, led={led}, pir={pir}, battery={battery}, talk={talk}" +
                      $", zoom={zoom}, siren={siren}, floodlight={floodlight}, privacy={privacy}" +
@@ -2010,6 +2013,9 @@ public sealed class CameraControl : ICameraControl
         var ability = await _httpApi!.GetAbilityAsync(ct).ConfigureAwait(false);
         _ability = ability;
         _abilityLoaded = true;
+        if (HasAutoTrackStream(ability))
+            foreach (var s in _sources)
+                s.LensesDetected(2, "the HTTP ability supportAutoTrackStream");
         return ability;
     }
 
@@ -2025,6 +2031,10 @@ public sealed class CameraControl : ICameraControl
     {
         return (int?)AbilityChannel(ability, channel)?["supportAITrack"]?["ver"] is > 0;
     }
+
+    /// <summary>supportAutoTrackStream on channel 0: the second lens of a TrackMix-style camera, served as channel 1.</summary>
+    internal static bool HasAutoTrackStream(JsonObject? ability) =>
+        ability != null && (int?)AbilityChannel(ability, 0)?["supportAutoTrackStream"]?["ver"] is > 0;
 
     private static JsonObject? AbilityChannel(JsonObject ability, int channel)
     {
@@ -3989,6 +3999,12 @@ public sealed class CameraControl : ICameraControl
         var text = (item?.Element(name) ?? support.Element(name))?.Value.Trim();
         return uint.TryParse(text, out var v) ? v : 0;
     }
+
+    /// <summary>Sub-channels listed under channel 0 of the Support list: lenses the login reply may not count.</summary>
+    internal static int SubLenses(XElement? support) =>
+        support?.Elements("item").FirstOrDefault(i => i.Element("chnID")?.Value.Trim() == "0")
+            ?.Elements("subItem").Select(sub => sub.Element("chnID")?.Value.Trim())
+            .Where(id => !string.IsNullOrEmpty(id) && id != "0").Distinct().Count() ?? 0;
 
     internal static bool ChannelSupportFlag(XElement? support, int channel, string name)
     {

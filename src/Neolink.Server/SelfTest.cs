@@ -4614,6 +4614,40 @@ public static class SelfTest
             }
         });
 
+        Test("rtsp link: IP addresses only, default port left out", () =>
+        {
+            // A page opened on a host name (a reverse proxy, perhaps) never lends that name to the link.
+            AssertEq(string.Join(",", RtspLink.Hosts("https://nvr.example.arpa", "192.168.1.20")), "192.168.1.20");
+            AssertEq(string.Join(",", RtspLink.Hosts("http://nvr.example.arpa:8655/", "192.168.1.20")), "192.168.1.20");
+            // Opened on the server's own IP: one address. On another IP (a Docker host): that one leads.
+            AssertEq(string.Join(",", RtspLink.Hosts("http://192.168.1.20:8655", "192.168.1.20")), "192.168.1.20");
+            AssertEq(string.Join(",", RtspLink.Hosts("http://192.168.1.10:8655", "172.17.0.2")), "192.168.1.10,172.17.0.2");
+            // Opened on the server itself: loopback says nothing about where others reach it.
+            AssertEq(string.Join(",", RtspLink.Hosts("http://localhost:8655", "192.168.1.20")), "192.168.1.20");
+            AssertEq(string.Join(",", RtspLink.Hosts("http://127.0.0.1:8655", "192.168.1.20")), "192.168.1.20");
+            AssertEq(string.Join(",", RtspLink.Hosts("http://[::1]:8655", "192.168.1.20")), "192.168.1.20");
+            // Only when the server names nothing does the page's host stand in.
+            AssertEq(string.Join(",", RtspLink.Hosts("https://nvr.example.arpa", null)), "nvr.example.arpa");
+            AssertEq(RtspLink.Hosts(null, null).Count, 0);
+
+            AssertEq(RtspLink.Address("192.168.1.20", 8654, "/FrontDoor/mainStream"), "192.168.1.20:8654/FrontDoor/mainStream");
+            AssertEq(RtspLink.Address("192.168.1.20", 554, "/FrontDoor/mainStream"), "192.168.1.20/FrontDoor/mainStream");
+            AssertEq(RtspLink.Address("fd00::5", 8654, "/Front Door/subStream"), "[fd00::5]:8654/Front%20Door/subStream");
+
+            // The snapshot rides the web port, so the page's own address (proxy and all) is the one known to work.
+            AssertEq(string.Join(",", RtspLink.SnapshotBases("https://nvr.example.arpa/", "192.168.1.20", 8655)),
+                "https://nvr.example.arpa,http://192.168.1.20:8655");
+            AssertEq(string.Join(",", RtspLink.SnapshotBases("http://192.168.1.20:8655", "192.168.1.20", 8655)), "http://192.168.1.20:8655");
+            AssertEq(string.Join(",", RtspLink.SnapshotBases("http://localhost:8655", "192.168.1.20", 8655)), "http://192.168.1.20:8655");
+            AssertEq(string.Join(",", RtspLink.SnapshotBases("http://localhost:8655", null, 8655)), "http://localhost:8655");
+            AssertEq(string.Join(",", RtspLink.SnapshotBases("https://nvr.example.arpa/neolink/", "192.168.1.20", 80)),
+                "https://nvr.example.arpa/neolink,http://192.168.1.20");
+            AssertEq(RtspLink.Snapshot("https://nvr.example.arpa", "frigate:p%40ss", "Front Door"),
+                "https://frigate:p%40ss@nvr.example.arpa/api/cameras/Front%20Door/snapshot.jpg");
+            AssertEq(RtspLink.Snapshot("http://192.168.1.20:8655", "", "FrontDoor"),
+                "http://192.168.1.20:8655/api/cameras/FrontDoor/snapshot.jpg");
+        });
+
         Test("every shipped language catalogue parses", () =>
         {
             // A malformed catalogue is caught and returns empty, so the language
@@ -10424,6 +10458,72 @@ public static class SelfTest
                 "<DeviceInfo><resolution><width>1</width><height>1</height></resolution></DeviceInfo>"));
             Assert(withSleep.HasSleep, "DeviceInfo with <sleep> advertises privacy mode");
             Assert(!withoutSleep.HasSleep, "DeviceInfo without <sleep> does not");
+            AssertEq(withoutSleep.Lenses, 1); // no channel counts sent: one lens
+            AssertEq(withoutSleep.OwnerChannel(1), (byte)1);
+
+            // A TrackMix: two video channels, one with detection. The second lens takes channel 0's pushes.
+            var trackMix = Bc.Xml.DeviceInfoXml.Parse(System.Xml.Linq.XElement.Parse(
+                "<DeviceInfo><type>ipc</type><channelNum>2</channelNum><analogChnNum>1</analogChnNum>" +
+                "<typeInfo>IPC</typeInfo></DeviceInfo>"));
+            AssertEq(trackMix.Lenses, 2);
+            AssertEq(trackMix.OwnerChannel(0), (byte)0);
+            AssertEq(trackMix.OwnerChannel(1), (byte)0);
+            AssertEq(trackMix.OwnerChannel(2), (byte)2); // not a channel of this camera: left alone
+            // The first Duo: both lenses detect, so each keeps its own pushes.
+            var duo = Bc.Xml.DeviceInfoXml.Parse(System.Xml.Linq.XElement.Parse(
+                "<DeviceInfo><type>ipc</type><channelNum>2</channelNum><analogChnNum>2</analogChnNum></DeviceInfo>"));
+            AssertEq(duo.Lenses, 2);
+            AssertEq(duo.OwnerChannel(1), (byte)1);
+            // One count stands in for the other; an NVR's channels are cameras, not lenses.
+            var oneCount = Bc.Xml.DeviceInfoXml.Parse(System.Xml.Linq.XElement.Parse(
+                "<DeviceInfo><channelNum>2</channelNum></DeviceInfo>"));
+            AssertEq(oneCount.DetectChannels, 2);
+            var nvr = Bc.Xml.DeviceInfoXml.Parse(System.Xml.Linq.XElement.Parse(
+                "<DeviceInfo><type>nvr</type><channelNum>8</channelNum><analogChnNum>0</analogChnNum></DeviceInfo>"));
+            Assert(nvr.IsNvr, "an NVR is recognised by its type");
+            AssertEq(nvr.Lenses, 1);
+            AssertEq(nvr.OwnerChannel(5), (byte)5);
+            Assert(Bc.Xml.DeviceInfoXml.Parse(System.Xml.Linq.XElement.Parse(
+                "<DeviceInfo><type>ipc</type><typeInfo>HOMEHUB</typeInfo></DeviceInfo>")).IsNvr, "or by its typeInfo");
+
+            // The raw login facts are kept for the log, absent ones shown as "-".
+            AssertEq(trackMix.LoginSummary, "type=ipc/IPC, channelNum=2, analogChnNum=1");
+            AssertEq(oneCount.LoginSummary, "type=-/-, channelNum=2, analogChnNum=-");
+
+            // A login reply that counts one channel: an ability flag can still reveal the second lens.
+            var oneChannel = Bc.Xml.DeviceInfoXml.Parse(System.Xml.Linq.XElement.Parse(
+                "<DeviceInfo><type>ipc</type><channelNum>1</channelNum><analogChnNum>1</analogChnNum></DeviceInfo>"));
+            AssertEq(oneChannel.OwnerChannel(1), (byte)1);
+            oneChannel.SetLenses(2);
+            AssertEq(oneChannel.Lenses, 2);
+            AssertEq(oneChannel.OwnerChannel(1), (byte)0);
+            duo.SetLenses(2); // nothing new: both lenses keep their own detections
+            AssertEq(duo.OwnerChannel(1), (byte)1);
+            nvr.SetLenses(2); // never applied to an NVR
+            AssertEq(nvr.Lenses, 1);
+            AssertEq(Streaming.CameraControl.SubLenses(System.Xml.Linq.XElement.Parse(
+                "<Support><item><chnID>0</chnID><ptzMode>pt</ptzMode><subItem><chnID>1</chnID></subItem></item></Support>")), 1);
+            AssertEq(Streaming.CameraControl.SubLenses(System.Xml.Linq.XElement.Parse(
+                "<Support><item><chnID>0</chnID></item><item><chnID>1</chnID><subItem><chnID>1</chnID></subItem></item></Support>")), 0);
+            AssertEq(Streaming.CameraControl.SubLenses(null), 0);
+            Assert(Streaming.CameraControl.HasAutoTrackStream(System.Text.Json.Nodes.JsonNode.Parse(
+                "{\"abilityChn\":[{\"supportAutoTrackStream\":{\"ver\":1}}]}")!.AsObject()), "the HTTP auto-track stream ability means a second lens");
+            Assert(!Streaming.CameraControl.HasAutoTrackStream(System.Text.Json.Nodes.JsonNode.Parse(
+                "{\"abilityChn\":[{\"supportAutoTrackStream\":{\"ver\":0}}]}")!.AsObject()), "ver 0 does not");
+            Assert(!Streaming.CameraControl.HasAutoTrackStream(null), "no ability table, no verdict");
+
+            // Which lenses of a camera have no entry: entries on the same address (or UID) count, others do not.
+            var wide = new CameraConfig { Name = "wide", Username = "admin", Host = "10.0.0.5" };
+            var tele = new CameraConfig { Name = "tele", Username = "admin", Host = "10.0.0.5", ChannelId = 1 };
+            var other = new CameraConfig { Name = "other", Username = "admin", Host = "10.0.0.6", ChannelId = 1 };
+            var generic = new CameraConfig { Name = "generic", Username = "", Host = "10.0.0.5", ChannelId = 1, RtspMain = "rtsp://10.0.0.5/1" };
+            AssertEq(string.Join(",", wide.MissingLenses(new[] { wide, other, generic }, 2)), "1");
+            AssertEq(wide.MissingLenses(new[] { wide, tele, other }, 2).Count, 0);
+            AssertEq(wide.MissingLenses(new[] { wide }, 1).Count, 0);
+            var byUid = new CameraConfig { Name = "a", Username = "admin", Uid = "95270000ABCDEFGH" };
+            var byUidTele = new CameraConfig { Name = "b", Username = "admin", Uid = "95270000abcdefgh", ChannelId = 1 };
+            AssertEq(byUid.MissingLenses(new[] { byUid, byUidTele }, 2).Count, 0);
+            Assert(!byUid.SameDevice(new CameraConfig { Name = "c", Username = "admin" }), "entries without address or UID are not one device");
 
             // Capability gating: only a usable zoom range (maxPos > 0) advertises
             // zoom — fixed-lens cameras answer with 0 (or not at all).

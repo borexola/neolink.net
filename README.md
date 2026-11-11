@@ -458,7 +458,7 @@ warnings with fill-date forecasts, and AES-256-GCM footage encryption.
 | `onvif_address` | *derived from `address`* | The camera's ONVIF device service (`host`, `host:port` or full URL). Only needed to override the port — ONVIF is otherwise probed on port 8000, then 80. A picture-settings fallback for models with no HTTP API (Lumus line) |
 | `username` / `password` | *required* | The camera's own login (same as the Reolink app) |
 | `stream` | `both` | `mainStream`, `subStream`, `externStream`, `both`, or `all` |
-| `channel_id` | `0` | Channel when connecting through a Reolink NVR (0-based) |
+| `channel_id` | `0` | Which channel of the device this entry is (0-based): a Reolink NVR's camera, or a lens of a [dual-lens camera](#dual-lens-cameras-trackmix-duo) |
 | `permitted_users` | all users | Restrict this camera's mounts to specific `users` |
 | `ptz_share` | `false` | Offer this camera's PTZ to Frigate on the shared port ([PTZ buttons in Frigate](#ptz-buttons-in-frigate)) |
 | `ptz_port` | *(none)* | Give this camera's PTZ its own port instead (Frigate 0.17 and older) |
@@ -497,6 +497,33 @@ warnings with fill-date forecasts, and AES-256-GCM footage encryption.
   camera will not report its UID, set `uid` in its config entry.
 - In Docker both need host networking (`--network host`): a bridged container
   gets no broadcasts or multicast.
+
+### Dual-lens cameras (TrackMix, Duo)
+
+A camera with two lenses that each have their own picture (TrackMix: wide and
+telephoto; the first Duo: left and right) serves one channel per lens. Each
+lens is its own camera entry: same `address` and login, `channel_id` `0` for
+the first lens and `1` for the second.
+
+```json
+{ "name": "driveway",      "address": "192.168.1.50", "username": "admin", "password": "…" },
+{ "name": "driveway_tele", "address": "192.168.1.50", "username": "admin", "password": "…", "channel_id": 1 }
+```
+
+- Neolink.NET reads the lens count at login. A lens with no entry gets a line
+  in the log and an **Add lens** button in Settings → Cameras, which fills in
+  the form with the first entry's address and login.
+- If no button appears, add the second entry by hand. The log line *channels
+  as the camera reports them*, written at each camera's first login, shows
+  what the camera said: include it when reporting a model that is not
+  recognised.
+- Each entry has its own tile, RTSP paths and recordings. On a TrackMix only
+  the first lens detects, so the second entry records on the first one's
+  detections. Use the first entry for pan/tilt, lights and the siren.
+- Every entry holds its own connections to the camera (one per stream). If the
+  camera starts refusing logins, open fewer streams per entry (`stream`).
+- Cameras that stitch both lenses into one panorama (Duo 2, Duo 3) have a
+  single channel and need none of this.
 
 ### Enable HTTP and ONVIF on the camera for the full feature set
 
@@ -664,6 +691,11 @@ OPNsense) pointing at `web_port`. Two things matter:
 Only the browser-facing traffic (the page, the live-video WebSocket, event
 clips/thumbnails) traverses the proxy, so your TLS certificate only needs to
 be valid for the browser.
+
+RTSP does not go through the proxy. The **rtsp** button in a camera's settings
+dialog therefore builds its RTSP link from the server's IP address and RTSP
+port, never from the host name the page was opened on. Its snapshot link is
+served by the web port, so that one does use the address the page was opened on.
 
 ## Home Assistant (MQTT)
 

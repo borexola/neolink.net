@@ -602,6 +602,7 @@ foreach (var cam in config.Cameras)
             service.SetSuspended(cameraState.Suspended(cam.Name)); // restore persisted suspend
             (service.KnownUid, service.LastKnownHost) = cameraState.Identity(cam.Name);
             service.IdentitySeen = (uid, host) => cameraState.SetIdentity(cam.Name, uid, host);
+            service.MissingLenses = lenses => cam.MissingLenses(config.Cameras, lenses);
             primaryService ??= service;
             camServices.Add(service);
             tasks.Add(Task.Run(() => RunCameraGuardedAsync(service, $"{cam.Name} ({kind})", shutdown.Token)));
@@ -880,6 +881,7 @@ foreach (var cam in config.Cameras)
         // on-demand recording session per camera (UI button ≡ HA Record switch).
         {
             EventRecorder = eventRecorder, Address = camAddress, Udp = cam.Udp,
+            Lenses = camServices.Count == 0 ? null : () => camServices.Select(s => s.Lenses).FirstOrDefault(n => n != null),
             // Read live: a relocated camera's host changes in place.
             LiveAddress = cam.IsGenericRtsp || cam.Demo ? null
                 : () => string.IsNullOrWhiteSpace(cam.Host) ? null

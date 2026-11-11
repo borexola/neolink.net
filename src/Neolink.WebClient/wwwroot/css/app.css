@@ -2071,6 +2071,39 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     background: var(--panel-2, var(--panel));
 }
 
+/* The RTSP link card: same pinned spot, without the warning colour. */
+.suspend-confirm.rtsp-card { border-color: var(--accent); gap: 10px; }
+.rtsp-head { display: flex; align-items: center; justify-content: space-between; }
+.rtsp-head .campanel-section-title { margin-bottom: 0; }
+/* Labels sit right beside their controls, not across the panel from them. */
+.rtsp-grid {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 8px 16px;
+    align-items: center;
+    font-size: 13px;
+}
+.rtsp-label { color: var(--muted); }
+.rtsp-grid select { justify-self: start; }
+/* The link and its Copy button read as one control. */
+.rtsp-copy { display: flex; align-items: center; gap: 8px; max-width: 760px; }
+.rtsp-link {
+    flex: 1;
+    min-width: 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    padding: 8px 10px;
+    border: 1px solid var(--border, rgba(128, 128, 128, .35));
+    border-radius: 6px;
+    overflow-wrap: anywhere;
+    user-select: none; /* the shown link has no login: Copy gives the full one */
+}
+.rtsp-copy .copy-btn { white-space: nowrap; min-width: 92px; justify-content: center; }
+.rtsp-card .ev-adv-hint { margin: 0; }
+.copy-btn .copy-ok, .copy-btn .copy-fail { display: none; }
+.copy-btn[data-state] .copy-idle { display: none; }
+.copy-btn[data-state="ok"] .copy-ok, .copy-btn[data-state="fail"] .copy-fail { display: inline; }
+
 .suspend-skip {
     display: inline-flex;
     align-items: center;

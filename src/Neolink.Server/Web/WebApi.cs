@@ -73,6 +73,9 @@ public sealed record WebCameraInfo(string Name, List<WebStreamInfo> Streams, ICa
     public string? MovedTo =>
         LiveAddress?.Invoke() is { } live && !string.Equals(live, Address, StringComparison.OrdinalIgnoreCase) ? live : null;
 
+    /// <summary>Lenses the camera reported at login, each a channel of its own; null when unknown.</summary>
+    public Func<int?>? Lenses { get; init; }
+
     /// <summary>Baichuan-over-UDP transport (beta): UDP-only battery models
     /// (Argus family). Surfaced so the UI can badge these cameras as beta.</summary>
     public bool Udp { get; init; }
@@ -238,7 +241,7 @@ public static class WebApi
         string? RtspMain, string? RtspSub,
         string? Uid, string? AlwaysOn, string? Stream, string? OnvifAddress,
         bool? Record, bool? Udp, bool? UdpProbe, bool? WakeCapture, double? KeepAliveHours,
-        string? PtzMode = null, int? PtzPort = null);
+        string? PtzMode = null, int? PtzPort = null, string? PasswordFrom = null);
     /// <summary>Uid/Udp matter here as much as they do on save: a UDP-only battery
     /// camera never listens on TCP, so testing it the TCP way always times out.
     /// OnvifAddress rides along so a generic camera's test can also say whether its
@@ -247,6 +250,7 @@ public static class WebApi
         string? Username, string? Password, int? ChannelId, string? RtspMain, string? RtspSub,
         string? Uid, bool? Udp, string? OnvifAddress = null);
     private sealed record AutoTrackRequest(bool? On);
+    private sealed record RtspLinkRequest(string? User);
     private sealed record MdSensitivityRequest(int? Sensitivity);
     private sealed record AiSensitivityRequest(string? Type, int? Sensitivity);
     /// <summary>Cols/Rows are only read for a zone Neolink keeps itself, where the
@@ -1098,6 +1102,14 @@ public static class WebApi
             try
             {
                 var cfg = NeolinkConfig.Load(o.ConfigPath);
+                // Lenses the running camera reported that no entry covers yet.
+                List<int>? MissingLenses(CameraConfig c)
+                {
+                    var live = cameras.FirstOrDefault(w => string.Equals(w.Name, c.Name, StringComparison.OrdinalIgnoreCase));
+                    if (live?.Lenses?.Invoke() is not { } lenses || lenses < 2) return null;
+                    var missing = c.MissingLenses(cfg.Cameras, lenses);
+                    return missing.Count == 0 ? null : missing;
+                }
                 return Results.Json(new
                 {
                     writable = ConfigEditor.IsWritable(o.ConfigPath),
@@ -1121,6 +1133,7 @@ public static class WebApi
                         username = c.IsGenericRtsp ? null : c.Username,
                         hasPassword = !string.IsNullOrEmpty(c.Password),
                         channelId = (int)c.ChannelId,
+                        missingLenses = MissingLenses(c),
                         httpAddress = c.HttpAddress,
                         rtspMain = ConfigEditor.MaskRtspPassword(c.RtspMain),
                         rtspSub = ConfigEditor.MaskRtspPassword(c.RtspSub),
@@ -1270,6 +1283,13 @@ public static class WebApi
                         // Write-only password: null keeps whatever the file has.
                         if (req.Password != null)
                             ConfigEditor.Set(cam, "password", req.Password.Length == 0 ? null : req.Password);
+                        // Another lens of a camera already configured takes that entry's password.
+                        else if (existing == null && req.PasswordFrom is { Length: > 0 } from
+                                 && ConfigEditor.FindCamera(cams, from) is { } sibling
+                                 && string.Equals(ConfigEditor.GetString(sibling, "address")?.Trim() ?? "",
+                                     req.Address?.Trim() ?? "", StringComparison.OrdinalIgnoreCase)
+                                 && ConfigEditor.GetString(sibling, "password") is { Length: > 0 } siblingPassword)
+                            ConfigEditor.Set(cam, "password", siblingPassword);
                         if (cam["password"] is not System.Text.Json.Nodes.JsonValue pw
                             || !pw.TryGetValue<string>(out var pwText) || pwText.Length == 0)
                             throw new FormatException("a password is required for a Reolink camera");
@@ -1729,11 +1749,20 @@ public static class WebApi
                 await camera.LoginAsync(username!, password, cts.Token,
                     Protocol.BcLoginMode.From(stored?.MaxEncryption, stored?.LegacyLogin ?? false));
                 var di = camera.DeviceInfo;
+                // The same count the running server settles on: login reply, then the ability list.
+                int lenses = di == null ? 1
+                    : (await Streaming.CameraService.ProbeLensesAsync(camera, di, cts.Token)).Facts.Lenses;
+                int channels = Math.Max(lenses, di?.VideoChannels ?? 0);
                 return Results.Json(new
                 {
                     ok = true,
                     message = (udp ? "Connected over UDP and logged in" : "Connected and logged in") +
-                        (di is { Width: > 0 } ? $" — the camera reports {di.Width}x{di.Height}" : ""),
+                        (di is { Width: > 0 } ? $" — the camera reports {di.Width}x{di.Height}" : "") +
+                        (di is { IsNvr: false, VideoChannels: > 0 } && channel >= channels
+                            ? $". It reports {channels} channel(s), numbered from 0, so channel {channel} may not exist"
+                            : lenses > 1
+                                ? $". It has {lenses} lenses, channels 0 to {lenses - 1}: each is added as its own camera"
+                                : ""),
                 });
             }
             catch (OperationCanceledException) when (!ctx.RequestAborted.IsCancellationRequested)
@@ -2538,6 +2567,41 @@ public static class WebApi
             return control.Online;
         }
         const string Asleep = "the camera is asleep and did not wake within a minute; try again";
+
+        // RTSP users that may open this camera's streams; empty when its streams need no login.
+        List<string> RtspLogins(WebCameraInfo cam) => cam.PermittedUsers == null ? new()
+            : o.Users.Keys.Where(cam.PermittedUsers.Contains).OrderBy(u => u, StringComparer.OrdinalIgnoreCase).ToList();
+
+        // Where this camera's RTSP streams are served, for the panel's "rtsp" dialog. Logins are named to admins only.
+        app.MapGet("/api/cameras/{name}/rtsp-link", (string name, HttpContext ctx) =>
+        {
+            var cam = cameras.FirstOrDefault(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase));
+            if (cam == null) return Results.Json(new { error = "unknown camera" }, statusCode: 404);
+            var logins = RtspLogins(cam);
+            return Results.Json(new
+            {
+                host = NetUtil.DisplayHost(o.BindAddr),
+                port = o.RtspPort,
+                loginRequired = logins.Count > 0,
+                users = IsAdmin(ctx) ? logins : null,
+                // The snapshot URL lives on the web port and takes the same logins (see SnapshotAuth).
+                webPort = o.Port,
+                snapshotOpen = !userStore.Enabled && logins.Count == 0,
+            });
+        });
+
+        // The login part of an RTSP link ("user:password", percent-encoded) for one RTSP user. Admins only.
+        app.MapPost("/api/cameras/{name}/rtsp-link", (string name, RtspLinkRequest req, HttpContext ctx) =>
+        {
+            if (AdminOnly(ctx) is { } denied) return denied;
+            var cam = cameras.FirstOrDefault(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase));
+            if (cam == null) return Results.Json(new { error = "unknown camera" }, statusCode: 404);
+            if (req.User is not { Length: > 0 } user || !RtspLogins(cam).Contains(user)
+                || !o.Users.TryGetValue(user, out var pass))
+                return Results.Json(new { error = "that RTSP user cannot open this camera's streams" }, statusCode: 400);
+            Log.Info($"RTSP link for {cam.Name} with the login of RTSP user '{user}' handed to '{SessionName(ctx)}'");
+            return Results.Json(new { userInfo = $"{Uri.EscapeDataString(user)}:{Uri.EscapeDataString(pass)}" });
+        });
 
         app.MapGet("/api/cameras/{name}/capabilities", (string name, HttpContext ctx) =>
             ExecAsync(name, ctx, mutating: false, async (control, reqCt) =>

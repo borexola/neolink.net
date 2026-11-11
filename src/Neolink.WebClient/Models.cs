@@ -241,9 +241,15 @@ public sealed record ApiAdminCamera(string Name, string Type, string? Address, s
     string? Uid = null, string? AlwaysOn = null, string? Stream = null, string? OnvifAddress = null,
     bool Record = true, bool Udp = false, bool UdpProbe = false, bool WakeCapture = false,
     double KeepAliveHours = 0, string? PtzMode = null, int? PtzPort = null, string? PtzOff = null, bool PtzOpen = false,
-    string? LearnedUid = null, string? CurrentAddress = null);
+    string? LearnedUid = null, string? CurrentAddress = null, List<int>? MissingLenses = null);
 public sealed record ApiAdminCameras(bool Writable, List<ApiAdminCamera> Cameras, ApiAdminPtz? Ptz = null,
     string? WriteProblem = null);
+
+/// <summary>GET /api/cameras/{name}/rtsp-link — where the RTSP streams are served; Users is null unless an admin asks.</summary>
+public sealed record ApiRtspLink(string? Host, int Port, bool LoginRequired, List<string>? Users = null,
+    int WebPort = 0, bool SnapshotOpen = false);
+/// <summary>POST /api/cameras/{name}/rtsp-link — "user:password", percent-encoded, for one RTSP user.</summary>
+public sealed record ApiRtspLogin(string UserInfo);
 
 /// <summary>GET /api/admin/discover — the server's own subnets, what the dialog starts with.</summary>
 public sealed record ApiLanScanDefaults(List<string> Subnets);
@@ -667,6 +673,7 @@ public static class UiIcon
             "archive" => "<polyline points=\"21 8 21 21 3 21 3 8\"/><rect x=\"1\" y=\"3\" width=\"22\" height=\"5\"/><line x1=\"10\" y1=\"12\" x2=\"14\" y2=\"12\"/>",
             "bell" => "<path d=\"M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9\"/><path d=\"M13.73 21a2 2 0 0 1-3.46 0\"/>",
             // The classic ribbon bookmark.
+            "link" => "<path d=\"M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71\"/><path d=\"M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71\"/>",
             "bookmark" => "<path d=\"M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z\"/>",
             // Globe with meridians — the UI language.
             "globe" => "<circle cx=\"12\" cy=\"12\" r=\"10\"/><line x1=\"2\" y1=\"12\" x2=\"22\" y2=\"12\"/>"

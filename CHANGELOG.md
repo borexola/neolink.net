@@ -4,6 +4,13 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
+## 1.2.4
+
+### Added
+
+- **Dual-lens cameras (TrackMix, the first Duo): the second lens can be added as its own camera.** Neolink reads the lens count at login, says in the log when a lens has no entry, and Settings → Cameras gets an **Add lens** button that reuses the first entry's address and login. A lens without its own detector (the TrackMix telephoto) records on the first lens's detections.
+- **An `rtsp` button in the camera settings dialog copies the camera's RTSP stream link or its snapshot URL.** Pick the stream and, as an admin, the RTSP user to sign in as: the copied link includes that login, which is never shown on screen.
+
 ## 1.2.3
 
 Per-object detection zones and fast camera settings on cameras without an HTTP API, the oldest footage deleted when a disk runs low, and a locked-down admin-password reset.

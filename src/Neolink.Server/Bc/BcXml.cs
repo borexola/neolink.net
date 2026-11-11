@@ -202,9 +202,46 @@ public sealed class DeviceInfoXml
     /// (it is what Home Assistant's reolink library keys on too).</summary>
     public bool HasSleep;
 
+    /// <summary>An NVR or Home Hub: its channels are attached cameras, not lenses.</summary>
+    public bool IsNvr;
+    /// <summary>Video channels the device serves (channelNum); 0 when it does not say.</summary>
+    public int VideoChannels;
+    /// <summary>Channels with detection of their own (analogChnNum): a TrackMix has two lenses but one.</summary>
+    public int DetectChannels;
+
+    /// <summary>Lenses of a standalone camera, each a channel of its own; 1 for an NVR or when unknown.</summary>
+    public int Lenses => IsNvr ? 1 : Math.Max(1, VideoChannels);
+
+    /// <summary>The channel whose detections and status cover <paramref name="channel"/>:
+    /// a lens with no detector of its own shares channel 0's.</summary>
+    public byte OwnerChannel(byte channel) =>
+        !IsNvr && channel >= DetectChannels && channel < VideoChannels ? (byte)0 : channel;
+
+    /// <summary>Records lenses learned outside the login reply (an ability flag): only channel 0 detects then.</summary>
+    public void SetLenses(int lenses)
+    {
+        if (IsNvr || lenses <= VideoChannels) return;
+        VideoChannels = lenses;
+        DetectChannels = 1;
+    }
+
+    /// <summary>The channel facts exactly as the login reply gave them, for the log.</summary>
+    public string LoginSummary = "";
+
     public static DeviceInfoXml Parse(XElement el)
     {
         var info = new DeviceInfoXml();
+        string Text(string name) => ((string?)el.Element(name) ?? "").Trim();
+        int Count(string name) => int.TryParse(Text(name), out var n) && n is > 0 and <= 255 ? n : 0;
+        info.IsNvr = Text("type").ToLowerInvariant() is "nvr" or "wifi_nvr" or "homehub"
+                     || Text("typeInfo").ToUpperInvariant() is "NVR" or "WIFI_NVR" or "HOMEHUB";
+        // Either count stands in for the other when the firmware sends only one.
+        int video = Count("channelNum"), detect = Count("analogChnNum");
+        info.VideoChannels = video > 0 ? video : detect;
+        info.DetectChannels = detect > 0 ? detect : video;
+        string Shown(string name) => Text(name) is { Length: > 0 } v ? v : "-";
+        info.LoginSummary = $"type={Shown("type")}/{Shown("typeInfo")}, channelNum={Shown("channelNum")}, " +
+                            $"analogChnNum={Shown("analogChnNum")}";
         var res = el.Element("resolution");
         if (res != null)
         {
@@ -282,6 +319,10 @@ public sealed class StreamInfoXml
 {
     public uint ChannelBits;
     public List<EncodeTableXml> EncodeTables { get; } = new();
+
+    /// <summary>"bits 1: mainStream 3840x2160, subStream 640x360" for the log.</summary>
+    public override string ToString() =>
+        $"bits {ChannelBits}: {string.Join(", ", EncodeTables.Select(t => $"{t.Type} {t.Width}x{t.Height}"))}";
 }
 
 /// <summary>One encode profile: name (e.g. "mainStream"), resolution and the framerate/bitrate options.</summary>

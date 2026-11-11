@@ -731,8 +731,41 @@
     // delimiter keeps "Drive" from matching "Driveway".
     const logCamHit = (msg, cam) => msg.startsWith(cam + ':') || msg.startsWith(cam + ' (');
 
+    // Text a copy button will copy, held here so a link with a password is never put in the page.
+    const heldCopy = {};
+
     window.neolink = {
         freeInit,
+
+        holdCopyText(key, text) {
+            if (text == null) delete heldCopy[key]; else heldCopy[key] = text;
+        },
+
+        // Runs in the button's own click, where every browser allows a copy (also on plain http).
+        copyHeld(btn, key) {
+            const text = heldCopy[key];
+            const done = (ok) => {
+                btn.dataset.state = ok ? 'ok' : 'fail';
+                clearTimeout(btn._copyTimer);
+                btn._copyTimer = setTimeout(() => { delete btn.dataset.state; }, 1800);
+            };
+            const legacy = () => {
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                ta.setAttribute('readonly', '');
+                ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;';
+                document.body.appendChild(ta);
+                ta.select();
+                let ok = false;
+                try { ok = document.execCommand('copy'); } catch { ok = false; }
+                ta.remove();
+                done(ok);
+            };
+            if (!text) { done(false); return; }
+            if (navigator.clipboard && window.isSecureContext)
+                navigator.clipboard.writeText(text).then(() => done(true), legacy);
+            else legacy();
+        },
 
         // Freeform geometry accessors for Blazor (saved layouts). They talk to
         // the LIVE in-memory state — a plain localStorage read could be a
