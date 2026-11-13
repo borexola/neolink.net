@@ -6,6 +6,8 @@ in the README). Paste the matching section below into the GitHub release.
 
 ## 1.2.4
 
+Each lens of a dual-lens camera as its own camera, an rtsp button that copies stream and snapshot links, camera password changes from Neolink, and a log that says why a stream never starts.
+
 ### Added
 
 - **Dual-lens cameras (TrackMix, the first Duo): the second lens can be added as its own camera.** Neolink reads the lens count at login, says in the log when a lens has no entry, and Settings → Cameras gets an **Add lens** button that reuses the first entry's address and login. A lens without its own detector (the TrackMix telephoto) records on the first lens's detections.
