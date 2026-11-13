@@ -403,7 +403,7 @@ public sealed class BcCamera : IBcCamera
                 // problem — surface it, the numeric code alone is rarely diagnosable.
                 if (reply.Xml is { Raw.Count: > 0 } replyXml)
                     Log.Debug($"BC command {msgId} rejected ({reply.Meta.ResponseCode}); reply body: " +
-                              string.Concat(replyXml.Raw.Select(e => e.ToString(SaveOptions.DisableFormatting))));
+                              XmlUtil.ForLog(string.Concat(replyXml.Raw.Select(e => e.ToString(SaveOptions.DisableFormatting)))));
                 throw new CameraCommandException(msgId, reply.Meta.ResponseCode);
             }
             return reply;

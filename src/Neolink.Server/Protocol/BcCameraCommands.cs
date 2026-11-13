@@ -26,6 +26,47 @@ public static class BcCameraCommands
     private static ExtensionXml ChannelExt(IBcCamera cam) => new() { ChannelId = cam.ChannelId };
     private static ExtensionXml RfExt(IBcCamera cam) => new() { RfId = cam.ChannelId };
 
+    /// <summary>The camera's accounts (msg 58): raw &lt;UserList&gt;, or null when it sends none.</summary>
+    public static async Task<XElement?> GetUserListAsync(this IBcCamera cam, string userName, TimeSpan? timeout = null, CancellationToken ct = default)
+    {
+        var reply = await cam.SendCommandAsync(BcConstants.MsgIdGetAbilitySupport,
+            extension: new ExtensionXml { UserName = userName }, replyTimeout: timeout, ct: ct).ConfigureAwait(false);
+        return reply?.Xml?.RawElement("UserList");
+    }
+
+    /// <summary>Gives one account a new password (msg 59). A camera that accepts it does not always reply.
+    /// <paramref name="beforeWrite"/> runs once the list is read, just before the camera can hold the new password.</summary>
+    public static async Task SetUserPasswordAsync(this IBcCamera cam, string userName, string password,
+        Action? beforeWrite = null, CancellationToken ct = default)
+    {
+        XElement? users;
+        try { users = await cam.GetUserListAsync(userName, ct: ct).ConfigureAwait(false); }
+        catch (TimeoutException) { users = null; } // nothing was written yet
+        if (users == null) throw new BcProtocolException("the camera did not return its account list");
+        var change = BcXmlBody.FromRaw(BuildPasswordChange(users, userName, password));
+        beforeWrite?.Invoke();
+        await cam.SendCommandAsync(BcConstants.MsgIdUpdateUserList, change,
+            replyTimeout: TimeSpan.FromSeconds(3), tolerateNoReply: true, ct: ct).ConfigureAwait(false);
+    }
+
+    /// <summary>The list to send back: every account as read, the named one marked "modify" with its new password.</summary>
+    internal static XElement BuildPasswordChange(XElement userList, string userName, string password)
+    {
+        var users = userList.Elements("User").ToList();
+        if (!users.Any(u => (string?)u.Element("userName") == userName))
+            throw new BcProtocolException($"the camera has no account named '{userName}'");
+        return new XElement("UserList", new XAttribute("version", BcXmlBody.XmlVersion), users.Select(u =>
+        {
+            bool target = (string?)u.Element("userName") == userName;
+            var user = new XElement("User", new XElement("userName", (string?)u.Element("userName")));
+            if (target) user.Add(new XElement("password", password));
+            foreach (var kept in new[] { "userId", "userLevel", "loginState" })
+                if (u.Element(kept) is { } value) user.Add(new XElement(kept, value.Value));
+            user.Add(new XElement("userSetState", target ? "modify" : "none"));
+            return user;
+        }));
+    }
+
     /// <summary>Feature flags the camera advertises (raw &lt;Support&gt; XML), or null if unsupported.</summary>
     public static async Task<XElement?> GetSupportAsync(this IBcCamera cam, TimeSpan? timeout = null, CancellationToken ct = default)
     {

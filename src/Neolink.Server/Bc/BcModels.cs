@@ -32,6 +32,7 @@ public static class BcConstants
     public const uint MsgIdGetServicePorts = 37;   // reply: ServerPort/HttpPort/HttpsPort/RtspPort/RtmpPort/OnvifPort
     public const uint MsgIdMotion = 33;
     public const uint MsgIdGetAbilitySupport = 58;     // firmware name: GET_USERCFG_V20 (<UserList>)
+    public const uint MsgIdUpdateUserList = 59;        // the whole <UserList> back, one <User> marked add/modify/delete
     public const uint MsgIdVersion = 80;
     public const uint MsgIdPing = 93;
     public const uint MsgIdGetGeneral = 104;

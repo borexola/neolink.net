@@ -1,12 +1,12 @@
 name: ci
 
-# Merge gate: every pull request (and every push to main) must build cleanly
+# Merge gate: every pull request (and every push to main or beta) must build cleanly
 # and pass the built-in self-test suite (`neolink.net selftest` — protocol
 # codecs, config, recording, auth, MQTT, and the live web-API contract test).
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, beta]
   workflow_dispatch:
 
 permissions:

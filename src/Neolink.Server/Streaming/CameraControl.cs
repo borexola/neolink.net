@@ -633,6 +633,22 @@ public sealed class CameraControl : ICameraControl
         }
     }
 
+    /// <summary>Writes a new password for one of the camera's accounts over the live session;
+    /// <paramref name="beforeWrite"/> runs just before the camera can hold it.</summary>
+    public Task SetAccountPasswordAsync(string user, string password, Action beforeWrite, CancellationToken ct) =>
+        WithCameraAsync<object?>(async camera =>
+        {
+            await camera.SetUserPasswordAsync(user, password, beforeWrite, ct).ConfigureAwait(false);
+            return null;
+        }, ct);
+
+    /// <summary>The camera's password changed: a login the HTTP API turned away before no longer pauses it.</summary>
+    public void HttpLoginChanged()
+    {
+        _httpRetryAt = default;
+        _httpLoginWarned = false;
+    }
+
     public Task<CameraCapabilities> GetCapabilitiesAsync(CancellationToken ct) =>
         WithCameraAsync(async camera =>
         {

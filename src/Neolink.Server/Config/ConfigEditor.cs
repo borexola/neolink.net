@@ -167,12 +167,7 @@ public static class ConfigEditor
     {
         lock (Gate)
         {
-            var text = File.ReadAllText(path);
-            var root = JsonNode.Parse(text, documentOptions: new JsonDocumentOptions
-            {
-                CommentHandling = JsonCommentHandling.Skip,
-                AllowTrailingCommas = true,
-            }) as JsonObject ?? throw new FormatException("config root must be a JSON object");
+            var root = Read(path);
 
             // strict: a camera the loader would merely SKIP at boot has to be refused
             // here, or the editor accepts it and it vanishes next start. But only ever
@@ -204,6 +199,14 @@ public static class ConfigEditor
             File.Move(tmp, path, overwrite: true);
         }
     }
+
+    /// <summary>The raw config document as <see cref="Apply"/> edits it. Throws when the file is not a JSON object.</summary>
+    public static JsonObject Read(string path) =>
+        JsonNode.Parse(File.ReadAllText(path), documentOptions: new JsonDocumentOptions
+        {
+            CommentHandling = JsonCommentHandling.Skip,
+            AllowTrailingCommas = true,
+        }) as JsonObject ?? throw new FormatException("config root must be a JSON object");
 
     /// <summary>Sets or removes a key on an object node (null removes).</summary>
     public static void Set(JsonObject obj, string key, JsonNode? value)

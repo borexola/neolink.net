@@ -164,6 +164,11 @@ public sealed class CameraService : ILiveCameraSource
     private volatile bool _parked;
     private volatile bool _suspended;      // user pressed "suspend": hold no connection at all
     private volatile CancellationTokenSource? _activeStream; // the live session's CTS, to interrupt on suspend
+    private sealed record LoginWatch(string? Password, TaskCompletionSource<bool> Done);
+    private LoginWatch? _loginWatch;                       // a re-login waiting to hear how its password fares
+    private volatile string? _loginPassword;               // the password the latest login attempt used
+    private volatile bool _relogin;                        // the session was dropped on purpose, to log in again
+    private volatile CancellationTokenSource? _authWait;   // the wait after a refused login; a re-login ends it
     private bool _sleepHintLogged;
     private bool _scanLogged; // "wake-capture watching" said once
     /// <summary>The camera resets this second connection at login while a sibling streams: one client at a time.</summary>
@@ -462,6 +467,39 @@ public sealed class CameraService : ILiveCameraSource
         {
             try { _activeStream?.Cancel(); } catch (ObjectDisposedException) { }
         }
+    }
+
+    /// <summary>Drops the session and logs in again with the entry's current password:
+    /// true when the camera accepts that login, false when it refuses it.</summary>
+    public Task<bool> ReloginAsync()
+    {
+        var watch = new LoginWatch(_config.Password, new(TaskCreationOptions.RunContinuationsAsynchronously));
+        Volatile.Write(ref _loginWatch, watch);
+        if (_activeStream is { } session)
+        {
+            _relogin = true;
+            try { session.Cancel(); } catch (ObjectDisposedException) { }
+        }
+        try { _authWait?.Cancel(); } catch (ObjectDisposedException) { }
+        return watch.Done.Task;
+    }
+
+    /// <summary>Tells a waiting re-login how a login with <paramref name="password"/> ended.
+    /// False when it waits for another password, the one the next attempt will use.</summary>
+    private bool LoginSettled(string? password, bool accepted)
+    {
+        if (Volatile.Read(ref _loginWatch) is not { } watch) return true;
+        if (watch.Password == password)
+        {
+            Interlocked.CompareExchange(ref _loginWatch, null, watch);
+            watch.Done.TrySetResult(accepted);
+            return true;
+        }
+        if (watch.Password == _config.Password) return false;
+        // The entry's password changed again since that re-login was asked for: it is void.
+        Interlocked.CompareExchange(ref _loginWatch, null, watch);
+        watch.Done.TrySetCanceled();
+        return true;
     }
 
     // Sleep policy: explicit always_on wins; unset = battery cameras doze,
@@ -942,18 +980,41 @@ public sealed class CameraService : ILiveCameraSource
             }
             catch (AuthFailedException ex)
             {
+                // A re-login is waiting to try another password than this attempt used: try that one now.
+                bool asked = Volatile.Read(ref _loginWatch) != null;
+                if (!LoginSettled(_loginPassword, false))
+                {
+                    backoff = MinBackoff;
+                    continue;
+                }
                 // Wrong credentials are permanent, but cameras also reject logins
                 // transiently (rebooting, user table full), so retry at a slow pace
                 // rather than giving up for good.
-                Log.Error($"{Tag}: authentication failed: {ex.Message}; " +
-                          $"retrying in {AuthRetryDelay.TotalSeconds:0}s (check the camera credentials)");
-                try
+                if (asked)
+                    Log.Debug($"{Tag}: the camera refused the password a re-login was trying");
+                else
+                    Log.Error($"{Tag}: authentication failed: {ex.Message}; " +
+                              $"retrying in {AuthRetryDelay.TotalSeconds:0}s (check the camera credentials)");
+                using (var wait = CancellationTokenSource.CreateLinkedTokenSource(ct))
                 {
-                    await Task.Delay(AuthRetryDelay, ct).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    return;
+                    _authWait = wait;
+                    if (Volatile.Read(ref _loginWatch) != null) wait.Cancel(); // a re-login was asked for just now
+                    try
+                    {
+                        await Task.Delay(AuthRetryDelay, wait.Token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                    {
+                        // A re-login ended the wait.
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        return;
+                    }
+                    finally
+                    {
+                        _authWait = null;
+                    }
                 }
                 backoff = MinBackoff;
                 continue;
@@ -963,6 +1024,13 @@ public sealed class CameraService : ILiveCameraSource
                 // Interrupted by a user suspend (the session's error races the token):
                 // not a failure — let the top-of-loop park hold it, no log, no backoff.
                 if (_suspended) continue;
+                // Dropped on purpose to log in again (ReloginAsync): not a failure either.
+                if (_relogin)
+                {
+                    _relogin = false;
+                    backoff = MinBackoff;
+                    continue;
+                }
                 if (gotFrames)
                 {
                     backoff = MinBackoff; // we did stream; reset the backoff
@@ -1390,8 +1458,15 @@ public sealed class CameraService : ILiveCameraSource
         _sessionReached = true;
 
         Note($"{Tag}: logging in as '{_config.Username}'");
-        await camera.LoginAsync(_config.Username, _config.Password, ct,
+        string? password = _loginPassword = _config.Password;
+        await camera.LoginAsync(_config.Username, password, ct,
             BcLoginMode.From(_config.MaxEncryption, _config.LegacyLogin)).ConfigureAwait(false);
+        if (!LoginSettled(password, true))
+        {
+            _relogin = true; // logged in with a password that was replaced meanwhile: this session is out of date
+            throw new OperationCanceledException("logging in again with the camera's new password");
+        }
+        _relogin = false;
         var res = camera.DeviceInfo;
         Note($"{Tag}: logged in{(res != null && res.Width > 0 ? $", camera reports {res.Width}x{res.Height}" : "")}");
         _connectFailures = 0;
@@ -1400,6 +1475,12 @@ public sealed class CameraService : ILiveCameraSource
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _activeStream = linked; // let SetSuspended interrupt this session at once
         if (_suspended) linked.Cancel(); // a suspend that raced the assignment above
+        // A re-login asked for while this login was finishing found no session to drop: answer it here.
+        if (!LoginSettled(password, true))
+        {
+            _relogin = true;
+            linked.Cancel();
+        }
 
         // A wake-capture cycle handed us its evidence: this session is the rest of
         // the experiment (see WakeDiag). Timed from the point we are logged in.

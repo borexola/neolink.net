@@ -175,6 +175,8 @@ public sealed class WebApiOptions
     /// detection-capability signals that let the settings dialog filter its
     /// event-type chips before the live probe answers. Null in tests.</summary>
     public CameraStateStore? CameraState { get; init; }
+    /// <summary>Changes a camera's own login password and moves the running sessions to it.</summary>
+    public CameraLogins? Logins { get; init; }
 }
 
 /// <summary>
@@ -233,6 +235,7 @@ public static class WebApi
     private sealed record AutoReplyRequest(int? FileId, int? Timeout);
     /// <summary>Camera add/edit. Password is WRITE-ONLY: null keeps the stored one,
     /// "" clears it, a value sets it. RTSP URLs sent back masked ("****") mean keep.</summary>
+    private sealed record CameraPasswordRequest(string? Password);
     /// <summary>AlwaysOn is a STRING tri-state ("auto"|"true"|"false") because the
     /// config key is itself tri-state: absent = auto (battery cams sleep, the rest
     /// stay on). A bool? could not tell "auto" apart from "leave unchanged".</summary>
@@ -1409,6 +1412,32 @@ public static class WebApi
             {
                 return Results.Json(new { error = $"config.json is not writable: {ex.Message}" }, statusCode: 409);
             }
+        });
+
+        // Changes the camera's own login password, proves it with a fresh login, then saves it. No restart.
+        app.MapPost("/api/admin/cameras/{name}/password", async (string name, CameraPasswordRequest req, HttpContext ctx) =>
+        {
+            if (AdminOnly(ctx) is { } denied) return denied;
+            // A page on another site must not reach this through a signed-in browser.
+            var origin = ctx.Request.Headers.Origin.ToString();
+            if (origin.Length > 0 && !(Uri.TryCreate(origin, UriKind.Absolute, out var originUri)
+                    && string.Equals(originUri.Authority, ctx.Request.Host.Value, StringComparison.OrdinalIgnoreCase)))
+            {
+                Log.Warn($"Camera password change REFUSED from cross-site origin {origin}");
+                return Results.Json(new { error = "change a camera's password from this server's own page" }, statusCode: 403);
+            }
+            if (o.Logins == null)
+                return Results.Json(new { error = "camera passwords cannot be changed on this server" }, statusCode: 400);
+            // The server's token, not the request's: a closed browser tab must not stop this halfway.
+            var change = await o.Logins.ChangeAsync(name, req.Password ?? "", ct);
+            if (!change.Ok)
+            {
+                Log.Warn($"camera \"{name}\" password change by '{SessionName(ctx)}': {change.Message}");
+                return Results.Json(new { error = change.Message }, statusCode: 409);
+            }
+            Log.Warn($"camera \"{name}\" login password changed on the camera via the web UI by '{SessionName(ctx)}' " +
+                     $"(entries: {string.Join(", ", change.Entries)}); config.json updated");
+            return Results.Json(new { ok = true, entries = change.Entries });
         });
 
         // Auto discover: what the dialog starts with — the server's own /24s.

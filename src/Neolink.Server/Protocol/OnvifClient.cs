@@ -66,7 +66,7 @@ public sealed partial class OnvifClient : IDisposable
     private bool _reportedOff;               // the camera's own port table says ONVIF is disabled
     private string _deviceUrl;               // the candidate currently being tried / that worked
     private readonly string _username;
-    private readonly string _password;
+    private volatile string _password;
     private readonly string _tag;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly bool _generic;
@@ -249,6 +249,9 @@ public sealed partial class OnvifClient : IDisposable
         if (port is > 0 and < 65536 && _candidates.Length > 1)
             _candidates = BuildCandidates(_bare, ProbeOrder(port, _probePorts ?? new[] { 8000, 80 }));
     }
+
+    /// <summary>The camera has a new password: sign requests with it from now on.</summary>
+    public void SetPassword(string? password) => _password = password ?? "";
 
     /// <summary>The camera was followed to a new address: probe it afresh on the same ports.</summary>
     public void Rehost(string address)

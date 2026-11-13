@@ -6079,6 +6079,15 @@ textarea.ai-prompt {
    but the TEXT inside reads left-aligned — long messages used to be laid out
    ragged-left across the whole row width, which read as a jumble. Width is
    capped at the widest input so the message visually belongs to its field. */
+/* The change-password-on-the-camera form: outlined, so it reads as its own step inside the editor. */
+.cam-pw-box {
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-sm);
+    background: rgba(91, 157, 255, 0.05);
+    padding: 4px 12px 8px;
+    margin: 6px 0 10px;
+}
+
 .field-error {
     color: var(--err);
     font-size: 11px;

@@ -498,6 +498,28 @@ warnings with fill-date forecasts, and AES-256-GCM footage encryption.
 - In Docker both need host networking (`--network host`): a bridged container
   gets no broadcasts or multicast.
 
+### Changing a camera's password
+
+Settings → Cameras → edit a Reolink camera → **Change the password on the
+camera…** sets a new login password on the camera itself. Neolink.NET then
+signs in again with it on every stream of that camera, a second-lens entry
+included, and writes it to `config.json` only once the camera has accepted a
+login with it. No restart is needed.
+
+- The camera has to be connected: a suspended or offline camera, or a sleeping
+  battery one, cannot take the change.
+- The password is 6 to 31 characters, without spaces.
+- If the camera does not take it, Neolink.NET goes back to the old password,
+  says so, and leaves `config.json` alone.
+- If the camera accepts neither password right away (it is restarting, say),
+  Neolink.NET keeps trying both for 15 minutes and saves the new one as soon
+  as the camera takes it. The log says how it ended.
+- Anything else that signs in to the camera (the Reolink app, an NVR, Home
+  Assistant) needs the new password too.
+- In the Home Assistant add-on, a camera listed in the add-on's Options with a
+  password there gets that password back at the next start: change it, or
+  blank it, in Options too.
+
 ### Dual-lens cameras (TrackMix, Duo)
 
 A camera with two lenses that each have their own picture (TrackMix: wide and

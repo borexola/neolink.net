@@ -276,6 +276,7 @@ var viewers = new ViewerRegistry();
 var server = new RtspServer(users) { Viewers = viewers };
 var tasks = new List<Task>();
 var webCameras = new List<WebCameraInfo>();
+var cameraLogins = new CameraLogins(Path.GetFullPath(configPath));
 // Router wake hints (wake_hints.syslog_port) route to each camera's wake-probe
 // owner by source IP; populated as the cameras are built below.
 var wakeHintTargets = new List<CameraService>();
@@ -658,7 +659,9 @@ foreach (var cam in config.Cameras)
         // All stream services: the camera is online if ANY session is live (a
         // viewer watching only the sub stream must not read as "offline"), and
         // commands fall back to whichever session exists.
-        control = new CameraControl(primary, httpApi, camServices, onvif) { HttpExplicit = cam.HttpAddress != null };
+        var reolink = new CameraControl(primary, httpApi, camServices, onvif) { HttpExplicit = cam.HttpAddress != null };
+        control = reolink;
+        cameraLogins.Add(cam, camServices, reolink, httpApi, onvif);
 
         // Two-way talk is opt-in (ui.talk). When on, this camera's RTSP mounts can
         // serve an ONVIF audio backchannel (go2rtc / HA WebRTC) — DESCRIBE still
@@ -1199,6 +1202,7 @@ if (config.WebPort > 0)
         // than on the bridge's ~20s refresh, so automations don't act on a stale switch.
         OnCameraChanged = mqtt == null ? null : mqtt.RepublishCameraAsync,
         CameraState = cameraState,
+        Logins = cameraLogins,
     };
 
     tasks.Add(Task.Run(async () =>

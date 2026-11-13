@@ -1915,6 +1915,36 @@
                                                placeholder="@(e.HasPassword ? T["•••• stored (blank keeps it)"] : T["camera password"])"
                                                @bind="e.Password" @bind:event="oninput" /></div>
                                     @if (CamPasswordError != null) { <div class="field-error">@CamPasswordError</div> }
+                                    @if (e.OriginalName != null)
+                                    {
+                                        @if (!_camPwOpen)
+                                        {
+                                            <div class="control-row"><span></span>
+                                                <button class="chip chip-active" type="button" @onclick="OpenCamPassword">@T["Change the password on the camera…"]</button></div>
+                                        }
+                                        else
+                                        {
+                                            <div class="cam-pw-box">
+                                            <div class="notice small">@T["Sets a new login password on the camera itself, signs in again with it and saves it here. The camera has to be online."]</div>
+                                            <div class="control-row"><span>@T["New camera password"]</span>
+                                                <input class="notif-input" type="password" autocomplete="new-password"
+                                                       placeholder="@T["6 to 31 characters, no spaces"]" @bind="_camPwNew" @bind:event="oninput" /></div>
+                                            <div class="control-row"><span>@T["Repeat it"]</span>
+                                                <input class="notif-input" type="password" autocomplete="new-password"
+                                                       @bind="_camPwAgain" @bind:event="oninput" /></div>
+                                            @if (_camPwNew.Length > 0 && CamPwError != null) { <div class="field-error">@CamPwError</div> }
+                                            <div class="control-row"><span></span>
+                                                <span>
+                                                    <button class="chip chip-active" type="button" disabled="@(_camPwBusy || CamPwError != null)"
+                                                            @onclick="ChangeCameraPasswordAsync">@(_camPwBusy ? T["Changing…"] : T["Change on the camera"])</button>
+                                                    <button class="chip" type="button" disabled="@_camPwBusy"
+                                                            @onclick="CloseCamPassword">@T["Cancel"]</button>
+                                                </span></div>
+                                            @if (_camPwResult != null) { <div class="notice small @(_camPwOk ? "ok" : "fail")">@_camPwResult</div> }
+                                            </div>
+                                        }
+                                        @if (_camPwResult != null && !_camPwOpen) { <div class="notice small @(_camPwOk ? "ok" : "fail")">@_camPwResult</div> }
+                                    }
                                     <div class="control-row"><span>@T["HTTP address (blank = derived)"]</span>
                                         <input class="notif-input" placeholder="@T["usually blank"]" @bind="e.HttpAddress" /></div>
                                     <div class="control-row"><span>@T["Channel (0 = first; an NVR channel or a second lens)"]</span>
@@ -5614,6 +5644,81 @@
         _camEdit.Name = name;
     }
 
+    // Changing the password on the camera itself, from the edit form of a Reolink entry.
+    private bool _camPwOpen, _camPwBusy, _camPwOk;
+    private string _camPwNew = "", _camPwAgain = "";
+    private string? _camPwResult;
+
+    /// <summary>The edit form as it would be saved; compared with how it was opened to spot unsaved edits.</summary>
+    private string CamSig() => _camEdit == null ? "" : JsonSerializer.Serialize(CamRequestBody(_camEdit, forSave: true));
+    private string _camEditSig = "";
+
+    private string? CamPwError =>
+        _camPwNew.Length is < 6 or > 31 ? T["The password must be 6 to 31 characters long."]
+        : _camPwNew.Any(ch => ch is < '!' or > '~') ? T["Use letters, digits and symbols only, without spaces."]
+        : _camPwNew != _camPwAgain ? T["The two entries do not match."]
+        : null;
+
+    private void OpenCamPassword()
+    {
+        _camPwOpen = true;
+        _camPwNew = _camPwAgain = "";
+        _camPwResult = null;
+    }
+
+    private void CloseCamPassword()
+    {
+        _camPwOpen = false;
+        _camPwNew = _camPwAgain = "";
+    }
+
+    /// <summary>Has the server change the password on the camera, sign in again with it and save it.</summary>
+    private async Task ChangeCameraPasswordAsync()
+    {
+        if (_camPwBusy || CamPwError != null || _camEdit?.OriginalName is not { } name) return;
+        _camPwBusy = true;
+        _camPwResult = null;
+        try
+        {
+            var req = ApiRequest(HttpMethod.Post, $"/api/admin/cameras/{Uri.EscapeDataString(name)}/password");
+            req.Content = JsonContent.Create(new { password = _camPwNew });
+            using var res = await Http.SendAsync(req);
+            _camPwOk = res.IsSuccessStatusCode;
+            _camPwResult = res.IsSuccessStatusCode
+                ? T["The camera has its new password. Neolink is signed in with it and config.json is updated; no restart needed."]
+                : await ApiErrorAsync(res) ?? T.F("Update failed ({0})", (int)res.StatusCode);
+            if (res.IsSuccessStatusCode && _camEdit is { } edit)
+            {
+                _camPwOpen = false;
+                _camPwNew = _camPwAgain = "";
+                edit.Password = ""; // blank keeps the stored one: a later Save must not put an older entry back
+                edit.HasPassword = true;
+                if (CamSig() == _camEditSig)
+                {
+                    // Nothing else was edited: close the form, so the result is not followed by a Save and its restart notice.
+                    _camTestOk = true;
+                    _camTestResult = $"{name}: {_camPwResult}";
+                    _camPwResult = null;
+                    _camEdit = null;
+                    await LoadAdminCamerasAsync();
+                }
+                else
+                {
+                    _camPwResult += " " + T["Your other changes in this form are not saved yet."];
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _camPwOk = false;
+            _camPwResult = ex.Message;
+        }
+        finally
+        {
+            _camPwBusy = false;
+        }
+    }
+
     /// <summary>Writes the address a relocated camera was followed to into config.json.</summary>
     private async Task AdoptAddressAsync(string name)
     {
@@ -5644,6 +5749,8 @@
     {
         _camTestResult = null;
         _camDeleteConfirm = null;
+        _camPwOpen = false;
+        _camPwResult = null;
         _camEdit = new CamEdit
         {
             OriginalName = cam.Name,
@@ -5670,6 +5777,7 @@
             PtzPort = cam.PtzPort,
             PtzOff = cam.PtzOff,
         };
+        _camEditSig = CamSig();
     }
 
     /// <summary>Opens the add form for another lens of a configured camera: same device and login, its own channel.</summary>

@@ -1061,7 +1061,8 @@ public sealed class CameraConfig
     public string Host { get; set; } = "";
     public int Port { get; set; } = 9000;
     public required string Username { get; init; }
-    public string? Password { get; init; }
+    /// <summary>Settable: a password changed on the camera applies to the running sessions.</summary>
+    public string? Password { get; set; }
     public string Stream { get; init; } = "both";
     /// <summary>Generic (non-Reolink) camera: pull this RTSP URL as the main stream.</summary>
     public string? RtspMain { get; init; }

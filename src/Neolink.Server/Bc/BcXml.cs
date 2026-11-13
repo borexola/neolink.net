@@ -371,6 +371,8 @@ public sealed class TalkAbilityXml
 public sealed class ExtensionXml
 {
     public uint? BinaryData;
+    /// <summary>The account a request is about (the user-list read names it here).</summary>
+    public string? UserName;
     public byte? ChannelId;
     /// <summary>PIR sensor id; PIR get/set address the sensor via rfId instead of channelId.</summary>
     public byte? RfId;
@@ -394,6 +396,7 @@ public sealed class ExtensionXml
     {
         var root = new XElement("Extension", new XAttribute("version", BcXmlBody.XmlVersion));
         if (BinaryData.HasValue) root.Add(new XElement("binaryData", BinaryData.Value));
+        if (UserName != null) root.Add(new XElement("userName", UserName));
         if (ChannelId.HasValue) root.Add(new XElement("channelId", ChannelId.Value));
         if (RfId.HasValue) root.Add(new XElement("rfId", RfId.Value));
         return XmlUtil.SerializeDoc(root);
@@ -402,6 +405,10 @@ public sealed class ExtensionXml
 
 internal static class XmlUtil
 {
+    /// <summary>XML text for a log line, with the value of any password element hidden.</summary>
+    public static string ForLog(string xml) => System.Text.RegularExpressions.Regex.Replace(
+        xml, "(<password>)[^<]*(</password>)", "$1***$2", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
     /// <summary>Parses an XML document from raw bytes, tolerating trailing NULs/garbage.</summary>
     public static XElement? TryParseRoot(byte[] plaintext)
     {

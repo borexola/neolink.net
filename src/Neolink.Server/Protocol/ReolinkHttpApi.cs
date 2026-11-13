@@ -43,7 +43,7 @@ public sealed class ReolinkHttpApi : IDisposable
     private readonly HttpClient _http;
     private string _apiUrl;
     private readonly string _username;
-    private readonly string _password;
+    private volatile string _password;
     private readonly byte _channelId;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
@@ -58,6 +58,13 @@ public sealed class ReolinkHttpApi : IDisposable
         _password = password ?? "";
         _channelId = channelId;
         _http = new HttpClient(NewHandler()) { Timeout = RequestTimeout };
+    }
+
+    /// <summary>The camera has a new password: use it and drop the token, so the next call logs in afresh.</summary>
+    public void SetPassword(string? password)
+    {
+        _password = password ?? "";
+        _token = null;
     }
 
     private static string ApiUrl(string address) =>

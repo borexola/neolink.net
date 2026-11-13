@@ -718,7 +718,7 @@ public sealed class BcUdpConnection : IBcConnection
     {
         if (msg.Xml == null)
             return msg.Binary is { Length: > 0 } b ? $" ({b.Length} binary bytes)" : "";
-        var s = Encoding.UTF8.GetString(msg.Xml.Serialize()).Replace('\r', ' ').Replace('\n', ' ');
+        var s = Neolink.Bc.Xml.XmlUtil.ForLog(Encoding.UTF8.GetString(msg.Xml.Serialize())).Replace('\r', ' ').Replace('\n', ' ');
         return " xml=" + (s.Length > 400 ? s[..400] + "…" : s);
     }
 

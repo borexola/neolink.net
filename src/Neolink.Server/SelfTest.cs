@@ -4648,6 +4648,37 @@ public static class SelfTest
                 "http://192.168.1.20:8655/api/cameras/FrontDoor/snapshot.jpg");
         });
 
+        Test("camera password change: the account list goes back with one account marked", () =>
+        {
+            var list = System.Xml.Linq.XElement.Parse(
+                "<UserList version=\"1.1\"><User><userSetState>none</userSetState><userName>admin</userName><userLevel>1</userLevel>" +
+                "<loginState>1</loginState><userId>0</userId></User><User><userSetState>none</userSetState>" +
+                "<userName>guest</userName><userLevel>0</userLevel></User></UserList>");
+            var sent = BcCameraCommands.BuildPasswordChange(list, "admin", "n<w&pass");
+            AssertEq(sent.ToString(System.Xml.Linq.SaveOptions.DisableFormatting),
+                "<UserList version=\"1.1\"><User><userName>admin</userName><password>n&lt;w&amp;pass</password><userId>0</userId>" +
+                "<userLevel>1</userLevel><loginState>1</loginState><userSetState>modify</userSetState></User>" +
+                "<User><userName>guest</userName><userLevel>0</userLevel><userSetState>none</userSetState></User></UserList>");
+            // An account the camera does not have is refused before anything is sent.
+            bool threw = false;
+            try { BcCameraCommands.BuildPasswordChange(list, "Admin", "whatever"); }
+            catch (Bc.BcProtocolException) { threw = true; }
+            Assert(threw, "account names are matched exactly");
+            // The account-list read names the account in its extension.
+            var ext = System.Text.Encoding.UTF8.GetString(new Bc.Xml.ExtensionXml { UserName = "admin" }.Serialize());
+            Assert(ext.Contains("<userName>admin</userName>"), "the extension carries the account name");
+            // What Neolink will send to a camera: 6 to 31 printable characters, no spaces.
+            Assert(Streaming.CameraLogins.PasswordError("Abc12!") == null, "a 6-character password passes");
+            Assert(Streaming.CameraLogins.PasswordError(new string('a', 31)) == null, "so does a 31-character one");
+            Assert(Streaming.CameraLogins.PasswordError("short") != null, "under 6 characters");
+            Assert(Streaming.CameraLogins.PasswordError(new string('a', 32)) != null, "over 31 characters");
+            Assert(Streaming.CameraLogins.PasswordError("with space1") != null, "spaces");
+            Assert(Streaming.CameraLogins.PasswordError("p\u00e4ssword1") != null, "outside printable ASCII");
+            // A camera that echoes an account list into a logged reply does not put a password in the log.
+            AssertEq(Bc.Xml.XmlUtil.ForLog("<User><userName>admin</userName><password>s3cret</password></User>"),
+                "<User><userName>admin</userName><password>***</password></User>");
+        });
+
         Test("every shipped language catalogue parses", () =>
         {
             // A malformed catalogue is caught and returns empty, so the language

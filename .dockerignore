@@ -5,6 +5,7 @@
 **/.claude/
 **/*.user
 **/config.json
+**/*.bak
 Dockerfile
 docker-compose.yml
 
