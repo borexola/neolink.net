@@ -73,7 +73,7 @@ Alternatively, skip MQTT for the picture entirely: point a Home Assistant
 |---|---|---|
 | Motion / Person / Vehicle / Animal | `binary_sensor` | From the camera's alarm pushes (AI labels need Smart Detection enabled in the Reolink app) |
 | Package / Crying / Line crossing / Intrusion / Loitering / Object left / Object taken | `binary_sensor` | Created up front like the core four, so automations can be built before the first event — they stay **Clear** until the camera pushes one (smart/perimeter detection must be configured in the Reolink app for that to ever happen). Crying is the indoor cams' audio detection and uses device class `sound` |
-| Doorbell | `event` | Video doorbells: every button press publishes an MQTT event (`event_type: press`, `device_class: doorbell`) — the natural trigger for ring automations |
+| Doorbell | `event` | Video doorbells: every button press fires the standard `ring` event (`device_class: doorbell`) — the natural trigger for ring automations, including Home Assistant's own **Doorbell rang** trigger |
 | Visitor | `binary_sensor` | Momentary doorbell-press pulse; HA clears it itself after a few seconds |
 | Record on demand | `switch` | **Record a clip on demand from HA**, regardless of what the camera detects — one clip, stops by itself; see below (appears when the server records events for this camera) |
 | Detection events | `switch` | The camera's **master toggle for event capture** — the same "Detection events" switch as the web UI's camera settings, so the two always agree. OFF stops the server recording event clips for this camera (and on-demand capture) until switched back on. The camera keeps detecting, so the detection binary_sensors above still report — this pauses recording, it isn't a sensor disarm. Stays usable while the camera is offline (appears when the server records events for this camera) |
@@ -126,6 +126,11 @@ a retained press would re-ring your automations after every broker restart. The
 entity is announced on the first detected press, so it appears in HA the first
 time someone rings. Presses are also logged and recorded as regular "Doorbell
 pressed" events with pre-roll video.
+
+Inside Home Assistant the entity reports the standard `ring` event type, which
+Home Assistant requires for doorbells from 2027.4; the MQTT payload itself
+stays `press`. Before 1.2.5 the entity reported `press`, so an automation that
+checks for `event_type: press` must be changed to `ring`.
 
 **On-demand recording (the Record on demand switch).** Most Reolink firmwares cannot be
 told to record on demand — but Neolink.NET is already the recorder, so it doesn't

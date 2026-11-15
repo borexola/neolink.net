@@ -4,6 +4,12 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
+## 1.2.5
+
+### Changed
+
+- **The Home Assistant doorbell event now reports the standard `ring` type instead of `press`,** which clears Home Assistant's "will stop working in 2027.4" warning and makes its Doorbell rang trigger work. Automations that check for `event_type: press` must switch to `ring`; the raw MQTT payload is unchanged.
+
 ## 1.2.4
 
 Each lens of a dual-lens camera as its own camera, an rtsp button that copies stream and snapshot links, camera password changes from Neolink, and a log that says why a stream never starts.

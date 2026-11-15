@@ -8205,6 +8205,33 @@ public static class SelfTest
                     "a hint push is a confirmed event — motion must go ON");
         });
 
+        Test("HA doorbell event reports ring while the topic keeps press", () =>
+        {
+            var cam = new Web.WebCameraInfo("bellcam",
+                new List<Web.WebStreamInfo>(), new StubCameraControl("bellcam"), null);
+            var hub = new Mqtt.HomeAssistantMqtt(
+                new Config.MqttConfig { Broker = "127.0.0.1", Port = 1 }, // never connected
+                new List<Web.WebCameraInfo> { cam }, "test");
+            var published = new Dictionary<string, string>();
+            hub.PublishObserver = (topic, payload) => { lock (published) published[topic] = payload; };
+
+            hub.OnMotion("bellcam", new Protocol.MotionPush("MD", new[] { "visitor" }));
+            const string topic = "homeassistant/event/neolink_bellcam/doorbell/config";
+            var until = DateTime.UtcNow.AddSeconds(5);
+            while (DateTime.UtcNow < until)
+            {
+                lock (published) { if (published.ContainsKey(topic)) break; }
+                Thread.Sleep(25);
+            }
+            string? config;
+            lock (published) published.TryGetValue(topic, out config);
+            Assert(config != null, "the first press must announce the doorbell event entity");
+            var root = System.Text.Json.JsonDocument.Parse(config!).RootElement;
+            var types = root.GetProperty("event_types").EnumerateArray().Select(e => e.GetString()).ToArray();
+            AssertEq(string.Join(",", types), "ring");
+            AssertEq(root.GetProperty("value_template").GetString(), "{{ {'event_type': 'ring'} | tojson }}");
+        });
+
         Test("camera state store: suspend flag round-trip + restart persistence", () =>
         {
             var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");

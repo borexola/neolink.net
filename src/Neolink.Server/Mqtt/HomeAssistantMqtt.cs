@@ -621,6 +621,7 @@ internal sealed class CameraBridge
     /// detect anything, so a change can be noticed and re-announced.</summary>
     private bool _announcedEvents;
     private bool _doorbellAnnounced;
+    private int _ringNoticeLogged;
     private DateTime _lastDoorbellPress = DateTime.MinValue;
 
     private bool _wifiAnnounced, _sirenAnnounced;  // lazily, on the first status push
@@ -1690,6 +1691,7 @@ internal sealed class CameraBridge
             if (!_doorbellAnnounced)
             {
                 _doorbellAnnounced = true;
+                WarnRingSwitchOnce();
                 await AnnounceEntityAsync("event", "doorbell", DoorbellEventConfig(), ct).ConfigureAwait(false);
                 await AnnounceEntityAsync("binary_sensor", "visitor", VisitorConfig(), ct).ConfigureAwait(false);
             }
@@ -1720,12 +1722,23 @@ internal sealed class CameraBridge
         availability_mode = "all",
     };
 
+    /// <summary>Once per run, tells a doorbell's owner the HA event type is now "ring", not "press".</summary>
+    private void WarnRingSwitchOnce()
+    {
+        if (!_hub.Config.Discovery || Interlocked.Exchange(ref _ringNoticeLogged, 1) != 0) return;
+        Log.Warn($"{_cam.Name}: the Home Assistant doorbell event now reports event_type 'ring' instead of " +
+                 "'press' (Home Assistant requires 'ring' from 2027.4). " +
+                 "Automations that check for 'press' must check for 'ring'.");
+    }
+
     private object DoorbellEventConfig() => new
     {
         name = "Doorbell",
         unique_id = $"neolink_{Id}_doorbell",
         state_topic = StateTopic("doorbell"),
-        event_types = new[] { "press" },
+        // HA requires "ring" on doorbell events; the topic keeps publishing "press" for other consumers.
+        event_types = new[] { "ring" },
+        value_template = "{{ {'event_type': 'ring'} | tojson }}",
         device_class = "doorbell",
         device = Device(),
         availability = Availability(),
@@ -1935,6 +1948,7 @@ internal sealed class CameraBridge
                 // HTTP-API extras (beta): one combined probe decides which of the
                 // volume/auto-track/preset/picture/quick-reply entities exist here.
                 await ProbeHttpExtrasAsync(f, ct).ConfigureAwait(false);
+                if (_isDoorbell) WarnRingSwitchOnce();
                 _featuresAnnounced = true;
                 _announcedEvents = _cam.EventsAvailableNow;
                 await AnnounceAsync(ct).ConfigureAwait(false);
