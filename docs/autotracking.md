@@ -4,8 +4,13 @@
 
 > **Experimental.** Tested on a Reolink E1 Pro.
 
-Frigate's click-to-move and autotracking move a camera by part of the picture.
-Reolink heads can't do that, so Neolink.NET does it for them by timing each pan and tilt.
+Frigate's click-to-move and autotracking need a camera that moves by part of the picture
+(ONVIF relative moves, `TranslationSpaceFov`). Reolink heads can't, so Neolink.NET's PTZ
+endpoint advertises it and does the work:
+
+- **Pan and tilt** are timed from the lens's angle of view and how fast the head turns.
+- **Start-up lag** is learned by itself on cameras that report their head position.
+- **Zoom lenses** also take exact zoom positions.
 
 ## 1. Neolink.NET
 

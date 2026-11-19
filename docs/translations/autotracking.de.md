@@ -7,8 +7,13 @@
 
 > **Experimentell.** Getestet mit einer Reolink E1 Pro.
 
-Frigates Klicksteuerung und Autotracking bewegen eine Kamera um einen Teil des Bildes.
-Reolink-Köpfe können das nicht, also übernimmt Neolink.NET es, indem es jeden Schwenk und jede Neigung zeitlich steuert.
+Frigates Klicksteuerung und Autotracking brauchen eine Kamera, die sich um einen Teil des Bildes bewegt
+(relative ONVIF-Bewegungen, `TranslationSpaceFov`). Reolink-Köpfe können das nicht, also meldet der
+PTZ-Endpunkt von Neolink.NET diese Fähigkeit und übernimmt die Arbeit:
+
+- **Schwenk und Neigung** werden aus dem Bildwinkel des Objektivs und der Drehgeschwindigkeit des Kopfes getimt.
+- **Die Anlaufverzögerung** wird von selbst gelernt, wenn die Kamera die Position ihres Kopfes meldet.
+- **Zoomobjektive** nehmen außerdem exakte Zoompositionen an.
 
 ## 1. Neolink.NET
 

@@ -7,8 +7,13 @@
 
 > **Experimental.** Probado con una Reolink E1 Pro.
 
-El clic para mover y el seguimiento automático de Frigate mueven una cámara una parte de la imagen.
-Los cabezales Reolink no pueden hacerlo, así que Neolink.NET lo hace por ellos cronometrando cada giro e inclinación.
+El clic para mover y el seguimiento automático de Frigate necesitan una cámara que se mueva una parte de la imagen
+(movimientos relativos ONVIF, `TranslationSpaceFov`). Los cabezales Reolink no pueden, así que el punto
+PTZ de Neolink.NET anuncia esa capacidad y hace el trabajo:
+
+- **El giro y la inclinación** se cronometran a partir del ángulo de visión del objetivo y la velocidad del cabezal.
+- **El retardo de arranque** se aprende solo en las cámaras que informan de la posición de su cabezal.
+- **Los objetivos con zoom** también aceptan posiciones de zoom exactas.
 
 ## 1. Neolink.NET
 

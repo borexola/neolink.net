@@ -7,8 +7,13 @@
 
 > **Eksperymentalne.** Przetestowane z Reolink E1 Pro.
 
-Sterowanie kliknięciem i autośledzenie we Frigate przesuwają kamerę o część obrazu.
-Głowice Reolink tego nie potrafią, więc Neolink.NET robi to za nie, odmierzając czas każdego obrotu i pochylenia.
+Sterowanie kliknięciem i autośledzenie we Frigate wymagają kamery, która przesuwa się o część obrazu
+(ruchy względne ONVIF, `TranslationSpaceFov`). Głowice Reolink tego nie potrafią, więc punkt PTZ
+Neolink.NET zgłasza tę możliwość i wykonuje pracę za nie:
+
+- **Obrót i pochylenie** są odmierzane na podstawie kąta widzenia obiektywu i prędkości głowicy.
+- **Opóźnienie startu** jest uczone samo na kamerach, które podają położenie głowicy.
+- **Obiektywy z zoomem** przyjmują też dokładne pozycje zoomu.
 
 ## 1. Neolink.NET
 

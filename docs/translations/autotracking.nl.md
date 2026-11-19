@@ -7,8 +7,13 @@
 
 > **Experimenteel.** Getest met een Reolink E1 Pro.
 
-Frigates klikken om te bewegen en autotracking verplaatsen een camera over een deel van het beeld.
-Reolink-koppen kunnen dat niet, dus Neolink.NET doet het voor ze door elke draai en kanteling te timen.
+Frigates klikken om te bewegen en autotracking hebben een camera nodig die over een deel van het beeld beweegt
+(relatieve ONVIF-bewegingen, `TranslationSpaceFov`). Reolink-koppen kunnen dat niet, dus het PTZ-eindpunt
+van Neolink.NET meldt die mogelijkheid en doet het werk:
+
+- **Draaien en kantelen** worden getimed op basis van de beeldhoek van de lens en hoe snel de kop draait.
+- **De opstartvertraging** wordt vanzelf geleerd bij camera's die de stand van hun kop doorgeven.
+- **Zoomlenzen** nemen ook exacte zoomstanden aan.
 
 ## 1. Neolink.NET
 

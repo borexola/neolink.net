@@ -7,8 +7,13 @@
 
 > **Expérimental.** Testé avec une Reolink E1 Pro.
 
-Le clic pour déplacer et le suivi automatique de Frigate déplacent une caméra d'une partie de l'image.
-Les têtes Reolink ne savent pas le faire ; Neolink.NET s'en charge en chronométrant chaque panoramique et chaque inclinaison.
+Le clic pour déplacer et le suivi automatique de Frigate demandent une caméra qui se déplace d'une partie de l'image
+(déplacements relatifs ONVIF, `TranslationSpaceFov`). Les têtes Reolink ne savent pas le faire ; le point
+d'accès PTZ de Neolink.NET annonce cette capacité et fait le travail :
+
+- **Le panoramique et l'inclinaison** sont chronométrés d'après l'angle de vue de l'objectif et la vitesse de la tête.
+- **Le délai de démarrage** s'apprend tout seul sur les caméras qui indiquent la position de leur tête.
+- **Les objectifs zoom** acceptent aussi des positions de zoom exactes.
 
 ## 1. Neolink.NET
 

@@ -7,8 +7,13 @@
 
 > **Experimental.** Testado com uma Reolink E1 Pro.
 
-O clique para mover e o rastreamento automático do Frigate movem uma câmera por uma parte da imagem.
-As cabeças Reolink não fazem isso, então o Neolink.NET faz por elas, cronometrando cada rotação e inclinação.
+O clique para mover e o rastreamento automático do Frigate precisam de uma câmera que se mova por uma parte da imagem
+(movimentos relativos ONVIF, `TranslationSpaceFov`). As cabeças Reolink não fazem isso, então o endpoint
+PTZ do Neolink.NET anuncia esse recurso e faz o trabalho:
+
+- **Rotação e inclinação** são cronometradas a partir do ângulo de visão da lente e da velocidade da cabeça.
+- **O atraso de partida** é aprendido sozinho nas câmeras que informam a posição da cabeça.
+- **Lentes com zoom** também aceitam posições de zoom exatas.
 
 ## 1. Neolink.NET
 
