@@ -20,27 +20,10 @@ and availability, driven by the camera's own detections.
 
 The cameras are unmodified and no Reolink NVR is required.
 
-```mermaid
-flowchart LR
-    reolink["Reolink cameras"]
-    other["Other IP cameras"]
-    neolink["Neolink.NET<br/>NVR · one process"]
-    ui["Neolink.NET UI"]
-    clients["Frigate / VLC /<br/>Blue Iris / ffmpeg"]
-    ha["Home Assistant"]
-    disk["Recordings<br/>24/7 + events"]
-    pad["<br/><br/>"]
-
-    reolink -- "Baichuan (9000)" --> neolink
-    other -- "RTSP + ONVIF" --> neolink
-    neolink -- "HTTP/WS (8655)" --> ui
-    neolink -- "RTSP (8654)<br/>ONVIF PTZ (8656)" --> clients
-    neolink -- "RTSP (8654)<br/>MQTT" --> ha
-    neolink -- "records" --> disk
-    %% Keeps GitHub's zoom buttons, drawn bottom-right, off the Recordings box.
-    neolink ~~~ pad
-    style pad fill:none,stroke:none
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/architecture-dark.png">
+  <img src="docs/architecture-light.png" alt="Reolink cameras (Baichuan, port 9000) and other IP cameras (RTSP and ONVIF) feed Neolink.NET, one NVR process. It serves the Neolink.NET UI over HTTP/WS on 8655, Frigate, VLC, Blue Iris and ffmpeg over RTSP on 8654 with ONVIF PTZ on 8656, Home Assistant over RTSP and MQTT, and records 24/7 and on events.">
+</picture>
 
 ![The Neolink.NET web UI: camera wall with resizable tiles and the live event review strip](docs/screenshot-1.png)
 

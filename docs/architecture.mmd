@@ -1,0 +1,16 @@
+%% Source of docs/architecture-dark.png and -light.png (rendered with Mermaid 11, at 2x).
+flowchart LR
+    reolink["Reolink cameras"]
+    other["Other IP cameras"]
+    neolink["<b>Neolink.NET</b><br/>NVR · one process"]
+    ui["Neolink.NET UI"]
+    clients["Frigate / VLC /<br/>Blue Iris / ffmpeg"]
+    ha["Home Assistant"]
+    disk["Recordings<br/>24/7 + events"]
+
+    reolink -- "Baichuan (9000)" --> neolink
+    other -- "RTSP + ONVIF" --> neolink
+    neolink -- "HTTP/WS (8655)" --> ui
+    neolink -- "RTSP (8654)<br/>ONVIF PTZ (8656)" --> clients
+    neolink -- "RTSP (8654)<br/>MQTT" --> ha
+    neolink -- "records" --> disk
