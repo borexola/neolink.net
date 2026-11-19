@@ -6,9 +6,19 @@ in the README). Paste the matching section below into the GitHub release.
 
 ## 1.2.5
 
+### Added
+
+- **Click-to-move and autotracking in Frigate for Reolink pan/tilt cameras (experimental).** Tick *This camera pans and tilts* in the camera editor and give its lens angle and how long a full pan and tilt take (or `ptz_fov_h` and `ptz_pan_rate` in the config), and its PTZ endpoint takes Frigate's relative moves; zoom lenses also take exact zoom positions.
+- **Presets on the video's pan/tilt pad.** The pad's bookmark button lists the camera's saved positions; tap one to send the head there.
+
 ### Changed
 
 - **The Home Assistant doorbell event now reports the standard `ring` type instead of `press`,** which clears Home Assistant's "will stop working in 2027.4" warning and makes its Doorbell rang trigger work. Automations that check for `event_type: press` must switch to `ring`; the raw MQTT payload is unchanged.
+
+### Fixed
+
+- **Pan/tilt commands no longer wait behind other camera requests.** A stop from the web UI, Home Assistant or Frigate goes out at once instead of queueing behind a snapshot or an SD-card search, so the head stops when told.
+- **Cameras without an HTTP API, such as battery models, now offer the on-screen display settings (camera name and timestamp with their positions, Reolink watermark) and Record audio** when their firmware has them, set over Baichuan; Record audio also appears in Home Assistant.
 
 ## 1.2.4
 

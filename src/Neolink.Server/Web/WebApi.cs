@@ -244,7 +244,16 @@ public static class WebApi
         string? RtspMain, string? RtspSub,
         string? Uid, string? AlwaysOn, string? Stream, string? OnvifAddress,
         bool? Record, bool? Udp, bool? UdpProbe, bool? WakeCapture, double? KeepAliveHours,
-        string? PtzMode = null, int? PtzPort = null, string? PasswordFrom = null);
+        string? PtzMode = null, int? PtzPort = null, string? PasswordFrom = null,
+        bool? PtzRelative = null, double? PtzFovH = null, double? PtzFovV = null, double? PtzPanRate = null,
+        double? PtzTiltRate = null, double? PtzLagMs = null, double? PtzSpeed = null, double? PtzTeleFovH = null);
+    /// <summary>The relative-move config keys and the request's values for them.</summary>
+    private static (string Key, double? Value)[] RelativeKeys(AdminCameraRequest r) =>
+    [
+        ("ptz_fov_h", r.PtzFovH), ("ptz_fov_v", r.PtzFovV), ("ptz_pan_rate", r.PtzPanRate), ("ptz_tilt_rate", r.PtzTiltRate),
+        ("ptz_lag_ms", r.PtzLagMs), ("ptz_speed", r.PtzSpeed), ("ptz_tele_fov_h", r.PtzTeleFovH),
+    ];
+
     /// <summary>Uid/Udp matter here as much as they do on save: a UDP-only battery
     /// camera never listens on TCP, so testing it the TCP way always times out.
     /// OnvifAddress rides along so a generic camera's test can also say whether its
@@ -1163,6 +1172,16 @@ public static class WebApi
                         ptzPort = c.PtzMode == "own" ? c.PtzPort : null,
                         ptzOff = c.PtzOff, // why the loader turned it off, shown beside the field
                         ptzOpen = cfg.PermittedUsersFor(c) == null, // no login applies to this camera
+                        // Click-to-move and autotracking for Frigate; settings the loader refused come back as the reason.
+                        ptzRelative = c.PtzRelative != null || c.PtzRelativeOff != null,
+                        ptzFovH = c.PtzRelative?.FovH,
+                        ptzFovV = c.PtzRelative?.FovV,
+                        ptzPanRate = c.PtzRelative?.PanRate,
+                        ptzTiltRate = c.PtzRelative?.TiltRate,
+                        ptzLagMs = c.PtzRelative?.LagMs,
+                        ptzSpeed = c.PtzRelative?.Speed,
+                        ptzTeleFovH = c.PtzRelative?.TeleFovH,
+                        ptzRelativeOff = c.PtzRelativeOff,
                     }).ToList(),
                 });
             }
@@ -1328,6 +1347,10 @@ public static class WebApi
                             ConfigEditor.Set(cam, "ptz_share", ptzMode == "shared" ? true : null);
                             ConfigEditor.Set(cam, "ptz_port", ptzMode == "own" ? req.PtzPort : null);
                         }
+                        // Relative moves: each blank setting is left out, and all of them go when switched off.
+                        if (req.PtzRelative is { } relative)
+                            foreach (var (key, value) in RelativeKeys(req))
+                                ConfigEditor.Set(cam, key, relative ? System.Text.Json.Nodes.JsonValue.Create(value) : null);
                         // A type switch must not leave generic-RTSP keys behind.
                         ConfigEditor.Set(cam, "rtsp_main", null);
                         ConfigEditor.Set(cam, "rtsp_sub", null);
@@ -1358,6 +1381,8 @@ public static class WebApi
                         // A generic camera has ONVIF of its own: Frigate goes to it directly.
                         ConfigEditor.Set(cam, "ptz_share", null);
                         ConfigEditor.Set(cam, "ptz_port", null);
+                        foreach (var (key, _) in RelativeKeys(req))
+                            ConfigEditor.Set(cam, key, null);
                     }
                     // Event recording applies to both camera kinds, so it is set
                     // outside the type branches (default true = key omitted).
@@ -3376,6 +3401,17 @@ public static class WebApi
                     await control.SetAudioVolumesAsync(req.TalkVolume, req.VisitorVolume, reqCt);
                 NudgeHa(name);
                 return Results.Json(new { ok = true });
+            }));
+
+        // The saved presets alone, for the on-video pad (httpfeatures reads every setting).
+        app.MapGet("/api/cameras/{name}/ptzpreset", (string name, HttpContext ctx) =>
+            ExecAsync(name, ctx, mutating: false, async (control, reqCt) =>
+            {
+                var presets = await control.GetPtzPresetsAsync(reqCt);
+                return Results.Json(new
+                {
+                    presets = (presets ?? []).Where(p => p.Enabled).Select(p => new { id = p.Id, name = p.Name }),
+                });
             }));
 
         // PTZ presets: {id} recalls a saved position; {id, name, save:true} saves

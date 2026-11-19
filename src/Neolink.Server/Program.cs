@@ -922,8 +922,17 @@ foreach (var cam in config.Cameras)
     if (cam.PtzMode != "off" && cam.PtzOff == null && primaryService != null)
     {
         var mainHub = (webStreams.FirstOrDefault(s => s.Kind == "mainStream") ?? webStreams.FirstOrDefault())?.Hub;
+        var hubs = webStreams.Select(s => s.Hub).ToList();
         var ptzCam = new Neolink.Onvif.OnvifPtzCamera(cam.Name, control, permitted,
-            mainHub == null ? null : () => (mainHub.Width, mainHub.Height));
+            mainHub == null ? null : () => (mainHub.Width, mainHub.Height))
+        {
+            Relative = cam.PtzRelative,
+            AnyStreamSize = () => hubs.Where(h => h.Width > 0 && h.Height > 0).Select(h => (h.Width, h.Height)).FirstOrDefault(),
+        };
+        if (cam.PtzRelative is { } rel)
+            Log.Info($"{cam.Name}: relative PTZ moves on (experimental): view {rel.FovH:0.#}°, pan {rel.PanRate:0.#}°/s, " +
+                     (rel.TiltRate is { } tilt ? $"tilt {tilt:0.#}°/s" : "tilt as fast as pan (set ptz_tilt_rate if up and down moves miss)") +
+                     (rel.Speed is { } speed ? $", at speed {speed:0}" : ""));
         if (cam.PtzMode == "own") StartPtzEndpoint($"{cam.Name}: ONVIF PTZ", cam.PtzPort!.Value, new[] { ptzCam });
         else sharedPtzCameras.Add(ptzCam);
     }

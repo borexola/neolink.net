@@ -32,6 +32,8 @@ public sealed partial class OnvifPtzServer
     internal static readonly TimeSpan MaxMoveTimeout = TimeSpan.FromSeconds(60);
     /// <summary>Velocities below this on both axes are a stop.</summary>
     private const double DeadZone = 0.05;
+    /// <summary>How long a reply that lists what a camera can do waits for a camera that has not said yet.</summary>
+    internal static readonly TimeSpan CapabilitiesWait = TimeSpan.FromSeconds(5);
     private const int MaxNonces = 4096;
     private const int MaxRefusalsTracked = 256;
 
@@ -68,7 +70,7 @@ public sealed partial class OnvifPtzServer
             ? $"{_tag} on http://{host}:{port}/onvif/device_service — in Frigate: onvif host {host}, port {port}{login}"
             : $"{_tag} on http://{host}:{port}/onvif/device_service for {string.Join(", ", _cameras.Select(c => c.Name))} — " +
               $"in Frigate 0.18+: onvif host {host}, port {port}, profile: the camera's name{login}");
-        foreach (var cam in _cameras) cam.StartCapabilitiesRead();
+        foreach (var cam in _cameras) _ = cam.KeepReadingCapabilitiesAsync(ct);
         var slots = new SemaphoreSlim(MaxConnections);
         try
         {
@@ -294,6 +296,10 @@ public sealed partial class OnvifPtzServer
             return Fault(sender: true, "ter:NotAuthorized", refused);
         }
 
+        // A reply that lists what a camera can do waits briefly for the camera to say, rather than guess.
+        if (ListsCapabilities(service, action))
+            await Task.WhenAll(visible.Select(c => c.WaitForCapabilitiesAsync(CapabilitiesWait, ct))).ConfigureAwait(false);
+
         switch (service, action)
         {
             case (NsDevice, "GetDeviceInformation"):
@@ -318,8 +324,8 @@ public sealed partial class OnvifPtzServer
             (NsPtz, "GetConfiguration") => ("PTZConfigurationToken", PtzConfigTokenOf),
             (NsPtz, "GetConfigurationOptions") => ("ConfigurationToken", PtzConfigTokenOf),
             (NsPtz, "GetNode") => ("NodeToken", NodeTokenOf),
-            (NsMedia, "GetProfile") or (NsPtz, "GetPresets" or "GotoPreset" or "SetPreset" or "GetStatus" or "ContinuousMove" or "Stop")
-                => ("ProfileToken", c => c.ProfileToken),
+            (NsMedia, "GetProfile") or (NsPtz, "GetPresets" or "GotoPreset" or "SetPreset" or "GetStatus" or "ContinuousMove"
+                or "RelativeMove" or "AbsoluteMove" or "Stop") => ("ProfileToken", c => c.ProfileToken),
             _ => null,
         };
         if (named is not { } by)
@@ -338,11 +344,17 @@ public sealed partial class OnvifPtzServer
             "GetPresets" => await GetPresetsAsync(cam, ct).ConfigureAwait(false),
             "GotoPreset" => await GotoPresetAsync(op, cam, ct).ConfigureAwait(false),
             "SetPreset" => await SetPresetAsync(op, cam, ct).ConfigureAwait(false),
-            "GetStatus" => Ok(PtzStatus(cam.Moving, cam.Zooming, DateTime.UtcNow)),
+            "GetStatus" => Ok(PtzStatus(cam.Moving, cam.Zooming, cam.ZoomFraction, DateTime.UtcNow)),
             "ContinuousMove" => await ContinuousMoveAsync(op, cam, ct).ConfigureAwait(false),
+            "RelativeMove" => await RelativeMoveAsync(op, cam, ct).ConfigureAwait(false),
+            "AbsoluteMove" => AbsoluteMove(op, cam),
             _ => await StopRequestAsync(op, cam, ct).ConfigureAwait(false),
         };
     }
+
+    private static bool ListsCapabilities(string service, string action) => (service, action) is
+        (NsMedia, "GetProfiles" or "GetProfile")
+        or (NsPtz, "GetConfigurations" or "GetConfiguration" or "GetConfigurationOptions" or "GetNodes" or "GetNode" or "AbsoluteMove");
 
     /// <summary>The camera a request's token names; with none given, the only camera this login sees.</summary>
     private static OnvifPtzCamera? Target(XElement op, List<OnvifPtzCamera> visible, string element,
@@ -461,7 +473,7 @@ public sealed partial class OnvifPtzServer
             if (zoom != null)
             {
                 var z = Num(zoom.Attribute("x"));
-                if (!double.IsFinite(z) || Math.Abs(z) < DeadZone) cam.StopZoom();
+                if (!double.IsFinite(z) || Math.Abs(z) < DeadZone) cam.StopZoom(hold: true);
                 else await cam.ZoomAsync(z, timeout, ct).ConfigureAwait(false);
             }
         }
@@ -469,10 +481,40 @@ public sealed partial class OnvifPtzServer
         return Ok("<tptz:ContinuousMoveResponse/>");
     }
 
+    /// <summary>A move by a fraction of the picture (x right, y up): what Frigate's click-to-move and autotracking send.</summary>
+    private static async Task<(int, string)> RelativeMoveAsync(XElement op, OnvifPtzCamera cam, CancellationToken ct)
+    {
+        if (!cam.HasRelative)
+            return Fault(sender: false, "ter:ActionNotSupported",
+                "RelativeMove is not offered for this camera: it needs ptz_fov_h and ptz_pan_rate in its Neolink config");
+        var translation = ChildElement(op, "Translation");
+        if ((translation == null ? null : ChildElement(translation, "PanTilt")) is not { } panTilt)
+            return Fault(sender: true, "ter:InvalidArgVal", "RelativeMove needs a pan/tilt Translation (relative zoom is not offered)");
+        if (panTilt.Attribute("space")?.Value is { Length: > 0 } space && space != FovSpace)
+            return Fault(sender: true, "ter:InvalidArgVal", $"relative moves are taken in {FovSpace} only");
+        try { await cam.RelativeMoveAsync(Num(panTilt.Attribute("x")), Num(panTilt.Attribute("y")), ct).ConfigureAwait(false); }
+        catch (Exception ex) { return CommandFault(ex); }
+        return Ok("<tptz:RelativeMoveResponse/>");
+    }
+
+    /// <summary>The zoom lens to an exact position, driven behind the reply: a fault here would end Frigate's
+    /// autotracking until it restarts, so a camera that fails is only logged. Pan and tilt have no positions.</summary>
+    private static (int, string) AbsoluteMove(XElement op, OnvifPtzCamera cam)
+    {
+        if (!cam.HasZoom)
+            return Fault(sender: false, "ter:ActionNotSupported",
+                "AbsoluteMove is not offered for this camera: only a zoom lens has positions to go to");
+        var position = ChildElement(op, "Position");
+        if ((position == null ? null : ChildElement(position, "Zoom"))?.Attribute("x") is not { } x || !double.IsFinite(Num(x)))
+            return Fault(sender: true, "ter:InvalidArgVal", "AbsoluteMove takes a Zoom position from 0 to 1: pan and tilt have none");
+        cam.ZoomTo(Num(x));
+        return Ok("<tptz:AbsoluteMoveResponse/>");
+    }
+
     private static async Task<(int, string)> StopRequestAsync(XElement op, OnvifPtzCamera cam, CancellationToken ct)
     {
         // Both flags default to true.
-        if (!string.Equals(Child(op, "Zoom"), "false", StringComparison.OrdinalIgnoreCase)) cam.StopZoom();
+        if (!string.Equals(Child(op, "Zoom"), "false", StringComparison.OrdinalIgnoreCase)) cam.StopZoom(hold: true);
         if (string.Equals(Child(op, "PanTilt"), "false", StringComparison.OrdinalIgnoreCase)) return Ok("<tptz:StopResponse/>");
         try { await cam.MoveAsync("stop", 32, DefaultMoveTimeout, ct).ConfigureAwait(false); }
         catch (Exception ex) { return CommandFault(ex); }

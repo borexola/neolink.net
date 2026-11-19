@@ -20,6 +20,7 @@ public sealed partial class OnvifPtzServer
     private const string VelocitySpace = "http://www.onvif.org/ver10/tptz/PanTiltSpaces/VelocityGenericSpace";
     private const string SpeedSpace = "http://www.onvif.org/ver10/tptz/PanTiltSpaces/GenericSpeedSpace";
     private const string PositionSpace = "http://www.onvif.org/ver10/tptz/PanTiltSpaces/PositionGenericSpace";
+    internal const string FovSpace = "http://www.onvif.org/ver10/tptz/PanTiltSpaces/TranslationSpaceFov";
     private const string ZoomPositionSpace = "http://www.onvif.org/ver10/tptz/ZoomSpaces/PositionGenericSpace";
     private const string ZoomVelocitySpace = "http://www.onvif.org/ver10/tptz/ZoomSpaces/VelocityGenericSpace";
     private const string ZoomSpeedSpace = "http://www.onvif.org/ver10/tptz/ZoomSpaces/ZoomGenericSpeedSpace";
@@ -142,13 +143,15 @@ public sealed partial class OnvifPtzServer
     private static string PtzConfigTokenOf(OnvifPtzCamera cam) => "ptz_" + cam.Name;
     private static string NodeTokenOf(OnvifPtzCamera cam) => "node_" + cam.Name;
 
-    /// <summary>A camera's PTZ configuration: continuous pan/tilt and, on a zoom lens, continuous zoom. Frigate
-    /// reads its "pt" and "zoom" features from these default spaces.</summary>
+    /// <summary>A camera's PTZ configuration: continuous pan/tilt, moves across the picture where configured and,
+    /// on a zoom lens, zoom by speed or position. Frigate reads its features from these default spaces.</summary>
     private static string PtzConfiguration(string element, OnvifPtzCamera cam)
     {
         bool panTilt = cam.HasPanTilt, zoom = cam.HasZoom;
         return $"<{element} token=\"{Esc(PtzConfigTokenOf(cam))}\"><tt:Name>{Esc(cam.Name)}</tt:Name><tt:UseCount>1</tt:UseCount>" +
                $"<tt:NodeToken>{Esc(NodeTokenOf(cam))}</tt:NodeToken>" +
+               (zoom ? $"<tt:DefaultAbsoluteZoomPositionSpace>{ZoomPositionSpace}</tt:DefaultAbsoluteZoomPositionSpace>" : "") +
+               (cam.HasRelative ? $"<tt:DefaultRelativePanTiltTranslationSpace>{FovSpace}</tt:DefaultRelativePanTiltTranslationSpace>" : "") +
                (panTilt ? $"<tt:DefaultContinuousPanTiltVelocitySpace>{VelocitySpace}</tt:DefaultContinuousPanTiltVelocitySpace>" : "") +
                (zoom ? $"<tt:DefaultContinuousZoomVelocitySpace>{ZoomVelocitySpace}</tt:DefaultContinuousZoomVelocitySpace>" : "") +
                "<tt:DefaultPTZSpeed>" +
@@ -162,7 +165,16 @@ public sealed partial class OnvifPtzServer
     private static string Spaces(OnvifPtzCamera cam)
     {
         bool panTilt = cam.HasPanTilt, zoom = cam.HasZoom;
-        return (panTilt
+        return (zoom
+                   ? $"<tt:AbsoluteZoomPositionSpace><tt:URI>{ZoomPositionSpace}</tt:URI>" +
+                     "<tt:XRange><tt:Min>0</tt:Min><tt:Max>1</tt:Max></tt:XRange></tt:AbsoluteZoomPositionSpace>"
+                   : "") +
+               (cam.HasRelative
+                   ? $"<tt:RelativePanTiltTranslationSpace><tt:URI>{FovSpace}</tt:URI>" +
+                     "<tt:XRange><tt:Min>-1</tt:Min><tt:Max>1</tt:Max></tt:XRange>" +
+                     "<tt:YRange><tt:Min>-1</tt:Min><tt:Max>1</tt:Max></tt:YRange></tt:RelativePanTiltTranslationSpace>"
+                   : "") +
+               (panTilt
                    ? $"<tt:ContinuousPanTiltVelocitySpace><tt:URI>{VelocitySpace}</tt:URI>" +
                      "<tt:XRange><tt:Min>-1</tt:Min><tt:Max>1</tt:Max></tt:XRange>" +
                      "<tt:YRange><tt:Min>-1</tt:Min><tt:Max>1</tt:Max></tt:YRange></tt:ContinuousPanTiltVelocitySpace>"
@@ -196,11 +208,12 @@ public sealed partial class OnvifPtzServer
     private static string Preset(PtzPresetInfo p) =>
         $"<tptz:Preset token=\"{p.Id}\"><tt:Name>{Esc(p.Name)}</tt:Name></tptz:Preset>";
 
-    /// <summary>Whether the head and lens move. The camera reports no position, so it is given as the origin:
-    /// Frigate's setup reads Position unguarded.</summary>
-    private static string PtzStatus(bool moving, bool zooming, DateTime utc) =>
+    /// <summary>Whether the head and lens move, and where the zoom is (0 = widest). Pan/tilt has no position
+    /// to give, so it is the origin: Frigate's setup reads Position unguarded.</summary>
+    private static string PtzStatus(bool moving, bool zooming, double zoom, DateTime utc) =>
         "<tptz:GetStatusResponse><tptz:PTZStatus>" +
-        $"<tt:Position><tt:PanTilt x=\"0\" y=\"0\" space=\"{PositionSpace}\"/><tt:Zoom x=\"0\" space=\"{ZoomPositionSpace}\"/></tt:Position>" +
+        $"<tt:Position><tt:PanTilt x=\"0\" y=\"0\" space=\"{PositionSpace}\"/>" +
+        $"<tt:Zoom x=\"{zoom.ToString("0.###", CultureInfo.InvariantCulture)}\" space=\"{ZoomPositionSpace}\"/></tt:Position>" +
         $"<tt:MoveStatus><tt:PanTilt>{(moving ? "MOVING" : "IDLE")}</tt:PanTilt><tt:Zoom>{(zooming ? "MOVING" : "IDLE")}</tt:Zoom></tt:MoveStatus>" +
         $"<tt:UtcTime>{utc.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture)}</tt:UtcTime>" +
         "</tptz:PTZStatus></tptz:GetStatusResponse>";

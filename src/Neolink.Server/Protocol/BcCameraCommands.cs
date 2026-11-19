@@ -171,6 +171,26 @@ public static class BcCameraCommands
         await cam.SendCommandAsync(BcConstants.MsgIdPtzControl, body, ChannelExt(cam), ct: ct).ConfigureAwait(false);
     }
 
+    /// <summary>Where the head is, in the camera's own units (msg 433); null when the reply carries no position.</summary>
+    public static async Task<(int? Pan, int? Tilt)?> GetPtzPositionAsync(this IBcCamera cam, TimeSpan? timeout = null,
+        CancellationToken ct = default)
+    {
+        var reply = await cam.SendCommandAsync(BcConstants.MsgIdGetPtzCurPos, extension: ChannelExt(cam),
+            replyTimeout: timeout, ct: ct).ConfigureAwait(false);
+        return ParsePtzPosition(reply?.Xml?.Raw);
+    }
+
+    /// <summary>pPos and tPos wherever the reply holds them: the root's spelling is not known for every firmware.</summary>
+    internal static (int? Pan, int? Tilt)? ParsePtzPosition(IEnumerable<XElement>? body)
+    {
+        var all = body?.SelectMany(e => e.DescendantsAndSelf()).ToList();
+        int? Read(string name) =>
+            int.TryParse(all?.FirstOrDefault(e => e.Name.LocalName == name)?.Value.Trim(),
+                System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : null;
+        int? pan = Read("pPos"), tilt = Read("tPos");
+        return pan == null && tilt == null ? null : (pan, tilt);
+    }
+
     public static async Task RebootAsync(this IBcCamera cam, CancellationToken ct = default)
     {
         await cam.SendCommandAsync(BcConstants.MsgIdReboot, ct: ct).ConfigureAwait(false);

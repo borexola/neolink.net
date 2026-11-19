@@ -902,25 +902,51 @@
                                  @onpointerdown:stopPropagation="true" @onpointerup:stopPropagation="true">
                                 @if (_ptzPadOpen && PtzSupported(slot.Camera))
                                 {
-                                    <div class="ptz-overlay-pad">
-                                        <button class="ptz-ov-up" title="@T["Pan up (hold)"]"
-                                                @onpointerdown='() => PtzMoveAsync(railCam, "up")'
-                                                @onpointerup="() => PtzHoldStopAsync(railCam)"
-                                                @onpointerleave="() => PtzHoldStopAsync(railCam)">▲</button>
-                                        <button class="ptz-ov-left" title="@T["Pan left (hold)"]"
-                                                @onpointerdown='() => PtzMoveAsync(railCam, "left")'
-                                                @onpointerup="() => PtzHoldStopAsync(railCam)"
-                                                @onpointerleave="() => PtzHoldStopAsync(railCam)">◀</button>
-                                        <button class="ptz-ov-stop" title="@T["Stop"]"
-                                                @onclick="() => PtzHoldStopAsync(railCam)">■</button>
-                                        <button class="ptz-ov-right" title="@T["Pan right (hold)"]"
-                                                @onpointerdown='() => PtzMoveAsync(railCam, "right")'
-                                                @onpointerup="() => PtzHoldStopAsync(railCam)"
-                                                @onpointerleave="() => PtzHoldStopAsync(railCam)">▶</button>
-                                        <button class="ptz-ov-down" title="@T["Pan down (hold)"]"
-                                                @onpointerdown='() => PtzMoveAsync(railCam, "down")'
-                                                @onpointerup="() => PtzHoldStopAsync(railCam)"
-                                                @onpointerleave="() => PtzHoldStopAsync(railCam)">▼</button>
+                                    <div class="ptz-fly">
+                                        @if (_ptzPresetsOpen)
+                                        {
+                                            <div class="ptz-presets">
+                                                <div class="ptz-presets-title">@T["Presets"]</div>
+                                                @if (_ptzPresets == null)
+                                                {
+                                                    <div class="ptz-presets-note">@T["Loading…"]</div>
+                                                }
+                                                else if (_ptzPresets.Count == 0)
+                                                {
+                                                    <div class="ptz-presets-note">@T["No presets saved on this camera yet. Save one in its settings."]</div>
+                                                }
+                                                else
+                                                {
+                                                    @foreach (var preset in _ptzPresets)
+                                                    {
+                                                        <button class="ptz-preset @(_ptzPresetGoing == preset.Id ? "going" : "")" title="@T.F("Move to {0}", preset.Name)"
+                                                                @onclick="() => GoToPresetAsync(railCam, preset.Id)">@UiIcon.Render("bookmark", 12) <span>@preset.Name</span></button>
+                                                    }
+                                                }
+                                            </div>
+                                        }
+                                        <div class="ptz-overlay-pad">
+                                            <button class="ptz-ov-up" title="@T["Pan up (hold)"]"
+                                                    @onpointerdown='() => PtzMoveAsync(railCam, "up")'
+                                                    @onpointerup="() => PtzHoldStopAsync(railCam)"
+                                                    @onpointerleave="() => PtzHoldStopAsync(railCam)">@UiIcon.Render("chev-up", 18)</button>
+                                            <button class="ptz-ov-left" title="@T["Pan left (hold)"]"
+                                                    @onpointerdown='() => PtzMoveAsync(railCam, "left")'
+                                                    @onpointerup="() => PtzHoldStopAsync(railCam)"
+                                                    @onpointerleave="() => PtzHoldStopAsync(railCam)">@UiIcon.Render("chev-left", 18)</button>
+                                            <button class="ptz-ov-stop" title="@T["Stop"]"
+                                                    @onclick="() => PtzHoldStopAsync(railCam)">@UiIcon.Render("stop", 14)</button>
+                                            <button class="ptz-ov-right" title="@T["Pan right (hold)"]"
+                                                    @onpointerdown='() => PtzMoveAsync(railCam, "right")'
+                                                    @onpointerup="() => PtzHoldStopAsync(railCam)"
+                                                    @onpointerleave="() => PtzHoldStopAsync(railCam)">@UiIcon.Render("chev-right", 18)</button>
+                                            <button class="ptz-ov-down" title="@T["Pan down (hold)"]"
+                                                    @onpointerdown='() => PtzMoveAsync(railCam, "down")'
+                                                    @onpointerup="() => PtzHoldStopAsync(railCam)"
+                                                    @onpointerleave="() => PtzHoldStopAsync(railCam)">@UiIcon.Render("chev-down", 18)</button>
+                                            <button class="ptz-ov-presets @(_ptzPresetsOpen ? "on" : "")" title="@(_ptzPresetsOpen ? T["Hide presets"] : T["Go to a preset"])"
+                                                    @onclick="() => TogglePtzPresetsAsync(railCam)">@UiIcon.Render("bookmark", 16)</button>
+                                        </div>
                                     </div>
                                 }
                                 <div class="cam-rail-pill">
@@ -928,7 +954,7 @@
                                     {
                                         <button class="cam-rail-btn cam-rail-ptz @(_ptzPadOpen ? "rail-active" : "")"
                                                 title="@(_ptzPadOpen ? T["Hide pan/tilt controls"] : T["Pan / tilt the camera"])"
-                                                @onclick="() => _ptzPadOpen = !_ptzPadOpen">PTZ</button>
+                                                @onclick="() => { _ptzPadOpen = !_ptzPadOpen; _ptzPresetsOpen = false; }">@UiIcon.Render("move", 16)</button>
                                     }
                                     @if (TalkSupported(slot.Camera))
                                     {
@@ -1949,7 +1975,31 @@
                                         <input class="notif-input" placeholder="@T["usually blank"]" @bind="e.HttpAddress" /></div>
                                     <div class="control-row"><span>@T["Channel (0 = first; an NVR channel or a second lens)"]</span>
                                         <input class="ret-input" type="number" min="0" max="255" @bind="e.ChannelId" /></div>
-
+                                }
+                                else
+                                {
+                                    <div class="control-row"><span>@T["Main RTSP URL"]</span>
+                                        <input class="notif-input @(CamRtspError != null ? "input-error" : "")"
+                                               placeholder="rtsp://user:pass@host:554/path" @bind="e.RtspMain" @bind:event="oninput" /></div>
+                                    <div class="control-row"><span>@T["Sub RTSP URL (optional)"]</span>
+                                        <input class="notif-input" placeholder="rtsp://…" @bind="e.RtspSub" @bind:event="oninput" /></div>
+                                    @if (CamRtspError != null) { <div class="field-error">@CamRtspError</div> }
+                                    <div class="control-row"><span>@T["ONVIF address (blank = derived)"]</span>
+                                        <input class="notif-input" placeholder="@T["usually blank"]" @bind="e.OnvifAddress" /></div>
+                                    <div class="notice small">
+                                        @((MarkupString)T["Put credentials inside the URL (rtsp://user:pass@host/path). A stored password shows as <b>****</b>; leave the URL untouched to keep it."])
+                                        @(" ")@((MarkupString)T["The camera's settings (model, picture, streams, pan/tilt, overlays) are read over <b>ONVIF</b>, found on the stream URL's own host unless you give an address here. Use a full URL (<b>http://user:pass@host:8000/onvif/device_service</b>) if its ONVIF login differs from the streaming one."])
+                                    </div>
+                                }
+                                @* Both camera kinds: right after the camera's own fields, ahead of the optional sections. *@
+                                <div class="control-row"><span>@T["Record detection events"]</span>
+                                    <select class="event-filter" value="@(e.Record ? "true" : "false")"
+                                            @onchange='ev => e.Record = (string?)ev.Value == "true"'>
+                                        <option value="true">@T["Yes (default)"]</option>
+                                        <option value="false">@T["No"]</option>
+                                    </select></div>
+                                @if (e.Type == "reolink")
+                                {
                                     <div class="campanel-divider"></div>
                                     <div class="campanel-subtitle">@T["OPTIONAL"]</div>
                                     <div class="control-row"><span>@T["Streams to open"]</span>
@@ -2065,29 +2115,73 @@
                                     <div class="notice small">
                                         @((MarkupString)T["Here Neolink <b>answers</b> ONVIF, so Frigate can pan, tilt and zoom this camera and use its presets with its own controls. It is not the <b>ONVIF address</b> above, which is where Neolink reads the camera. Video stays on RTSP. <b>Shared port</b> serves every camera on one port, told apart by Frigate's <b>onvif.profile</b> (Frigate 0.18+); <b>Own port</b> is for older Frigate."])
                                     </div>
+
+                                    @* Frigate's click-to-move and autotracking: Neolink times each move from the lens's angles and the head's speeds. *@
+                                    <div class="campanel-divider"></div>
+                                    <div class="campanel-subtitle">@T["CLICK-TO-MOVE AND AUTOTRACKING"] <span class="preview-tag">@T["EXPERIMENTAL"]</span></div>
+                                    <label class="control-row check-row"><span>@T["This camera pans and tilts"]</span>
+                                        <input type="checkbox" @bind="e.PtzRelative" @bind:after="() => e.PtzRelativeOff = null" /></label>
+                                    @if (!e.PtzRelative)
+                                    {
+                                        <div class="notice small">@T["Tick it to let Frigate's click-to-move and autotracking drive this camera."]</div>
+                                    }
+                                    else
+                                    {
+                                        @if (e.PtzMode == "off")
+                                        {
+                                            <div class="field-warn">@T["These settings reach Frigate through PTZ for Frigate above: turn that on too."]</div>
+                                        }
+                                        <div class="control-row"><span>@T["Horizontal angle of view"]</span>
+                                            <span class="unit-input"><input class="ret-input" type="number" min="1" max="170" step="0.1"
+                                                   @bind="e.PtzFovH" @bind:event="oninput" @bind:after="() => e.PtzRelativeOff = null" /><span>°</span></span></div>
+                                        <div class="control-row"><span>@T["Vertical angle of view"]</span>
+                                            <span class="unit-input"><input class="ret-input" type="number" min="1" max="170" step="0.1" placeholder="@T["auto"]"
+                                                   @bind="e.PtzFovV" @bind:event="oninput" @bind:after="() => e.PtzRelativeOff = null" /><span>°</span></span></div>
+                                        <div class="notice small">@T["From the camera's spec sheet. Leave vertical blank to take it from the picture's shape."]</div>
+                                        <div class="control-row"><span>@T["Time for a full pan"]</span>
+                                            <span class="sweep">
+                                                <input class="ret-input" type="number" min="0.1" step="0.1" aria-label="@T["Seconds"]"
+                                                       @bind="e.PanSweepSeconds" @bind:event="oninput" @bind:after="() => FillSweepRate(e, pan: true)" />@T["s for"]
+                                                <input class="ret-input" type="number" min="1" max="360" step="1" aria-label="@T["Degrees"]"
+                                                       @bind="e.PanSweepDegrees" @bind:event="oninput" @bind:after="() => FillSweepRate(e, pan: true)" />°
+                                                <span class="sweep-rate">@SweepRateText(e.PtzPanRate, null)</span>
+                                            </span></div>
+                                        <div class="control-row"><span>@T["Time for a full tilt"]</span>
+                                            <span class="sweep">
+                                                <input class="ret-input" type="number" min="0.1" step="0.1" aria-label="@T["Seconds"]"
+                                                       @bind="e.TiltSweepSeconds" @bind:event="oninput" @bind:after="() => FillSweepRate(e, pan: false)" />@T["s for"]
+                                                <input class="ret-input" type="number" min="1" max="360" step="1" aria-label="@T["Degrees"]"
+                                                       @bind="e.TiltSweepDegrees" @bind:event="oninput" @bind:after="() => FillSweepRate(e, pan: false)" />°
+                                                <span class="sweep-rate">@SweepRateText(e.PtzTiltRate, T["same speed as pan"])</span>
+                                            </span></div>
+                                        <div class="notice small">@T["Time the head from end stop to end stop in its camera panel with Speed at 32, the speed Frigate's arrows use. The spec sheet gives the range."]</div>
+                                        @if (CamPtzRelativeError != null)
+                                        {
+                                            <div class="field-error">@CamPtzRelativeError</div>
+                                        }
+                                        else if (e.PtzRelativeOff != null)
+                                        {
+                                            <div class="field-warn">@T.F("Off when the server last loaded it: {0}", e.PtzRelativeOff)</div>
+                                        }
+                                        else
+                                        {
+                                            <div class="notice small">@T["Then try click-to-move in Frigate: if the head goes past the spot, shorten that time; if it stops short, lengthen it. Misses sideways are the pan time, up and down the tilt time."]</div>
+                                        }
+                                        <details class="ptz-more" open="@e.PtzMoreOpen">
+                                            <summary>@T["More settings"]</summary>
+                                            <div class="control-row"><span>@T["Move speed (1-64)"]</span>
+                                                <span class="unit-input"><input class="ret-input" type="number" min="1" max="64" step="1" placeholder="32"
+                                                       @bind="e.PtzSpeed" @bind:event="oninput" @bind:after="() => e.PtzRelativeOff = null" /><span></span></span></div>
+                                            <div class="control-row"><span>@T["Start-up lag"]</span>
+                                                <span class="unit-input"><input class="ret-input" type="number" min="-500" max="2000" step="10" placeholder="@T["auto"]"
+                                                       @bind="e.PtzLagMs" @bind:event="oninput" @bind:after="() => e.PtzRelativeOff = null" /><span>ms</span></span></div>
+                                            <div class="control-row"><span>@T["Angle at full zoom (zoom lenses)"]</span>
+                                                <span class="unit-input"><input class="ret-input" type="number" min="0.5" max="170" step="0.1" placeholder="—"
+                                                       @bind="e.PtzTeleFovH" @bind:event="oninput" @bind:after="() => e.PtzRelativeOff = null" /><span>°</span></span></div>
+                                            <div class="notice small">@T["A higher move speed suits a slow head: time both speeds again at it. The lag is learned by itself when the camera reports where its head is."]</div>
+                                        </details>
+                                    }
                                 }
-                                else
-                                {
-                                    <div class="control-row"><span>@T["Main RTSP URL"]</span>
-                                        <input class="notif-input @(CamRtspError != null ? "input-error" : "")"
-                                               placeholder="rtsp://user:pass@host:554/path" @bind="e.RtspMain" @bind:event="oninput" /></div>
-                                    <div class="control-row"><span>@T["Sub RTSP URL (optional)"]</span>
-                                        <input class="notif-input" placeholder="rtsp://…" @bind="e.RtspSub" @bind:event="oninput" /></div>
-                                    @if (CamRtspError != null) { <div class="field-error">@CamRtspError</div> }
-                                    <div class="control-row"><span>@T["ONVIF address (blank = derived)"]</span>
-                                        <input class="notif-input" placeholder="@T["usually blank"]" @bind="e.OnvifAddress" /></div>
-                                    <div class="notice small">
-                                        @((MarkupString)T["Put credentials inside the URL (rtsp://user:pass@host/path). A stored password shows as <b>****</b>; leave the URL untouched to keep it."])
-                                        @(" ")@((MarkupString)T["The camera's settings (model, picture, streams, pan/tilt, overlays) are read over <b>ONVIF</b>, found on the stream URL's own host unless you give an address here. Use a full URL (<b>http://user:pass@host:8000/onvif/device_service</b>) if its ONVIF login differs from the streaming one."])
-                                    </div>
-                                }
-                                @* Applies to both camera kinds, so it sits outside the branches. *@
-                                <div class="control-row"><span>@T["Record detection events"]</span>
-                                    <select class="event-filter" value="@(e.Record ? "true" : "false")"
-                                            @onchange='ev => e.Record = (string?)ev.Value == "true"'>
-                                        <option value="true">@T["Yes (default)"]</option>
-                                        <option value="false">@T["No"]</option>
-                                    </select></div>
                                 @* Test/Cancel/Save live in the pinned .settings-foot below —
                                    the form scrolls, its actions must not. *@
                             }
@@ -5469,6 +5563,36 @@
         public int? PtzPort;
         /// <summary>Why the server turned it off at its last load; cleared once the fields change.</summary>
         public string? PtzOff;
+        // Frigate's click-to-move and autotracking (experimental): the lens's angles and the head's speeds.
+        public bool PtzRelative;
+        public double? PtzFovH, PtzFovV, PtzPanRate, PtzTiltRate, PtzLagMs, PtzSpeed, PtzTeleFovH;
+        /// <summary>Each speed as the time of a full sweep, starting from the E1's 355° and 50°; not saved.</summary>
+        public double? PanSweepSeconds, PanSweepDegrees = 355, TiltSweepSeconds, TiltSweepDegrees = 50;
+        /// <summary>Set once at load, so clearing a field inside More settings does not fold it shut.</summary>
+        public bool PtzMoreOpen;
+        public string? PtzRelativeOff;
+    }
+
+    /// <summary>Turns a timed full sweep into the speed the config takes; a blank sweep clears it.</summary>
+    private static void FillSweepRate(CamEdit e, bool pan)
+    {
+        var (seconds, degrees) = pan ? (e.PanSweepSeconds, e.PanSweepDegrees) : (e.TiltSweepSeconds, e.TiltSweepDegrees);
+        e.PtzRelativeOff = null;
+        double? rate = seconds > 0 && degrees > 0 ? Math.Round(degrees.Value / seconds.Value, 1) : null;
+        if (pan) e.PtzPanRate = rate;
+        else e.PtzTiltRate = rate;
+    }
+
+    /// <summary>The speed a timed sweep works out to, shown beside it.</summary>
+    private static string SweepRateText(double? rate, string? blank) => rate is { } r ? $"= {r:0.#} °/s" : blank ?? "";
+
+    /// <summary>Shows a speed as the time of a full sweep.</summary>
+    private static void FillSweepSeconds(CamEdit e, bool pan)
+    {
+        var (rate, degrees) = pan ? (e.PtzPanRate, e.PanSweepDegrees) : (e.PtzTiltRate, e.TiltSweepDegrees);
+        double? seconds = rate > 0 && degrees > 0 ? Math.Round(degrees.Value / rate.Value, 1) : null;
+        if (pan) e.PanSweepSeconds = seconds;
+        else e.TiltSweepSeconds = seconds;
     }
 
     private ApiAdminPtz? _adminPtz;
@@ -5776,7 +5900,19 @@
             PtzMode = cam.PtzMode ?? "off",
             PtzPort = cam.PtzPort,
             PtzOff = cam.PtzOff,
+            PtzRelative = cam.PtzRelative,
+            PtzFovH = cam.PtzFovH,
+            PtzFovV = cam.PtzFovV,
+            PtzPanRate = cam.PtzPanRate,
+            PtzTiltRate = cam.PtzTiltRate,
+            PtzLagMs = cam.PtzLagMs,
+            PtzSpeed = cam.PtzSpeed,
+            PtzTeleFovH = cam.PtzTeleFovH,
+            PtzMoreOpen = cam.PtzSpeed != null || cam.PtzLagMs != null || cam.PtzTeleFovH != null,
+            PtzRelativeOff = cam.PtzRelativeOff,
         };
+        FillSweepSeconds(_camEdit, pan: true);
+        FillSweepSeconds(_camEdit, pan: false);
         _camEditSig = CamSig();
     }
 
@@ -5790,10 +5926,15 @@
         e.ChannelId = channel;
         e.Name = $"{cam.Name}_lens{channel + 1}";
         e.Stream = "both";
-        // A PTZ port or profile belongs to the entry it was set on.
+        // A PTZ port or profile, and the moves' settings, belong to the entry they were set on.
         e.PtzMode = "off";
         e.PtzPort = null;
         e.PtzOff = null;
+        e.PtzRelative = false;
+        e.PtzFovH = e.PtzFovV = e.PtzPanRate = e.PtzTiltRate = e.PtzLagMs = e.PtzSpeed = e.PtzTeleFovH = null;
+        e.PanSweepSeconds = e.TiltSweepSeconds = null;
+        e.PtzMoreOpen = false;
+        e.PtzRelativeOff = null;
     }
 
     private void CancelCameraEdit()
@@ -5906,8 +6047,27 @@
         }
     }
 
+    /// <summary>Click-to-move and autotracking: the ranges the server checks on save.</summary>
+    private string? CamPtzRelativeError
+    {
+        get
+        {
+            if (_camEdit is not { Type: "reolink", PtzRelative: true } e) return null;
+            static bool Within(double? v, double min, double max) => v is not { } d || d >= min && d <= max;
+            return e.PtzFovH == null ? T["Enter the camera's horizontal angle of view, from its spec sheet."]
+                : e.PtzPanRate == null ? T["Enter the time for a full pan."]
+                : !Within(e.PtzFovH, 1, 170) || !Within(e.PtzFovV, 1, 170) ? T["Angles of view are 1 to 170 degrees."]
+                : !Within(e.PtzPanRate, 0.5, 720) || !Within(e.PtzTiltRate, 0.5, 720) ? T["Speeds are 0.5 to 720 degrees a second."]
+                : !Within(e.PtzSpeed, 1, 64) ? T["The move speed is 1 to 64."]
+                : !Within(e.PtzLagMs, -500, 2000) ? T["The lag is -500 to 2000 ms."]
+                : !Within(e.PtzTeleFovH, 0.5, e.PtzFovH.Value) ? T["The angle at full zoom cannot be wider than the horizontal one."]
+                : null;
+        }
+    }
+
     private string? CamFormError =>
-        CamNameError ?? CamAddressError ?? CamUsernameError ?? CamPasswordError ?? CamRtspError ?? CamUidError ?? CamPtzError;
+        CamNameError ?? CamAddressError ?? CamUsernameError ?? CamPasswordError ?? CamRtspError ?? CamUidError ?? CamPtzError
+        ?? CamPtzRelativeError;
 
     /// <summary>The test has nothing to dial only when there is neither an address
     /// nor a UID-over-UDP to find the camera by. A UDP camera with a UID is testable
@@ -5948,6 +6108,14 @@
         keepAliveHours = forSave && e.Type == "reolink" ? e.KeepAliveHours : (double?)null,
         ptzMode = forSave && e.Type == "reolink" ? e.PtzMode : null,
         ptzPort = forSave && e.Type == "reolink" && e.PtzMode == "own" ? e.PtzPort : null,
+        ptzRelative = forSave && e.Type == "reolink" ? e.PtzRelative : (bool?)null,
+        ptzFovH = forSave && e.Type == "reolink" && e.PtzRelative ? e.PtzFovH : null,
+        ptzFovV = forSave && e.Type == "reolink" && e.PtzRelative ? e.PtzFovV : null,
+        ptzPanRate = forSave && e.Type == "reolink" && e.PtzRelative ? e.PtzPanRate : null,
+        ptzTiltRate = forSave && e.Type == "reolink" && e.PtzRelative ? e.PtzTiltRate : null,
+        ptzLagMs = forSave && e.Type == "reolink" && e.PtzRelative ? e.PtzLagMs : null,
+        ptzSpeed = forSave && e.Type == "reolink" && e.PtzRelative ? e.PtzSpeed : null,
+        ptzTeleFovH = forSave && e.Type == "reolink" && e.PtzRelative ? e.PtzTeleFovH : null,
         record = forSave ? e.Record : (bool?)null,
     };
 
@@ -7992,7 +8160,7 @@
         {
             RevertAutoMainSwitch(); // the outgoing card gets its stream back first
             _maxIndex = index;
-            _ptzPadOpen = false; // each camera's pad starts collapsed
+            _ptzPadOpen = _ptzPresetsOpen = false; // each camera's pad starts collapsed
             changed = true;
         }
         var target = _slots[index];
@@ -8123,7 +8291,7 @@
         RevertAutoMainSwitch();
         ReturnBorrowedSlot();
         _maxIndex = null;
-        _ptzPadOpen = false;
+        _ptzPadOpen = _ptzPresetsOpen = false;
         _ = SaveAsync();
     }
 
@@ -8238,6 +8406,51 @@
     }
 
     private Task PtzHoldStopAsync(string cam) => PtzMoveAsync(cam, "stop");
+
+    // The pad's preset list: read fresh each time it opens, since presets change in the camera's settings.
+    private sealed record PadPreset(int Id, string Name);
+    private bool _ptzPresetsOpen;
+    private List<PadPreset>? _ptzPresets;
+    private int? _ptzPresetGoing;
+
+    private async Task TogglePtzPresetsAsync(string cam)
+    {
+        _ptzPresetsOpen = !_ptzPresetsOpen;
+        if (!_ptzPresetsOpen) return;
+        _ptzPresets = null;
+        StateHasChanged();
+        var list = new List<PadPreset>();
+        try
+        {
+            using var res = await Http.SendAsync(ApiRequest(HttpMethod.Get, $"/api/cameras/{Uri.EscapeDataString(cam)}/ptzpreset"));
+            if (res.IsSuccessStatusCode
+                && (await res.Content.ReadFromJsonAsync<JsonElement>()).TryGetProperty("presets", out var arr))
+                foreach (var p in arr.EnumerateArray())
+                    list.Add(new PadPreset(p.GetProperty("id").GetInt32(), p.GetProperty("name").GetString() ?? ""));
+        }
+        catch
+        {
+            // Unreadable: shown as no presets; reopening the list asks again.
+        }
+        _ptzPresets = list;
+    }
+
+    private async Task GoToPresetAsync(string cam, int id)
+    {
+        _ptzPresetGoing = id;
+        try
+        {
+            var req = ApiRequest(HttpMethod.Post, $"/api/cameras/{Uri.EscapeDataString(cam)}/ptzpreset");
+            req.Content = JsonContent.Create(new { id });
+            using var _ = await Http.SendAsync(req);
+            await Task.Delay(1500); // the highlight shows which preset the head is heading for
+        }
+        catch
+        {
+            // Transient failure: tapping the preset again retries.
+        }
+        if (_ptzPresetGoing == id) _ptzPresetGoing = null;
+    }
 
     private bool TalkActive(string cam) =>
         _talkCamera != null && string.Equals(_talkCamera, cam, StringComparison.OrdinalIgnoreCase);

@@ -1345,6 +1345,96 @@ public static class SelfTest
             Assert(Streaming.CameraControl.ParseBcAiSensitivity("vehicle", ai) == null, "a reply for another type is ignored");
         });
 
+        Test("OSD and record audio over Baichuan: parsing and write-back", () =>
+        {
+            System.Xml.Linq.XElement X(string s) => System.Xml.Linq.XElement.Parse(s);
+            // The shape nodelink-js documents from live cameras: anchors in a 16.16 space, the watermark in the name block.
+            var osdBody = X("<body><OsdDatetime version=\"1.1\"><channelId>0</channelId><enable>0</enable>" +
+                            "<topLeftX>65537</topLeftX><topLeftY>1</topLeftY><width>0</width><height>0</height>" +
+                            "<language>English</language></OsdDatetime>" +
+                            "<OsdChannelName version=\"1.1\"><channelId>0</channelId><name>Porch</name><enable>1</enable>" +
+                            "<topLeftX>65536</topLeftX><topLeftY>65536</topLeftY><enWatermark>1</enWatermark>" +
+                            "<enBgcolor>0</enBgcolor></OsdChannelName></body>");
+            var osd = Streaming.CameraControl.ParseBcOsd(osdBody);
+            Assert(osd is { ShowName: true, Name: "Porch", NamePos: "Lower Right", ShowTime: false, TimePos: "Top Center",
+                       Watermark: true } && osd.PosOptions.SequenceEqual(Streaming.CameraControl.BcOsdPositions),
+                "msg 44: both overlays, their positions and the watermark");
+            System.Xml.Linq.XElement Block(int x, int y) =>
+                X($"<OsdDatetime><enable>1</enable><topLeftX>{x}</topLeftX><topLeftY>{y}</topLeftY></OsdDatetime>");
+            foreach (var (x, y, want) in new[]
+                     {
+                         (0, 0, "Upper Left"), (1, 1, "Upper Left"), (65537, 1, "Top Center"), (65536, 1, "Upper Right"),
+                         (1, 65536, "Lower Left"), (65537, 65536, "Bottom Center"), (65536, 65536, "Lower Right"),
+                         (30000, 1, "Custom"), (1, 65537, "Custom"),
+                     })
+                AssertEq(Streaming.CameraControl.BcOsdPosition(Block(x, y)), want);
+            Assert(Streaming.CameraControl.BcOsdPosition(X("<OsdDatetime><topLeftX>1</topLeftX></OsdDatetime>")) == null,
+                "no anchor, no position");
+            Assert(Streaming.CameraControl.ParseBcOsd(X("<body><OsdChannelName><enable>0</enable><watermark>0</watermark>" +
+                       "</OsdChannelName></body>")) is { Watermark: false, NamePos: null, PosOptions.Count: 0 },
+                "another spelling of the watermark switch; without anchors no positions are offered");
+            Assert(Streaming.CameraControl.ParseBcOsd(X("<body><OsdChannelName><enable>1</enable><watermarkPos>2</watermarkPos>" +
+                       "</OsdChannelName></body>")) is { Watermark: null }, "no watermark switch: the toggle stays hidden");
+            Assert(Streaming.CameraControl.ParseBcOsd(X("<body><Other/></body>")) == null, "no overlays, no OSD section");
+
+            var wmOff = Streaming.CameraControl.BuildBcOsd(osdBody, null, null, null, null, false);
+            Assert((string?)wmOff.Element("OsdChannelName")!.Element("enWatermark") == "0"
+                   && (string?)wmOff.Element("OsdChannelName")!.Element("enable") == "1"
+                   && (string?)wmOff.Element("OsdChannelName")!.Element("topLeftX") == "65536"
+                   && (string?)wmOff.Element("OsdDatetime")!.Element("language") == "English",
+                "only the watermark changes; both overlays go back as read");
+            Assert((string?)osdBody.Element("OsdChannelName")!.Element("enWatermark") == "1", "the read body is not mutated");
+            var timeOn = Streaming.CameraControl.BuildBcOsd(osdBody, null, null, true, null, null);
+            Assert((string?)timeOn.Element("OsdDatetime")!.Element("enable") == "1"
+                   && (string?)timeOn.Element("OsdChannelName")!.Element("enWatermark") == "1", "the timestamp switch alone");
+            foreach (var (pos, x, y) in new[]
+                     {
+                         ("Upper Left", "1", "1"), ("Top Center", "65537", "1"), ("Upper Right", "65536", "1"),
+                         ("Lower Left", "1", "65536"), ("bottom center", "65537", "65536"), ("Lower Right", "65536", "65536"),
+                     })
+            {
+                var moved = Streaming.CameraControl.BuildBcOsd(osdBody, null, null, null, pos, null);
+                Assert((string?)moved.Element("OsdDatetime")!.Element("topLeftX") == x
+                       && (string?)moved.Element("OsdDatetime")!.Element("topLeftY") == y
+                       && (string?)moved.Element("OsdChannelName")!.Element("topLeftX") == "65536",
+                    $"the timestamp moves to {pos} (near edge written as 1, as the app does); the name stays");
+            }
+            static bool Refuses<T>(Action a) where T : Exception
+            {
+                try { a(); return false; }
+                catch (T) { return true; }
+            }
+            Assert(Refuses<NotSupportedException>(() => Streaming.CameraControl.BuildBcOsd(
+                    X("<body><OsdChannelName><enable>1</enable></OsdChannelName></body>"), null, null, null, null, false)),
+                "a watermark the camera does not have is refused, not invented");
+            Assert(Refuses<ArgumentException>(() => Streaming.CameraControl.BuildBcOsd(osdBody, null, "Middle", null, null, null)),
+                "an unknown position name is refused");
+            Assert(Refuses<NotSupportedException>(() => Streaming.CameraControl.BuildBcOsd(
+                    X("<body><OsdDatetime><enable>1</enable></OsdDatetime></body>"), null, null, null, "Upper Left", null)),
+                "a block without an anchor is not given one");
+
+            // Msg 56 keeps one audio flag per stream; the write sets them all, as reolink_aio's SetEnc does.
+            var enc = X("<Compression version=\"1.1\"><channelId>0</channelId>" +
+                        "<mainStream><audio>1</audio><width>2560</width><bitRate>3072</bitRate></mainStream>" +
+                        "<subStream><audio>0</audio><width>640</width></subStream></Compression>");
+            Assert(Streaming.CameraControl.CompressionRecordAudio(enc) == true, "any stream with audio = on");
+            var encOff = Streaming.CameraControl.BuildCompressionAudio(enc, false)!;
+            Assert(encOff.Descendants("audio").All(a => a.Value == "0")
+                   && (string?)encOff.Element("mainStream")!.Element("bitRate") == "3072"
+                   && (string?)encOff.Element("subStream")!.Element("width") == "640", "every stream off, the rest as read");
+            Assert(Streaming.CameraControl.CompressionRecordAudio(encOff) == false, "all streams off = off");
+            Assert(Streaming.CameraControl.BuildCompressionAudio(enc, true)!.Descendants("audio").All(a => a.Value == "1"),
+                "every stream on");
+            Assert((string?)enc.Element("subStream")!.Element("audio") == "0", "the read element is not mutated");
+            var otherRoot = X("<body><Enc><mainStream><audio>0</audio></mainStream><subStream><audio>1</audio></subStream></Enc></body>");
+            Assert(Streaming.CameraControl.CompressionRecordAudio(otherRoot) == true
+                   && Streaming.CameraControl.BuildCompressionAudio(otherRoot, false)!.Descendants("audio").All(a => a.Value == "0"),
+                "the flags are found under any root name, as reolink_aio finds them");
+            var bare = X("<Compression><mainStream><width>640</width></mainStream></Compression>");
+            Assert(Streaming.CameraControl.CompressionRecordAudio(bare) == null
+                   && Streaming.CameraControl.BuildCompressionAudio(bare, false) == null, "no audio flag = no switch");
+        });
+
         Test("event clip length is read from a closed MP4 with its moov at the end", () =>
         {
             static byte[] Box(string type, params byte[][] parts)
@@ -5995,6 +6085,122 @@ public static class SelfTest
                 "a grid Neolink cannot read is never overwritten");
         });
 
+        Test("a battery camera without an HTTP API gets the watermark and record audio over Baichuan", () =>
+        {
+            static System.Xml.Linq.XElement X(string s) => System.Xml.Linq.XElement.Parse(s);
+            static bool Throws<T>(Func<Task> a) where T : Exception
+            {
+                try { a().GetAwaiter().GetResult(); return false; }
+                catch (T) { return true; }
+            }
+            var ct = CancellationToken.None;
+            var cam = new SettingsCamera
+            {
+                Osd = new[]
+                {
+                    X("<OsdChannelName version=\"1.1\"><channelId>0</channelId><name>Porch</name><enable>1</enable>" +
+                      "<topLeftX>65536</topLeftX><topLeftY>65536</topLeftY><enWatermark>1</enWatermark></OsdChannelName>"),
+                    X("<OsdDatetime version=\"1.1\"><channelId>0</channelId><enable>1</enable>" +
+                      "<topLeftX>65537</topLeftX><topLeftY>1</topLeftY></OsdDatetime>"),
+                },
+                Compression = X("<Compression version=\"1.1\"><channelId>0</channelId><mainStream><audio>1</audio>" +
+                                "<width>2560</width></mainStream><subStream><audio>1</audio><width>640</width></subStream></Compression>"),
+            };
+            var source = new BatterySource { Camera = cam };
+            var control = new Streaming.CameraControl(source);
+
+            var f = control.GetHttpFeaturesAsync(ct).GetAwaiter().GetResult();
+            Assert(f?.Osd is { Watermark: true, ShowName: true, ShowTime: true, NamePos: "Lower Right", TimePos: "Top Center" }
+                   && f.Osd.PosOptions.Count == 6 && f.Audio is { RecordAudio: true },
+                "both switches and the overlay positions appear from the Baichuan replies");
+
+            control.SetOsdSettingsAsync(null, null, null, null, false, ct).GetAwaiter().GetResult();
+            var osdWrite = cam.Sent.Last(s => s.MsgId == BcConstants.MsgIdSetOsd).Body;
+            Assert(osdWrite.Length == 2 && (string?)osdWrite[0].Element("enWatermark") == "0"
+                   && (string?)osdWrite[0].Element("enable") == "1" && (string?)osdWrite[1].Element("topLeftX") == "65537",
+                "msg 45 carries both overlays back with only the watermark changed");
+            control.SetOsdSettingsAsync(null, null, null, "Lower Left", null, ct).GetAwaiter().GetResult();
+            osdWrite = cam.Sent.Last(s => s.MsgId == BcConstants.MsgIdSetOsd).Body;
+            Assert((string?)osdWrite[1].Element("topLeftX") == "1" && (string?)osdWrite[1].Element("topLeftY") == "65536"
+                   && (string?)osdWrite[0].Element("topLeftX") == "65536" && (string?)osdWrite[0].Element("enWatermark") == "0",
+                "the timestamp moves to the lower left; the name and the watermark stay as they are");
+            control.SetRecordAudioAsync(false, ct).GetAwaiter().GetResult();
+            var encWrite = cam.Sent.Last(s => s.MsgId == BcConstants.MsgIdSetCompression).Body.Single();
+            Assert(encWrite.Descendants("audio").All(a => a.Value == "0")
+                   && (string?)encWrite.Element("mainStream")!.Element("width") == "2560",
+                "msg 57 turns audio off on every stream and keeps the encoding");
+            Assert(control.GetAudioStateAsync(ct).GetAwaiter().GetResult() is { RecordAudio: false }
+                   && control.GetOsdSettingsAsync(ct).GetAwaiter().GetResult() is { Watermark: false, TimePos: "Lower Left" },
+                "the new states read back, as the Home Assistant switch reads them");
+
+            int sent = cam.Sent.Count;
+            Assert(Throws<ArgumentException>(() => control.SetOsdSettingsAsync(null, "Middle", null, null, null, ct))
+                   && cam.Sent.Count == sent, "an unknown position is refused before anything is sent");
+            source.Camera = null;
+            Assert(control.GetHttpFeaturesAsync(ct).GetAwaiter().GetResult() == null && cam.Sent.Count == sent,
+                "a sleeping camera is not asked");
+            Assert(Throws<Streaming.CameraOfflineException>(() => control.SetRecordAudioAsync(true, ct)) && cam.Sent.Count == sent,
+                "a write to a sleeping camera fails instead of waking it");
+
+            // Below, the log must say once why a switch is hidden, and say nothing when both are offered.
+            var said = new List<string>();
+            var tap = Log.Tap;
+            Log.Tap = (_, m) => { if (m.Contains(" not offered")) lock (said) said.Add(m); };
+            var closed = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+            closed.Start();
+            int closedPort = ((System.Net.IPEndPoint)closed.LocalEndpoint).Port;
+            closed.Stop();
+            using var deadHttp = new Protocol.ReolinkHttpApi($"127.0.0.1:{closedPort}", "admin", "pw", 0);
+            var argus = new SettingsCamera
+            {
+                Osd = new[] { X("<OsdChannelName version=\"1.1\"><channelId>0</channelId><enable>1</enable>" +
+                                "<topLeftX>1</topLeftX><topLeftY>1</topLeftY><enWatermark>1</enWatermark></OsdChannelName>") },
+                Compression = X("<Compression version=\"1.1\"><mainStream><audio>1</audio></mainStream></Compression>"),
+            };
+            var plain = new SettingsCamera
+            {
+                Osd = new[] { X("<OsdChannelName version=\"1.1\"><channelId>0</channelId><enable>1</enable></OsdChannelName>") },
+                Compression = X("<Compression version=\"1.1\"><mainStream><audio>1</audio></mainStream></Compression>"),
+                Support = X("<Support version=\"1.1\"><item><chnID>0</chnID><noAudio>1</noAudio></item></Support>"),
+            };
+            var mute = new SettingsCamera { SilentOsd = true };
+            try
+            {
+                // The field case: HTTP off on a battery camera, so its derived HTTP API never answers.
+                var argusControl = new Streaming.CameraControl(new BatterySource { Camera = argus, Name = "argus" }, deadHttp);
+                Assert(argusControl.HttpAbsent, "its HTTP API counts as absent");
+                var af = argusControl.GetHttpFeaturesAsync(ct).GetAwaiter().GetResult();
+                Assert(af?.Osd is { Watermark: true } && af.Audio is { RecordAudio: true }, "both switches appear there too");
+                var asked = argus.Sent.Select(s => s.MsgId).ToList();
+                int pictureAt = asked.IndexOf(BcConstants.MsgIdGetVideoInput);
+                Assert(asked.IndexOf(BcConstants.MsgIdGetOsd) is >= 0 and var osdAt && osdAt < pictureAt
+                       && asked.IndexOf(BcConstants.MsgIdGetCompression) is >= 0 and var encAt && encAt < pictureAt,
+                    "Baichuan settings are read before the picture, whose ONVIF probe can spend the budget");
+                argusControl.SetRecordAudioAsync(false, ct).GetAwaiter().GetResult();
+                Assert(argus.Sent.Any(s => s.MsgId == BcConstants.MsgIdSetCompression), "its writes go over Baichuan");
+
+                // Hidden: no switch in the reply, no microphone, silence, a refusal.
+                var plainControl = new Streaming.CameraControl(new BatterySource { Camera = plain, Name = "plain" });
+                var pf = plainControl.GetHttpFeaturesAsync(ct).GetAwaiter().GetResult();
+                Assert(pf?.Osd is { Watermark: null } && pf.Audio == null, "both switches stay hidden");
+                Assert(plain.Sent.All(s => s.MsgId != BcConstants.MsgIdGetCompression), "a camera without audio is not asked for it");
+                Assert(Throws<NotSupportedException>(() => plainControl.SetOsdSettingsAsync(null, null, null, null, false, ct))
+                       && plain.Sent.All(s => s.MsgId != BcConstants.MsgIdSetOsd), "a watermark write is refused, not sent");
+                plainControl.GetHttpFeaturesAsync(ct).GetAwaiter().GetResult();
+                new Streaming.CameraControl(new BatterySource { Camera = mute, Name = "mute" })
+                    .GetHttpFeaturesAsync(ct).GetAwaiter().GetResult();
+            }
+            finally { Log.Tap = tap; }
+            string[] Said(string name) { lock (said) return said.Where(m => m.StartsWith(name + ": ")).ToArray(); }
+            Assert(Said("plain") is { Length: 3 } p && p.Any(m => m.Contains("watermark") && m.Contains("msg 44 holds no switch"))
+                   && p.Any(m => m.Contains("positions") && m.Contains("msg 44 holds no position"))
+                   && p.Any(m => m.Contains("Record audio") && m.Contains("Support flags")),
+                $"a missing switch, missing anchors and a missing microphone are each said once ({Said("plain").Length})");
+            Assert(Said("mute") is { Length: 2 } q && q.Any(m => m.Contains("did not answer msg 44"))
+                   && q.Any(m => m.Contains("refused msg 56 (code 400)")), "silence and a refusal are told apart");
+            Assert(Said("argus").Length == 0, "nothing to explain when both switches are offered");
+        });
+
         Test("a stored zone follows a camera that is renamed; nothing else changes", () =>
         {
             var dir = Path.Combine(Path.GetTempPath(), "neolink-selftest-rename-" + Guid.NewGuid().ToString("N"));
@@ -6744,7 +6950,7 @@ public static class SelfTest
             Assert(PtzCall(ptz, "", "<trt:GetStreamUri/>", auth) is (500, var noStream)
                    && noStream.Contains("ter:ActionNotSupported"), "video is not served here");
             Assert(PtzCall(ptz, "", "<tptz:AbsoluteMove/>", auth).Body.Contains("ter:ActionNotSupported"),
-                "nor any move but a continuous one");
+                "nor a move to a position, without a zoom lens");
             Assert(ptz.HandleAsync("<s:Envelope", "http://nvr:8081", null, "test", ct).GetAwaiter().GetResult() is (400, var bad)
                    && bad.Contains("ter:WellFormed"), "malformed XML is a Sender fault");
 
@@ -6771,13 +6977,10 @@ public static class SelfTest
             PtzCall(ptz, "", "<tptz:ContinuousMove><tptz:Velocity><tt:PanTilt x=\"0\" y=\"0\"/></tptz:Velocity></tptz:ContinuousMove>", auth);
             AssertEq(control.Log(), "up@58,stop@32,stop@32");
 
-            // A camera that reports no pan/tilt gets a profile without it, once it has answered (read behind the
-            // request, never holding it); with no users, no login is asked.
+            // A camera that reports no pan/tilt gets a profile without it, from the first reply, which waits briefly
+            // for the camera's answer; with no users, no login is asked.
             var fixedCam = new Onvif.OnvifPtzCamera("fixed", new PtzRecordingControl("fixed", hasPtz: false), null);
             var fixedPtz = new Onvif.OnvifPtzServer("fixed", new Dictionary<string, string>(), new[] { fixedCam });
-            Assert(PtzCall(fixedPtz, "", "<trt:GetProfiles/>") is (200, var early) && early.Contains("PTZConfiguration"),
-                "before the camera answers, pan/tilt is assumed");
-            fixedCam.CapabilitiesRead.Wait(TimeSpan.FromSeconds(5));
             Assert(PtzCall(fixedPtz, "", "<trt:GetProfiles/>") is (200, var plain) && !plain.Contains("PTZConfiguration"),
                 "no pan/tilt, no PTZ configuration; and an install with no users asks no login");
         });
@@ -6893,7 +7096,8 @@ public static class SelfTest
             AssertEq(string.Join(",", PtzFirst(PtzCall(ptz, "",
                     "<tptz:GetConfigurationOptions><tptz:ConfigurationToken>ptz_zoomy</tptz:ConfigurationToken></tptz:GetConfigurationOptions>").Body,
                     "Spaces").Elements().Select(e => e.Name.LocalName)),
-                "ContinuousPanTiltVelocitySpace,ContinuousZoomVelocitySpace,PanTiltSpeedSpace,ZoomSpeedSpace");
+                "AbsoluteZoomPositionSpace,ContinuousPanTiltVelocitySpace,ContinuousZoomVelocitySpace,PanTiltSpeedSpace,ZoomSpeedSpace");
+            Assert(profiles.Contains("DefaultAbsoluteZoomPositionSpace"), "Frigate's \"zoom-a\" feature");
 
             // Frigate's zoom in: a zoom velocity alone. The lens steps up from where it is; no pan/tilt command goes out.
             AssertEq(PtzCall(ptz, "", Zoom(0.5)).Status, 200);
@@ -6911,6 +7115,15 @@ public static class SelfTest
             WaitFor(() => !cam.Zooming);
             Assert(!cam.Zooming && control.Log().EndsWith("zoom@0"), $"zoomed out to the end: {control.Log()}");
 
+            // An exact position, as Frigate's absolute zooming sends it; the status then says where the lens is.
+            AssertEq(PtzCall(ptz, "", "<tptz:AbsoluteMove><tptz:Position><tt:Zoom x=\"0.25\"/></tptz:Position></tptz:AbsoluteMove>").Status, 200);
+            Assert(cam.Zooming, "zooming until the lens is there");
+            WaitFor(() => !cam.Zooming);
+            Assert(control.Log().EndsWith("zoom@25") && PtzCall(ptz, "", "<tptz:GetStatus/>").Body.Contains("<tt:Zoom x=\"0.25\""),
+                $"the lens went to a quarter, and the status says so: {control.Log()}");
+            Assert(PtzCall(ptz, "", "<tptz:AbsoluteMove><tptz:Position><tt:PanTilt x=\"0\" y=\"0\"/></tptz:Position></tptz:AbsoluteMove>")
+                is (400, var noPosition) && noPosition.Contains("pan and tilt have none"), "only the zoom has positions");
+
             // A held zoom whose Stop never comes ends with its timeout.
             var slow = new PtzRecordingControl("slow") { Lens = (0, 1000, 0) };
             var slowCam = new Onvif.OnvifPtzCamera("slow", slow, null);
@@ -6927,6 +7140,379 @@ public static class SelfTest
                 "", "<trt:GetProfiles/>").Body;
             Assert(zoomOnly.Contains("DefaultContinuousZoomVelocitySpace") && !zoomOnly.Contains("DefaultContinuousPanTiltVelocitySpace"),
                 "zoom only");
+        });
+
+        Test("ONVIF PTZ: the relative-move settings are read, and a bad one turns off relative moves only", () =>
+        {
+            var json = Path.Combine(Path.GetTempPath(), $"neolink-ptzrel-{Guid.NewGuid():N}.json");
+            var toml = Path.ChangeExtension(json, ".toml");
+            const string head = "\"username\": \"admin\", \"address\": \"10.0.0.2\", \"ptz_share\": true";
+            File.WriteAllText(json, $$"""
+                {
+                  "ptz_bind": "127.0.0.1",
+                  "cameras": [
+                    { "name": "e1", {{head}}, "ptz_fov_h": 87.5, "ptz_fov_v": 47, "ptz_pan_rate": 30, "ptz_tilt_rate": 12, "ptz_lag_ms": 80, "ptz_speed": 48 },
+                    { "name": "brief", {{head}}, "ptz_fov_h": 90, "ptz_pan_rate": 25 },
+                    { "name": "zoom", {{head}}, "ptz_fov_h": 90, "ptz_pan_rate": 25, "ptz_tele_fov_h": 30 },
+                    { "name": "half", {{head}}, "ptz_fov_h": 90 },
+                    { "name": "wide", {{head}}, "ptz_fov_h": 400, "ptz_pan_rate": 25 },
+                    { "name": "text", {{head}}, "ptz_fov_h": "90", "ptz_pan_rate": 25 },
+                    { "name": "racing", {{head}}, "ptz_fov_h": 90, "ptz_pan_rate": 25, "ptz_speed": 99 },
+                    { "name": "plain", {{head}} }
+                  ]
+                }
+                """);
+            File.WriteAllText(toml, """
+                ptz_bind = "127.0.0.1"
+                [[cameras]]
+                name = "e1"
+                username = "admin"
+                address = "10.0.0.2"
+                ptz_share = true
+                ptz_fov_h = 87.5
+                ptz_pan_rate = 30
+                ptz_tilt_rate = 12
+                """);
+            try
+            {
+                var c = NeolinkConfig.Load(json);
+                CameraConfig Cam(string name) => c.Cameras.Single(x => x.Name == name);
+                AssertEq(Cam("e1").PtzRelative, new PtzRelativeConfig(87.5, 47, 30, 12, 80, null, 48));
+                Assert(Cam("brief").PtzRelative is { FovV: null, TiltRate: null, Tilt: 25, LagMs: null, Speed: null, TeleFovH: null },
+                    "unset: the tilt rate is the pan rate, the lag learned or none, the speed the arrows', the vertical angle the picture's");
+                AssertEq(Cam("zoom").PtzRelative?.TeleFovH, 30d);
+                Assert(new[] { "half", "wide", "text", "racing" }.All(n => Cam(n) is { PtzRelative: null, PtzRelativeOff: not null, PtzOff: null }),
+                    "one of the pair missing, an impossible angle, a string or a speed past 64: no relative moves, PTZ itself stays");
+                Assert(Cam("plain") is { PtzRelative: null, PtzRelativeOff: null }, "not asked for");
+                bool refused = false;
+                try { NeolinkConfig.Load(json, strict: true); } catch (FormatException) { refused = true; }
+                Assert(refused, "a save is refused instead");
+                AssertEq(NeolinkConfig.Load(toml).Cameras.Single().PtzRelative, new PtzRelativeConfig(87.5, null, 30, 12, null, null));
+            }
+            finally { File.Delete(json); File.Delete(toml); }
+        });
+
+        Test("ONVIF PTZ: a move across the picture runs as a timed pan, then a timed tilt", () =>
+        {
+            static string Num(double v) => v.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            static string Relative(double x, double y, string? space = Onvif.OnvifPtzServer.FovSpace) =>
+                $"<tptz:RelativeMove><tptz:Translation><tt:PanTilt x=\"{Num(x)}\" y=\"{Num(y)}\" space=\"{space}\"/>" +
+                "</tptz:Translation><tptz:Speed><tt:PanTilt x=\"1\" y=\"1\"/></tptz:Speed></tptz:RelativeMove>";
+            static void WaitFor(Func<bool> done) { for (int i = 0; i < 100 && !done(); i++) Thread.Sleep(20); }
+            const string options = "<tptz:GetConfigurationOptions><tptz:ConfigurationToken>ptz_e1</tptz:ConfigurationToken></tptz:GetConfigurationOptions>";
+            (PtzRecordingControl, Onvif.OnvifPtzCamera, Onvif.OnvifPtzServer) Endpoint(PtzRelativeConfig? relative, int failStops = 0,
+                int failMoveAt = 0)
+            {
+                var control = new PtzRecordingControl("e1") { FailStops = failStops, FailMoveAt = failMoveAt };
+                var cam = new Onvif.OnvifPtzCamera("e1", control, null)
+                {
+                    Relative = relative, Settle = TimeSpan.FromMilliseconds(50), StopRetryDelay = TimeSpan.FromMilliseconds(100),
+                };
+                return (control, cam, new Onvif.OnvifPtzServer("e1", new Dictionary<string, string>(), new[] { cam }));
+            }
+
+            // The geometry: centre to edge of a 90° view is 45°; the tilt is the point's elevation once the pan has centred it.
+            var (pan, tilt) = Onvif.OnvifPtzCamera.AnglesFor(1, 0, 90, 90, 1);
+            Assert(Math.Abs(pan - 45) < 1e-9 && tilt == 0, $"centre to edge: {pan}, {tilt}");
+            AssertEq(Math.Round(Onvif.OnvifPtzCamera.AnglesFor(-0.5, 0, 90, 90, 1).Pan, 3), -26.565);
+            AssertEq(Math.Round(Onvif.OnvifPtzCamera.AnglesFor(1, 1, 90, 90, 1).Tilt, 2), 35.26); // a corner sits lower once panned to
+            AssertEq(Math.Round(Onvif.OnvifPtzCamera.AnglesFor(0, -1, 90, 90, 1).Tilt, 3), -45d);
+            AssertEq(Math.Round(Onvif.OnvifPtzCamera.VerticalFov(90, 1080.0 / 1920), 1), 58.7);
+            AssertEq(Onvif.OnvifPtzCamera.Magnification(90, 30, 0), 1d);
+            AssertEq(Math.Round(Onvif.OnvifPtzCamera.Magnification(90, 30, 1), 3), 3.732);
+
+            // A 90° lens on a head turning 450°/s: centre to edge takes a tenth of a second.
+            var fast = new PtzRelativeConfig(FovH: 90, FovV: 90, PanRate: 450, TiltRate: 450, LagMs: 0, TeleFovH: null);
+            var (control, cam, ptz) = Endpoint(fast);
+            Assert(cam.LegsFor(1, 0, 1).Single() is { Command: "right" } leg && Math.Abs(leg.For.TotalSeconds - 0.1) < 1e-6
+                   && Math.Abs(leg.Degrees - 45) < 1e-9, "one pan leg of a tenth of a second");
+            AssertEq(Math.Round(cam.LegsFor(0, -1, Onvif.OnvifPtzCamera.Magnification(90, 30, 1)).Single().For.TotalSeconds * 450), 15d);
+            AssertEq(cam.LegsFor(0.005, double.NaN, 1).Count, 0);
+
+            // Frigate's "pt-r-fov" feature: the FOV translation space, default and listed, in schema order.
+            AssertEq(string.Join(",", PtzFirst(PtzCall(ptz, "", "<trt:GetProfiles/>").Body, "PTZConfiguration").Elements().Select(e => e.Name.LocalName)),
+                "Name,UseCount,NodeToken,DefaultRelativePanTiltTranslationSpace,DefaultContinuousPanTiltVelocitySpace,DefaultPTZSpeed,DefaultPTZTimeout");
+            var spaces = PtzFirst(PtzCall(ptz, "", options).Body, "Spaces");
+            AssertEq(string.Join(",", spaces.Elements().Select(e => e.Name.LocalName)),
+                "RelativePanTiltTranslationSpace,ContinuousPanTiltVelocitySpace,PanTiltSpeedSpace");
+            Assert(spaces.Elements().First().Value.Contains("TranslationSpaceFov"), "Frigate looks for this URI");
+
+            // Right and down by the whole half-picture: pan, stop, tilt, stop, and moving until the picture has settled.
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            AssertEq(PtzCall(ptz, "", Relative(1, -1)).Status, 200);
+            Assert(cam.Moving && PtzCall(ptz, "", "<tptz:GetStatus/>").Body.Contains("<tt:PanTilt>MOVING</tt:PanTilt>"),
+                "the status says the head moves");
+            WaitFor(() => !cam.Moving);
+            AssertEq(control.Log(), "right@32,stop@32,down@32,stop@32");
+            Assert(clock.Elapsed > TimeSpan.FromMilliseconds(150) && clock.Elapsed < TimeSpan.FromSeconds(2),
+                $"45° of pan and 35° of tilt at 450°/s, and the settling: {clock.ElapsedMilliseconds} ms");
+
+            // Nothing worth turning sends nothing; another space is refused.
+            AssertEq(PtzCall(ptz, "", Relative(0.005, 0)).Status, 200);
+            Assert(!cam.Moving && control.Log().EndsWith("down@32,stop@32"), "too small a move");
+            Assert(PtzCall(ptz, "", Relative(0.5, 0, "http://www.onvif.org/ver10/tptz/PanTiltSpaces/TranslationGenericSpace"))
+                is (400, var otherSpace) && otherSpace.Contains("TranslationSpaceFov"), "only the FOV space");
+
+            // A Stop mid-move ends it there: the tilt never starts, and no second stop follows.
+            var slow = fast with { PanRate = 90 }; // half a second of pan
+            (control, cam, ptz) = Endpoint(slow);
+            PtzCall(ptz, "", Relative(1, 1));
+            PtzCall(ptz, "", "<tptz:Stop/>");
+            Assert(!cam.Moving, "stopped");
+            Thread.Sleep(800);
+            AssertEq(control.Log(), "right@32,stop@32");
+
+            // A new move with nothing to turn still ends the one under way.
+            PtzCall(ptz, "", Relative(-1, 0));
+            PtzCall(ptz, "", Relative(0, 0));
+            Assert(!cam.Moving && control.Log().EndsWith("left@32,stop@32"), "the empty move stopped the head");
+
+            // A leg whose stop fails is stopped again shortly.
+            (control, cam, ptz) = Endpoint(fast, failStops: 1);
+            PtzCall(ptz, "", Relative(1, 0));
+            WaitFor(() => !cam.Moving);
+            AssertEq(control.Log(), "right@32,stop@32");
+
+            // A start that reached the camera but lost its reply is stopped all the same, on the first leg or the second.
+            (control, cam, ptz) = Endpoint(fast, failMoveAt: 1);
+            AssertEq(PtzCall(ptz, "", Relative(1, 0)).Status, 500);
+            WaitFor(() => !cam.Moving);
+            Assert(!cam.Moving && control.Log() == "right@32,stop@32", $"the first leg's start: {control.Log()}");
+            (control, cam, ptz) = Endpoint(fast, failMoveAt: 2);
+            AssertEq(PtzCall(ptz, "", Relative(1, -1)).Status, 200);
+            WaitFor(() => control.Log().Split(',').Length == 4 && !cam.Moving);
+            Assert(!cam.Moving && control.Log() == "right@32,stop@32,down@32,stop@32", $"the second leg's start: {control.Log()}");
+
+            // A configured speed drives the legs.
+            (control, cam, ptz) = Endpoint(fast with { Speed = 48 });
+            PtzCall(ptz, "", Relative(1, 0));
+            WaitFor(() => !cam.Moving);
+            AssertEq(control.Log(), "right@48,stop@32");
+
+            // Not configured: not advertised, and the refusal names the settings.
+            (_, _, ptz) = Endpoint(null);
+            Assert(!PtzCall(ptz, "", options).Body.Contains("RelativePanTilt"), "no relative space without the settings");
+            Assert(PtzCall(ptz, "", Relative(0.5, 0)) is (500, var unset)
+                   && unset.Contains("ter:ActionNotSupported") && unset.Contains("ptz_fov_h"), "says what to set");
+        });
+
+        Test("ONVIF PTZ: a head that reports its position tunes the timing of relative moves", () =>
+        {
+            static void WaitFor(Func<bool> done) { for (int i = 0; i < 200 && !done(); i++) Thread.Sleep(20); }
+
+            // The estimator: 800 units/s after 120 ms of nothing, with an end stop and a wrap among the readings.
+            var samples = Enumerable.Range(0, 12).Select(i => (Seconds: 0.2 + 0.05 * i, Travel: 800 * (0.08 + 0.05 * i))).ToList();
+            samples[3] = (samples[3].Seconds, 0.5);
+            samples[7] = (samples[7].Seconds, 30000);
+            Assert(Onvif.LagEstimator.Fit(samples) is { } fit && Math.Abs(fit.Lag - 0.12) < 0.01 && Math.Abs(fit.Rate - 800) < 20,
+                "the two bad readings do not move the fit");
+            Assert(Onvif.LagEstimator.Fit(samples.Take(5).ToList()) == null, "too few moves");
+            Assert(Onvif.LagEstimator.Fit(samples.Select(s => (0.3, s.Travel)).ToList()) == null, "moves all alike");
+            // 300 ms of coasting is the readings going wrong, not the head: no fit, and a window full of it drops the last one.
+            var coasting = Enumerable.Range(0, 12).Select(i => (Seconds: 0.2 + 0.05 * i, Travel: 800 * (0.5 + 0.05 * i))).ToList();
+            Assert(Onvif.LagEstimator.Fit(coasting) == null, "not believed");
+            var estimator = new Onvif.LagEstimator();
+            foreach (var (s, t) in samples.Where((_, i) => i is not (3 or 7))) estimator.Add(s, t);
+            Assert(estimator.Seconds is > 0.11 and < 0.13, $"learned: {estimator.Seconds}");
+            foreach (var (s, t) in coasting) estimator.Add(s, t);
+            Assert(estimator.Seconds == null, "back to the configured lag");
+
+            // The reply's root is not known for every firmware; the two fields are.
+            AssertEq(BcCameraCommands.ParsePtzPosition(new[] { System.Xml.Linq.XElement.Parse("<ptzCurPos><channelId>0</channelId><pPos>1200</pPos><tPos>30</tPos></ptzCurPos>") }),
+                ((int?)1200, (int?)30));
+            AssertEq(BcCameraCommands.ParsePtzPosition(new[] { System.Xml.Linq.XElement.Parse("<PtzCurPos><pPos>7</pPos></PtzCurPos>") }),
+                ((int?)7, (int?)null));
+            Assert(BcCameraCommands.ParsePtzPosition(new[] { System.Xml.Linq.XElement.Parse("<Other/>") }) == null
+                   && BcCameraCommands.ParsePtzPosition(null) == null, "no position in the reply");
+
+            // A head at 1000 units/s whose first 150 ms of each move turn nothing: the lag is learned from its readings,
+            // each move measured from where the last one left the head, over the time its motor ran.
+            var control = new PtzRecordingControl("e1") { Head = (1000, 0.15) };
+            var unset = new PtzRelativeConfig(FovH: 90, FovV: 90, PanRate: 100, TiltRate: null, LagMs: null, TeleFovH: null);
+            var cam = new Onvif.OnvifPtzCamera("e1", control, null) { Relative = unset, Settle = TimeSpan.FromMilliseconds(30) };
+            AssertEq(cam.LearnedLag, ((double?)null, (double?)null));
+            foreach (var x in new[] { 1, -0.3, 0.7, -1, 0.4, -0.6, 0.9, -0.35, 1, -0.5 })
+            {
+                cam.RelativeMoveAsync(x, 0, CancellationToken.None).GetAwaiter().GetResult();
+                WaitFor(() => !cam.Moving);
+            }
+            Assert(cam.LearnedLag is { Pan: > 0.05 and < 0.3, Tilt: null }, $"about 150 ms of pan lag, none learned for tilt: {cam.LearnedLag}");
+
+            // A reading older than RestingFor, or taken before another UI moved the head, is not measured from.
+            var briefly = new Onvif.OnvifPtzCamera("e1", control, null)
+            {
+                Relative = unset, Settle = TimeSpan.FromMilliseconds(30), RestingFor = TimeSpan.FromMilliseconds(200),
+            };
+            briefly.RelativeMoveAsync(0.5, 0, CancellationToken.None).GetAwaiter().GetResult();
+            WaitFor(() => !briefly.Moving);
+            Assert(briefly.KnowsRestingPlace, "fresh from the move");
+            Thread.Sleep(300);
+            Assert(!briefly.KnowsRestingPlace, "too old: the camera may have moved the head itself since");
+            briefly.RelativeMoveAsync(-0.5, 0, CancellationToken.None).GetAwaiter().GetResult();
+            WaitFor(() => !briefly.Moving);
+            control.PtzAsync("left", 20, CancellationToken.None).GetAwaiter().GetResult();
+            control.PtzAsync("stop", 20, CancellationToken.None).GetAwaiter().GetResult();
+            Assert(!briefly.KnowsRestingPlace, "another UI moved the head");
+
+            // A lag set in the config is the user's: the position is not even read.
+            int reads = control.PositionReads;
+            var fixedLag = new Onvif.OnvifPtzCamera("e1", control, null) { Relative = unset with { LagMs = 50 }, Settle = TimeSpan.FromMilliseconds(30) };
+            fixedLag.RelativeMoveAsync(0.5, 0, CancellationToken.None).GetAwaiter().GetResult();
+            WaitFor(() => !fixedLag.Moving);
+            AssertEq(control.PositionReads, reads);
+
+            // One that does not say teaches nothing.
+            var mute = new PtzRecordingControl("e1");
+            var muteCam = new Onvif.OnvifPtzCamera("e1", mute, null) { Relative = unset, Settle = TimeSpan.FromMilliseconds(30) };
+            foreach (var x in new[] { 0.3, -0.3 })
+            {
+                muteCam.RelativeMoveAsync(x, 0, CancellationToken.None).GetAwaiter().GetResult();
+                WaitFor(() => !muteCam.Moving);
+            }
+            Assert(mute.PositionReads == 2 && muteCam.LearnedLag == ((double?)null, (double?)null), "asked after each move, nothing learned");
+        });
+
+        Test("ONVIF PTZ: with relative moves on, a preset move lasts until the head is back", () =>
+        {
+            static void WaitFor(Func<bool> done) { var sw = System.Diagnostics.Stopwatch.StartNew(); while (!done() && sw.ElapsedMilliseconds < 5000) Thread.Sleep(20); }
+            var ct = CancellationToken.None;
+            var rel = new PtzRelativeConfig(FovH: 90, FovV: 90, PanRate: 90, TiltRate: null, LagMs: 0, TeleFovH: null);
+
+            // From who knows where, a whole picture each way (2 s); back from its own 27° move, about 0.3 s.
+            var control = new PtzRecordingControl("e1");
+            var cam = new Onvif.OnvifPtzCamera("e1", control, null) { Relative = rel, Settle = TimeSpan.FromMilliseconds(30) };
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            cam.GotoPresetAsync(1, ct).GetAwaiter().GetResult();
+            Assert(cam.Moving, "under way");
+            WaitFor(() => !cam.Moving);
+            Assert(clock.Elapsed > TimeSpan.FromSeconds(1.5), $"the long way: {clock.ElapsedMilliseconds} ms");
+            cam.RelativeMoveAsync(0.5, 0, ct).GetAwaiter().GetResult();
+            WaitFor(() => !cam.Moving);
+            clock.Restart();
+            cam.GotoPresetAsync(1, ct).GetAwaiter().GetResult();
+            Assert(cam.Moving, "under way again");
+            WaitFor(() => !cam.Moving);
+            Assert(clock.Elapsed < TimeSpan.FromSeconds(1.2), $"the way back from its own move: {clock.ElapsedMilliseconds} ms");
+            AssertEq(control.Log(), "preset@1,right@32,stop@32,preset@1");
+
+            // A head that says where it is: there once two readings agree, and the next move is measured from there.
+            var reporting = new PtzRecordingControl("e1") { Head = (1000, 0.1) };
+            var known = new Onvif.OnvifPtzCamera("e1", reporting, null) { Relative = rel with { LagMs = null }, Settle = TimeSpan.FromMilliseconds(30) };
+            known.GotoPresetAsync(1, ct).GetAwaiter().GetResult();
+            WaitFor(() => !known.Moving);
+            Assert(!known.Moving && known.KnowsRestingPlace, "the preset's reading is where the next move starts");
+
+            // Without relative moves a preset move is done once the camera takes it, as before.
+            var plain = new Onvif.OnvifPtzCamera("e1", new PtzRecordingControl("e1"), null);
+            plain.GotoPresetAsync(1, ct).GetAwaiter().GetResult();
+            Assert(!plain.Moving, "no waiting without the settings");
+        });
+
+        Test("ONVIF PTZ: an absolute zoom answers at once, a Stop holds the lens, and a silent lens is not asked on every status", () =>
+        {
+            static void WaitFor(Func<bool> done) { var sw = System.Diagnostics.Stopwatch.StartNew(); while (!done() && sw.ElapsedMilliseconds < 4000) Thread.Sleep(20); }
+            const string toFull = "<tptz:AbsoluteMove><tptz:Position><tt:Zoom x=\"1\"/></tptz:Position></tptz:AbsoluteMove>";
+            (Onvif.OnvifPtzCamera, Onvif.OnvifPtzServer) Endpoint(PtzRecordingControl control, PtzRelativeConfig? rel = null)
+            {
+                var cam = new Onvif.OnvifPtzCamera("zoomy", control, null) { Relative = rel, Settle = TimeSpan.FromMilliseconds(30) };
+                cam.StartCapabilitiesRead();
+                cam.CapabilitiesRead.Wait(TimeSpan.FromSeconds(5));
+                return (cam, new Onvif.OnvifPtzServer("zoomy", new Dictionary<string, string>(), new[] { cam }));
+            }
+            List<string> Zooms(PtzRecordingControl c) => c.Log().Split(',').Where(s => s.StartsWith("zoom@")).ToList();
+
+            // A lens that takes its time: a Stop part way sends it the position it has got to.
+            var slowLens = new PtzRecordingControl("zoomy") { Lens = (0, 100, 0), LensStep = 10 };
+            var (cam, ptz) = Endpoint(slowLens);
+            AssertEq(PtzCall(ptz, "", toFull).Status, 200);
+            Assert(cam.Zooming, "zooming");
+            Thread.Sleep(700);
+            PtzCall(ptz, "", "<tptz:Stop/>");
+            Assert(!cam.Zooming, "the status says the lens stopped");
+            WaitFor(() => Zooms(slowLens).Count == 2);
+            var sent = Zooms(slowLens);
+            Assert(sent.Count == 2 && sent[0] == "zoom@100" && int.Parse(sent[1][5..]) is > 0 and < 100, $"held where it had got to: {slowLens.Log()}");
+            var held = int.Parse(sent[1][5..]) / 100.0;
+            Assert(PtzCall(ptz, "", "<tptz:GetStatus/>").Body.Contains($"<tt:Zoom x=\"{held.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)}\""),
+                "and the status says where");
+
+            // A camera that fails the zoom still gets a reply Frigate can live with, and the status settles.
+            var failing = new PtzRecordingControl("zoomy") { Lens = (0, 100, 0), FailZoomSets = true };
+            (cam, ptz) = Endpoint(failing);
+            AssertEq(PtzCall(ptz, "", toFull).Status, 200);
+            WaitFor(() => !cam.Zooming);
+            Assert(!cam.Zooming, "the failed zoom does not claim to move");
+
+            // A lens that does not answer is asked once per stale reading, not on every status.
+            var silent = new PtzRecordingControl("zoomy") { Lens = (0, 100, 0), FailZoomReads = true };
+            (cam, ptz) = Endpoint(silent);
+            for (int i = 0; i < 20; i++) PtzCall(ptz, "", "<tptz:GetStatus/>");
+            Thread.Sleep(100);
+            AssertEq(silent.ZoomReads, 1);
+
+            // Nor while the head moves: a stale reading is read again once it stops.
+            var quiet = new PtzRecordingControl("zoomy") { Lens = (0, 100, 0) };
+            var rel = new PtzRelativeConfig(FovH: 90, FovV: 90, PanRate: 90, TiltRate: null, LagMs: 0, TeleFovH: null);
+            (cam, ptz) = Endpoint(quiet, rel);
+            cam.RelativeMoveAsync(1, 0, CancellationToken.None).GetAwaiter().GetResult(); // half a second of pan
+            for (int i = 0; i < 10; i++) { PtzCall(ptz, "", "<tptz:GetStatus/>"); Thread.Sleep(20); }
+            AssertEq(quiet.ZoomReads, 0);
+            WaitFor(() => !cam.Moving);
+            PtzCall(ptz, "", "<tptz:GetStatus/>");
+            WaitFor(() => quiet.ZoomReads == 1);
+            AssertEq(quiet.ZoomReads, 1);
+        });
+
+        Test("ONVIF PTZ: Frigate's first look waits for the camera's capabilities, which are read until it answers", () =>
+        {
+            // A camera slow to answer: the first profile still offers its zoom lens.
+            var slowCaps = new PtzRecordingControl("zoomy") { Lens = (0, 100, 0), CapsDelay = TimeSpan.FromMilliseconds(300) };
+            var ptz = new Onvif.OnvifPtzServer("zoomy", new Dictionary<string, string>(), new[] { new Onvif.OnvifPtzCamera("zoomy", slowCaps, null) });
+            Assert(PtzCall(ptz, "", "<trt:GetProfiles/>").Body.Contains("DefaultAbsoluteZoomPositionSpace"), "zoom offered from the first reply");
+
+            // A camera offline at first is asked again until it answers.
+            var late = new PtzRecordingControl("late") { Lens = (0, 100, 0), CapsFailures = 2 };
+            var lateCam = new Onvif.OnvifPtzCamera("late", late, null) { CapabilitiesRetry = TimeSpan.FromMilliseconds(50) };
+            using (var stop = new CancellationTokenSource(TimeSpan.FromSeconds(5)))
+                lateCam.KeepReadingCapabilitiesAsync(stop.Token).Wait(TimeSpan.FromSeconds(5));
+            Assert(lateCam.HasZoom, "known after two reads that found it offline");
+
+            // The picture's shape for the tilt: a running stream's, else the camera's encode table, else 16:9.
+            var rel = new PtzRelativeConfig(FovH: 90, FovV: null, PanRate: 90, TiltRate: null, LagMs: 0, TeleFovH: null);
+            var table = new PtzRecordingControl("e1") { MainSize = (2560, 1920) };
+            var shaped = new Onvif.OnvifPtzCamera("e1", table, null, () => (0u, 0u)) { Relative = rel };
+            AssertEq(shaped.PictureShape(), 9.0 / 16);
+            shaped.StartCapabilitiesRead();
+            shaped.CapabilitiesRead.Wait(TimeSpan.FromSeconds(5));
+            AssertEq(shaped.PictureShape(), 0.75);
+            var running = new Onvif.OnvifPtzCamera("e1", new PtzRecordingControl("e1"), null, () => (0u, 0u))
+            {
+                Relative = rel, AnyStreamSize = () => (640u, 480u),
+            };
+            AssertEq(running.PictureShape(), 0.75);
+        });
+
+        Test("PTZ: pan/tilt commands skip the queue behind other camera commands; guard and patrol moves are announced", () =>
+        {
+            var bc = new LaneCamera();
+            var control = new Streaming.CameraControl(new LiveSource(bc));
+            var heard = new List<string>();
+            control.PtzCommandSent += c => { lock (heard) heard.Add(c); };
+            var held = control.GetZoomFocusAsync(CancellationToken.None); // holds the command gate until released
+            Thread.Sleep(50);
+            Assert(control.PtzAsync("left", 32, CancellationToken.None).Wait(TimeSpan.FromSeconds(2)),
+                "a pan goes out while a snapshot or an SD search holds the command gate");
+            Assert(control.SetPatrolAsync(1, true, CancellationToken.None).Wait(TimeSpan.FromSeconds(2)), "and so does a patrol");
+            Assert(!held.IsCompleted, "the other command is still waiting");
+            bc.Release.SetResult();
+            Assert(held.Wait(TimeSpan.FromSeconds(2)), "released");
+            Assert(control.SetGuardAsync(null, null, "go", CancellationToken.None).Wait(TimeSpan.FromSeconds(5)), "guard");
+            lock (heard) AssertEq(string.Join(",", heard), "left,patrol,guard");
+
+            // The head's position: three misses running and this session stops asking.
+            for (int i = 0; i < 5; i++)
+                Assert(control.GetPtzPositionAsync(CancellationToken.None).GetAwaiter().GetResult() == null, "no position");
+            AssertEq(bc.PositionAsks, 3);
         });
 
         Test("ONVIF PTZ: the stop watchdog retries, and stands down for another UI's command", () =>
@@ -11025,6 +11611,30 @@ public static class SelfTest
                 using (var res = SavePtz("off")) AssertEq((int)res.StatusCode, 200);
                 saved = File.ReadAllText(configPath);
                 Assert(!saved.Contains("ptz_share") && !saved.Contains("ptz_port"), "off removes both keys");
+
+                // Click-to-move and autotracking through the same editor: the settings given are written and read back,
+                // one out of range refuses the save, and unticking removes them all.
+                HttpResponseMessage SaveRelative(string fields) => PostRaw(http, $"/api/admin/cameras{tokenQ}",
+                    $$"""{"originalName":"storedcam","name":"storedcam","type":"reolink","address":"127.0.0.1:9","username":"stored-admin","ptzMode":"shared",{{fields}}}""");
+                using (var res = SaveRelative("\"ptzRelative\":true,\"ptzFovH\":87.5,\"ptzPanRate\":59.2,\"ptzTiltRate\":25,\"ptzSpeed\":48"))
+                    AssertEq((int)res.StatusCode, 200);
+                saved = File.ReadAllText(configPath);
+                Assert(saved.Contains("\"ptz_fov_h\": 87.5") && saved.Contains("\"ptz_pan_rate\": 59.2") && saved.Contains("\"ptz_tilt_rate\": 25")
+                       && saved.Contains("\"ptz_speed\": 48") && !saved.Contains("ptz_fov_v") && !saved.Contains("ptz_lag_ms"),
+                    "the settings given are written, the blank ones left out");
+                listed = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(
+                    http.GetStringAsync($"/api/admin/cameras{tokenQ}").Result);
+                storedCam = listed.GetProperty("cameras").EnumerateArray().First(c => c.GetProperty("name").GetString() == "storedcam");
+                Assert(storedCam.GetProperty("ptzRelative").GetBoolean() && storedCam.GetProperty("ptzFovH").GetDouble() == 87.5
+                       && storedCam.GetProperty("ptzPanRate").GetDouble() == 59.2 && storedCam.GetProperty("ptzSpeed").GetDouble() == 48
+                       && (!storedCam.TryGetProperty("ptzFovV", out var fovV) || fovV.ValueKind == System.Text.Json.JsonValueKind.Null),
+                    "the editor reads them back");
+                Assert(SaveError(SaveRelative("\"ptzRelative\":true,\"ptzFovH\":400,\"ptzPanRate\":59")).Contains("1-170"),
+                    "an impossible angle is refused");
+                using (var res = SaveRelative("\"ptzRelative\":false")) AssertEq((int)res.StatusCode, 200);
+                saved = File.ReadAllText(configPath);
+                Assert(!saved.Contains("ptz_fov_h") && !saved.Contains("ptz_pan_rate") && !saved.Contains("ptz_tilt_rate")
+                       && !saved.Contains("ptz_speed"), "unticked, every one of them goes");
                 File.WriteAllText(configPath, configBefore);
 
                 // With accounts on, the background feed is admin-only: a normal
@@ -12355,20 +12965,68 @@ public static class SelfTest
     {
         private readonly List<string> _moves = new();
         public int FailStops;
+        /// <summary>The move command (counting from 1, stops aside) that reaches the camera but whose reply is lost.</summary>
+        public int FailMoveAt;
+        private int _movesSent;
         public string Log() { lock (_moves) return string.Join(",", _moves); }
         public event Action<string>? PtzCommandSent;
         public override Task PtzAsync(string command, float speed, CancellationToken ct)
         {
             if (command == "stop" && Interlocked.Decrement(ref FailStops) >= 0)
                 throw new IOException("link dropped");
-            lock (_moves) _moves.Add(string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{command}@{speed}"));
+            lock (_moves)
+            {
+                Travel();
+                _running = command == "stop" ? null : (command, System.Diagnostics.Stopwatch.GetTimestamp());
+                _moves.Add(string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{command}@{speed}"));
+                if (command != "stop" && ++_movesSent == FailMoveAt) throw new IOException("reply lost");
+            }
             PtzCommandSent?.Invoke(command);
             return Task.CompletedTask;
         }
-        public override Task<Streaming.CameraCapabilities> GetCapabilitiesAsync(CancellationToken ct) =>
-            Task.FromResult(new Streaming.CameraCapabilities(
+
+        /// <summary>A head that says where it is: its units per second, and how much of each move turns nothing.</summary>
+        public (double Rate, double Lag)? Head;
+        public int PositionReads;
+        private double _pan = 100_000, _tilt = 100_000;
+        private (string Command, long Since)? _running;
+
+        private void Travel()
+        {
+            if (_running is not { } run || Head is not { } head) return;
+            double moved = head.Rate * Math.Max(0, System.Diagnostics.Stopwatch.GetElapsedTime(run.Since).TotalSeconds - head.Lag);
+            if (run.Command is "left" or "right") _pan += run.Command == "right" ? moved : -moved;
+            else _tilt += run.Command == "up" ? moved : -moved;
+        }
+
+        public Task<(int? Pan, int? Tilt)?> GetPtzPositionAsync(CancellationToken ct)
+        {
+            Interlocked.Increment(ref PositionReads);
+            lock (_moves) return Task.FromResult<(int?, int?)?>(Head == null ? null : ((int)_pan, (int)_tilt));
+        }
+        /// <summary>How long the capabilities take to come, and how many reads find the camera offline first.</summary>
+        public TimeSpan CapsDelay;
+        public int CapsFailures;
+        public override async Task<Streaming.CameraCapabilities> GetCapabilitiesAsync(CancellationToken ct)
+        {
+            if (Interlocked.Decrement(ref CapsFailures) >= 0) throw new Streaming.CameraOfflineException(CameraName);
+            if (CapsDelay > TimeSpan.Zero) await Task.Delay(CapsDelay, ct);
+            return new Streaming.CameraCapabilities(
                 new Bc.Xml.VersionInfoXml { Model = "E1", FirmwareVersion = "v3.0" }, null,
-                new Streaming.CameraFeatures(Ptz: hasPtz, Led: false, Pir: false, Battery: false, Talk: false, Zoom: Lens != null)));
+                new Streaming.CameraFeatures(Ptz: hasPtz, Led: false, Pir: false, Battery: false, Talk: false, Zoom: Lens != null));
+        }
+
+        /// <summary>The main stream's size in the camera's encode table; null = no table.</summary>
+        public (uint Width, uint Height)? MainSize;
+        public new Task<Bc.Xml.StreamInfoListXml?> GetStreamInfoAsync(CancellationToken ct)
+        {
+            if (MainSize is not { } size) return Task.FromResult<Bc.Xml.StreamInfoListXml?>(null);
+            var info = new Bc.Xml.StreamInfoXml();
+            info.EncodeTables.Add(new Bc.Xml.EncodeTableXml { Type = "mainStream", Width = size.Width, Height = size.Height });
+            var list = new Bc.Xml.StreamInfoListXml();
+            list.StreamInfos.Add(info);
+            return Task.FromResult<Bc.Xml.StreamInfoListXml?>(list);
+        }
 
         /// <summary>The preset slots, as the camera's HTTP API lists them; null = no HTTP API.</summary>
         public List<Streaming.PtzPresetInfo>? Presets;
@@ -12394,16 +13052,32 @@ public static class SelfTest
             }
             return Task.CompletedTask;
         }
-        public new Task<System.Xml.Linq.XElement?> GetZoomFocusAsync(CancellationToken ct) =>
-            Task.FromResult(Lens is { } l
-                ? System.Xml.Linq.XElement.Parse($"<PtzZoomFocus><zoom><maxPos>{l.Max}</maxPos><minPos>{l.Min}</minPos><curPos>{l.Cur}</curPos></zoom></PtzZoomFocus>")
-                : null);
+        /// <summary>Positions the lens travels per read after a zoom command; 0 = it is there at once.</summary>
+        public int LensStep;
+        private long? _lensTarget;
+        public bool FailZoomReads, FailZoomSets;
+        public int ZoomReads;
+        public new Task<System.Xml.Linq.XElement?> GetZoomFocusAsync(CancellationToken ct)
+        {
+            Interlocked.Increment(ref ZoomReads);
+            if (FailZoomReads) throw new IOException("no answer");
+            lock (_moves)
+            {
+                if (Lens is { } moving && _lensTarget is { } target && moving.Cur != target)
+                    Lens = moving with { Cur = moving.Cur + Math.Clamp(target - moving.Cur, -LensStep, LensStep) };
+                return Task.FromResult(Lens is { } l
+                    ? System.Xml.Linq.XElement.Parse($"<PtzZoomFocus><zoom><maxPos>{l.Max}</maxPos><minPos>{l.Min}</minPos><curPos>{l.Cur}</curPos></zoom></PtzZoomFocus>")
+                    : null);
+            }
+        }
         public new Task SetZoomFocusAsync(string command, uint movePos, CancellationToken ct)
         {
+            if (FailZoomSets) throw new IOException("link dropped");
             lock (_moves)
             {
                 _moves.Add($"zoom@{movePos}");
-                Lens = Lens!.Value with { Cur = movePos };
+                if (LensStep > 0) _lensTarget = movePos;
+                else Lens = Lens!.Value with { Cur = movePos };
             }
             return Task.CompletedTask;
         }
@@ -12419,6 +13093,64 @@ public static class SelfTest
         "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" +
         "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" +
         "AAAAAAAAAAAAAAAH/////////gAAAAA=";
+
+    /// <summary>A Baichuan session holding the OSD (44/45) and encoder (56/57) settings; it logs every message.</summary>
+    private sealed class SettingsCamera : Protocol.IBcCamera
+    {
+        public System.Xml.Linq.XElement[] Osd = Array.Empty<System.Xml.Linq.XElement>();
+        public System.Xml.Linq.XElement? Compression;
+        public System.Xml.Linq.XElement? Support;
+        public bool SilentOsd;
+        public readonly List<(uint MsgId, System.Xml.Linq.XElement[] Body)> Sent = new();
+        public byte ChannelId => 0;
+        public Bc.Xml.DeviceInfoXml? DeviceInfo => null;
+        public System.Net.IPAddress? RemoteIp => null;
+        public Task<string> Closed { get; } = new TaskCompletionSource<string>().Task;
+        public Task LoginAsync(string username, string? password, CancellationToken ct, Protocol.BcLoginMode? mode = null) =>
+            Task.CompletedTask;
+        public Task StartVideoAsync(StreamKind stream, ChannelWriter<byte[]> binaryOut, Func<bool>? stallTolerable,
+            CancellationToken ct) => throw new NotSupportedException();
+        public Task PingAsync(CancellationToken ct) => Task.CompletedTask;
+        public Task WatchMotionAsync(Action<MotionPush> onEvent, CancellationToken ct) => throw new NotSupportedException();
+        public Task WatchStatusAsync(Action<StatusPush> onEvent, CancellationToken ct) => throw new NotSupportedException();
+        public Task<byte[]?> SnapAsync(CancellationToken ct) => Task.FromResult<byte[]?>(null);
+        public Task TalkAsync(Bc.Xml.TalkAbilityXml ability, ChannelReader<byte[]> frames, CancellationToken ct) =>
+            throw new NotSupportedException();
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        public Task<BcMessage?> SendCommandAsync(uint msgId, Bc.Xml.BcXmlBody? xml = null, Bc.Xml.ExtensionXml? extension = null,
+            TimeSpan? replyTimeout = null, bool tolerateNoReply = false, CancellationToken ct = default)
+        {
+            var body = xml?.Raw.Select(e => new System.Xml.Linq.XElement(e)).ToArray() ?? Array.Empty<System.Xml.Linq.XElement>();
+            lock (Sent) Sent.Add((msgId, body));
+            static Task<BcMessage?> Reply(uint id, params System.Xml.Linq.XElement[] els)
+            {
+                var b = new Bc.Xml.BcXmlBody();
+                b.Raw.AddRange(els.Select(e => new System.Xml.Linq.XElement(e)));
+                return Task.FromResult<BcMessage?>(new BcMessage { Meta = new BcMeta { MsgId = id, ResponseCode = 200 }, Xml = b });
+            }
+            switch (msgId)
+            {
+                case BcConstants.MsgIdGetSupport when Support != null: return Reply(msgId, Support);
+                case BcConstants.MsgIdGetOsd when SilentOsd: throw new TimeoutException();
+                case BcConstants.MsgIdGetOsd when Osd.Length > 0: return Reply(msgId, Osd);
+                case BcConstants.MsgIdSetOsd: Osd = body; return Task.FromResult<BcMessage?>(null);
+                case BcConstants.MsgIdGetCompression when Compression != null: return Reply(msgId, Compression);
+                case BcConstants.MsgIdSetCompression: Compression = body.Single(); return Task.FromResult<BcMessage?>(null);
+                default: throw new CameraCommandException(msgId, 400);
+            }
+        }
+    }
+
+    /// <summary>A battery camera's stream source; a null session is the camera asleep.</summary>
+    private sealed class BatterySource : Streaming.ILiveCameraSource
+    {
+        public Protocol.IBcCamera? Camera;
+        public string Name { get; init; } = "porch";
+        public Protocol.IBcCamera? LiveCamera => Camera;
+        public bool BatteryPowered => true;
+        public bool SleepFriendly => true;
+    }
 
     /// <summary>A Baichuan session holding one AiDetectCfg per type; it can be told to ignore writes.</summary>
     private sealed class ZoneCamera : Protocol.IBcCamera
@@ -12458,6 +13190,61 @@ public static class SelfTest
             if (!IgnoreWrites) Cfg[type] = new System.Xml.Linq.XElement(sent);
             return Task.FromResult<BcMessage?>(null);
         }
+    }
+
+    /// <summary>A Baichuan session that answers pan/tilt, patrols and the guard at once, holds a zoom read until
+    /// released, and never answers the head's position.</summary>
+    private sealed class LaneCamera : Protocol.IBcCamera
+    {
+        public readonly TaskCompletionSource Release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int PositionAsks;
+        public byte ChannelId => 0;
+        public Bc.Xml.DeviceInfoXml? DeviceInfo => null;
+        public System.Net.IPAddress? RemoteIp => null;
+        public Task<string> Closed { get; } = new TaskCompletionSource<string>().Task;
+        public Task LoginAsync(string username, string? password, CancellationToken ct, Protocol.BcLoginMode? mode = null) =>
+            Task.CompletedTask;
+        public Task StartVideoAsync(StreamKind stream, ChannelWriter<byte[]> binaryOut, Func<bool>? stallTolerable,
+            CancellationToken ct) => throw new NotSupportedException();
+        public Task PingAsync(CancellationToken ct) => Task.CompletedTask;
+        public Task WatchMotionAsync(Action<MotionPush> onEvent, CancellationToken ct) => throw new NotSupportedException();
+        public Task WatchStatusAsync(Action<StatusPush> onEvent, CancellationToken ct) => throw new NotSupportedException();
+        public Task<byte[]?> SnapAsync(CancellationToken ct) => Task.FromResult<byte[]?>(null);
+        public Task TalkAsync(Bc.Xml.TalkAbilityXml ability, ChannelReader<byte[]> frames, CancellationToken ct) =>
+            throw new NotSupportedException();
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        public async Task<BcMessage?> SendCommandAsync(uint msgId, Bc.Xml.BcXmlBody? xml = null, Bc.Xml.ExtensionXml? extension = null,
+            TimeSpan? replyTimeout = null, bool tolerateNoReply = false, CancellationToken ct = default)
+        {
+            switch (msgId)
+            {
+                case BcConstants.MsgIdGetZoomFocus:
+                    await Release.Task.WaitAsync(ct);
+                    return null;
+                case BcConstants.MsgIdGetPtzCurPos:
+                    Interlocked.Increment(ref PositionAsks);
+                    throw new TimeoutException();
+                case BcConstants.MsgIdGetGuard:
+                    return new BcMessage
+                    {
+                        Meta = new BcMeta { MsgId = msgId, ResponseCode = 200 },
+                        Xml = Bc.Xml.BcXmlBody.FromRaw(System.Xml.Linq.XElement.Parse(
+                            "<PtzGuard version=\"1.1\"><channelId>0</channelId><benable>1</benable><bvalid>1</bvalid><timeout>60</timeout></PtzGuard>")),
+                    };
+                case BcConstants.MsgIdSetGuard or BcConstants.MsgIdPtzControl:
+                    return null;
+                default:
+                    throw new NotSupportedException($"msg {msgId}");
+            }
+        }
+    }
+
+    /// <summary>A stream source whose session is always the given one.</summary>
+    private sealed class LiveSource(Protocol.IBcCamera camera) : Streaming.ILiveCameraSource
+    {
+        public string Name => "lane";
+        public Protocol.IBcCamera? LiveCamera => camera;
     }
 
     /// <summary>A stream source with no session, battery or mains.</summary>

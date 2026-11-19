@@ -7,7 +7,7 @@ namespace Neolink.Onvif;
 
 /// <summary>One camera behind an ONVIF PTZ endpoint: its profile (named after it), its moves, zoom and presets,
 /// the watchdog that stops a move whose Stop never came, and its capabilities once known.</summary>
-public sealed class OnvifPtzCamera
+public sealed partial class OnvifPtzCamera
 {
     /// <summary>A watchdog stop that fails is tried this many times in all, StopRetryDelay apart.</summary>
     private const int StopAttempts = 3;
@@ -41,6 +41,9 @@ public sealed class OnvifPtzCamera
     internal ICameraControl Control { get; }
     internal IReadOnlySet<string>? Permitted { get; }
     internal TimeSpan StopRetryDelay { get; init; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>How long a capabilities read the camera did not answer waits before the next.</summary>
+    internal TimeSpan CapabilitiesRetry { get; init; } = TimeSpan.FromSeconds(10);
 
     /// <summary>The ONVIF profile token, which is also the profile's name: Frigate's onvif.profile matches either.</summary>
     internal string ProfileToken => Name;
@@ -79,9 +82,33 @@ public sealed class OnvifPtzCamera
         {
             using var limit = new CancellationTokenSource(TimeSpan.FromMinutes(1));
             var caps = await Control.GetCapabilitiesAsync(limit.Token).ConfigureAwait(false);
-            if (!caps.Provisional) _caps = caps;
+            if (caps.Provisional) return;
+            _caps = caps;
+            if (Relative is { FovV: null }) await ReadPictureShapeAsync(limit.Token).ConfigureAwait(false);
         }
-        catch (Exception) { /* offline or asleep: the next request asks again */ }
+        catch (Exception) { /* offline or asleep: asked again later */ }
+    }
+
+    /// <summary>Reads the capabilities until the camera has answered, so Frigate's first look already has them.</summary>
+    internal async Task KeepReadingCapabilitiesAsync(CancellationToken ct)
+    {
+        while (_caps == null && !ct.IsCancellationRequested)
+        {
+            StartCapabilitiesRead();
+            await CapabilitiesRead.ConfigureAwait(false);
+            if (_caps != null) return;
+            try { await Task.Delay(CapabilitiesRetry, ct).ConfigureAwait(false); }
+            catch (OperationCanceledException) { return; }
+        }
+    }
+
+    /// <summary>Waits up to <paramref name="limit"/> for the camera's capabilities, so a reply is not built on guesses.</summary>
+    internal async Task WaitForCapabilitiesAsync(TimeSpan limit, CancellationToken ct)
+    {
+        if (_caps != null) return;
+        StartCapabilitiesRead();
+        try { await CapabilitiesRead.WaitAsync(limit, ct).ConfigureAwait(false); }
+        catch (TimeoutException) { /* still unknown: the reply assumes */ }
     }
 
     /// <summary>Pan/tilt is offered unless the camera has said it has none (until it answers, it is assumed).</summary>
@@ -113,16 +140,18 @@ public sealed class OnvifPtzCamera
         {
             await SendAsync(command, speed, ct).ConfigureAwait(false);
             var generation = Interlocked.Increment(ref _generation);
+            LoseTrack();
             _moving = command != "stop";
             if (_moving) _ = WatchdogAsync(generation, timeout, attempt: 1);
         }
         finally { _moveGate.Release(); }
     }
 
-    private async Task SendAsync(string command, float speed, CancellationToken ct)
+    /// <summary>Sends a command and returns when it left for the camera (a Stopwatch timestamp).</summary>
+    private async Task<long> SendAsync(string command, float speed, CancellationToken ct)
     {
         Sending.Value = this; // flows into the camera's notice of this command, and ends with this call
-        await Control.PtzAsync(command, speed, ct).ConfigureAwait(false);
+        return await Control.PtzTimedAsync(command, speed, ct).ConfigureAwait(false);
     }
 
     /// <summary>Another UI (the web panel, Home Assistant) drove the head: its move is its own to stop.</summary>
@@ -130,15 +159,25 @@ public sealed class OnvifPtzCamera
     {
         if (ReferenceEquals(Sending.Value, this)) return;
         Interlocked.Increment(ref _generation);
-        _moving = command is "up" or "down" or "left" or "right"; // a preset move ends by itself
+        LoseTrack();
+        _moving = command is "up" or "down" or "left" or "right"; // a preset, guard or patrol move ends by itself
     }
 
     // ------------------------------------------------------------------ zoom
 
     /// <summary>How often a held zoom steps the lens; each step is an exact position, all Reolink takes.</summary>
     private static readonly TimeSpan ZoomTick = TimeSpan.FromMilliseconds(250);
-    private CancellationTokenSource? _zoom;
+    private readonly object _zoomLock = new();
+    private LensJob? _zoom;
     private volatile bool _zooming;
+
+    /// <summary>One zoom under way, ended by StopZoom, a newer zoom or its own time limit.</summary>
+    private sealed class LensJob(TimeSpan limit)
+    {
+        internal readonly CancellationTokenSource Cts = new(limit);
+        /// <summary>Set by an ONVIF Stop: the lens is to stay where it has got to.</summary>
+        internal volatile bool Hold;
+    }
 
     /// <summary>Whether a zoom is under way.</summary>
     internal bool Zooming => _zooming;
@@ -147,51 +186,76 @@ public sealed class OnvifPtzCamera
     /// timeout: the lens is stepped toward that end, a full range taking about 4 s at Frigate's 0.5.</summary>
     internal async Task ZoomAsync(double velocity, TimeSpan timeout, CancellationToken ct)
     {
-        var zoom = CameraControl.ZoomPosition(await Control.GetZoomFocusAsync(ct).ConfigureAwait(false))
+        var zoom = await ReadLensAsync(ct).ConfigureAwait(false)
                    ?? throw new NotSupportedException("the camera reports no zoom lens");
         var step = Math.Max(1, (long)Math.Round((zoom.Max - zoom.Min) * Math.Min(1, Math.Abs(velocity)) / 8));
-        // Under the move gate, so a zoom and a preset move take turns rather than drive the lens together.
-        await _moveGate.WaitAsync(ct).ConfigureAwait(false);
-        try
-        {
-            var mine = new CancellationTokenSource(timeout);
-            StopZoom();
-            _zoom = mine;
-            _zooming = true;
-            _ = ZoomLoopAsync(mine, zoom, Math.Sign(velocity) * step);
-        }
-        finally { _moveGate.Release(); }
+        StartLensJob(timeout, job => StepLensAsync(job.Cts.Token, zoom, Math.Sign(velocity) * step));
     }
 
-    private async Task ZoomLoopAsync(CancellationTokenSource mine, (long Min, long Max, long Cur) zoom, long step)
+    private async Task StepLensAsync(CancellationToken ct, (long Min, long Max, long Cur) zoom, long step)
     {
-        var ct = mine.Token;
-        try
+        for (long pos = zoom.Cur; !ct.IsCancellationRequested;)
         {
-            for (long pos = zoom.Cur; !ct.IsCancellationRequested;)
-            {
-                long next = Math.Clamp(pos + step, zoom.Min, zoom.Max);
-                if (next == pos) break; // the end of the range
-                pos = next;
-                await Control.SetZoomFocusAsync("zoomPos", (uint)pos, ct).ConfigureAwait(false);
-                await Task.Delay(ZoomTick, ct).ConfigureAwait(false);
-            }
+            long next = Math.Clamp(pos + step, zoom.Min, zoom.Max);
+            if (next == pos) break; // the end of the range
+            pos = next;
+            await Control.SetZoomFocusAsync("zoomPos", (uint)pos, ct).ConfigureAwait(false);
+            NoteLens((zoom.Min, zoom.Max, pos));
+            await Task.Delay(ZoomTick, ct).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) { /* stopped, or the move timed out */ }
+    }
+
+    /// <summary>Runs a zoom behind the caller in place of any under way; it counts as zooming until it ends.</summary>
+    private void StartLensJob(TimeSpan limit, Func<LensJob, Task> drive)
+    {
+        var job = new LensJob(limit);
+        LensJob? old;
+        lock (_zoomLock)
+        {
+            old = _zoom;
+            _zoom = job;
+            _zooming = true;
+        }
+        Cancel(old);
+        _ = RunLensJobAsync(job, drive);
+    }
+
+    private async Task RunLensJobAsync(LensJob job, Func<LensJob, Task> drive)
+    {
+        try { await drive(job).ConfigureAwait(false); }
+        catch (OperationCanceledException) when (job.Cts.IsCancellationRequested) { /* stopped, replaced or out of time */ }
         catch (Exception ex) { Log.Debug($"{Name}: ONVIF PTZ zoom stopped: {Log.Flatten(ex)}"); }
         finally
         {
-            if (Interlocked.CompareExchange(ref _zoom, null, mine) == mine) _zooming = false;
-            mine.Dispose();
+            lock (_zoomLock)
+                if (_zoom == job)
+                {
+                    _zoom = null;
+                    _zooming = false;
+                }
+            job.Cts.Dispose();
         }
     }
 
-    /// <summary>Ends a zoom under way; the lens stops at the last position it was sent.</summary>
-    internal void StopZoom()
+    /// <summary>Ends a zoom under way; with <paramref name="hold"/>, as for an ONVIF Stop, the lens stays where it has got to.</summary>
+    internal void StopZoom(bool hold = false)
     {
-        if (Interlocked.Exchange(ref _zoom, null) is not { } zoom) return;
-        _zooming = false;
-        try { zoom.Cancel(); }
+        LensJob? job;
+        lock (_zoomLock)
+        {
+            job = _zoom;
+            _zoom = null;
+            _zooming = false;
+        }
+        if (job == null) return;
+        job.Hold = hold;
+        Cancel(job);
+        MarkLensStale();
+    }
+
+    private static void Cancel(LensJob? job)
+    {
+        try { job?.Cts.Cancel(); }
         catch (ObjectDisposedException) { /* it had just finished */ }
     }
 
@@ -213,48 +277,54 @@ public sealed class OnvifPtzCamera
         return slots;
     }
 
-    /// <summary>Drives to a saved preset; any continuous move or zoom under way gives way to it.</summary>
+    /// <summary>Drives to a saved preset; any move or zoom under way gives way to it. With relative moves
+    /// configured it counts as moving until the head is there, which Frigate's calibration waits for.</summary>
     internal async Task GotoPresetAsync(int id, CancellationToken ct)
     {
         await _moveGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             StopZoom();
+            var away = _moving ? null : TrackedOffset; // a move cut short leaves the way back unknown
             Sending.Value = this; // this preset move is not another UI's
             await Control.PtzToPresetAsync(id, ct).ConfigureAwait(false);
-            Interlocked.Increment(ref _generation); // retires the watchdog of an earlier move
-            _moving = false;
+            var generation = Interlocked.Increment(ref _generation); // retires the watchdog of an earlier move
+            LoseTrack();
+            MarkLensStale(); // a preset can move the zoom too
+            _moving = Relative != null;
+            if (_moving) _ = SettleAtPresetAsync(generation, PresetTravel(away));
         }
         finally { _moveGate.Release(); }
     }
 
     internal Task SavePresetAsync(int id, string name, CancellationToken ct) => Control.SavePtzPresetAsync(id, name, ct);
 
-    private async Task WatchdogAsync(long generation, TimeSpan after, int attempt)
+    /// <summary>Stops the head after <paramref name="after"/> unless a later command took it over; a failed stop is
+    /// tried again. <paramref name="timedOut"/> says the move's own timeout ran out, rather than a send failing.</summary>
+    private async Task WatchdogAsync(long generation, TimeSpan after, int attempt, bool timedOut = true)
     {
         await Task.Delay(after).ConfigureAwait(false);
         await _moveGate.WaitAsync().ConfigureAwait(false);
         try
         {
             if (Interlocked.Read(ref _generation) != generation) return; // a later command took over
-            if (attempt == 1)
+            if (attempt == 1 && timedOut)
                 Log.Debug($"{Name}: ONVIF PTZ move had no Stop within {after.TotalSeconds:0}s — stopping the head");
-            using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            await SendAsync("stop", 32, limit.Token).ConfigureAwait(false);
+            using var limit = new CancellationTokenSource(SendLimit);
+            await SendAsync("stop", ArrowSpeed, limit.Token).ConfigureAwait(false);
             _moving = false;
         }
         catch (Exception ex)
         {
             if (attempt < StopAttempts)
             {
-                Log.Debug($"{Name}: ONVIF PTZ stop after a timed-out move failed ({ex.Message}); trying again");
-                _ = WatchdogAsync(generation, StopRetryDelay, attempt + 1);
+                Log.Debug($"{Name}: ONVIF PTZ stop failed ({ex.Message}); trying again");
+                _ = WatchdogAsync(generation, StopRetryDelay, attempt + 1, timedOut);
             }
             else
             {
                 _moving = false; // nothing more this endpoint can do; the status must not claim a move for ever
-                Log.Warn($"{Name}: ONVIF PTZ could not stop the head after its move timed out ({Log.Flatten(ex)}) — " +
-                         "stop it from the camera panel");
+                Log.Warn($"{Name}: ONVIF PTZ could not stop the head ({Log.Flatten(ex)}) — stop it from the camera panel");
             }
         }
         finally { _moveGate.Release(); }
@@ -267,7 +337,7 @@ public sealed class OnvifPtzCamera
         try
         {
             using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-            await MoveAsync("stop", 32, OnvifPtzServer.DefaultMoveTimeout, limit.Token).ConfigureAwait(false);
+            await MoveAsync("stop", ArrowSpeed, OnvifPtzServer.DefaultMoveTimeout, limit.Token).ConfigureAwait(false);
         }
         catch (Exception ex) { Log.Debug($"{Name}: ONVIF PTZ stop on shutdown failed: {Log.Flatten(ex)}"); }
     }

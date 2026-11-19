@@ -1766,25 +1766,33 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 
 .cam-rail-btn.talk-connecting { color: var(--accent); background: var(--accent-soft); opacity: 0.75; }
 
-/* The pan pad flies out to the LEFT of the rail, vertically centered on the
-   pill — absolute, so opening it never shifts the pill it came from. */
-.cam-rail .ptz-overlay-pad {
+/* The pan pad (and its preset list) flies out to the LEFT of the rail, vertically
+   centered on the pill: absolute, so opening it never shifts the pill. */
+.cam-rail .ptz-fly {
     position: absolute;
     right: calc(100% + 8px);
     top: 50%;
     transform: translateY(-50%);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    animation: talk-overlay-in 0.18s ease;
+}
+
+.ptz-overlay-pad,
+.ptz-presets {
+    padding: 8px;
+    border-radius: 16px;
+    background: color-mix(in srgb, var(--bg) 72%, transparent);
+    backdrop-filter: blur(8px);
+    border: 1px solid var(--line);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
 }
 
 .ptz-overlay-pad {
     display: grid;
-    grid-template-areas: ". up ." "left stop right" ". down .";
+    grid-template-areas: ". up ." "left stop right" ". down presets";
     gap: 4px;
-    padding: 6px;
-    border-radius: 14px;
-    background: color-mix(in srgb, var(--bg) 74%, transparent);
-    backdrop-filter: blur(6px);
-    border: 1px solid var(--line);
-    animation: talk-overlay-in 0.18s ease;
 }
 
 .ptz-ov-up { grid-area: up; }
@@ -1792,27 +1800,81 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 .ptz-ov-stop { grid-area: stop; }
 .ptz-ov-right { grid-area: right; }
 .ptz-ov-down { grid-area: down; }
+.ptz-ov-presets { grid-area: presets; }
 
 .ptz-overlay-pad button {
-    width: 40px;
-    height: 40px;
-    border: 1px solid var(--line);
-    border-radius: 9px;
-    background: color-mix(in srgb, var(--panel) 55%, transparent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 42px;
+    height: 42px;
+    border: 1px solid transparent;
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--panel) 60%, transparent);
     color: var(--fg);
-    font-size: 13px;
-    line-height: 1;
     cursor: pointer;
     user-select: none;
     -webkit-user-select: none;
     touch-action: none; /* press-and-hold must not turn into a scroll */
+    transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
 }
+
+.ptz-overlay-pad button:hover { background: color-mix(in srgb, var(--fg) 14%, transparent); }
+
+.ptz-overlay-pad .ptz-ov-stop { color: var(--muted); width: 36px; height: 36px; justify-self: center; }
+
+/* The presets button sits in the pad's empty corner, quieter than the arrows. */
+.ptz-overlay-pad .ptz-ov-presets { width: 34px; height: 34px; align-self: end; justify-self: end; color: var(--muted); }
+.ptz-overlay-pad .ptz-ov-presets.on { color: var(--accent); background: var(--accent-soft); border-color: var(--accent); }
 
 .ptz-overlay-pad button:active {
     background: color-mix(in srgb, var(--accent) 30%, transparent);
     border-color: var(--accent);
     color: var(--accent);
 }
+
+/* Saved positions, one tap each; scrolls when a camera holds many. */
+.ptz-presets {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 132px;
+    max-width: 200px;
+    max-height: 168px;
+    overflow-y: auto;
+}
+
+.ptz-presets-title {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding: 0 6px 4px;
+}
+
+.ptz-presets-note { font-size: 11px; color: var(--muted); padding: 2px 6px 4px; }
+
+.ptz-preset {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    width: 100%;
+    padding: 7px 9px;
+    border: 1px solid transparent;
+    border-radius: 9px;
+    background: none;
+    color: var(--fg);
+    font-size: 12px;
+    text-align: left;
+    cursor: pointer;
+}
+
+.ptz-preset > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ptz-preset .nl-icon { color: var(--muted); flex: none; }
+.ptz-preset:hover { background: color-mix(in srgb, var(--fg) 10%, transparent); }
+.ptz-preset.going { color: var(--accent); background: var(--accent-soft); border-color: var(--accent); }
+.ptz-preset.going .nl-icon { color: var(--accent); }
 
 /* No hover on touch: keep the rail readable instead of ghosted. */
 @media (hover: none) {
@@ -6400,3 +6462,20 @@ textarea.ai-prompt {
     font-size: 11px;
     padding-left: 8px;
 }
+
+.check-row { cursor: pointer; }
+/* The settings rows stretch inputs to 340px; a checkbox keeps its own size, at the start of the column. */
+.settings-panel .settings-body .check-row > input[type="checkbox"] { width: auto; margin: 0; }
+
+/* A number box with its unit after it (°, ms). */
+.unit-input { display: inline-flex; align-items: center; gap: 5px; }
+.unit-input .ret-input { width: 84px; }
+.unit-input > span { color: var(--muted); min-width: 22px; }
+
+/* "[6] s for [355] °  = 59.2 °/s": a timed sweep and the speed it works out to. */
+.sweep { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--muted); }
+.sweep .ret-input { width: 84px; }
+.sweep-rate { margin-left: 8px; }
+
+.ptz-more > summary { cursor: pointer; font-size: 12px; color: var(--muted); padding: 6px 0; }
+.ptz-more[open] > summary { color: var(--text); }

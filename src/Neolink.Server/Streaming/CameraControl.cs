@@ -75,7 +75,7 @@ public sealed record AiSensitivity(string Type, int Sensitivity, int? StayTime);
 /// <see cref="CameraControl.AiAlarmTypes"/> entry.</summary>
 public sealed record DetectionZone(string Type, int Cols, int Rows, string Table);
 
-/// <summary>The on-screen-display overlay config (HTTP API): camera-name and
+/// <summary>The on-screen-display overlay config (HTTP API or Baichuan): camera-name and
 /// timestamp visibility + position and the Reolink watermark. PosOptions is the
 /// firmware's own list of valid positions (empty when it didn't provide one).</summary>
 public sealed record OsdSettings(bool ShowName, string? Name, string? NamePos,
@@ -258,8 +258,19 @@ public interface ICameraControl
     Task SetPirEnabledAsync(bool enabled, CancellationToken ct);
     Task PtzAsync(string command, float speed, CancellationToken ct);
 
-    /// <summary>Raised with the command ("up"… "stop", or "preset") after each PTZ command the camera
-    /// accepted, whoever sent it.</summary>
+    /// <summary>PtzAsync that also returns when the command left for the camera (a Stopwatch timestamp), for timed moves.</summary>
+    async Task<long> PtzTimedAsync(string command, float speed, CancellationToken ct)
+    {
+        long sent = System.Diagnostics.Stopwatch.GetTimestamp();
+        await PtzAsync(command, speed, ct).ConfigureAwait(false);
+        return sent;
+    }
+
+    /// <summary>Where the head is, in the camera's own units; null when it does not say. Either axis may be missing.</summary>
+    Task<(int? Pan, int? Tilt)?> GetPtzPositionAsync(CancellationToken ct) => Task.FromResult<(int?, int?)?>(null);
+
+    /// <summary>Raised with the command ("up"… "stop", "preset", "guard" or "patrol") after each PTZ command the
+    /// camera accepted, whoever sent it.</summary>
     event Action<string>? PtzCommandSent { add { } remove { } }
 
     Task RebootAsync(CancellationToken ct);
@@ -980,17 +991,72 @@ public sealed class CameraControl : ICameraControl
             return null;
         }, ct);
 
-    public async Task PtzAsync(string command, float speed, CancellationToken ct)
+    // Pan/tilt commands (msg 18) take a gate of their own, never the command gate: a stop must not wait behind
+    // a snapshot or an SD-card search. Patrols, the only other msg-18 command, take it too.
+    private readonly SemaphoreSlim _ptzGate = new(1, 1);
+
+    private async Task<T> WithPtzLaneAsync<T>(Func<IBcCamera, Task<T>> op, CancellationToken ct)
     {
-        await WithCameraAsync<object?>(async camera =>
+        await _ptzGate.WaitAsync(ct).ConfigureAwait(false);
+        try
         {
+            var camera = AnyLive() ?? throw new CameraOfflineException(CameraName);
+            return await op(camera).ConfigureAwait(false);
+        }
+        finally
+        {
+            _ptzGate.Release();
+        }
+    }
+
+    public Task PtzAsync(string command, float speed, CancellationToken ct) => PtzTimedAsync(command, speed, ct);
+
+    public async Task<long> PtzTimedAsync(string command, float speed, CancellationToken ct)
+    {
+        long sent = await WithPtzLaneAsync(async camera =>
+        {
+            long at = System.Diagnostics.Stopwatch.GetTimestamp();
             await camera.PtzAsync(command, speed, ct).ConfigureAwait(false);
-            return null;
+            return at;
         }, ct).ConfigureAwait(false);
         PtzCommandSent?.Invoke(command);
+        return sent;
     }
 
     public event Action<string>? PtzCommandSent;
+
+    /// <summary>A camera that refuses or ignores the read three times running is not asked again on that session.</summary>
+    public async Task<(int? Pan, int? Tilt)?> GetPtzPositionAsync(CancellationToken ct)
+    {
+        if (AnyLive() is { } live && !(_ptzPosTriedOn?.TryGetTarget(out var last) == true && ReferenceEquals(last, live)))
+        {
+            _ptzPosTriedOn = new WeakReference<IBcCamera>(live);
+            _ptzPosMisses = 0;
+        }
+        if (_ptzPosMisses >= PtzPosGiveUp) return null;
+        try
+        {
+            var pos = await WithCameraAsync(c => c.GetPtzPositionAsync(TimeSpan.FromMilliseconds(1500), ct), ct)
+                .ConfigureAwait(false);
+            _ptzPosMisses = pos == null ? _ptzPosMisses + 1 : 0;
+            return pos;
+        }
+        catch (CameraOfflineException)
+        {
+            return null; // reconnecting: not evidence the read is unsupported
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested
+                                   && ex is CameraCommandException or TimeoutException or IOException or ObjectDisposedException)
+        {
+            _ptzPosMisses++;
+            return null;
+        }
+    }
+
+    // Consecutive head-position misses on the current session; at PtzPosGiveUp the read stops until the next one.
+    private int _ptzPosMisses;
+    private WeakReference<IBcCamera>? _ptzPosTriedOn;
+    private const int PtzPosGiveUp = 3;
 
     public Task<XElement?> GetZoomFocusAsync(CancellationToken ct) =>
         WithCameraAsync(camera => camera.GetZoomFocusAsync(ct: ct), ct);
@@ -1241,13 +1307,15 @@ public sealed class CameraControl : ICameraControl
                     Log.Info($"{CameraName}: no HTTP API answered ({reason}) — battery models usually " +
                              "don't have one, so this is expected. Picture settings, Wi-Fi detail and " +
                              "scaled snapshots stay unavailable; streams, events, PIR, battery readings, " +
-                             "volume and presets (Baichuan) are unaffected. If this model does expose " +
+                             "volume, presets, the on-screen display and record audio (Baichuan) are " +
+                             "unaffected. If this model does expose " +
                              "HTTP, set 'http_address' explicitly.");
                     return default;
                 }
                 Log.Warn($"{CameraName}: the camera's HTTP API is not answering ({reason}). " +
                          "Picture settings, Wi-Fi signal and scaled snapshots are unavailable until it " +
-                         "does (volume, PTZ presets and AI sensitivity fall back to Baichuan). " + (slow
+                         "does (volume, PTZ presets, AI sensitivity, the on-screen display and record audio " +
+                         "fall back to Baichuan). " + (slow
                              // A no-reply timeout can't tell a slow camera from silently
                              // dropped packets — don't claim "the port is open".
                              ? "Either the camera is overloaded (Wi-Fi camera under streaming load), or " +
@@ -1300,7 +1368,8 @@ public sealed class CameraControl : ICameraControl
             var onvifImage = await HttpOrOnvifImageAsync(ct).ConfigureAwait(false);
             var bare = await WithBcStandInsAsync(new HttpFeatures(onvifImage, null, null, null, null, null, null), ct)
                 .ConfigureAwait(false);
-            return bare is { Image: null, Volume: null, PtzPresets: null, AiSensitivities: null } ? null : bare;
+            return bare is { Image: null, Volume: null, PtzPresets: null, AiSensitivities: null, Osd: null, Audio: null }
+                ? null : bare;
         }
         // Sequential on purpose (the HTTP client serializes requests anyway) —
         // but ONE slow answer must not blank the rest of the panel. A mid-sweep
@@ -1343,6 +1412,11 @@ public sealed class CameraControl : ICameraControl
                 return default; // sweep budget spent — the cache stands in
             }
         }
+        // HTTP plainly absent: Baichuan goes first, since the picture's ONVIF probe below can spend most of the budget.
+        var bc = HttpAbsent
+            ? await WithBcStandInsAsync(new HttpFeatures(null, null, null, null, null, null, null), ct, budget.Token,
+                picture: false).ConfigureAwait(false)
+            : null;
         var image = await Step<ImageSettings>(HttpOrOnvifImageAsync).ConfigureAwait(false);
         var volume = await Step<int?>(HttpVolumeAsync).ConfigureAwait(false);
         var wifi = await Step<WifiReading>(GetWifiSignalAsync).ConfigureAwait(false);
@@ -1352,8 +1426,8 @@ public sealed class CameraControl : ICameraControl
         var sdCards = await Step<IReadOnlyList<SdCardInfo>>(GetSdCardsAsync).ConfigureAwait(false);
         var mdSens = await Step<int?>(GetMdSensitivityAsync).ConfigureAwait(false);
         var aiSens = await Step<IReadOnlyList<AiSensitivity>>(HttpAiSensitivitiesAsync).ConfigureAwait(false);
-        var osd = await Step<OsdSettings>(GetOsdSettingsAsync).ConfigureAwait(false);
-        var audio = await Step<AudioState>(GetAudioStateAsync).ConfigureAwait(false);
+        var osd = await Step<OsdSettings>(HttpOsdAsync).ConfigureAwait(false);
+        var audio = await Step<AudioState>(HttpAudioStateAsync).ConfigureAwait(false);
         var fresh = new HttpFeatures(image, volume, wifi, presets, replies, autoTrack, sdCards, mdSens, aiSens, osd, audio);
 
         // Fill the holes from the last good sweep — live values always win; the
@@ -1393,8 +1467,8 @@ public sealed class CameraControl : ICameraControl
             _httpUnreachableWarned = true;
             _httpWarnCooldownUntil = DateTime.UtcNow + TimeSpan.FromMinutes(30);
             Log.Warn($"{CameraName}: none of the camera's HTTP-API features answered — picture settings, " +
-                     "OSD, Wi-Fi signal and motion sensitivity stay unavailable (volume, PTZ presets and AI " +
-                     "sensitivity fall back to Baichuan). " +
+                     "Wi-Fi signal and motion sensitivity stay unavailable (volume, PTZ presets, AI sensitivity, " +
+                     "the on-screen display and record audio fall back to Baichuan). " +
                      "The camera streams fine over Baichuan, so this is the HTTP API specifically: it may be " +
                      "disabled on the camera (enable it in the Reolink app, or set 'http_address'), or " +
                      "something between Neolink and the camera is dropping HTTP traffic " +
@@ -1404,7 +1478,14 @@ public sealed class CameraControl : ICameraControl
                            "see this camera's ONVIF log line for whether that route is available.)"
                          : ""));
         }
-        return await WithBcStandInsAsync(merged, ct, budget.Token).ConfigureAwait(false);
+        if (bc != null)
+            merged = merged with
+            {
+                Volume = merged.Volume ?? bc.Volume, PtzPresets = merged.PtzPresets ?? bc.PtzPresets,
+                AiSensitivities = merged.AiSensitivities ?? bc.AiSensitivities, Osd = merged.Osd ?? bc.Osd,
+                Audio = WithRecordAudio(merged.Audio, bc.Audio?.RecordAudio),
+            };
+        return await WithBcStandInsAsync(merged, ct, budget.Token, rest: bc == null).ConfigureAwait(false);
     }
 
     public async Task<ImageSettings?> GetImageSettingsAsync(CancellationToken ct) =>
@@ -1684,12 +1765,23 @@ public sealed class CameraControl : ICameraControl
     /// unevenly: the encode settings' record-audio flag, and whichever extra
     /// AudioCfg volumes this firmware carries. Absent members read as null and the
     /// UI simply doesn't draw them — the camera decides what's on offer.</summary>
-    public Task<AudioState?> GetAudioStateAsync(CancellationToken ct) =>
+    public async Task<AudioState?> GetAudioStateAsync(CancellationToken ct)
+    {
+        var http = await HttpAudioStateAsync(ct).ConfigureAwait(false);
+        return http?.RecordAudio != null ? http : WithRecordAudio(http, await BcRecordAudioAsync(ct).ConfigureAwait(false));
+    }
+
+    /// <summary><paramref name="a"/> with the record-audio flag it lacked, when there is one.</summary>
+    private static AudioState? WithRecordAudio(AudioState? a, bool? rec) =>
+        a?.RecordAudio != null || rec == null ? a : (a ?? new AudioState(null, null, null)) with { RecordAudio = rec };
+
+    private Task<AudioState?> HttpAudioStateAsync(CancellationToken ct) =>
         HttpTryAsync<AudioState>(async c =>
         {
             bool? rec = null;
             try { rec = EncRecordAudio(await _httpApi!.GetEncAsync(c).ConfigureAwait(false)); }
             catch (ReolinkApiException) { /* no Enc surface: flag stays hidden */ }
+            if (rec != null) _recordAudioViaBc = false;
             int? talk = null, visitor = null;
             try
             {
@@ -1722,8 +1814,14 @@ public sealed class CameraControl : ICameraControl
     /// recordings here, in the Reolink app and on the SD card alike.</summary>
     public async Task SetRecordAudioAsync(bool on, CancellationToken ct)
     {
-        if (_httpApi == null)
-            throw new NotSupportedException($"record audio needs the camera's HTTP API ('{CameraName}' has none)");
+        if (_httpApi == null || _recordAudioViaBc || HttpAbsent)
+        {
+            await ModifyBodyAsync(BcConstants.MsgIdGetCompression, BcConstants.MsgIdSetCompression,
+                body => BuildCompressionAudio(body, on)
+                        ?? throw new NotSupportedException($"{CameraName} exposes no record-audio flag in its encode settings"),
+                $"record audio {(on ? "enabled" : "disabled")} on every stream", ct).ConfigureAwait(false);
+            return;
+        }
         var enc = await _httpApi.GetEncAsync(ct).ConfigureAwait(false);
         bool touched = false;
         if (enc["audio"] is not null) // the flag's documented home: top of Enc
@@ -2286,11 +2384,11 @@ public sealed class CameraControl : ICameraControl
     }
 
     // ------------------------------------------- Baichuan stand-ins for HTTP settings
-    // Picture (26/25), presets (190/19), volume (264/265) and AI sensitivity (342/343),
-    // for a camera whose HTTP API (and, for the picture, ONVIF) never served them.
+    // Picture (26/25), presets (190/19), volume (264/265), AI sensitivity (342/343), OSD (44/45)
+    // and record audio (56/57), for a camera whose HTTP API (and, for the picture, ONVIF) never served them.
 
     /// <summary>Set when Baichuan served the section, so its writes go the same way.</summary>
-    private volatile bool _imageViaBc, _presetsViaBc, _volumeViaBc, _aiViaBc;
+    private volatile bool _imageViaBc, _presetsViaBc, _volumeViaBc, _aiViaBc, _osdViaBc, _recordAudioViaBc;
 
     /// <summary>Stand-in reads the current session refused or ignored; a new session asks again.</summary>
     private readonly HashSet<string> _bcRefused = new(StringComparer.Ordinal);
@@ -2299,17 +2397,24 @@ public sealed class CameraControl : ICameraControl
     /// <summary>AI types the firmware's AiDetectCfg parser recognises.</summary>
     internal static readonly string[] BcAiTypes = { "people", "vehicle", "dog_cat", "face" };
 
-    /// <summary>Fills the sections HTTP left empty from Baichuan, within <paramref name="limit"/>.</summary>
+    /// <summary>Fills the sections HTTP left empty from Baichuan, within <paramref name="limit"/>: the picture,
+    /// the <paramref name="rest"/>, or both.</summary>
     private async Task<HttpFeatures> WithBcStandInsAsync(HttpFeatures f, CancellationToken ct,
-        CancellationToken limit = default)
+        CancellationToken limit = default, bool picture = true, bool rest = true)
     {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct, limit);
         try
         {
-            if (f.Image == null && await BcImageAsync(cts.Token).ConfigureAwait(false) is { } i)
+            if (picture && f.Image == null && await BcImageAsync(cts.Token).ConfigureAwait(false) is { } i)
                 f = f with { Image = i };
+            if (!rest) return f;
             if (f.Volume == null && await BcVolumeAsync(cts.Token).ConfigureAwait(false) is { } v)
                 f = f with { Volume = v };
+            // One round trip each, so they go before the presets and the four AI reads.
+            if (f.Osd == null && await BcOsdAsync(cts.Token).ConfigureAwait(false) is { } o)
+                f = f with { Osd = o };
+            if (f.Audio?.RecordAudio == null)
+                f = f with { Audio = WithRecordAudio(f.Audio, await BcRecordAudioAsync(cts.Token).ConfigureAwait(false)) };
             if (f.PtzPresets == null && await BcPresetsAsync(cts.Token).ConfigureAwait(false) is { } p)
                 f = f with { PtzPresets = p };
             if (f.AiSensitivities == null && await BcAiSensitivitiesAsync(cts.Token).ConfigureAwait(false) is { } a)
@@ -2317,15 +2422,27 @@ public sealed class CameraControl : ICameraControl
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            // The sweep's budget ran out; what was read stands.
+            ExplainOnce("budget", "the settings read ran out of time before every Baichuan setting was read; " +
+                                  "opening the panel again reads the rest");
         }
         return f;
     }
 
-    /// <summary>One stand-in read on the live session, or null. A refusal retires <paramref name="key"/>
-    /// for the session; silence retires its whole family (the part before ':').</summary>
-    private async Task<XElement?> BcStandInAsync(uint msgId, string root, string key,
-        Func<CameraCapabilities, IBcCamera, bool> supported, Func<byte, XElement?>? body, CancellationToken ct)
+    /// <summary>Lines already logged this run, by key: each says once why a Baichuan setting is missing.</summary>
+    private readonly HashSet<string> _bcExplained = new(StringComparer.Ordinal);
+
+    private void ExplainOnce(string key, string message)
+    {
+        lock (_bcExplained)
+            if (!_bcExplained.Add(key)) return;
+        Log.Info($"{CameraName}: {message}");
+    }
+
+    /// <summary>One stand-in read on the live session, or null; a null <paramref name="root"/> returns the whole body.
+    /// A refusal retires <paramref name="key"/> for the session; silence retires its whole family (the part before ':').</summary>
+    private async Task<XElement?> BcStandInAsync(uint msgId, string? root, string key,
+        Func<CameraCapabilities, IBcCamera, bool> supported, Func<byte, XElement?>? body, CancellationToken ct,
+        Action<string>? miss = null)
     {
         if (AnyLive() == null) return null;
         CameraCapabilities caps;
@@ -2341,22 +2458,35 @@ public sealed class CameraControl : ICameraControl
                     _bcRefused.Clear();
                     _bcRefusedBy = camera;
                 }
-                if (_bcRefused.Contains(key) || _bcRefused.Contains(family) || !supported(caps, camera)) return null;
+                if (_bcRefused.Contains(key) || _bcRefused.Contains(family)) return null;
+                if (!supported(caps, camera))
+                {
+                    miss?.Invoke("the camera's Support flags rule it out");
+                    return null;
+                }
                 try
                 {
-                    var el = await camera.GetRawAsync(msgId, root, body?.Invoke(camera.ChannelId), ExtrasTimeout, ct)
-                        .ConfigureAwait(false);
-                    if (el == null) _bcRefused.Add(key);
+                    var el = root == null
+                        ? await GetBcBodyAsync(camera, msgId, body?.Invoke(camera.ChannelId), ct).ConfigureAwait(false)
+                        : await camera.GetRawAsync(msgId, root, body?.Invoke(camera.ChannelId), ExtrasTimeout, ct)
+                            .ConfigureAwait(false);
+                    if (el == null)
+                    {
+                        _bcRefused.Add(key);
+                        miss?.Invoke($"msg {msgId} came back without the settings");
+                    }
                     return el;
                 }
-                catch (CameraCommandException)
+                catch (CameraCommandException ex)
                 {
                     _bcRefused.Add(key);
+                    miss?.Invoke($"the camera refused msg {msgId} (code {ex.ResponseCode})");
                     return null;
                 }
                 catch (TimeoutException)
                 {
                     _bcRefused.Add(family);
+                    miss?.Invoke($"the camera did not answer msg {msgId} within {ExtrasTimeout.TotalSeconds:0}s");
                     return null;
                 }
             }, ct).ConfigureAwait(false);
@@ -2420,6 +2550,152 @@ public sealed class CameraControl : ICameraControl
         if (list.Count == 0) return null;
         _aiViaBc = true;
         return list;
+    }
+
+    /// <summary>A whole reply body as one &lt;body&gt; element, for replies with several roots; null when empty.</summary>
+    private static async Task<XElement?> GetBcBodyAsync(IBcCamera camera, uint msgId, XElement? request, CancellationToken ct)
+    {
+        var reply = await camera.SendCommandAsync(msgId, request == null ? null : BcXmlBody.FromRaw(request),
+            new ExtensionXml { ChannelId = camera.ChannelId }, replyTimeout: ExtrasTimeout, ct: ct).ConfigureAwait(false);
+        return reply?.Xml is { Raw.Count: > 0 } xml ? new XElement("body", xml.Raw) : null;
+    }
+
+    private async Task<OsdSettings?> BcOsdAsync(CancellationToken ct)
+    {
+        void Miss(string why) => ExplainOnce("watermark", $"the Reolink watermark switch is not offered: {why}");
+        var body = await BcStandInAsync(BcConstants.MsgIdGetOsd, null, "osd", (_, _) => true, null, ct, Miss)
+            .ConfigureAwait(false);
+        if (body == null) return null;
+        var osd = ParseBcOsd(body);
+        if (osd?.Watermark == null)
+            Miss($"msg 44 holds no {(osd == null ? "overlays" : "switch")} Neolink recognises: " +
+                 body.ToString(SaveOptions.DisableFormatting));
+        if (osd == null) return null;
+        if (osd.PosOptions.Count == 0)
+            ExplainOnce("positions", "overlay positions are not offered: msg 44 holds no position Neolink recognises: " +
+                                     body.ToString(SaveOptions.DisableFormatting));
+        _osdViaBc = true;
+        return osd;
+    }
+
+    /// <summary>The msg 44 overlays, their positions and the watermark.</summary>
+    internal static OsdSettings? ParseBcOsd(XElement body)
+    {
+        var name = body.Element("OsdChannelName");
+        var time = body.Element("OsdDatetime");
+        if (name == null && time == null) return null;
+        string? namePos = BcOsdPosition(name), timePos = BcOsdPosition(time);
+        return new OsdSettings(
+            ShowName: IsOn(name?.Element("enable")?.Value), Name: name?.Element("name")?.Value.Trim(), NamePos: namePos,
+            ShowTime: IsOn(time?.Element("enable")?.Value), TimePos: timePos,
+            Watermark: BcWatermark(body) is { } wm ? IsOn(wm.Value) : null,
+            PosOptions: namePos != null || timePos != null ? BcOsdPositions : Array.Empty<string>());
+    }
+
+    /// <summary>Overlay positions over Baichuan, named as the HTTP API names them.</summary>
+    internal static readonly string[] BcOsdPositions =
+        { "Upper Left", "Top Center", "Upper Right", "Lower Left", "Bottom Center", "Lower Right" };
+
+    // topLeftX/Y are normalised (nodelink-js, from captures of the Reolink app): 0 or 1 is the near edge,
+    // 65536 the far edge, and an x of 65537 centres the overlay.
+    private const int OsdFar = 65536, OsdCentre = 65537, OsdSlack = 16;
+
+    /// <summary>A msg 44 block's position: one of <see cref="BcOsdPositions"/>, "Custom" for a dragged placement,
+    /// or null when the block has no anchor.</summary>
+    internal static string? BcOsdPosition(XElement? block)
+    {
+        if (XInt(block, "topLeftX") is not { } x || XInt(block, "topLeftY") is not { } y) return null;
+        static int? Edge(int v) => v is >= 0 and <= OsdSlack ? 0 : v is >= OsdFar - OsdSlack and <= OsdFar ? 2 : null;
+        int? col = x == OsdCentre ? 1 : Edge(x);
+        return col is { } c && Edge(y) is { } r ? BcOsdPositions[r / 2 * 3 + c] : "Custom";
+    }
+
+    /// <summary>The anchor msg 45 takes for a position name; null when the name is not one of <see cref="BcOsdPositions"/>.</summary>
+    internal static (int X, int Y)? BcOsdAnchor(string pos)
+    {
+        int i = Array.FindIndex(BcOsdPositions, p => p.Equals(pos.Trim(), StringComparison.OrdinalIgnoreCase));
+        return i < 0 ? null : ((i % 3) switch { 0 => 1, 1 => OsdCentre, _ => OsdFar }, i < 3 ? 1 : OsdFar);
+    }
+
+    /// <summary>The 0/1 watermark switch in a msg 44 body, found by name since its exact spelling is unconfirmed.</summary>
+    private static XElement? BcWatermark(XElement body) => body.Descendants().FirstOrDefault(e =>
+        !e.HasElements && e.Name.LocalName.EndsWith("watermark", StringComparison.OrdinalIgnoreCase)
+        && e.Value.Trim() is "0" or "1");
+
+    /// <summary>A copy of the msg 44 body with the asked switches and positions set; throws when the camera lacks one.</summary>
+    internal static XElement BuildBcOsd(XElement body, bool? showName, string? namePos, bool? showTime, string? timePos,
+        bool? watermark)
+    {
+        var copy = new XElement(body);
+        static void Set(XElement? flag, bool? on, string what)
+        {
+            if (on is not { } v) return;
+            if (flag == null) throw new NotSupportedException($"the camera reports no {what}");
+            flag.Value = v ? "1" : "0";
+        }
+        static void Place(XElement? block, string? pos, string what)
+        {
+            if (pos == null) return;
+            var (x, y) = BcOsdAnchor(pos)
+                         ?? throw new ArgumentException($"position must be one of: {string.Join(", ", BcOsdPositions)}");
+            if (block?.Element("topLeftX") is not { } ax || block.Element("topLeftY") is not { } ay)
+                throw new NotSupportedException($"the camera reports no position for its {what}");
+            ax.Value = x.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            ay.Value = y.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+        var name = copy.Element("OsdChannelName");
+        var time = copy.Element("OsdDatetime");
+        Set(name?.Element("enable"), showName, "name overlay");
+        Place(name, namePos, "name overlay");
+        Set(time?.Element("enable"), showTime, "timestamp overlay");
+        Place(time, timePos, "timestamp overlay");
+        Set(BcWatermark(copy), watermark, "watermark setting");
+        return copy;
+    }
+
+    /// <summary>Reads a settings reply whole, changes it with <paramref name="build"/> and writes every root back.</summary>
+    private Task ModifyBodyAsync(uint getId, uint setId, Func<XElement, XElement> build, string what, CancellationToken ct) =>
+        WithCameraAsync<object?>(async camera =>
+        {
+            var body = await GetBcBodyAsync(camera, getId, null, ct).ConfigureAwait(false)
+                       ?? throw new NotSupportedException($"msg {getId} came back without the settings");
+            var write = new BcXmlBody();
+            write.Raw.AddRange(build(body).Elements());
+            await camera.SendCommandAsync(setId, write, new ExtensionXml { ChannelId = camera.ChannelId },
+                replyTimeout: TimeSpan.FromMilliseconds(1500), tolerateNoReply: true, ct: ct).ConfigureAwait(false);
+            Log.Info($"{CameraName}: {what}");
+            return null;
+        }, ct);
+
+    private async Task<bool?> BcRecordAudioAsync(CancellationToken ct)
+    {
+        void Miss(string why) => ExplainOnce("recordAudio", $"the Record audio switch is not offered: {why}");
+        var body = await BcStandInAsync(BcConstants.MsgIdGetCompression, null, "recordAudio",
+            (caps, cam) => !ChannelSupportFlag(caps.Support, cam.ChannelId, "noAudio"), null, ct, Miss).ConfigureAwait(false);
+        if (body == null) return null;
+        if (CompressionRecordAudio(body) is not { } rec)
+        {
+            Miss("msg 56 holds no audio flag Neolink recognises: " + body.ToString(SaveOptions.DisableFormatting));
+            return null;
+        }
+        _recordAudioViaBc = true;
+        return rec;
+    }
+
+    /// <summary>The msg 56 reply's audio flags, one per stream, wherever its blocks sit (as reolink_aio reads them).</summary>
+    private static List<XElement> AudioFlags(XElement body) => body.Descendants("audio").Where(e => !e.HasElements).ToList();
+
+    /// <summary>Record audio from the msg 56 reply: on when any stream carries audio; null when none says.</summary>
+    internal static bool? CompressionRecordAudio(XElement body) =>
+        AudioFlags(body) is { Count: > 0 } flags ? flags.Any(f => IsOn(f.Value)) : null;
+
+    /// <summary>A copy of the msg 56 reply with every audio flag set; null when it has none.</summary>
+    internal static XElement? BuildCompressionAudio(XElement body, bool on)
+    {
+        var copy = new XElement(body);
+        var flags = AudioFlags(copy);
+        foreach (var f in flags) f.Value = on ? "1" : "0";
+        return flags.Count == 0 ? null : copy;
     }
 
     // ------------------------------------------------- detection zones (Baichuan)
@@ -2923,10 +3199,14 @@ public sealed class CameraControl : ICameraControl
         Log.Info($"{CameraName}: HDR set to {value}");
     }
 
-    public Task<OsdSettings?> GetOsdSettingsAsync(CancellationToken ct) =>
+    public async Task<OsdSettings?> GetOsdSettingsAsync(CancellationToken ct) =>
+        await HttpOsdAsync(ct).ConfigureAwait(false) ?? await BcOsdAsync(ct).ConfigureAwait(false);
+
+    private Task<OsdSettings?> HttpOsdAsync(CancellationToken ct) =>
         HttpTryAsync<OsdSettings?>(async c =>
         {
             var (osd, range) = await _httpApi!.GetOsdAsync(c).ConfigureAwait(false);
+            _osdViaBc = false;
             return ParseOsd(osd, range);
         }, ct);
 
@@ -2950,8 +3230,17 @@ public sealed class CameraControl : ICameraControl
     public async Task SetOsdSettingsAsync(bool? showName, string? namePos, bool? showTime, string? timePos,
         bool? watermark, CancellationToken ct)
     {
-        if (_httpApi == null)
-            throw new NotSupportedException($"OSD settings need the camera's HTTP API ('{CameraName}' has none)");
+        if (_httpApi == null || _osdViaBc || HttpAbsent)
+        {
+            foreach (var pos in new[] { namePos, timePos })
+                if (pos != null && BcOsdAnchor(pos) == null)
+                    throw new ArgumentException($"position must be one of: {string.Join(", ", BcOsdPositions)}");
+            await ModifyBodyAsync(BcConstants.MsgIdGetOsd, BcConstants.MsgIdSetOsd,
+                body => BuildBcOsd(body, showName, namePos, showTime, timePos, watermark),
+                $"OSD changed (name={showName}/{namePos}, time={showTime}/{timePos}, watermark={watermark})", ct)
+                .ConfigureAwait(false);
+            return;
+        }
         // Read-modify-write of the whole Osd object — SetOsd expects the complete
         // structure (both overlay blocks) back, unlike the flat Image/Isp writes.
         var (osd, _) = await _httpApi.GetOsdAsync(ct).ConfigureAwait(false);
@@ -3157,19 +3446,29 @@ public sealed class CameraControl : ICameraControl
         if (timeout is < 10 or > 300)
             throw new ArgumentException("timeout must be 10-300 seconds");
         // The camera answers only after its PTZ module does (up to 8 s), refusals included.
-        return ModifyAsync(BcConstants.MsgIdGetGuard, BcConstants.MsgIdSetGuard, "PtzGuard",
+        var write = ModifyAsync(BcConstants.MsgIdGetGuard, BcConstants.MsgIdSetGuard, "PtzGuard",
             el => BuildGuard(el, enabled, timeout, action),
             $"PTZ guard (enabled={enabled}, timeout={timeout}, action={action})", ct, TimeSpan.FromSeconds(10));
+        return action == "go" ? AnnounceAsync(write) : write;
+
+        async Task AnnounceAsync(Task sent)
+        {
+            await sent.ConfigureAwait(false);
+            PtzCommandSent?.Invoke("guard");
+        }
     }
 
-    public Task SetPatrolAsync(int id, bool run, CancellationToken ct) =>
-        WithCameraAsync<object?>(async camera =>
+    public async Task SetPatrolAsync(int id, bool run, CancellationToken ct)
+    {
+        await WithPtzLaneAsync<object?>(async camera =>
         {
             await camera.SendCommandAsync(BcConstants.MsgIdPtzControl, BcXmlBody.FromRaw(BuildPatrolControl(camera.ChannelId, id, run)),
                 new ExtensionXml { ChannelId = camera.ChannelId }, ct: ct).ConfigureAwait(false);
-            Log.Info($"{CameraName}: patrol {id} {(run ? "started" : "stopped")}");
             return null;
-        }, ct);
+        }, ct).ConfigureAwait(false);
+        PtzCommandSent?.Invoke("patrol");
+        Log.Info($"{CameraName}: patrol {id} {(run ? "started" : "stopped")}");
+    }
 
     public Task SetPrivacyMasksAsync(bool on, CancellationToken ct) =>
         ModifyAsync(BcConstants.MsgIdGetShelter, BcConstants.MsgIdSetShelter, "Shelter",

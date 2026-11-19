@@ -216,6 +216,7 @@ public sealed class NeolinkConfig
         string? onvifAddress = null;
         int? ptzPort = null;
         bool ptzShare = false;
+        var ptzRelative = new Dictionary<string, double?>();
         string? rtspMain = null, rtspSub = null;
         string? audioTranscode = null;
         string? maxEncryption = null;
@@ -250,6 +251,11 @@ public sealed class NeolinkConfig
                     ptzShare = prop.Value.ValueKind == JsonValueKind.True;
                     if (prop.Value.ValueKind is not (JsonValueKind.True or JsonValueKind.False or JsonValueKind.Null))
                         Log.Warn($"Camera \"{name ?? "?"}\": ptz_share must be true or false (got {prop.Value.GetRawText()}), so it is off");
+                    break;
+                // Judged in PtzRelativeConfig.From: a bad value turns off relative moves only.
+                case "ptzfovh" or "ptzfovv" or "ptztelefovh" or "ptzpanrate" or "ptztiltrate" or "ptzlagms" or "ptzspeed":
+                    ptzRelative[Key(prop.Name)] = prop.Value.ValueKind == JsonValueKind.Null ? null
+                        : prop.Value.ValueKind == JsonValueKind.Number ? prop.Value.GetDouble() : double.NaN;
                     break;
                 case "uid": uid = prop.Value.GetString(); break;
                 case "stream": stream = prop.Value.GetString() ?? "both"; break;
@@ -288,7 +294,8 @@ public sealed class NeolinkConfig
 
         return BuildCamera(name, username, password, address, uid, stream, channelId, permitted, httpAddress,
             record, rtspMain, rtspSub, alwaysOn, udpProbe, udp, wakeCapture, onvifAddress,
-            keepAliveHours, audioTranscode, maxEncryption, legacyLogin, ptzShare, ptzPort);
+            keepAliveHours, audioTranscode, maxEncryption, legacyLogin, ptzShare, ptzPort,
+            PtzRelativeConfig.From(key => ptzRelative.GetValueOrDefault(Key(key))));
     }
 
     private static RecordingConfig ParseJsonRecording(JsonElement el)
@@ -540,7 +547,8 @@ public sealed class NeolinkConfig
                     MiniToml.GetBool(c, "legacy_login") ?? false,
                     MiniToml.GetBool(c, "ptz_share") ?? false,
                     MiniToml.GetInt(c, "ptz_port") is { } ptzPort
-                        ? ptzPort is >= 0 and <= 65535 ? (int)ptzPort : CameraConfig.NotAPort : null));
+                        ? ptzPort is >= 0 and <= 65535 ? (int)ptzPort : CameraConfig.NotAPort : null,
+                    PtzRelativeConfig.From(key => c.ContainsKey(key) ? MiniToml.GetDouble(c, key) ?? double.NaN : null)));
             }
             catch (Exception ex) when (!strict && IsBadEntry(ex))
             {
@@ -588,7 +596,7 @@ public sealed class NeolinkConfig
         bool? alwaysOn = null, bool udpProbe = false, bool udp = false, bool wakeCapture = false,
         string? onvifAddress = null, double keepAliveHours = 0,
         string? audioTranscode = null, string? maxEncryption = null, bool legacyLogin = false,
-        bool ptzShare = false, int? ptzPort = null)
+        bool ptzShare = false, int? ptzPort = null, (PtzRelativeConfig? Config, string? Why) ptzRelative = default)
     {
         if (name == null) throw new FormatException("camera entry missing \"name\"");
         audioTranscode = NormalizeAudioTranscode(name, audioTranscode);
@@ -659,6 +667,8 @@ public sealed class NeolinkConfig
             OnvifAddress = string.IsNullOrWhiteSpace(onvifAddress) ? null : onvifAddress.Trim(),
             PtzShare = ptzShare,
             PtzPort = ptzPort,
+            PtzRelative = ptzRelative.Config,
+            PtzRelativeOff = ptzRelative.Why,
             Record = record,
             AlwaysOn = alwaysOn,
             Uid = string.IsNullOrWhiteSpace(uid) ? null : uid.Trim(),
@@ -856,6 +866,13 @@ public sealed class NeolinkConfig
         foreach (var cam in Cameras)
         {
             var mode = cam.PtzMode;
+            if (cam.PtzRelativeOff is { } bad)
+            {
+                if (strict) throw new FormatException($"Camera \"{cam.Name}\": relative PTZ moves — {bad}");
+                Log.Error($"Camera \"{cam.Name}\": relative PTZ moves are off — {bad}.");
+            }
+            else if (cam.PtzRelative != null && mode == "off")
+                Log.Warn($"Camera \"{cam.Name}\": ptz_fov_h and ptz_pan_rate do nothing until ptz_share or ptz_port turns on PTZ for Frigate");
             if (mode == "off") continue;
             string? why = cam.IsGenericRtsp
                 ? "a non-Reolink camera has ONVIF of its own: point Frigate at the camera itself"
@@ -1055,6 +1072,34 @@ public sealed class RecordingConfig
     public int EffectiveContinuousRetentionDays => ContinuousRetentionDays ?? RetentionDays;
 }
 
+/// <summary>What turns a move across the picture into motor time: the lens's angles (degrees) and the head's
+/// rates (degrees per second). A zoom lens gives its widest angle, and its narrowest as TeleFovH.</summary>
+public sealed record PtzRelativeConfig(double FovH, double? FovV, double PanRate, double? TiltRate, double? LagMs, double? TeleFovH,
+    double? Speed = null)
+{
+    /// <summary>The tilt rate, which is the pan rate when not given.</summary>
+    public double Tilt => TiltRate ?? PanRate;
+
+    /// <summary>The settings as configured (NaN = not a number), or why they cannot be used; none given = neither.</summary>
+    internal static (PtzRelativeConfig? Config, string? Why) From(Func<string, double?> value)
+    {
+        double? fovH = value("ptz_fov_h"), fovV = value("ptz_fov_v"), tele = value("ptz_tele_fov_h"),
+            pan = value("ptz_pan_rate"), tilt = value("ptz_tilt_rate"), lag = value("ptz_lag_ms"), speed = value("ptz_speed");
+        if (fovH == null && fovV == null && tele == null && pan == null && tilt == null && lag == null && speed == null)
+            return (null, null);
+        static bool Within(double? v, double min, double max) => v is not { } d || d >= min && d <= max; // NaN fails
+        string? why = fovH == null || pan == null ? "ptz_fov_h and ptz_pan_rate are both needed"
+            : !Within(fovH, 1, 170) || !Within(fovV, 1, 170) ? "ptz_fov_h and ptz_fov_v are angles of view in degrees (1-170)"
+            : !Within(tele, 0.5, fovH.Value) ? "ptz_tele_fov_h is the angle at full zoom: above 0.5 and no wider than ptz_fov_h"
+            : !Within(pan, 0.5, 720) || !Within(tilt, 0.5, 720) ? "ptz_pan_rate and ptz_tilt_rate are degrees per second (0.5-720)"
+            : !Within(lag, -500, 2000) ? "ptz_lag_ms must be between -500 and 2000"
+            : !Within(speed, 1, 64) ? "ptz_speed is the camera's PTZ speed (1-64)"
+            : null;
+        return why != null ? (null, why)
+            : (new PtzRelativeConfig(fovH!.Value, fovV, pan!.Value, tilt, lag, tele, speed), null);
+    }
+}
+
 public sealed class CameraConfig
 {
     public required string Name { get; init; }
@@ -1109,6 +1154,11 @@ public sealed class CameraConfig
     /// <summary>Opt-in: this camera's own ONVIF PTZ port, for Frigate before 0.18 (no onvif.profile).
     /// Takes precedence over <see cref="PtzShare"/>; null or 0 = none.</summary>
     public int? PtzPort { get; init; }
+    /// <summary>Opt-in: the lens angles and head rates that let the PTZ endpoint take moves by a fraction of
+    /// the picture (Frigate's click-to-move and autotracking); null = not offered.</summary>
+    public PtzRelativeConfig? PtzRelative { get; init; }
+    /// <summary>Why the relative-move settings given cannot be used; null when they can, or none were given.</summary>
+    public string? PtzRelativeOff { get; init; }
     /// <summary>A ptz_port value that is not a number, kept for validation to report.</summary>
     internal const int NotAPort = -1;
     /// <summary>Why this camera's PTZ endpoint is off although configured; null when it works.</summary>

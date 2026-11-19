@@ -241,7 +241,10 @@ public sealed record ApiAdminCamera(string Name, string Type, string? Address, s
     string? Uid = null, string? AlwaysOn = null, string? Stream = null, string? OnvifAddress = null,
     bool Record = true, bool Udp = false, bool UdpProbe = false, bool WakeCapture = false,
     double KeepAliveHours = 0, string? PtzMode = null, int? PtzPort = null, string? PtzOff = null, bool PtzOpen = false,
-    string? LearnedUid = null, string? CurrentAddress = null, List<int>? MissingLenses = null);
+    string? LearnedUid = null, string? CurrentAddress = null, List<int>? MissingLenses = null,
+    bool PtzRelative = false, double? PtzFovH = null, double? PtzFovV = null, double? PtzPanRate = null,
+    double? PtzTiltRate = null, double? PtzLagMs = null, double? PtzSpeed = null, double? PtzTeleFovH = null,
+    string? PtzRelativeOff = null);
 public sealed record ApiAdminCameras(bool Writable, List<ApiAdminCamera> Cameras, ApiAdminPtz? Ptz = null,
     string? WriteProblem = null);
 
@@ -646,6 +649,8 @@ public static class UiIcon
             "chev-left" => "<polyline points=\"15 18 9 12 15 6\"/>",
             "chev-right" => "<polyline points=\"9 18 15 12 9 6\"/>",
             "chev-down" => "<polyline points=\"6 9 12 15 18 9\"/>",
+            "chev-up" => "<polyline points=\"18 15 12 9 6 15\"/>",
+            "stop" => "<rect x=\"7\" y=\"7\" width=\"10\" height=\"10\" rx=\"2\"/>",
             "calendar" => "<rect x=\"3\" y=\"4\" width=\"18\" height=\"18\" rx=\"2\"/><line x1=\"16\" y1=\"2\" x2=\"16\" y2=\"6\"/><line x1=\"8\" y1=\"2\" x2=\"8\" y2=\"6\"/><line x1=\"3\" y1=\"10\" x2=\"21\" y2=\"10\"/>",
             "camera" => "<path d=\"M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z\"/><circle cx=\"12\" cy=\"13\" r=\"4\"/>",
             "video-off" => "<path d=\"M16 16v1a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2m5.66 0H14a2 2 0 0 1 2 2v3.34l1 1L23 7v10\"/><line x1=\"1\" y1=\"1\" x2=\"23\" y2=\"23\"/>",

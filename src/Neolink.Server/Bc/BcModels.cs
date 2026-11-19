@@ -80,6 +80,7 @@ public static class BcConstants
     public const uint MsgIdGetAutoReboot = 101;
     public const uint MsgIdSetGuard = 331;         // <PtzGuard>
     public const uint MsgIdGetGuard = 332;
+    public const uint MsgIdGetPtzCurPos = 433;     // pPos/tPos: where the head is, on models that say
     public const uint MsgIdDingdongList = 484;     // <dingdongList>: paired chimes
     public const uint MsgIdDingdongDeviceOpt = 485; // <dingdongDeviceOpt>: per-chime get/set/ring
     public const uint MsgIdGetCrossline = 527;     // <CrosslineDetect>; each SET is GET + 1
@@ -91,6 +92,10 @@ public static class BcConstants
     public const uint MsgIdSetDingdongSilent = 610;
     public const uint MsgIdSetVideoInput = 25;     // <VideoInput>: picture sliders, 0-255
     public const uint MsgIdGetVideoInput = 26;
+    public const uint MsgIdGetOsd = 44;            // <OsdChannelName> + <OsdDatetime>: overlays and watermark
+    public const uint MsgIdSetOsd = 45;
+    public const uint MsgIdGetCompression = 56;    // <Compression>: per-stream encoding, each with an <audio> flag
+    public const uint MsgIdSetCompression = 57;
     public const uint MsgIdGetPtzPreset = 190;     // <PtzPreset>: saved slots only; 19 goes/saves
     public const uint MsgIdGetAudioCfg = 264;      // <audioCfg>: speaker volume
     public const uint MsgIdSetAudioCfg = 265;
