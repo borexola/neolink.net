@@ -6,11 +6,14 @@
 > verificada. A [documentação em inglês](../../README.md) é a referência; correções
 > são bem-vindas.
 
-**Ponte RTSP + visualizador web para câmeras Reolink que falam o protocolo proprietário Baichuan.**
+**Ponte RTSP + visualizador web para câmeras Reolink que falam o protocolo proprietário Baichuan, e para qualquer outra câmera que sirva RTSP.**
 
-O Neolink.NET é para câmeras IP Reolink que usam o protocolo proprietário
+O Neolink.NET foi feito para câmeras IP Reolink que usam o protocolo proprietário
 "Baichuan" na porta TCP 9000 em vez de RTSP/ONVIF padrão (B800/D800,
 B400/D400, E1, Lumus, 510A, Duo, TrackMix e muitas outras).
+Outras câmeras IP podem ficar ao lado delas: o Neolink.NET busca seus fluxos RTSP
+e lê suas configurações e detecções via ONVIF
+([câmeras que não são Reolink](../../README.md#non-reolink-cameras-generic-rtsp)).
 
 Seu software NVR (**Frigate**, Blue Iris, Home Assistant, Shinobi, VLC,
 ffmpeg…) conecta-se ao Neolink.NET, que faz login na câmera, demultiplexa o

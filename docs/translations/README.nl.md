@@ -6,12 +6,15 @@
 > juistheid worden gecontroleerd. De [Engelse documentatie](../../README.md) is
 > leidend; correcties zijn welkom.
 
-**RTSP-brug + webviewer voor Reolink-camera's die het propriëtaire Baichuan-protocol spreken.**
+**RTSP-brug + webviewer voor Reolink-camera's die het propriëtaire Baichuan-protocol spreken, en voor elke andere camera die RTSP levert.**
 
-Neolink.NET is voor Reolink-IP-camera's die het propriëtaire
+Neolink.NET is gebouwd voor Reolink-IP-camera's die het propriëtaire
 „Baichuan"-protocol op TCP-poort 9000 spreken in plaats van standaard
 RTSP/ONVIF (B800/D800, B400/D400, E1, Lumus, 510A, Duo, TrackMix en vele
 andere).
+Andere IP-camera's kunnen erbij: Neolink.NET haalt hun RTSP-streams op en
+leest hun instellingen en detecties via ONVIF
+([niet-Reolink-camera's](../../README.md#non-reolink-cameras-generic-rtsp)).
 
 Uw NVR-software (**Frigate**, Blue Iris, Home Assistant, Shinobi, VLC,
 ffmpeg…) verbindt met Neolink.NET, dat inlogt op de camera, haar mediastream

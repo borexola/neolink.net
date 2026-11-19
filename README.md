@@ -2,11 +2,13 @@
 
 **English** · [Français](docs/translations/README.fr.md) · [Deutsch](docs/translations/README.de.md) · [Español](docs/translations/README.es.md) · [Nederlands](docs/translations/README.nl.md) · [Polski](docs/translations/README.pl.md) · [Português](docs/translations/README.pt.md)
 
-**RTSP bridge + web viewer for Reolink cameras that speak the proprietary Baichuan protocol.**
+**RTSP bridge + web viewer for Reolink cameras that speak the proprietary Baichuan protocol, and for any other camera that serves RTSP.**
 
-Neolink.NET is for Reolink IP cameras that talk the proprietary "Baichuan" protocol on
+Neolink.NET is built for Reolink IP cameras that talk the proprietary "Baichuan" protocol on
 TCP port 9000 instead of standard RTSP/ONVIF (B800/D800, B400/D400, E1, Lumus, 510A,
-Duo, TrackMix, Argus Solar, Solar Floodlight, and many others).
+Duo, TrackMix, Argus Solar, Solar Floodlight, and many others). Other IP cameras sit
+beside them: Neolink.NET pulls their RTSP streams and reads their settings and
+detections over ONVIF ([non-Reolink cameras](#non-reolink-cameras-generic-rtsp)).
 
 Your NVR software (**Frigate**, Blue Iris, Home Assistant, Shinobi, VLC, ffmpeg, …) connects to
 Neolink.NET, which logs into the camera, demuxes its media stream, and re-serves it as
@@ -18,13 +20,22 @@ and availability, driven by the camera's own detections.
 
 The cameras are unmodified and no Reolink NVR is required.
 
-```
-┌──────────┐  Baichuan (9000)  ┌─────────────────┐  RTSP (8654)   ┌──────────────────┐
-│ Reolink  │ ────────────────► │                 │ ─────────────► │ Frigate / VLC /  │
-│ cameras  │                   │   Neolink.NET   │                │ Blue Iris / HA   │
-└──────────┘                   │  (one process)  │  HTTP/WS (8655)┌──────────────────┐
-                               │                 │ ─────────────► │ Browser web UI   │
-                               └─────────────────┘                └──────────────────┘
+```mermaid
+flowchart LR
+    reolink["Reolink cameras"]
+    other["Other IP cameras"]
+    neolink["Neolink.NET<br/>NVR · one process"]
+    ui["Neolink.NET UI"]
+    clients["Frigate / VLC /<br/>Blue Iris / ffmpeg"]
+    ha["Home Assistant"]
+    disk["Recordings<br/>24/7 + events"]
+
+    reolink -- "Baichuan (9000)" --> neolink
+    other -- "RTSP + ONVIF" --> neolink
+    neolink -- "HTTP/WS (8655)" --> ui
+    neolink -- "RTSP (8654)<br/>ONVIF PTZ (8656)" --> clients
+    neolink -- "RTSP (8654)<br/>MQTT" --> ha
+    neolink -- "records" --> disk
 ```
 
 ![The Neolink.NET web UI: camera wall with resizable tiles and the live event review strip](docs/screenshot-1.png)
