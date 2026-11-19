@@ -29,6 +29,7 @@ flowchart LR
     clients["Frigate / VLC /<br/>Blue Iris / ffmpeg"]
     ha["Home Assistant"]
     disk["Recordings<br/>24/7 + events"]
+    pad["<br/><br/>"]
 
     reolink -- "Baichuan (9000)" --> neolink
     other -- "RTSP + ONVIF" --> neolink
@@ -36,6 +37,9 @@ flowchart LR
     neolink -- "RTSP (8654)<br/>ONVIF PTZ (8656)" --> clients
     neolink -- "RTSP (8654)<br/>MQTT" --> ha
     neolink -- "records" --> disk
+    %% Keeps GitHub's zoom buttons, drawn bottom-right, off the Recordings box.
+    neolink ~~~ pad
+    style pad fill:none,stroke:none
 ```
 
 ![The Neolink.NET web UI: camera wall with resizable tiles and the live event review strip](docs/screenshot-1.png)
