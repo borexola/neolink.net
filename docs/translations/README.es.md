@@ -68,3 +68,5 @@ recarga.
 La documentación detallada (configuración, Home Assistant, cámaras de batería,
 almacenamiento por niveles, aplicación de escritorio de Windows…) está en el
 [README en inglés](../../README.md) y en la carpeta [docs/](../).
+
+Clic para mover y seguimiento automático en Frigate (experimental): [guía](autotracking.es.md).

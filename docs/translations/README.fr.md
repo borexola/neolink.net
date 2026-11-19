@@ -68,3 +68,5 @@ redémarrage ni rechargement.
 La documentation détaillée (configuration, Home Assistant, caméras batterie,
 stockage à niveaux, application de bureau Windows…) vit dans le
 [README anglais](../../README.md) et le dossier [docs/](../).
+
+Clic pour déplacer et suivi automatique dans Frigate (expérimental) : [guide](autotracking.fr.md).
