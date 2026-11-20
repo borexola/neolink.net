@@ -1,221 +1,63 @@
 {
-  // Neolink.NET configuration.
-  // Copy this file to config.json and edit it — comments and trailing commas are allowed.
+  // Neolink.NET configuration. Copy to config.json and edit; comments and trailing commas are fine.
+  // Most of this can also be set from the web UI (Server settings). Every option: README → Configuration.
 
-  // Address to serve on. "0.0.0.0" = all networks, "127.0.0.1" = this computer only.
-  "bind": "0.0.0.0",
+  "bind": "0.0.0.0",     // "127.0.0.1" = this computer only
+  "bind_port": 8654,     // RTSP (VLC, Frigate, Home Assistant, ...)
+  "web_port": 8655,      // web UI and API; 0 = off
 
-  // RTSP port (for VLC, ffmpeg, Frigate, Blue Iris, Home Assistant, ...).
-  "bind_port": 8654,
-
-  // HTTP/WebSocket port: the web UI and the JSON/fMP4 API. 0 disables both.
-  "web_port": 8655,
-
-  // Serve the browser UI on web_port. Set false for API-only / headless setups.
-  "webui": true,
-
-  // Web-UI specific settings. NOTE: UI sign-in accounts are NOT configured here —
-  // they live in users.json (created from the UI itself) and are entirely separate
-  // from the RTSP "users" list below.
   "ui": {
-    // Where the UI's server-side state persists: users.json (accounts) and
-    // settings.json (per-user layouts, filters, recording switches).
-    // Defaults to this config file's directory — point it at a persistent volume
-    // if your config is mounted read-only or replaced on deployments, otherwise
-    // accounts and layouts are lost every deploy.
+    // Where accounts and layouts are kept (default: this file's folder). Use a persistent volume.
     // "state_dir": "/config",
 
-    // Sign-in recovery: while true, the login screen allows setting a new admin
-    // password WITHOUT the old one. Set it back to false right after use!
-    "reset_admin_password": false,
-
-    // Playback speed of the ambient clip previews in the review strip.
-    "trickle_speed": 4,
-
-    // Two-way talk — a mic button on talk-capable cameras (doorbells etc.)
-    // streams your microphone to the camera's speaker. Off by default; can also
-    // be toggled from the web UI (Server settings → Web UI). Browsers only allow
-    // microphone access on HTTPS or localhost pages.
-    "talk": false,
-
-    // Show the admin-only sidebar strip that reports live server work (footage
-    // archiving progress, and future long-running jobs). On by default; set false
-    // to hide it for everyone. Admins can also dismiss a single run from the strip.
-    "show_background_tasks": true
-
-    // Optional: seed the default UI language ("en", "fr", "de", "es", "nl",
-    // "pl", "pt") on a server whose state has none yet — handy for provisioned
-    // deploys. It is only a seed: the first-run dialog and Server settings →
-    // Language own the setting from then on (stored in users.json, applied
-    // live, no restart needed).
-    // "language": "fr"
+    // Locked out? true lets the login screen set a new admin password. Set back to false after.
+    "reset_admin_password": false
   },
 
-  // Optional: recording to disk — motion/AI detection events (clips + thumbnails)
-  // and, when switched on per camera in the web UI, continuous 24/7 footage.
-  // Remove this section to disable. In Docker, mount a volume at "path".
+  // Optional: record detection events (and 24/7 footage, switched on per camera in the web UI).
   // "recording": {
-  //   "path": "/recordings",           // storage directory
-  //   "clips_path": "/clips",          // optional fast tier (SSD): new event clips land here,
-  //                                    // 24/7 footage stays on "path"; unset = everything on "path"
-  //   "archive_path": "/archive",      // optional cold tier: enables per-camera archiving in the
-  //                                    // web UI — expired footage MOVES here instead of being
-  //                                    // deleted. Use a different drive; in Docker, a second volume.
-  //                                    // NOTE (Docker): map a volume at EVERY tier path you set —
-  //                                    // an unmapped path is silently created inside the container
-  //                                    // and that footage is lost when the container is recreated
-  //   "retention_days": 7,             // delete events older than this (0 = keep forever)
-  //   "pre_seconds": 5,                // video kept from before the detection
-  //   "post_seconds": 8,               // quiet time before an event closes
-  //   "max_clip_seconds": 120,         // hard cap per event/clip
-  //   "stream": "auto",                // which stream to record: auto|mainStream|subStream
-  //   "segment_minutes": 10,           // continuous recording: max length of one file
-  //   "max_segment_size_mb": 256,      // continuous recording: max size of one file (rolls at whichever hits first)
-  //   "continuous_retention_days": 7,  // continuous footage retention (default = retention_days)
-  //   "delete_oldest_when_full": false, // a disk running low frees its oldest footage instead of halting recording
-  //   "encrypt": false                 // encrypt new footage at rest (AES-256-GCM). Playback and
-  //                                    // old plaintext footage are unaffected. The key is NEOLINK_SECRET_KEY
-  //                                    // or the state dir's secret.key — back it up (see README)
+  //   "path": "/recordings",       // in Docker, a mounted volume
+  //   "retention_days": 7          // 0 = keep forever
   // },
 
-  // Optional: publish to MQTT for Home Assistant (auto-discovery). Remove to disable.
-  // HA creates a device per camera with motion/person/vehicle/animal sensors,
-  // battery, night-vision, floodlight, PIR, reboot + PTZ buttons and a snapshot,
-  // depending on what each camera supports — plus a "Neolink.NET Server" device
-  // with the server's own health (CPU, memory, disk, viewers, ...).
+  // Optional: Home Assistant over MQTT (auto-discovery).
   // "mqtt": {
-  //   "broker": "192.168.1.10",        // MQTT broker host (often the HA / Mosquitto box)
-  //   "port": 1883,                    // 8883 with "tls": true
+  //   "broker": "192.168.1.10",
   //   "username": "neolink",
-  //   "password": "CHANGE-ME",
-  //   "client_id": "neolink",          // must be unique on the broker
-  //   "base_topic": "neolink",         // root of the state/command topics
-  //   "discovery": true,               // publish HA discovery config
-  //   "discovery_prefix": "homeassistant",  // must match HA's MQTT integration
-  //   "keepalive": 30,
-  //   "tls": false,
-  //   "stats_interval": 60             // server health publish cadence in seconds
-  //                                    // (0 = off, minimum 5; editable in the web UI)
+  //   "password": "CHANGE-ME"
   // },
 
-  // Optional: router wake hints for battery cameras. On a PIR event the camera
-  // calls Reolink's push service; catch that moment and Neolink connects
-  // immediately instead of waiting for the ping-pattern scan. Two independent
-  // sources, either or both — full recipes: docs/battery-cameras.md.
-  //  - push_ports: Neolink itself plays the push service. Recommended: a router
-  //    destination-NAT rule redirecting the camera's outbound 443 to this host
-  //    on 8443; it works even when the camera has cached the push service's
-  //    real IP. Alternative: a DNS override (pushx.reolink.com -> this host,
-  //    that hostname ONLY) on OpenWRT/Pi-hole/AdGuard/...; the camera then
-  //    dials 443 directly, so list [443, 53] instead. Either way Reolink app
-  //    notifications stop for those cameras; Home Assistant via Neolink
-  //    takes over.
-  //  - syslog_port: OPNsense/pfSense forward their firewall log (remote syslog,
-  //    filterlog) here; the camera's TCP/443 call is the signal. 0 = off.
-  // "wake_hints": {
-  //   "syslog_port": 5140,             // UDP port to receive the router's syslog on
-  //   "trust_hours": 2,               // hours since last hint; e.g. 72 for infrequent events
-  //   "push_ports": [8443, 53]         // decoy push service (NAT-redirect mode; use [443, 53] for a DNS override)
-  // },
-
-  // Optional: password-protect the RTSP server. Remove entries for open access.
-  // Connect with e.g. rtsp://me:mepass@192.168.1.100:8654/driveway
-  // Also editable in the web UI under Server settings → Users.
+  // Optional: RTSP logins, e.g. rtsp://me:mepass@<host>:8654/driveway. Empty = open access.
   "users": [
     // { "name": "me", "pass": "mepass" }
   ],
 
-  // One entry per camera.
   "cameras": [
     {
-      // Name used in the RTSP URL and the web UI: rtsp://<host>:8654/driveway
-      "name": "driveway",
-
-      // Camera login (the same credentials as the Reolink app).
-      "username": "admin",
+      "name": "driveway",              // used in the RTSP URL and the web UI
+      "username": "admin",             // same login as the Reolink app
       "password": "CHANGE-ME",
+      "address": "192.168.1.187",      // IP or hostname; port 9000 unless given
+      "stream": "both",                // mainStream, subStream, both or all
 
-      // IP or hostname of the camera. Port defaults to 9000 if omitted.
-      "address": "192.168.1.187:9000",
+      // "http_address": "192.168.1.187",   // camera's web interface: lets the UI change stream settings
+      // "channel_id": 1,                   // behind a Reolink NVR, or a dual-lens camera's second lens
+      // "permitted_users": [ "me" ],       // only these RTSP users may watch
+      // "always_on": true,                 // battery cameras: stay awake 24/7 (see docs/battery-cameras.md)
 
-      // Optional: the camera's HTTP(S) web interface ("host", "host:port" or full URL).
-      // Enables changing stream profiles (resolution/fps/bitrate) from the web UI;
-      // most non-battery Reolink cameras serve it on port 80/443.
-      // "http_address": "192.168.1.187",
+      // PTZ buttons in Frigate (port 8656, onvif.profile = this camera's name):
+      // "ptz_share": true,
+      // Click-to-move and autotracking in Frigate (experimental, see docs/autotracking.md). Reolink E1 Pro values:
+      // "ptz_fov_h": 87.5,                 // horizontal lens angle, from the spec sheet
+      // "ptz_pan_rate": 59.2,              // °/s panning: 355° in 6 s
+      // "ptz_tilt_rate": 25,               // °/s tilting: 50° in 2 s
+    },
 
-      // Optional: the camera's ONVIF device service ("host", "host:port" or full URL).
-      // A picture-settings FALLBACK for models with no Reolink HTTP API (Lumus line):
-      // brightness/contrast/saturation/sharpness + day-night over ONVIF. Defaults to
-      // the address host on the standard /onvif/device_service path; set this only to
-      // override the port/path. Requires ONVIF enabled on the camera.
-      // "onvif_address": "192.168.1.187:8000",
-
-      // Which streams to serve: "mainStream", "subStream", "externStream", "both", or "all".
-      // "both" serves /driveway (+ /driveway/mainStream) and /driveway/subStream.
-      "stream": "both",
-
-      // Audio per RTSP client: each client picks its audio codec with a query
-      // parameter on any camera URL —
-      //   rtsp://host:8654/driveway?audio=opus      (also .../subStream?audio=opus)
-      // gets Opus (what WebRTC ecosystems — go2rtc, browsers, HA WebRTC cards —
-      // take natively, saving them their own ffmpeg hop), while an NVR keeps
-      // recording the camera's own AAC from the bare URL, simultaneously;
-      // ?audio=original forces the camera's track. An unsupported format is
-      // refused (404 + a log line naming the supported values).
-      // ffmpeg (with libopus) on PATH or NEOLINK_FFMPEG powers the transcode; it
-      // runs only while an Opus client is connected and costs <1% of a core. No
-      // ffmpeg = ?audio=opus answers 404 (with a log line). Recordings, the web
-      // UI player and two-way talk always use the camera's original audio.
-      // Optional: make the BARE URL (no query) serve Opus instead:
-      // "audio_transcode": "opus",
-
-      // Only needed when connecting through a Reolink NVR: camera channel, starting at 0.
-      "channel_id": 0
-
-      // Battery cameras (Argus etc.): unset = auto — cameras that report a battery
-      // sleep while nobody watches (connecting on demand); everything else streams
-      // around the clock. Set true to hold a battery camera awake 24/7 (needed for
-      // recording/motion events; drains the battery — pair with solar/USB power),
-      // or false to force sleep-friendly behavior.
-      // "always_on": false,
-
-      // UDP transport for battery-only models (parts of the Argus
-      // line) that never listen on TCP — they log "Connection refused" forever on
-      // the normal path because they speak Baichuan over UDP. Set the camera's UID
-      // (Reolink app -> device info, or the sticker) and "udp": true to connect over
-      // UDP instead. The camera must still be awake and reachable by "address" on
-      // your LAN; a sleeping battery camera can't be woken over UDP either (PIR
-      // motion or the Reolink app wakes it). Everything after connect — video,
-      // events, battery, controls — works the same as the TCP path.
-      // IN DOCKER THIS NEEDS HOST NETWORKING ("network_mode: host", or
-      // "--network host") — the UDP handshake carries the client's port inside
-      // the packet and discovery uses LAN broadcast, so neither survives a
-      // bridge network. TCP cameras are unaffected. See the README's "UDP-only
-      // battery models".
-      // "uid": "95270000ABCDEFGH",
-      // "udp": true,
-
-      // Wake-capture (battery cameras): while sleep-friendly and unwatched, keep a
-      // cheap liveness poll running so Neolink connects the moment the camera wakes
-      // ITSELF (motion) and captures the event - instead of only connecting when a
-      // viewer opens the stream. The poll doesn't reach a sleeping camera (its radio
-      // is off), so it costs no battery, and it's silent in the log. This catches
-      // events without holding the camera awake 24/7 like always_on. No effect with
-      // always_on (never sleeps) or on non-battery cameras.
-      // "wake_capture": true,
-
-      // Optional: restrict this camera to specific users from "users" above.
-      // "permitted_users": [ "me" ]
-    }
-
-    // Generic (non-Reolink) camera: give RTSP URLs instead of address/username —
-    // put the login inside the URL. It streams, plays in the web UI and records
-    // continuous (24/7) footage; Reolink-only extras (PTZ, LED, PIR, detection
-    // events, stream profiles) are unavailable for these.
+    // Non-Reolink camera: RTSP URLs with the login inside. Streams and records; no Reolink extras.
     // {
-    //   "name": "garage-3rdparty",
-    //   "rtsp_main": "rtsp://user:pass@192.168.1.60:554/stream1",   // required (or "rtsp")
-    //   "rtsp_sub": "rtsp://user:pass@192.168.1.60:554/stream2"     // optional low-res twin
-    // }
+    //   "name": "garage",
+    //   "rtsp_main": "rtsp://user:pass@192.168.1.60:554/stream1",
+    //   "rtsp_sub": "rtsp://user:pass@192.168.1.60:554/stream2"
+    // },
   ]
 }
