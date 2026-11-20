@@ -29,6 +29,23 @@ PTZ do Neolink.NET anuncia esse recurso e faz o trabalho:
 
 *Reolink E1 Pro: 87,5°, uma rotação completa em 6 s para 355°, uma inclinação completa em 2 s para 50°.*
 
+**Edita o `config.json`?** Adicione isto à entrada da câmera. As velocidades são graus ÷ segundos.
+
+```jsonc
+{
+  "name": "e1pro",
+  "address": "192.168.1.60",
+  "username": "admin",
+  "password": "…",
+  "ptz_share": true,       // PTZ para o Frigate na porta compartilhada (8656)
+  "ptz_fov_h": 87.5,       // obrigatório: ângulo horizontal da lente, da ficha técnica
+  "ptz_pan_rate": 59.2,    // obrigatório: °/s de rotação, 355° em 6 s
+  "ptz_tilt_rate": 25      // °/s de inclinação, 50° em 2 s (padrão: a de rotação)
+  // Opcional: "ptz_fov_v" (ângulo vertical), "ptz_speed" (velocidade medida, padrão 32),
+  // "ptz_lag_ms" (partida do motor, aprendida), "ptz_tele_fov_h" (zoom: ângulo no zoom máximo)
+}
+```
+
 ## 2. Frigate
 
 No app Reolink, salve uma predefinição chamada `home` para onde a câmera volta.
@@ -79,6 +96,7 @@ cameras:
 1. **Clique para mover:** na visualização ao vivo do Frigate, clique em um ponto. A cabeça deve centrá-lo.
    - Se passar do ponto, encurte o tempo desse eixo no Neolink.NET.
    - Se parar antes, aumente-o.
+   - No `config.json`, ao contrário: aumente a velocidade se passar do ponto, diminua se parar antes.
 2. **Calibrar:** reinicie o Frigate e não mexa na câmera por cerca de dois minutos.
    O Frigate salva `movement_weights` sozinho; depois defina `calibrate_on_startup: false`.
 3. **Rastrear:** entre na imagem. A câmera segue você e volta para `home` após `timeout` segundos.

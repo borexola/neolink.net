@@ -26,6 +26,23 @@ endpoint advertises it and does the work:
 
 *Reolink E1 Pro: 87.5°, a full pan in 6 s for 355°, a full tilt in 2 s for 50°.*
 
+**Editing `config.json` instead?** Add these to the camera's entry. Rates are degrees ÷ seconds.
+
+```jsonc
+{
+  "name": "e1pro",
+  "address": "192.168.1.60",
+  "username": "admin",
+  "password": "…",
+  "ptz_share": true,       // PTZ for Frigate on the shared port (8656)
+  "ptz_fov_h": 87.5,       // required: horizontal lens angle, from the spec sheet
+  "ptz_pan_rate": 59.2,    // required: °/s panning, 355° in 6 s
+  "ptz_tilt_rate": 25      // °/s tilting, 50° in 2 s (default: the pan rate)
+  // Optional: "ptz_fov_v" (vertical angle), "ptz_speed" (speed timed at, default 32),
+  // "ptz_lag_ms" (motor start-up, learned if left out), "ptz_tele_fov_h" (zoom lenses: angle at full zoom)
+}
+```
+
 ## 2. Frigate
 
 In the Reolink app, save a preset named `home` for the camera to return to.
@@ -76,6 +93,7 @@ cameras:
 1. **Click-to-move:** in Frigate's live view, click a spot. The head should centre on it.
    - If it goes past the spot, shorten that axis's time in Neolink.NET.
    - If it stops short, lengthen it.
+   - In `config.json`, the other way round: raise the rate if it goes past, lower it if it stops short.
 2. **Calibrate:** restart Frigate and leave the camera alone for about two minutes.
    Frigate saves `movement_weights` itself; then set `calibrate_on_startup: false`.
 3. **Track:** walk into view. The camera follows you and returns to `home` after `timeout` seconds.

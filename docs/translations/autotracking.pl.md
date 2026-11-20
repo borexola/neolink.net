@@ -29,6 +29,23 @@ Neolink.NET zgłasza tę możliwość i wykonuje pracę za nie:
 
 *Reolink E1 Pro: 87,5°, pełny obrót w 6 s na 355°, pełne pochylenie w 2 s na 50°.*
 
+**Edytujesz `config.json`?** Dodaj to do wpisu kamery. Prędkości to stopnie ÷ sekundy.
+
+```jsonc
+{
+  "name": "e1pro",
+  "address": "192.168.1.60",
+  "username": "admin",
+  "password": "…",
+  "ptz_share": true,       // PTZ dla Frigate na wspólnym porcie (8656)
+  "ptz_fov_h": 87.5,       // wymagane: poziomy kąt obiektywu, z karty katalogowej
+  "ptz_pan_rate": 59.2,    // wymagane: °/s obrotu, 355° w 6 s
+  "ptz_tilt_rate": 25      // °/s pochylenia, 50° w 2 s (domyślnie: jak obrót)
+  // Opcjonalne: "ptz_fov_v" (kąt pionowy), "ptz_speed" (mierzona prędkość, domyślnie 32),
+  // "ptz_lag_ms" (rozruch silnika, uczony), "ptz_tele_fov_h" (zoom: kąt przy pełnym zbliżeniu)
+}
+```
+
 ## 2. Frigate
 
 W aplikacji Reolink zapisz preset o nazwie `home`, do którego kamera będzie wracać.
@@ -79,6 +96,7 @@ cameras:
 1. **Sterowanie kliknięciem:** w podglądzie na żywo we Frigate kliknij w punkt. Głowica powinna go wyśrodkować.
    - Jeśli go minie, skróć czas tej osi w Neolink.NET.
    - Jeśli zatrzyma się przed nim, wydłuż go.
+   - W `config.json` odwrotnie: zwiększ prędkość, jeśli minie punkt, zmniejsz, jeśli zatrzyma się przed nim.
 2. **Kalibracja:** uruchom ponownie Frigate i nie ruszaj kamery przez około dwie minuty.
    Frigate sam zapisze `movement_weights`; potem ustaw `calibrate_on_startup: false`.
 3. **Śledzenie:** wejdź w kadr. Kamera podąża za tobą i wraca do `home` po `timeout` sekundach.
