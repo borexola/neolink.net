@@ -10710,6 +10710,68 @@ public static class SelfTest
             Assert(Web.UpdateChecker.PickNewestTag([]) == null, "empty list yields null");
         });
 
+        Test("ai describe: an untrusted certificate fails unless accepted", () =>
+        {
+            using var rsa = System.Security.Cryptography.RSA.Create(2048);
+            var csr = new System.Security.Cryptography.X509Certificates.CertificateRequest("CN=127.0.0.1", rsa,
+                System.Security.Cryptography.HashAlgorithmName.SHA256,
+                System.Security.Cryptography.RSASignaturePadding.Pkcs1);
+            using var made = csr.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(1));
+            // Re-imported so Windows' SChannel gets a usable private key.
+            using var cert = System.Security.Cryptography.X509Certificates.X509CertificateLoader.LoadPkcs12(
+                made.Export(System.Security.Cryptography.X509Certificates.X509ContentType.Pfx), null);
+            var l = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+            l.Start();
+            _ = Task.Run(async () =>
+            {
+                while (true)
+                {
+                    using var c = await l.AcceptTcpClientAsync();
+                    try
+                    {
+                        using var tls = new System.Net.Security.SslStream(c.GetStream());
+                        await tls.AuthenticateAsServerAsync(cert);
+                        // Read the whole request (headers, then Content-Length bytes) before answering.
+                        var got = new MemoryStream();
+                        var buf = new byte[8192];
+                        int need = -1;
+                        while (need < 0 || got.Length < need)
+                        {
+                            int n = await tls.ReadAsync(buf);
+                            if (n == 0) break;
+                            got.Write(buf, 0, n);
+                            if (need >= 0) continue;
+                            var head = Encoding.ASCII.GetString(got.GetBuffer(), 0, (int)got.Length);
+                            int end = head.IndexOf("\r\n\r\n", StringComparison.Ordinal);
+                            if (end < 0) continue;
+                            var len = System.Text.RegularExpressions.Regex.Match(head, @"(?i)content-length:\s*(\d+)");
+                            need = end + 4 + (len.Success ? int.Parse(len.Groups[1].Value) : 0);
+                        }
+                        const string json = "{\"model\":\"m\",\"choices\":[{\"message\":{\"content\":\"READY\"}}]}";
+                        await tls.WriteAsync(Encoding.ASCII.GetBytes(
+                            $"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {json.Length}\r\nConnection: close\r\n\r\n{json}"));
+                    }
+                    catch { /* the refused handshakes land here */ }
+                }
+            });
+            try
+            {
+                var cfg = new Neolink.Ai.AiSettings
+                {
+                    Endpoint = $"https://127.0.0.1:{((System.Net.IPEndPoint)l.LocalEndpoint).Port}/v1",
+                };
+                var strict = Neolink.Ai.AiDescriber.TestAsync(cfg, "", CancellationToken.None).GetAwaiter().GetResult();
+                Assert(strict.Error?.Contains("Accept self-signed certificates") == true,
+                    $"an untrusted certificate is refused with the hint (got: {strict.Error})");
+                cfg.InsecureTls = true;
+                Assert(cfg.Clone().InsecureTls, "Clone keeps InsecureTls");
+                var lax = Neolink.Ai.AiDescriber.TestAsync(cfg, "", CancellationToken.None).GetAwaiter().GetResult();
+                Assert(lax.Error == null && lax.Detail?.Contains("READY") == true,
+                    $"the same certificate is accepted once opted in (got: {lax.Error})");
+            }
+            finally { l.Stop(); }
+        });
+
         Test("ai describe: endpoint normalization + think-block stripping", () =>
         {
             static string? Url(string e) =>

@@ -331,7 +331,7 @@ public static class WebApi
         string? OllamaEndpoint, string? OllamaModel,
         string? AnthropicEndpoint, string? AnthropicModel, string? AnthropicApiKey,
         string? Prompt, bool? NoThink, int? MaxFrames, int? TimeoutSeconds,
-        int? SampleEverySeconds = null, string? ReasoningEffort = null);
+        int? SampleEverySeconds = null, string? ReasoningEffort = null, bool? InsecureTls = null);
     private sealed record CredentialsRequest(string? Username, string? Password, string? Language = null);
     private sealed record LanguageRequest(string? Language);
     /// <summary>Partial like the AI request: null fields keep their stored value.</summary>
@@ -2020,6 +2020,7 @@ public static class WebApi
                     defaultPrompt = Neolink.Ai.AiSettings.DefaultPrompt,
                     noThink = s.NoThink,
                     reasoningEffort = s.ReasoningEffort,
+                    insecureTls = s.InsecureTls,
                     sampleEverySeconds = s.SampleEverySeconds,
                     maxFrames = s.MaxFrames,
                     timeoutSeconds = s.TimeoutSeconds,
@@ -2050,6 +2051,7 @@ public static class WebApi
                     Prompt = req.Prompt ?? cur.Prompt,
                     NoThink = req.NoThink ?? cur.NoThink,
                     ReasoningEffort = (req.ReasoningEffort ?? cur.ReasoningEffort).Trim().ToLowerInvariant(),
+                    InsecureTls = req.InsecureTls ?? cur.InsecureTls,
                     SampleEverySeconds = Math.Clamp(req.SampleEverySeconds ?? cur.SampleEverySeconds, 1, 600),
                     MaxFrames = Math.Max(1, req.MaxFrames ?? cur.MaxFrames),
                     TimeoutSeconds = Math.Clamp(req.TimeoutSeconds ?? cur.TimeoutSeconds, 5, 600),

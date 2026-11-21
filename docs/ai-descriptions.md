@@ -30,6 +30,20 @@ Two switches, both required:
 
 Requires event recording (a `recording` section in the config).
 
+### HTTPS endpoints signed by your own CA
+
+If the test fails with `UntrustedRoot`, the server does not know the CA that
+signed the endpoint's certificate. Either switch on **Accept self-signed
+certificates** (the certificate is no longer checked at all), or keep the
+check and give the server your CA:
+
+- **Docker**: mount the CA certificate (PEM) into the trust folder and
+  restart: `-v /path/to/home-ca.crt:/etc/ssl/certs/home-ca.pem:ro`.
+- **Linux**: copy it to `/usr/local/share/ca-certificates/` (a `.crt` file),
+  run `sudo update-ca-certificates`, restart Neolink.
+- **Windows**: import it into *Trusted Root Certification Authorities* of the
+  local computer, restart Neolink.
+
 ## How it works
 
 1. **A detection fires**: the camera's own detection, and the event records

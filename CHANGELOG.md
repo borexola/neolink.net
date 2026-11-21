@@ -10,6 +10,7 @@ in the README). Paste the matching section below into the GitHub release.
 
 - **Click-to-move and autotracking in Frigate for Reolink pan/tilt cameras (experimental).** Tick *This camera pans and tilts* in the camera editor and give its lens angle and how long a full pan and tilt take (or `ptz_fov_h` and `ptz_pan_rate` in the config), and its PTZ endpoint takes Frigate's relative moves; zoom lenses also take exact zoom positions.
 - **Presets on the video's pan/tilt pad.** The pad's bookmark button lists the camera's saved positions; tap one to send the head there.
+- **AI descriptions can reach an LLM whose HTTPS certificate comes from your own CA.** Switch on *Accept self-signed certificates* in Settings → AI, or add the CA to the server's trusted certificates (see the AI descriptions guide).
 
 ### Changed
 

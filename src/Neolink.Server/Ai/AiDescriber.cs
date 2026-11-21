@@ -409,11 +409,21 @@ public sealed class AiDescriber
     // Connect bounded separately: a blackholed host would otherwise eat the whole
     // answer timeout (the OS SYN retry window is ~2 minutes on Linux).
     private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(10);
-    private static readonly HttpClient Http = new(new SocketsHttpHandler
+    private static readonly HttpClient Http = NewClient(insecure: false);
+
+    // For endpoints behind an internal CA the server has no root for; opt-in (InsecureTls).
+    private static readonly HttpClient HttpInsecure = NewClient(insecure: true);
+
+    private static HttpClient NewClient(bool insecure)
     {
-        ConnectTimeout = ConnectTimeout,
-        PooledConnectionIdleTimeout = TimeSpan.FromMinutes(2),
-    }) { Timeout = Timeout.InfiniteTimeSpan };
+        var handler = new SocketsHttpHandler
+        {
+            ConnectTimeout = ConnectTimeout,
+            PooledConnectionIdleTimeout = TimeSpan.FromMinutes(2),
+        };
+        if (insecure) handler.SslOptions.RemoteCertificateValidationCallback = (_, _, _, _) => true;
+        return new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+    }
 
     private readonly AiStore _store;
     private readonly EventStore _events;
@@ -1119,7 +1129,8 @@ public sealed class AiDescriber
         string body;
         try
         {
-            using var res = await Http.SendAsync(req, timeout.Token).ConfigureAwait(false);
+            using var res = await (cfg.InsecureTls ? HttpInsecure : Http)
+                .SendAsync(req, timeout.Token).ConfigureAwait(false);
             body = await res.Content.ReadAsStringAsync(timeout.Token).ConfigureAwait(false);
             if (!res.IsSuccessStatusCode)
                 throw new InvalidOperationException(
@@ -1285,8 +1296,14 @@ public sealed class AiDescriber
                 }
                 catch { /* text fails too: the original error names the real problem */ }
             }
-            return (Log.Flatten(ex), null);
+            return (Log.Flatten(ex) + (UntrustedCert(ex)
+                ? " — the server does not trust this certificate. Turn on 'Accept self-signed " +
+                  "certificates', or add your CA to the server's trusted certificates."
+                : ""), null);
         }
+
+        static bool UntrustedCert(Exception ex) =>
+            ex is HttpRequestException { InnerException: System.Security.Authentication.AuthenticationException };
 
         // Transport-level failure (refused, no route, DNS, connect timeout): no
         // HTTP response was ever received.

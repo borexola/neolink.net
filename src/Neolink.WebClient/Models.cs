@@ -461,6 +461,7 @@ public sealed class ApiAiSettings
     public bool NoThink { get; set; } = true;
     /// <summary>reasoning_effort to send; "" = not sent.</summary>
     public string ReasoningEffort { get; set; } = "";
+    public bool InsecureTls { get; set; }
     /// <summary>One frame about every N seconds, as the source allows (the stream
     /// tap can't sample faster than the camera's keyframe cadence).</summary>
     public int SampleEverySeconds { get; set; } = 2;

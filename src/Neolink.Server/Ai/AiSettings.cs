@@ -151,6 +151,9 @@ public sealed class AiSettings
     public string ReasoningEffort { get; set; } = "";
     public static readonly string[] ReasoningEfforts = { "none", "minimal", "low", "medium", "high" };
 
+    /// <summary>Accept whatever certificate the endpoint presents (internal CA, self-signed).</summary>
+    public bool InsecureTls { get; set; }
+
     /// <summary>Sampling density: one frame about every N seconds (1–600), AS
     /// THE SOURCE ALLOWS — the stream tap can only keep keyframes, which arrive
     /// at the camera's GOP cadence (typically one per 2-4s), so values below
@@ -203,6 +206,7 @@ public sealed class AiSettings
         Prompt = Prompt,
         NoThink = NoThink,
         ReasoningEffort = ReasoningEffort,
+        InsecureTls = InsecureTls,
         SampleEverySeconds = SampleEverySeconds,
         MaxFrames = MaxFrames,
         TimeoutSeconds = TimeoutSeconds,

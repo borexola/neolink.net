@@ -2725,6 +2725,10 @@
                                                placeholder="@(_ai.HasApiKey ? T["•••• stored (blank keeps it)"] : T["usually none for local servers"])"
                                                @bind="_aiApiKey" /></div>
                                 }
+                                <div class="control-row"><span>@T["Accept self-signed certificates"]</span>
+                                    <button class="chip @(_ai.InsecureTls ? "" : "chip-off")"
+                                            title="@T["For internal CAs and homelab TLS (e.g. a reverse proxy with an OPNsense or step-ca certificate): the server will trust whatever certificate this URL presents"]"
+                                            @onclick="() => _ai.InsecureTls = !_ai.InsecureTls">@(_ai.InsecureTls ? T["on"] : T["off"])</button></div>
                                 <div class="campanel-divider"></div>
                                 <div class="campanel-subtitle">@T["BEHAVIOR"]</div>
                                 <div class="control-row"><span>@T["One frame every … seconds"]</span>
@@ -3867,6 +3871,7 @@
         prompt = _ai.Prompt,
         noThink = _ai.NoThink,
         reasoningEffort = _ai.ReasoningEffort,
+        insecureTls = _ai.InsecureTls,
         sampleEverySeconds = _ai.SampleEverySeconds,
         maxFrames = _ai.MaxFrames,
         timeoutSeconds = _ai.TimeoutSeconds,
