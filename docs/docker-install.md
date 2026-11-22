@@ -2,7 +2,7 @@
 
 The full Docker reference: image tags, compose, Unraid, upgrading, and building
 the image yourself. For the one-command version, see the
-[README's quick start](../README.md#quick-start-docker--recommended).
+[README's quick start](../README.md#quick-start-docker-recommended).
 
 Prebuilt multi-arch images (`linux/amd64` + `linux/arm64`) are published to
 GitHub Container Registry on every push to `main` and every `v*` release tag.

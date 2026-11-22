@@ -19,8 +19,8 @@ Ihre NVR-Software (**Frigate**, Blue Iris, Home Assistant, Shinobi, VLC,
 ffmpeg …) verbindet sich mit Neolink.NET, das sich bei der Kamera anmeldet,
 ihren Medienstrom demultiplext und ihn als standardkonformes RTSP neu
 ausliefert. Obendrauf bringt Neolink.NET eine **eingebaute Browser-Oberfläche**
-mit — eine Multi-Kamera-Wand mit Live-Video bei geringer Latenz, ohne Plugins
-und ohne Transkodierung — sowie eine native **MQTT-Integration für Home
+mit (eine Multi-Kamera-Wand mit Live-Video bei geringer Latenz, ohne Plugins
+und ohne Transkodierung) sowie eine native **MQTT-Integration für Home
 Assistant**: Jede Kamera erscheint automatisch in HA (über MQTT Discovery) mit
 Erkennungssensoren, Bedienelementen und Verfügbarkeit.
 
@@ -57,10 +57,10 @@ docker run -d --name neolink --restart unless-stopped \
 
 Web-Oberfläche unter `http://<host>:8655`, RTSP-Streams unter
 `rtsp://<host>:8654/<Kameraname>`. Ein **Home-Assistant-Add-on** ist ebenfalls
-verfügbar — siehe die englische Dokumentation.
+verfügbar (siehe die englische Dokumentation).
 
 Die Sprache der Oberfläche wird beim ersten Start gewählt (Dialog „Diesen
-Server sichern“) oder unter ⚙ → Sprache und gilt sofort — ohne Neustart und
+Server sichern“) oder unter ⚙ → Sprache und gilt sofort, ohne Neustart und
 ohne Neuladen.
 
 ## Vollständige Dokumentation

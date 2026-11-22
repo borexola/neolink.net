@@ -18,9 +18,9 @@ sus ajustes y detecciones por ONVIF
 Su software NVR (**Frigate**, Blue Iris, Home Assistant, Shinobi, VLC,
 ffmpeg…) se conecta a Neolink.NET, que inicia sesión en la cámara,
 demultiplexa su flujo multimedia y lo vuelve a servir como RTSP conforme a los
-estándares. Además, Neolink.NET incluye una **interfaz web integrada** — un
+estándares. Además, Neolink.NET incluye una **interfaz web integrada** (un
 muro multicámara con vídeo en directo de baja latencia, sin plugins ni
-transcodificación — y una **integración MQTT nativa para Home Assistant**:
+transcodificación) y una **integración MQTT nativa para Home Assistant**:
 cada cámara aparece automáticamente en HA (mediante MQTT Discovery) con
 sensores de detección, controles y disponibilidad.
 
@@ -57,10 +57,10 @@ docker run -d --name neolink --restart unless-stopped \
 
 Interfaz web en `http://<host>:8655`, flujos RTSP en
 `rtsp://<host>:8654/<NombreCámara>`. También hay un **complemento de Home
-Assistant** — consulte la documentación en inglés.
+Assistant** (consulte la documentación en inglés).
 
 El idioma de la interfaz se elige en el primer arranque (diálogo «Proteger
-este servidor») o en ⚙ → Idioma, y se aplica al instante — sin reinicio ni
+este servidor») o en ⚙ → Idioma, y se aplica al instante, sin reinicio ni
 recarga.
 
 ## Documentación completa

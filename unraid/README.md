@@ -5,7 +5,7 @@
 
 This is a **self-serve** template: add it to your own Unraid server with the
 steps below. It is intentionally not submitted to the Community Applications
-store — there is no store listing to maintain. (Anyone is welcome to submit it
+store, so there is no store listing to maintain. (Anyone is welcome to submit it
 to CA; it just isn't something this project runs.)
 
 ## Installing on Unraid
@@ -24,7 +24,7 @@ Either way works and needs nothing from the project maintainer:
 Install it, set the ports and the **Config** path (default
 `/mnt/user/appdata/neolink`), and start it. On first start Neolink writes a
 commented starter `config.json` into that folder and the web UI comes straight
-up (no crash-loop) — open the **WebUI** (port 8655) and create your admin
+up (no crash-loop). Open the **WebUI** (port 8655) and create your admin
 account.
 
 To add cameras, edit `config.json` in the Config folder: uncomment the example
@@ -34,13 +34,13 @@ and map the **Recordings** volume. Full reference:
 [`config.example.json`](../src/Neolink.Server/config.example.json).
 
 UDP-only battery cameras (`"udp": true`) need **Network Type: Host** instead of
-the template's default bridge — their handshake and discovery do not survive
+the template's default bridge, because their handshake and discovery do not survive
 Docker's NAT. Switch it in the container's edit page (the WebUI and RTSP stay on
 8654/8655, now bound directly on the server). Every other camera works on
 bridge; see the project README's *UDP-only battery models*.
 
 Tiered storage: map the optional **Clips** / **Archive** volumes and set
-`clips_path` / `archive_path` in `config.json` — see the project README's
+`clips_path` / `archive_path` in `config.json`; see the project README's
 *Tiered storage* section. In Unraid, put `/clips` on the cache/SSD and
 `/archive` on the array.
 
