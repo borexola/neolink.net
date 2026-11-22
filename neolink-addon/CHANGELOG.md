@@ -3,6 +3,25 @@
 Release notes for the Neolink.NET Home Assistant add-on. Home Assistant shows
 the sections between your installed version and the update on offer.
 
+## 1.2.5
+
+Click-to-move and autotracking in Frigate for Reolink pan/tilt cameras (experimental), presets on the pan/tilt pad, AI descriptions over HTTPS from your own CA, and pan/tilt commands that go out at once. One breaking change: the Home Assistant doorbell event now reports `ring` instead of `press`.
+
+### Breaking changes
+
+- **The Home Assistant doorbell event now reports the standard `ring` type instead of `press`,** so automations that check for `event_type: press` must switch to `ring`. This clears Home Assistant's "will stop working in 2027.4" warning and makes its Doorbell rang trigger work; the raw MQTT payload is unchanged.
+
+### Added
+
+- **Click-to-move and autotracking in Frigate for Reolink pan/tilt cameras (experimental).** Tick *This camera pans and tilts* in the camera editor and give its lens angle and how long a full pan and tilt take (or `ptz_fov_h` and `ptz_pan_rate` in the config), and its PTZ endpoint takes Frigate's relative moves; zoom lenses also take exact zoom positions.
+- **Presets on the video's pan/tilt pad.** The pad's bookmark button lists the camera's saved positions; tap one to send the head there.
+- **AI descriptions can reach an LLM whose HTTPS certificate comes from your own CA.** Switch on *Accept self-signed certificates* in Settings → AI, or add the CA to the server's trusted certificates (see the AI descriptions guide).
+
+### Fixed
+
+- **Pan/tilt commands no longer wait behind other camera requests.** A stop from the web UI, Home Assistant or Frigate goes out at once instead of queueing behind a snapshot or an SD-card search, so the head stops when told.
+- **Cameras without an HTTP API, such as battery models, now offer the on-screen display settings (camera name and timestamp with their positions, Reolink watermark) and Record audio** when their firmware has them, set over Baichuan; Record audio also appears in Home Assistant.
+
 ## 1.2.4
 
 Each lens of a dual-lens camera as its own camera, an rtsp button that copies stream and snapshot links, camera password changes from Neolink, and a log that says why a stream never starts.
