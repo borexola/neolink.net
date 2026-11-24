@@ -398,7 +398,7 @@
                         title="@(_included.Contains(name) ? T["Loaded (click to remove)"] : T["Click to load this camera's footage"])"
                         @onclick="() => ToggleCameraAsync(name)">@name</button>
             }
-            @if (!_camsLoaded || _dayLoading)
+            @if (!_camsLoaded || DayLoading)
             {
                 <span class="event-sub" role="status"><span class="btn-spinner"></span>@(_camsLoaded ? T["Loading…"] : T["Loading cameras…"])</span>
             }
@@ -502,7 +502,7 @@
                     </div>
                     @foreach (var cam in Included)
                     {
-                        <div class="tl-lane">
+                        <div class="tl-lane @(LaneLoading(cam.Name) ? "tl-lane-loading" : "")">
                             @* Card copies: drawn only where Neolink has no footage of its own. *@
                             @if (_sdCard)
                             {
@@ -600,7 +600,11 @@
                      title="@(_studio ? (focused ? T["Click to show all monitors again"] : T["Click to focus this monitor"]) : null)"
                      @onclick="() => ToggleFocus(cam.Name)" @key="cam.Name">
                     <video id="@VideoId(cam.Name)" muted playsinline preload="auto"></video>
-                    @if (_noFootage.Contains(cam.Name))
+                    @if (LaneLoading(cam.Name))
+                    {
+                        <div class="tl-nofootage tl-tile-wait" role="status"><span class="btn-spinner"></span> @T["Loading…"]</div>
+                    }
+                    else if (_noFootage.Contains(cam.Name))
                     {
                         <div class="tl-nofootage">@T.F("no footage at {0}", TimeText(_t))</div>
                     }
@@ -687,7 +691,14 @@
     private bool _booted;
     private bool _prefsReady; // saved layout known: the toolbar may paint
     private bool _camsLoaded; // the camera list has arrived (or failed)
-    private bool _dayLoading; // the day's events and coverage are in flight
+    private int _dayLoads; // day loads in flight (quick day changes overlap)
+    private int _dayGen; // the newest day load; older ones stand down
+    private bool DayLoading => _dayLoads > 0;
+    private readonly HashSet<string> _covLoading = new(StringComparer.OrdinalIgnoreCase); // coverage requests in flight
+
+    /// <summary>The lane has no coverage yet, but some is on its way.</summary>
+    private bool LaneLoading(string camera) =>
+        !_cov.ContainsKey(camera) && (DayLoading || _covLoading.Contains(camera));
 
     // Calendar date-picker: days that hold footage are highlighted at a glance.
     private bool _showCalendar;
@@ -958,9 +969,9 @@
             await LoadCamerasAsync();
             _included.RemoveWhere(name => _cameras.All(c => !string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase)));
             _camsLoaded = true;
-            _dayLoading = true; // set here so the cameras never paint with a finished-looking hint
+            var day = LoadDayAsync(); // started first, so the cameras paint as loading
             StateHasChanged();
-            await LoadDayAsync();
+            await day;
             StateHasChanged();
             _detect = await GetJsonAsync<ApiDetect>("/api/detect");
             await LoadBookmarksAsync();
@@ -1148,9 +1159,9 @@
 
     private async Task LoadDayAsync()
     {
-        _dayLoading = true;
+        _dayLoads++;
         try { await LoadDayCoreAsync(); }
-        finally { _dayLoading = false; }
+        finally { _dayLoads--; }
     }
 
     private async Task LoadDayCoreAsync()
@@ -1161,6 +1172,12 @@
         _sdStrip.Clear();
         _marks.Clear();
         _playing = false;
+        int gen = ++_dayGen;
+        // The cursor lands first so it does not jump when the lanes fill:
+        // today starts five minutes back, other days at midday.
+        _t = _date == DateTime.Today
+            ? Math.Max(0, (DateTime.Now - _date).TotalSeconds - 300)
+            : DaySeconds / 2;
 
         // The timeline needs event recording; continuous footage is optional
         // (event clips play as a fallback when it is off or has gaps).
@@ -1175,7 +1192,7 @@
             _supported = false;
             return;
         }
-        if (!_supported) return;
+        if (!_supported || gen != _dayGen) return;
 
         // The events reply gives the day's colored lane marks AND playable event
         // clips. The date filter must run on the server, inside the cap — a
@@ -1184,6 +1201,7 @@
         {
             var events = await GetJsonAsync<List<ApiEvent>>(
                 $"/api/events?limit=10000&date={_date:yyyy-MM-dd}");
+            if (gen != _dayGen) return; // a newer day load took over
             if (events == null)
             {
                 _supported = false;
@@ -1239,21 +1257,22 @@
             return;
         }
 
+        StateHasChanged(); // the event marks paint while the coverage is still on its way
+
         // Continuous coverage only for the cameras the user selected (the expensive part).
+        // Fetched side by side; each lane paints as its own answer arrives.
         if (_continuous)
         {
-            foreach (var cam in Included)
-                await LoadCoverageAsync(cam.Name);
+            await Task.WhenAll(Included.Select(c => c.Name).ToList().Select(async name =>
+            {
+                await LoadCoverageAsync(name);
+                StateHasChanged();
+            }));
+            if (gen != _dayGen) return;
         }
         _covRefreshed = DateTime.UtcNow; // the periodic refresh restarts from here
         if (_sdCard) _ = LoadSdStripAsync();
 
-        // Land the cursor somewhere useful: today starts five minutes back —
-        // autoplay then rolls through the recent past, which is almost always
-        // what a "let me check the cameras" visit is after. Other days: midday.
-        _t = _date == DateTime.Today
-            ? Math.Max(0, (DateTime.Now - _date).TotalSeconds - 300)
-            : DaySeconds / 2;
         // Autoplay: the day starts rolling as soon as it loads (first visit and
         // day changes alike) — pause is one click away, dead-stopped tiles that
         // LOOK broken were the common first impression.
@@ -1263,17 +1282,25 @@
 
     private async Task LoadCoverageAsync(string camera)
     {
-        var date = _date.ToString("yyyy-MM-dd");
+        var day = _date;
+        var date = day.ToString("yyyy-MM-dd");
+        List<Seg> segs;
+        _covLoading.Add(camera);
         try
         {
-            var segs = await GetJsonAsync<List<ApiSegment>>(
+            var files = await GetJsonAsync<List<ApiSegment>>(
                 $"/api/recordings/{Uri.EscapeDataString(camera)}/{date}");
-            _cov[camera] = BuildSegs(segs ?? new List<ApiSegment>(), camera, date);
+            segs = BuildSegs(files ?? new List<ApiSegment>(), camera, date);
         }
         catch
         {
-            _cov[camera] = new List<Seg>();
+            segs = new List<Seg>();
         }
+        finally
+        {
+            _covLoading.Remove(camera);
+        }
+        if (day == _date) _cov[camera] = segs; // the day changed meanwhile: this answer is stale
     }
 
     /// <summary>

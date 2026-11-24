@@ -4600,6 +4600,26 @@ button.ev-switch-opt {
     overflow: hidden;
 }
 
+/* Coverage still on its way: a sheen sweeps the lane until it fills. */
+.tl-lane-loading::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 30%, transparent), transparent) no-repeat;
+    background-size: 40% 100%;
+    animation: tl-lane-sheen 1.3s linear infinite;
+    pointer-events: none;
+}
+
+@keyframes tl-lane-sheen {
+    from { background-position: -70% 0; }
+    to { background-position: 170% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .tl-lane-loading::after { animation-duration: 4s; }
+}
+
 /* Footage blocks and event marks are inset by proportion, not pixels — they
    grow with the lane (at the 26px floor these land on the original 7/12 and
    4/18 pixel geometry). */
@@ -4798,6 +4818,9 @@ body.tl-colresizing, body.tl-colresizing * { cursor: col-resize !important; user
     color: var(--muted);
     font-size: 13px;
 }
+
+/* The tile's footage is still loading: dim whatever frame is left from before. */
+.tl-tile-wait { background: rgba(0, 0, 0, 0.55); }
 
 /* Buffering veil: JS (tlSync) toggles .tl-loading while the player has no
    decodable picture under the cursor. The fade-in delay keeps ordinary quick
