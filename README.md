@@ -2,7 +2,7 @@
 
 **English** · [Français](docs/translations/README.fr.md) · [Deutsch](docs/translations/README.de.md) · [Español](docs/translations/README.es.md) · [Nederlands](docs/translations/README.nl.md) · [Polski](docs/translations/README.pl.md) · [Português](docs/translations/README.pt.md)
 
-**RTSP bridge + web viewer for Reolink cameras that speak the proprietary Baichuan protocol, and for any other camera that serves RTSP.**
+**RTSP bridge, web viewer and NVR for Reolink cameras that speak the proprietary Baichuan protocol, and for any other camera that serves RTSP.**
 
 Neolink.NET is built for Reolink IP cameras that talk the proprietary "Baichuan" protocol on
 TCP port 9000 instead of standard RTSP/ONVIF (B800/D800, B400/D400, E1, Lumus, 510A,
@@ -17,6 +17,11 @@ a multi-camera wall with live low-latency video, no plugins, no transcoding and 
 It also has a native **MQTT integration for Home Assistant**: each camera appears in HA
 automatically (via MQTT Discovery) with motion/person/vehicle/animal sensors, controls,
 and availability, driven by the camera's own detections.
+
+It is also an **NVR in its own right**: it records detection events and continuous 24/7
+footage to your own disks, and plays them back from an events page and a synced
+multi-camera timeline with export. Retention, tiered storage and footage encryption are
+built in, so no other recording software is needed.
 
 The cameras are unmodified and no Reolink NVR is required.
 
@@ -114,8 +119,8 @@ like `:1.0.1` in production.
   two-way talk, with no plugins and no transcoding.
 - **Camera settings and controls** read from the camera itself: PTZ, zoom, lights, siren,
   privacy mode, picture settings and more.
-- **Recording:** detection-event clips and continuous 24/7 footage, an events page, and a
-  synced multi-camera timeline with export.
+- **A full NVR:** detection-event clips and continuous 24/7 recording, an events page, a
+  synced multi-camera timeline with export, retention, tiered storage and encryption at rest.
 - **Home Assistant over MQTT:** a device per camera appears automatically, with detection
   sensors, controls and battery state.
 - **Non-Reolink cameras:** any camera that serves RTSP, with settings and detections over ONVIF.
@@ -124,8 +129,7 @@ like `:1.0.1` in production.
 - **Battery cameras (beta):** auto-detected and sleep-friendly, UDP-only Argus models included.
 - **AI event descriptions and AI search (beta):** a vision LLM describes each event and
   rates its threat level.
-- **Storage and alerts:** tiered storage, footage encryption at rest, email alerts and
-  browser alerts.
+- **Alerts:** email for critical conditions, plus per-user browser alerts.
 - **Windows desktop app (beta):** the camera wall in its own window, with real Windows
   notifications.
 - **Light on the server:** detection runs on the camera, so there is no GPU and no
@@ -160,7 +164,8 @@ in Home Assistant are in [docs/streams.md](docs/streams.md).
 - [Configuration reference](docs/configuration.md): every option, web UI sign-in, finding
   cameras, dual-lens cameras, detection zones
 - [Non-Reolink cameras](docs/generic-cameras.md): generic RTSP, with settings over ONVIF
-- [Recording](docs/recording.md): retention, tiered storage, encryption
+- [Recording (NVR)](docs/recording.md): event and 24/7 recording, retention, tiered storage,
+  encryption
 - [Battery cameras](docs/battery-cameras.md) (beta), UDP-only models included
 - [Behind a reverse proxy](docs/reverse-proxy.md)
 - [Email notifications](docs/email-notifications.md)

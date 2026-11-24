@@ -8,6 +8,28 @@
   direct connections); slow clients are isolated and can never affect the
   camera or other viewers
 
+**NVR: recording and review (optional)**: full guide in [recording.md](recording.md)
+- **Detection-event recording**: the camera's own motion and AI detections become labeled
+  clips with thumbnails and pre-roll, and you choose per camera which detection types to keep
+- **Continuous 24/7 recording** in rolling segments, browsable by day; both modes switch
+  per camera at runtime, with no restart
+- **Review**: a strip of new events, a deep-linkable Events page with the full history, and
+  a **Timeline** that scrubs all cameras in sync with coverage bars, event marks and a
+  footage calendar
+- **Export**: a chosen period as one MP4 joined without re-encoding, or a zip of the
+  original segments
+- **Retention and storage tiers**: separate retention for events and continuous footage, an
+  SSD tier for clips, a cold archive tier that moves aged footage instead of deleting it,
+  and capacity warnings with fill-date forecasts
+- **Footage encryption at rest** (AES-256-GCM)
+- **Open storage**: plain fragmented MP4 in per-camera date folders, so backups and other
+  tools can read it
+- **Slow disks cannot stall live video**: recording runs on its own writer threads and
+  drops recorded frames, never live ones, when a disk falls behind
+- **Accounts**: each user sees only the cameras they are allowed, in live view, events,
+  timeline and search
+- No Reolink NVR and no other recording software is needed
+
 **Web UI (optional, built in)**: full tour in [web-ui.md](web-ui.md)
 - Live low-latency video (well under a second on a LAN, fMP4 over WebSocket +
   MSE, with no plugins and no transcoding), live audio, opt-in **two-way talk**
