@@ -14,7 +14,7 @@ RTSP/ONVIF (B800/D800, B400/D400, E1, Lumus, 510A, Duo, TrackMix en vele
 andere).
 Andere IP-camera's kunnen erbij: Neolink.NET haalt hun RTSP-streams op en
 leest hun instellingen en detecties via ONVIF
-([niet-Reolink-camera's](../../README.md#non-reolink-cameras-generic-rtsp)).
+([niet-Reolink-camera's](../generic-cameras.md#non-reolink-cameras-generic-rtsp)).
 
 Uw NVR-software (**Frigate**, Blue Iris, Home Assistant, Shinobi, VLC,
 ffmpeg…) verbindt met Neolink.NET, dat inlogt op de camera, haar mediastream

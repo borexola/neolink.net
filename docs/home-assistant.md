@@ -275,3 +275,35 @@ The event `id` arrives in the MQTT **Last event** payload, so an HA automation
 can attach the exact thumbnail of the event that fired it to a notification.
 The JSON endpoints (`/api/events`, `/api/cameras`, …) are metadata, not
 footage: those stay web-account only.
+
+## Quick start (Home Assistant add-on)
+
+Running Home Assistant OS (or Supervised)? Neolink.NET installs as a native
+add-on, with no Docker commands and no YAML files:
+
+[![Add repository to my Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fborexola%2Fneolink.net)
+
+1. Click the badge (or Settings → Add-ons → Add-on Store → ⋮ → Repositories →
+   add `https://github.com/borexola/neolink.net`), then install **Neolink.NET**.
+2. Add your cameras in the add-on's *Configuration* tab (name, IP, account).
+3. Start it and click **OPEN WEB UI**.
+
+If the **Mosquitto broker** add-on is installed, the MQTT connection is wired
+up automatically at every start, so cameras appear as Home Assistant devices with
+no further setup. Recordings land in `/media/neolink`, so clips show up in HA's
+media browser. Full details in the add-on's Documentation tab
+([neolink-addon/DOCS.md](../neolink-addon/DOCS.md)). UDP-only battery cameras
+need the **Neolink.NET (host network)** add-on from the same store instead
+([neolink-host/DOCS.md](../neolink-host/DOCS.md)).
+
+**Prefer to write the config yourself?** Empty the add-on's camera list
+(`cameras: []`) and it stops touching `cameras`; then edit `config.json` in
+`/addon_configs/…_neolink/` (Samba/SSH/Studio Code Server) and restart. That
+folder also holds `settings.json` and the rest of the UI state. Every option
+in the [configuration reference](configuration.md) works there; a `//` comment in the file stops the add-on merging
+anything at all, MQTT included. For a NAS, add it under Settings → System →
+Storage and point `path`/`archive_path` at `/media/<share>` or
+`/share/<share>`, because add-ons cannot take Docker-style volume mappings.
+
+Running Home Assistant in a plain container (no Supervisor)? Use the [Docker
+route](docker-install.md): everything works the same, including the MQTT integration.

@@ -8,7 +8,7 @@ Neolink.NET is built for Reolink IP cameras that talk the proprietary "Baichuan"
 TCP port 9000 instead of standard RTSP/ONVIF (B800/D800, B400/D400, E1, Lumus, 510A,
 Duo, TrackMix, Argus Solar, Solar Floodlight, and many others). Other IP cameras sit
 beside them: Neolink.NET pulls their RTSP streams and reads their settings and
-detections over ONVIF ([non-Reolink cameras](#non-reolink-cameras-generic-rtsp)).
+detections over ONVIF ([non-Reolink cameras](docs/generic-cameras.md#non-reolink-cameras-generic-rtsp)).
 
 Your NVR software (**Frigate**, Blue Iris, Home Assistant, Shinobi, VLC, ffmpeg, …) connects to
 Neolink.NET, which logs into the camera, demuxes its media stream, and re-serves it as
@@ -39,22 +39,10 @@ The cameras are unmodified and no Reolink NVR is required.
 
 *All screenshots show synthetic demo footage.*
 
-> ### A note on camera coverage
->
-> Reolink ships a large and ever-growing range of cameras, and their firmwares
-> genuinely differ: the same feature can work on one model, answer differently
-> on the next, and be broken outright on a third. Neolink.NET is developed and
-> tested against the cameras **I actually own**, which is a handful, not the
-> catalogue: cameras are expensive, and I maintain this project alone in my
-> spare time. So: everything here works on the models it was built against;
-> on models I've never touched, it *should* work, but I simply cannot promise
-> it until someone with that hardware tells me.
->
-> **This is where you come in.** If your camera misbehaves, an issue with logs
-> is genuinely valuable: most model-specific quirks in this project were found
-> and fixed exactly that way. And if you can go one step further, **pull
-> requests are very welcome**: a fix validated on hardware I don't have is the
-> one contribution I cannot make myself.
+> **Camera coverage.** Reolink's range is large and its firmwares differ. Neolink.NET is
+> developed and tested on the handful of cameras I own. Other models should work, but I
+> cannot promise it until someone with that hardware reports back. An issue with logs
+> helps, and a pull request validated on your hardware helps most.
 
 ## Try it first: no cameras, no config
 
@@ -72,9 +60,6 @@ container. The same showroom runs on bare metal too: `neolink.net --demo`
 
 ## Quick start (Home Assistant add-on)
 
-Running Home Assistant OS (or Supervised)? Neolink.NET installs as a native
-add-on, with no Docker commands and no YAML files:
-
 [![Add repository to my Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fborexola%2Fneolink.net)
 
 1. Click the badge (or Settings → Add-ons → Add-on Store → ⋮ → Repositories →
@@ -82,25 +67,10 @@ add-on, with no Docker commands and no YAML files:
 2. Add your cameras in the add-on's *Configuration* tab (name, IP, account).
 3. Start it and click **OPEN WEB UI**.
 
-If the **Mosquitto broker** add-on is installed, the MQTT connection is wired
-up automatically at every start, so cameras appear as Home Assistant devices with
-no further setup. Recordings land in `/media/neolink`, so clips show up in HA's
-media browser. Full details in the add-on's Documentation tab
-([neolink-addon/DOCS.md](neolink-addon/DOCS.md)). UDP-only battery cameras
-need the **Neolink.NET (host network)** add-on from the same store instead
-([neolink-host/DOCS.md](neolink-host/DOCS.md)).
-
-**Prefer to write the config yourself?** Empty the add-on's camera list
-(`cameras: []`) and it stops touching `cameras`; then edit `config.json` in
-`/addon_configs/…_neolink/` (Samba/SSH/Studio Code Server) and restart. That
-folder also holds `settings.json` and the rest of the UI state. Every option
-below works there; a `//` comment in the file stops the add-on merging
-anything at all, MQTT included. For a NAS, add it under Settings → System →
-Storage and point `path`/`archive_path` at `/media/<share>` or
-`/share/<share>`, because add-ons cannot take Docker-style volume mappings.
-
-Running Home Assistant in a plain container (no Supervisor)? Use the Docker
-route below: everything works the same, including the MQTT integration.
+With the **Mosquitto broker** add-on installed, cameras appear as Home Assistant devices
+with no further setup. UDP-only battery cameras need the **Neolink.NET (host network)**
+add-on from the same store instead. More in the
+[add-on guide](docs/home-assistant.md#quick-start-home-assistant-add-on).
 
 ## Quick start (Docker, recommended)
 
@@ -124,155 +94,45 @@ streams serve at `rtsp://localhost:8654/<camera-name>`. Images are multi-arch
 like `:1.0.1` in production.
 
 > Host networking (`--network host`) is required for
-> [UDP-only battery cameras](#udp-only-battery-models-beta) and RTSP over UDP
+> [UDP-only battery cameras](docs/battery-cameras.md#udp-only-models) and RTSP over UDP
 > transport; everything else works with plain port mapping.
 
-## Quick start (Windows, no Docker)
+## Other ways to run it
 
-> ### 📖 Step-by-step with screenshots: **[docs/windows-install.md](docs/windows-install.md)**
-> Every click from download to your cameras on screen.
+- **Windows, no Docker:** one MSI installs the desktop app (beta) and, if you tick
+  **Local server (Windows service)**, the full server too.
+  [Step-by-step guide](docs/windows-install.md).
+- **Unraid:** [template and notes](unraid/README.md).
+- **From source:** needs the .NET 10 SDK.
+  [Build and run it](docs/development.md#quick-start-from-source).
 
-One MSI, two shapes. Download `Neolink.NET.Desktop-X.Y.Z-win-x64.msi` from the
-[releases page](https://github.com/borexola/neolink.net/releases) and run it:
+## Highlights
 
-- **Desktop monitoring**: the default install is the [desktop
-  app](#windows-desktop-app-beta): your camera wall in its own window, real
-  Windows notifications from the tray, pointed at a server you already run
-  (Docker, the add-on, another machine).
-- **A complete standalone system**: tick **Local server (Windows service)**
-  on the feature page and the same MSI installs the full server as a Windows
-  service: recording and serving your cameras 24/7, signed in or not, with
-  nothing else to install. The desktop app connects to it at
-  `http://localhost:8655`, and cameras, accounts and recording all get set up
-  from the web UI there.
+- **RTSP bridge:** H.264/H.265 and AAC are repackaged, never re-encoded, and one camera
+  connection feeds any number of clients.
+- **Web UI built in:** a multi-camera wall with sub-second live video, audio and opt-in
+  two-way talk, with no plugins and no transcoding.
+- **Camera settings and controls** read from the camera itself: PTZ, zoom, lights, siren,
+  privacy mode, picture settings and more.
+- **Recording:** detection-event clips and continuous 24/7 footage, an events page, and a
+  synced multi-camera timeline with export.
+- **Home Assistant over MQTT:** a device per camera appears automatically, with detection
+  sensors, controls and battery state.
+- **Non-Reolink cameras:** any camera that serves RTSP, with settings and detections over ONVIF.
+- **Frigate:** steady RTSP for detect and record, PTZ buttons, click-to-move and
+  autotracking (beta).
+- **Battery cameras (beta):** auto-detected and sleep-friendly, UDP-only Argus models included.
+- **AI event descriptions and AI search (beta):** a vision LLM describes each event and
+  rates its threat level.
+- **Storage and alerts:** tiered storage, footage encryption at rest, email alerts and
+  browser alerts.
+- **Windows desktop app (beta):** the camera wall in its own window, with real Windows
+  notifications.
+- **Light on the server:** detection runs on the camera, so there is no GPU and no
+  per-frame work. It runs on a Raspberry Pi.
+- **Seven languages:** English, French, German, Spanish, Dutch, Polish and Portuguese.
 
-The MSI is not code-signed yet, so SmartScreen shows *"Windows protected your
-PC"* on first run. Click **More info** → **Run anyway**. Details in the
-[desktop guide](docs/desktop-app.md).
-
-## Quick start (from source)
-
-Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download).
-
-```bash
-git clone https://github.com/borexola/neolink.net.git
-cd neolink.net
-cp src/Neolink.Server/config.example.json src/Neolink.Server/config.json  # edit it
-dotnet run --project src/Neolink.Server -c Release
-```
-
-Single-file, self-contained binaries:
-
-```bash
-dotnet publish src/Neolink.Server -c Release -r linux-x64    # or win-x64, linux-arm64, ...
-```
-
-## Lightweight by design: the camera does the heavy lifting
-
-Neolink.NET runs no object detection of its own: it never decodes, transcodes, or
-analyses a single video frame for motion or AI. All of that already happens *on
-the camera*, whose dedicated silicon detects motion and classifies people,
-vehicles and animals in real time. Neolink.NET simply **listens for the alarm
-messages the camera pushes** over the Baichuan connection (the same events that
-drive Reolink's own app) and relays them to Home Assistant as MQTT sensors, and
-doorbell button presses as MQTT events. That means:
-
-- **No GPU, no Coral, no CPU-hungry inference.** Unlike setups where a server
-  re-analyses every stream, Neolink.NET adds essentially zero processing load. It
-  runs comfortably on a Raspberry Pi or a small NAS container.
-- **Event-driven, not polled.** Sensors fire the instant the camera sees
-  something, with no scan interval and no per-frame work.
-- **AI is only as good as the camera.** Person/vehicle/animal labels come from
-  the camera's firmware, so enable the detection types you want in the Reolink
-  app and Neolink.NET surfaces exactly those.
-
-The trade-off is that detection quality and available classes are whatever your
-camera model provides (rather than a tunable server-side model like Frigate's);
-in exchange you get an integration light enough to leave running forever.
-
-One preview feature adds boxes to that picture without changing any of it: **live
-object boxes** (Server settings → Experimental) outlines people, vehicles and
-animals while you watch a single camera. The camera tells you *what* it saw but
-never *where*, so the outlining is done by your BROWSER, on the frames it is
-already decoding to show you. The server still never looks at a video frame, and
-nothing is sent anywhere. It is a second opinion for the person watching:
-recording, notifications and Home Assistant continue to follow the camera.
-
-## Features
-
-**RTSP bridge**
-- H.264 / H.265 and AAC are **repackaged, never re-encoded**; ADPCM audio is
-  decoded to PCM (L16)
-- TCP-interleaved and UDP transports, RTSP Basic auth, per-camera permissions
-- One camera connection feeds any number of clients (cameras fall over at ~2–3
-  direct connections); slow clients are isolated and can never affect the
-  camera or other viewers
-
-**Web UI (optional, built in)**: full tour in [docs/web-ui.md](docs/web-ui.md)
-- Live low-latency video (well under a second on a LAN, fMP4 over WebSocket +
-  MSE, with no plugins and no transcoding), live audio, opt-in **two-way talk**
-- Camera wall with five layouts (Grid, Focus, Mosaic, Theater, Free),
-  per-tile stream choice, maximize and fullscreen
-- **Camera settings & controls** discovered from the camera itself: PTZ,
-  zoom/focus, lights, siren, privacy mode, reboot, detection sensitivity and
-  infrared brightness, plus (over the HTTP API, beta) picture settings, HDR,
-  volume, OSD, PTZ presets, quick replies and a firmware-update badge. Changes stage and are
-  sent only on "Apply to camera"; a **PORTS tab** can enable the camera's own
-  HTTP/ONVIF services right from Neolink. [Non-Reolink
-  cameras](#non-reolink-cameras-generic-rtsp) get the same panel over **ONVIF**:
-  identity, stream profiles, picture, pan/tilt with presets, overlay placement
-  and reboot
-- A **detection zone** on every camera: kept on the camera where it can hold
-  one, kept on Neolink where it cannot, and the editor says which
-- **Events** review strip and deep-linkable events page, a synced
-  multi-camera **Timeline** with footage export, and **camera SD-card
-  playback** (preview)
-- **Perimeter protection**: line-crossing / intrusion / loitering / object left or taken alerts from
-  the Reolink app become their own event types, opt-in per camera under
-  *Event types* (an untouched setup records what it always did); they get
-  their own icons in the strip
-- **AI event descriptions (BETA)**: a vision LLM writes what happened plus a
-  GREEN/YELLOW/RED threat level; see
-  [AI event descriptions](#ai-event-descriptions-beta)
-- **AI Search (BETA)**: search events in plain language ("people wearing
-  something red last week"). Structured filters parse instantly, the LLM
-  matches descriptions; see [AI Search](docs/ai-descriptions.md#ai-search-beta)
-- **Live object boxes (PREVIEW)**: while you watch one camera full-size, the
-  people, vehicles and animals in frame are outlined as you look at them.
-  The outlining runs in your browser, on frames it has already decoded, so the
-  server adds nothing and no frame leaves the device. Switch it on under
-  Server settings → Experimental
-- **Battery cameras** (BETA) auto-detected and sleep-friendly; see
-  [Battery cameras](#battery-cameras-argus-etc-beta)
-- **Tiered storage** (SSD clips tier + cold archive, capacity watching and
-  fill forecasts; see [Tiered storage](docs/recording.md#tiered-storage-optional)),
-  **footage encryption at rest**, **email alerts** for critical
-  conditions ([Email notifications](#email-notifications)) and per-user
-  **browser alerts**
-- **Multiple languages**: English, French, German, Spanish, Dutch, Polish and
-  Portuguese. Picked at first-run setup or under ⚙ → Language, applied live
-  (no restart, no reload); each account keeps its own choice and the admin sets
-  the server default for the sign-in screen. Non-English languages are
-  AI-translated and cannot be fully verified, so corrections are welcome
-
-**Home Assistant / MQTT (optional)**: full guide in
-[docs/home-assistant.md](docs/home-assistant.md)
-- A **device per camera appears automatically** (MQTT Discovery, no YAML):
-  detection sensors driven by the camera's own pushes, controls, battery and
-  sleep state, recording switches, record-on-demand, doorbell press events,
-  and a Last-event sensor for notification deep links
-- Two-level availability with retained state; a dozing battery camera stays
-  *available* with an **Asleep** sensor saying why. MQTT 3.1.1 is spoken
-  natively, with no external library
-
-**Protocol / robustness**
-- Full login handshake including modern encryption: BCEncrypt (XOR),
-  AES-128-CFB, and **FullAes** (2023+ firmwares with encrypted media streams)
-- Automatic reconnection with backoff; media-stream resynchronization (a
-  corrupt packet skips forward instead of tearing the connection down)
-- A crash in one camera's pipeline can never take down other cameras or the
-  process
-- Zero native dependencies, zero NuGet packages, so it builds fully offline
+The full list is in [docs/features.md](docs/features.md).
 
 ## Stream URLs
 
@@ -281,797 +141,48 @@ recording, notifications and Home Assistant continue to follow the camera.
 | `rtsp://host:8654/driveway` | main stream (alias) |
 | `rtsp://host:8654/driveway/mainStream` | main stream (high resolution) |
 | `rtsp://host:8654/driveway/subStream` | sub stream (low resolution) |
-| `rtsp://host:8654/driveway?audio=opus` | same stream, audio transcoded to **Opus** (WebRTC-friendly; needs ffmpeg). Works on any camera path; `?audio=original` forces the camera's own track |
 | `http://host:8655/` | web UI |
-| `http://host:8655/api/cameras` | JSON list of cameras and stream state |
-| `ws://host:8655/api/stream?path=/driveway/subStream` | live fMP4 (MSE-compatible) |
-| `GET /api/cameras/driveway/capabilities` | device info + discovered features (ptz/led/pir/battery) |
-| `GET /api/cameras/driveway/streaminfo` | encode profiles: resolution, framerate/bitrate options |
-| `GET /api/cameras/driveway/battery` | battery charge/status (battery cameras) |
-| `GET`/`POST /api/cameras/driveway/led` | status LED & floodlight: `{"state":"open"}`, `{"lightState":"close"}` |
-| `GET`/`POST /api/cameras/driveway/pir` | PIR motion sensor: `{"enabled":true}` |
-| `POST /api/cameras/driveway/ptz` | pan/tilt: `{"command":"left","speed":32}` (`up/down/left/right/stop`) |
-| `POST /api/cameras/driveway/reboot` | reboot the camera |
-| `POST /api/cameras/driveway/wake-hint` | external "the camera is up for an event" signal (battery cameras; see the battery guide) |
 
-`POST` (control) endpoints require HTTP **Basic auth** when `users` are configured,
-honouring the same per-camera `permitted_users` rules as RTSP; with no users
-configured they are open, like everything else. Feature discovery is live: the
-server probes the camera once per connection and the web UI only shows the
-controls the camera actually supports.
+The Opus audio variant, the HTTP and WebSocket API, the ONVIF audio backchannel and WebRTC
+in Home Assistant are in [docs/streams.md](docs/streams.md).
 
-### RTSP audio backchannel (two-way talk without the web UI)
+## Documentation
 
-Cameras with a speaker also expose an **ONVIF Profile-T audio backchannel** on the
-same RTSP mount, so [go2rtc](https://github.com/AlexxIT/go2rtc), Home Assistant's
-WebRTC Camera and other ONVIF-aware clients can talk through the camera. A client
-that sends `Require: www.onvif.org/ver20/backchannel` on `DESCRIBE` is offered an
-extra sendonly `PCMU/8000` track; the G.711 audio it streams is decoded and fed to
-the same talk pipeline the web UI's mic button uses. Plain players (VLC, ffmpeg)
-never see the extra track; it only appears when a client asks for it.
+**Install**
 
-It rides the two-way-talk opt-in: set `"ui": { "talk": true }` (or *Server settings
-→ Web UI → Two-way talk*). Example go2rtc source:
+- [Docker](docs/docker-install.md): image tags, compose, Unraid, upgrading
+- [Home Assistant add-on](docs/home-assistant.md#quick-start-home-assistant-add-on)
+- [Windows](docs/windows-install.md) and the [desktop app](docs/desktop-app.md) (beta)
+- [From source](docs/development.md#quick-start-from-source)
 
-```yaml
-streams:
-  driveway:
-    - rtsp://<neolink-host>:8654/driveway#backchannel=1
-```
+**Configure**
 
-### WebRTC in Home Assistant
+- [Configuration reference](docs/configuration.md): every option, web UI sign-in, finding
+  cameras, dual-lens cameras, detection zones
+- [Non-Reolink cameras](docs/generic-cameras.md): generic RTSP, with settings over ONVIF
+- [Recording](docs/recording.md): retention, tiered storage, encryption
+- [Battery cameras](docs/battery-cameras.md) (beta), UDP-only models included
+- [Behind a reverse proxy](docs/reverse-proxy.md)
+- [Email notifications](docs/email-notifications.md)
 
-The [WebRTC Camera](https://github.com/AlexxIT/WebRTC) custom card (HACS) plays
-Neolink streams over WebRTC with near-zero latency, straight from the RTSP URL:
-its embedded go2rtc does the WebRTC lifting. Ask for `?audio=opus` so the audio
-arrives in the codec WebRTC takes natively (no browser-side silence, no extra
-ffmpeg hop on the HA box), and add `microphone` to get two-way talk through the
-ONVIF backchannel above:
+**Use**
 
-```yaml
-type: custom:webrtc-camera
-grid_options:
-  columns: full
-  rows: 12
-streams:
-  - url: rtsp://admin:password@<neolink-ip>:8654/FrontDoor?audio=opus
-    name: FrontDoor
-    mode: webrtc
-    media: video,audio,microphone
-```
+- [Web UI tour](docs/web-ui.md)
+- [Stream URLs and API](docs/streams.md)
+- [AI event descriptions and AI search](docs/ai-descriptions.md) (beta)
 
-Use your RTSP credentials from `users` in the URL (omit `admin:password@` when
-none are configured). `?audio=opus` needs an ffmpeg next to Neolink (the Docker
-image and Home Assistant add-on ship one); the `microphone` line needs two-way
-talk enabled and a camera with a speaker.
+**Integrate**
 
-## Configuration
+- [Home Assistant (MQTT)](docs/home-assistant.md)
+- [Frigate](docs/frigate.md): streams, PTZ buttons, and
+  [click-to-move and autotracking](docs/autotracking.md) (beta)
 
-JSON with comments and trailing commas allowed; see
-[config.example.json](src/Neolink.Server/config.example.json). Legacy TOML configs from
-the original Rust neolink are also accepted.
+**Reference**
 
-### Top level
-
-| Option | Default | Description |
-|---|---|---|
-| `bind` | `0.0.0.0` | Address to serve on |
-| `bind_port` | `8654` | RTSP port |
-| `web_port` | `8655` | Web UI + HTTP/WS API port; `0` disables both |
-| `webui` | `true` | Serve the browser UI on `web_port`; `false` = API only |
-| `web_bind` | = `bind` | Separate bind address for the web port |
-| `ptz_port` | `8656` | Shared ONVIF PTZ port for Frigate ([PTZ buttons in Frigate](#ptz-buttons-in-frigate)); `0` = off |
-| `ptz_bind` | = `bind` | Bind address for the PTZ ports |
-| `users` | *(none)* | **RTSP** Basic-auth users: `{ "name", "pass" }`. Omit for open access. Separate from web-UI accounts! |
-| `recording` | *(none)* | Event recording (see below). Omit to disable |
-| `mqtt` | *(none)* | MQTT / Home Assistant integration (see below). Omit to disable |
-| `ui` | *(defaults)* | Web-UI specific settings (see below) |
-
-### Web-UI settings (`"ui": { ... }`)
-
-| Option | Default | Description |
-|---|---|---|
-| `enabled` / `port` / `bind` | = `webui` / `web_port` / `web_bind` | Grouped aliases of the top-level web options |
-| `state_dir` | config dir | Where the UI's server-side state persists: `users.json` (sign-in accounts) and `settings.json` (per-user layouts/filters/recording switches) |
-| `reset_admin_password` | `false` | Recovery: while `true`, the login screen allows setting a new admin password from the LAN; the flag turns itself off after one reset |
-| `remote_setup` | `false` | The first-run admin setup and the admin-password reset only accept LAN addresses; `true` lets a public address do them (set up over a VPN that looks public) |
-| `trickle_speed` | `4` | Playback speed of the review strip's ambient clip previews |
-| `language` | *(none)* | Seeds the default UI language (`en`, `fr`, `de`, `es`, `nl`, `pl`, `pt`) on a server whose state has none yet. Only a seed: the first-run dialog and ⚙ → Language own the setting afterwards (stored in `users.json`, applied live) |
-
-> **Persistence across deployments**: three locations must live on volumes or
-> your state resets every deploy: **(1)** the config directory (or `ui.state_dir`)
-> holding `users.json` + `settings.json`: lose it and accounts, layouts and
-> filters reset; **(2)** the `recording.path` directory: lose it and footage
-> *and the reviewed/dismissed state* (stored in each event's `event.json`) reset,
-> so previously dismissed events reappear; **(3)** `config.json` itself. The
-> docker-compose example mounts (1)+(3) via `./config:/config`; uncomment its
-> `./recordings:/recordings` line for (2) when you turn on recording.
-
-### Web UI sign-in
-
-Authentication is **off by default**: no database, no config required. The
-first visitor is prompted to create the **admin** account (or dismiss and do it
-later via ⚙ → "Enable login…"); creating it turns sign-in on for the whole UI
-and API. Accounts live in `users.json` next to your config: passwords are
-stored as PBKDF2-SHA256 (210k iterations, per-user salt, constant-time
-verification, safe for an open-source, file-based setup), and sessions are
-HMAC-signed tokens that expire after 30 days and are invalidated the moment a
-password changes.
-
-The admin manages accounts from ⚙ → Users…: add normal users, change any
-password, delete users (the admin itself can't be deleted). **cameras…** limits
-a normal user to chosen cameras; the rest vanish from their wall, events,
-timeline and search, and the server refuses them. **Every account
-keeps its own UI settings** (layout, tiles, review-strip filters), stored
-server-side, so people don't fight over one shared view. Forgot the admin
-password? Set `"reset_admin_password": true` in the config, restart, and use
-"Reset admin password…" on the login screen from the LAN; the flag turns
-itself off again after one reset.
-
-The admin also gets ⚙ → **Server settings…**: a form that edits most of
-`config.json` (network ports, web UI, recording) and writes it back to the file
-(atomically, keeping a `.bak`; comments are not preserved). The **Users** tab
-also edits the RTSP `users` (passwords write-only). The **Cameras** tab adds, edits and deletes cameras
-from the same panel, Reolink and generic RTSP alike, with live validation, a
-**Test connection** button (a real Baichuan login for Reolink; an RTSP
-round-trip for generic URLs), and write-only passwords: a stored password is
-never sent to the browser, and leaving the field blank keeps it. Saved changes
-apply on the next restart, which the admin can trigger with **Restart
-service…**: the process exits and your container/systemd restart policy brings
-it back within seconds while the UI reconnects on its own. Running the Home
-Assistant add-on, that policy is the add-on's **Watchdog** toggle (on its Info
-page): enable it, or the restart button stops the add-on and nothing starts it
-again. When a newer release
-exists on GitHub, a dismissable banner links to it.
-
-### Recording (`"recording": { ... }`)
-
-> ### 📖 Full guide: **[docs/recording.md](docs/recording.md)**: every option,
-> tiered storage (SSD clips tier, cold archive), capacity forecasts, and
-> footage encryption at rest.
-
-One line turns it on:
-
-```json
-"recording": { "path": "/recordings" }
-```
-
-Two modes, each switchable per camera at runtime from the web UI (camera ⚙ →
-RECORDING): **detection events** (the camera's own motion/AI detections
-become labeled clips with thumbnails, reviewable from the events strip) and
-**continuous (24/7)** NVR-style segments browsable by day. Defaults: 7-day
-retention, 5 s of pre-roll, rolling 10-minute segments; everything is plain
-fragmented MP4 in per-camera date folders, so backups and external tooling
-are trivial. The full guide covers the rest: an SSD fast tier for clips, a
-cold archive tier that moves aged footage instead of deleting it, 90%-full
-warnings with fill-date forecasts, and AES-256-GCM footage encryption.
-
-### Per camera
-
-| Option | Default | Description |
-|---|---|---|
-| `name` | *required* | Name used in the RTSP URL and web UI |
-| `address` | *required* | Camera IP/hostname; port defaults to `9000` |
-| `http_address` | *derived from `address`* | The camera's HTTP(S) web interface (`host`, `host:port` or full URL). Only needed to override the host/port: the HTTP API is otherwise reached on the `address` host, port 80. Unlocks picture settings, volume, PTZ presets, OSD, detection sensitivity, SD-card browsing and stream-profile changes |
-| `onvif_address` | *derived from `address`* | The camera's ONVIF device service (`host`, `host:port` or full URL). Only needed to override the port: ONVIF is otherwise probed on port 8000, then 80. A picture-settings fallback for models with no HTTP API (Lumus line) |
-| `username` / `password` | *required* | The camera's own login (same as the Reolink app) |
-| `stream` | `both` | `mainStream`, `subStream`, `externStream`, `both`, or `all` |
-| `channel_id` | `0` | Which channel of the device this entry is (0-based): a Reolink NVR's camera, or a lens of a [dual-lens camera](#dual-lens-cameras-trackmix-duo) |
-| `permitted_users` | all users | Restrict this camera's mounts to specific `users` |
-| `ptz_share` | `false` | Offer this camera's PTZ to Frigate on the shared port ([PTZ buttons in Frigate](#ptz-buttons-in-frigate)) |
-| `ptz_port` | *(none)* | Give this camera's PTZ its own port instead (Frigate 0.17 and older) |
-| `ptz_fov_h`, `ptz_pan_rate` | *(none)* | **Beta.** The lens's angle of view and the head's pan speed; together they turn on [click-to-move and autotracking in Frigate](#click-to-move-and-autotracking-in-frigate-beta), which lists the optional `ptz_fov_v`, `ptz_tilt_rate`, `ptz_lag_ms`, `ptz_speed` and `ptz_tele_fov_h` |
-| `record` | `true` | Initial default for this camera's "Detection events" switch (changeable in the web UI) |
-| `max_encryption` | `fullaes` | **Diagnostic.** Caps the encryption the login advertises: `none`, `bcencrypt`, `aes`, `fullaes`. Only for firmware that will not answer the default; see [troubleshooting](docs/troubleshooting.md) |
-| `legacy_login` | `false` | **Diagnostic.** Opens the login with the older credential framing instead of the header-only one. Pairs with `max_encryption`; see [troubleshooting](docs/troubleshooting.md) |
-
-> **Keep camera passwords alphanumeric.** Reolink's HTTP API (the one behind
-> `http_address`, picture settings, volume, PTZ presets and scaled snapshots)
-> is far pickier about the password than the video protocol. Some special
-> characters (`@ : / % & + #` and others, varying by firmware) make the HTTP
-> login fail with `password wrong` **even though the exact same password works
-> for live video and in the camera's own web page**. The result is a camera
-> that streams and records perfectly but whose HTTP-backed features silently go
-> missing (the log warns once that the HTTP API "REJECTED the login"). If you
-> hit this, set the camera's password to letters and digits only (`a–z A–Z
-> 0–9`) in the Reolink app. This is a camera-firmware quirk, not a Neolink.NET
-> limitation, and the reference Reolink libraries recommend the same. Passwords
-> over 31 characters can fail for the same reason.
-
-### Finding cameras and following IP changes
-
-- **Auto discover.** Settings → Cameras → *Auto discover…* scans a subnet or
-  address range (the server's own by default, a camera VLAN if you type it)
-  for plug-in Reolink cameras, with model and name where ONVIF is on; *Add…*
-  fills in the add-camera form, so the password is all you type. Battery
-  models never answer a scan: add those by UID (see the battery guide).
-- **A camera that gets a new IP is followed.** At the first login Neolink.NET
-  asks each camera for its UID and remembers it (`camera-state.json`). When
-  the configured address stops answering, it asks the LAN which camera has
-  that UID (a UID-keyed discovery hello, no credentials sent) and connects
-  to wherever it answers from. `config.json` is not touched: the camera
-  settings and the camera list show *now at &lt;address&gt;* with a
-  **Use new address** button that writes it to the file. Cameras connected
-  over UDP need none of this (they are found by UID on every connect). If a
-  camera will not report its UID, set `uid` in its config entry.
-- In Docker both need host networking (`--network host`): a bridged container
-  gets no broadcasts or multicast.
-
-### Changing a camera's password
-
-Settings → Cameras → edit a Reolink camera → **Change the password on the
-camera…** sets a new login password on the camera itself. Neolink.NET then
-signs in again with it on every stream of that camera, a second-lens entry
-included, and writes it to `config.json` only once the camera has accepted a
-login with it. No restart is needed.
-
-- The camera has to be connected: a suspended or offline camera, or a sleeping
-  battery one, cannot take the change.
-- The password is 6 to 31 characters, without spaces.
-- If the camera does not take it, Neolink.NET goes back to the old password,
-  says so, and leaves `config.json` alone.
-- If the camera accepts neither password right away (it is restarting, say),
-  Neolink.NET keeps trying both for 15 minutes and saves the new one as soon
-  as the camera takes it. The log says how it ended.
-- Anything else that signs in to the camera (the Reolink app, an NVR, Home
-  Assistant) needs the new password too.
-- In the Home Assistant add-on, a camera listed in the add-on's Options with a
-  password there gets that password back at the next start: change it, or
-  blank it, in Options too.
-
-### Dual-lens cameras (TrackMix, Duo)
-
-A camera with two lenses that each have their own picture (TrackMix: wide and
-telephoto; the first Duo: left and right) serves one channel per lens. Each
-lens is its own camera entry: same `address` and login, `channel_id` `0` for
-the first lens and `1` for the second.
-
-```json
-{ "name": "driveway",      "address": "192.168.1.50", "username": "admin", "password": "…" },
-{ "name": "driveway_tele", "address": "192.168.1.50", "username": "admin", "password": "…", "channel_id": 1 }
-```
-
-- Neolink.NET reads the lens count at login. A lens with no entry gets a line
-  in the log and an **Add lens** button in Settings → Cameras, which fills in
-  the form with the first entry's address and login.
-- If no button appears, add the second entry by hand.
-- Each entry has its own tile, RTSP paths and recordings. On a TrackMix only
-  the first lens detects, so the second entry records on the first one's
-  detections. Use the first entry for pan/tilt, lights and the siren.
-- Every entry holds its own connections to the camera (one per stream). If the
-  camera starts refusing logins, open fewer streams per entry (`stream`).
-- Cameras that stitch both lenses into one panorama (Duo 2, Duo 3) have a
-  single channel and need none of this.
-
-### Enable HTTP and ONVIF on the camera for the full feature set
-
-Neolink.NET streams and records over Baichuan (port 9000), which needs nothing
-extra, but the camera's *optional* HTTP and ONVIF services unlock the rest of
-the control surface, and both are worth turning on. **You can do it from
-Neolink itself**: the camera's ⚙ panel has a **PORTS tab** that reads the
-camera's live service table and can enable HTTP or ONVIF right there (admin
-only, behind a confirmation; the Baichuan port itself is never touchable).
-The same switches live in the Reolink app under *Settings → Network → Advanced
-→ Port Settings*. The `http_address` / `onvif_address` config keys are only
-needed for non-standard hosts/ports; otherwise both services are found on the
-camera's own IP automatically.
-
-- **HTTP (or HTTPS)** is where most settings live: picture sliders, day-night,
-  HDR, speaker volume, Wi-Fi signal, PTZ presets, the on-screen display,
-  detection sensitivity, SD-card browsing/playback, stream-profile changes,
-  and right-sized snapshots. Off = the camera still streams and records
-  perfectly; those panels are simply absent. If HTTP is on but features are
-  missing, the log says exactly why (a rejected login usually means a special
-  character in the password; see the note above).
-- **ONVIF** matters most on models with no HTTP API (the Lumus line): its
-  imaging service is the **fallback** for the picture sliders and day-night
-  mode. Reolink serves it on port 8000; leave the default and it is found
-  automatically. It covers imaging basics only, so it complements HTTP rather
-  than replacing it.
-
-Neither interface weakens LAN security beyond what the Reolink app already
-uses (same camera login), and neither is required for core video or recording.
-
-### Non-Reolink cameras (generic RTSP)
-
-Any camera that serves RTSP can be added alongside the Reolink ones. Instead of
-`address`/`username`, give it the stream URLs, with credentials inside the URL:
-
-```json
-{
-  "name": "front_gate",
-  "rtsp_main": "rtsp://admin:pass@192.168.1.50:554/Streaming/Channels/101",
-  "rtsp_sub":  "rtsp://admin:pass@192.168.1.50:554/Streaming/Channels/102"
-}
-```
-
-Neolink pulls those streams and re-serves them on its own RTSP port, records
-them, and shows them in the web UI.
-
-**Detections come over ONVIF's event service.** Neolink subscribes to the
-camera's own analytics (motion, and person/vehicle/animal where the camera
-classifies what it saw), so a non-Reolink camera gets the same treatment as a
-Reolink one: event clips with thumbnails, the events page and timeline,
-e-mail/webhook notifications, AI descriptions, and motion sensors in Home
-Assistant. A camera whose ONVIF has no event service (or none reachable) still
-streams and records around the clock; it simply produces no events, and the
-switches that depend on them stay out of the way.
-
-**Settings come over ONVIF**, the standard nearly every IP camera speaks. Turn
-it on in the camera's own web page and the ⚙ panel fills in with whatever its
-ONVIF services actually answer for:
-
-| Section | ONVIF service |
-|---|---|
-| Model / firmware / serial on the identity strip | Device |
-| **Streams**: resolution, framerate, bitrate per profile, editable | Media or Media2 (video encoder configuration) |
-| **Picture**: brightness, contrast, saturation, sharpness, day/night | Imaging |
-| **Pan / tilt** and saved **presets** | PTZ (only when the head actually pans and tilts) |
-| **Zoom**: the lens's optical zoom, as a slider | PTZ (`GetStatus` / `AbsoluteMove`) |
-| **On-screen display**: where the name and timestamp sit | Media or Media2 (OSD) |
-| **Detections**: motion and, where the camera classifies, person/vehicle/animal | Events (pull-point) |
-| **Reboot** | Device |
-| Stills, for thumbnails and posters | Media (`GetSnapshotUri`) |
-| **Detection zone**: the camera's own motion grid | Analytics (cell motion detector); Neolink keeps it otherwise, see below |
-
-A camera that answers none of this still streams and records exactly as
-before; the panel simply shows less. What ONVIF cannot do is left out rather
-than offered and refused: there is no way to switch an overlay off (only to
-move it), and hue, anti-flicker, flip/mirror and HDR have no ONVIF equivalent.
-Focus is not offered either: ONVIF moves it through the imaging service in ways
-too different from one camera to the next to present as a single slider.
-
-Newer cameras speak **Media2**, the successor to ONVIF's media service, and some
-speak only that. Neolink asks the older one first (every Reolink answers it)
-and moves to Media2 only when it gets nothing, so the streams, stills and
-overlays come through either way.
-
-Two interoperability details are handled for you, because between them they
-account for most "ONVIF is enabled but Neolink shows nothing" reports: requests
-are stamped in **the camera's own clock** (read from it first, unauthenticated;
-a camera drifting from your server by more than a few seconds rejects every
-request otherwise, which looks exactly like a wrong password), and the camera's
-login is offered over **HTTP authentication as well as WS-Security**, since
-which of the two a given firmware insists on is not something you can tell from
-the outside.
-
-ONVIF is looked for on the stream URL's own host, port 80 first, then 8000,
-2020 (TP-Link Tapo) and 8899, and signs in with the login that URL carries.
-`onvif_address` overrides both: give it `host`, `host:port`, or a full URL, and a
-full URL may carry its own `user:pass@` when the camera keeps separate accounts
-for streaming and management (an `@` or `/` inside the password may be written
-as-is there; in a stream URL they must still be percent-encoded, `%40` and
-`%2F`). **Test connection** in the Cameras editor says whether ONVIF answered,
-and whether it rejected the login, before you save the entry.
-
-A device that carries several video channels (an NVR, a multi-sensor camera) can
-be added once per channel, each with that channel's stream URLs: the settings,
-stills, pan/tilt, zone and detections of each entry follow the channel its stream
-URLs name, not the device's first.
-
-| Option | Default | Description |
-|---|---|---|
-| `rtsp_main` | *one of these is required* | Main-stream RTSP URL (`rtsp://user:pass@host:554/path`) |
-| `rtsp_sub` | *optional* | Sub-stream RTSP URL |
-| `onvif_address` | *the stream URL's host* | Where the camera's ONVIF device service lives; may be a full URL with its own login |
-| `name`, `permitted_users`, `audio_transcode` | | As for a Reolink camera |
-| `record` | `true` | Seeds this camera's "Detection events" switch, as for a Reolink camera. Only meaningful when its ONVIF event service answers |
-
-### Detection zones
-
-Every camera has one, under camera ⚙ → **Camera settings** → **Detection zone**.
-Drag boxes over the camera's own picture to mark what is worth watching.
-
-Where the zone is KEPT depends on the camera, and the editor says which:
-
-- **On the camera**, for a Reolink with its HTTP API. It is the same grid the
-  Reolink app edits, at whatever dimensions that model reports, and it governs
-  the camera's own motion and AI alarms, so it changes its app notifications
-  and this server's event recording alike.
-- **On the camera**, for a non-Reolink camera whose ONVIF analytics runs a
-  **cell motion detector** (Hikvision, Dahua, Axis and many others do). The grid
-  has the camera's own dimensions, and it decides where the camera's *motion*
-  alarms fire; any other analytics rules it runs (line crossing, intrusion…)
-  keep their own areas, and the rule's other settings (how many cells must
-  move, the alarm delays) are left exactly as they were.
-- **On Neolink**, for every camera that keeps no zone of its own: a generic
-  RTSP camera with no such detector (or no reachable ONVIF), and Reolink models
-  whose firmware carries no grid. Nothing is
-  written to the camera and its own alerts are unchanged; the zone governs what
-  *Neolink* watches, which today is the live object boxes. It is stored in
-  `camera-state.json` alongside the other per-camera settings and survives
-  restarts.
-
-The editor draws the grid over the camera's latest still. A generic RTSP
-camera with no ONVIF snapshot, or whose ONVIF snapshot fails, gets that still
-from the stream Neolink is already carrying, decoded with ffmpeg; without
-ffmpeg the grid is drawn over an empty frame instead. A Reolink camera is
-untouched by this: when its snapshot fails, the answer is the last frame,
-honestly labelled, or nothing.
-
-## Behind a reverse proxy (HAProxy / nginx / Caddy)
-
-The web UI works behind a TLS-terminating reverse proxy (e.g. HAProxy on
-OPNsense) pointing at `web_port`. Two things matter:
-
-- **WebSocket upgrade** must be allowed for `/_blazor` (the UI's interactive
-  circuit) and `/api/stream` (live video). Most proxies pass the `Upgrade`
-  header by default; in HAProxy make sure the backend has a generous
-  `timeout tunnel` (e.g. `1h`) so long-lived streams aren't cut.
-- **The container never needs to reach its own public URL.** The UI runs on
-  Blazor Server, so its API calls execute *inside* the container; when the
-  configured server address is the page's own origin, those calls
-  automatically short-circuit to loopback instead of going back out through
-  the proxy: no hairpin NAT, split DNS, or internal-CA trust required.
-  (Symptom of the old behaviour: the page loads but the camera list shows
-  "Cannot reach https://… The SSL connection could not be established".)
-
-Only the browser-facing traffic (the page, the live-video WebSocket, event
-clips/thumbnails) traverses the proxy, so your TLS certificate only needs to
-be valid for the browser.
-
-RTSP does not go through the proxy. The **rtsp** button in a camera's settings
-dialog therefore builds its RTSP link from the server's IP address and RTSP
-port, never from the host name the page was opened on. Its snapshot link is
-served by the web port, so that one does use the address the page was opened on.
-
-## Home Assistant (MQTT)
-
-> ### 📖 Full guide: **[docs/home-assistant.md](docs/home-assistant.md)**:
-> all options, the full entity table, on-demand recording, notification deep
-> links, packet sizing, and snapshots over HTTP.
-
-Add an `mqtt` section and a **device per camera** appears in Home Assistant
-automatically via MQTT Discovery, no YAML. Detection `binary_sensor`s are
-driven by the camera's own pushes (event-driven, no polling); controls
-(floodlight, siren, PTZ, privacy mode, reboot), battery and **Asleep** state,
-recording switches, **record on demand**, doorbell press events and a
-**Last event** sensor for notification deep links round it out. A separate
-server device carries health and storage sensors. MQTT 3.1.1 is spoken
-natively: no external library, retained state, two-level availability.
-
-```json
-"mqtt": { "broker": "192.168.1.10", "username": "neolink", "password": "secret" }
-```
-
-## Email notifications
-
-For the things you want to hear about even when you're not looking at a
-dashboard, Neolink.NET can email **critical alerts**. It's off until you opt in:
-open ⚙ **Server settings → Notifications**, turn it on, enter one recipient
-address and your SMTP details, and **Send test email** to confirm. Settings
-apply immediately (no restart) and are stored separately from `config.json`.
-
-All alerts default on once enabled; disable any you don't want. Each is
-**edge-triggered and de-duplicated**: you get one email when a condition starts
-(re-reminded at most every 6 hours while it persists) and a short "resolved"
-follow-up when it clears:
-
-| Alert | Fires when |
-|---|---|
-| Storage full / recovered | A recording drive runs out of space and recording halts; then when space is freed |
-| Server overload | CPU stays near maximum for several minutes |
-| Camera offline / back online | A camera is unreachable longer than its threshold (default 10 min, **configurable per camera**; 0 = never); then when it reconnects. Battery cameras dozing are not treated as an outage |
-| Recording write failures | Footage fails to write to disk: a failing/disconnected drive or a permissions problem (distinct from "full") |
-
-**Isolation:** the notifier runs on its own background task and swallows every
-error, so a wrong or unreachable mail server only logs a warning; it can never
-affect recording, streaming or MQTT.
-
-**SMTP transport:** STARTTLS (587) and implicit SSL/TLS (465) are both
-supported, with `AUTH LOGIN`. Use a provider **app password** where offered
-(Gmail, Outlook, etc.) rather than your main account password.
-
-**About the password at rest.** The SMTP password is encrypted with AES-256-GCM;
-the key is an owner-only `secret.key` in the state dir, or the
-`NEOLINK_SECRET_KEY` environment variable if set (so the key can live only in
-the environment). It is write-only in the UI and never returned by the API.
-Be aware of the inherent limit: to send email the app must be able to recover
-the password, so this protects it against casual disk/backup exposure but **not**
-against someone who already has full read access to the server's files (they'd
-have both the key and the ciphertext). That trade-off is unavoidable for any
-self-hosted app that sends its own authenticated email.
-
-## AI event descriptions (BETA)
-
-> ### 📖 Full guide: **[docs/ai-descriptions.md](docs/ai-descriptions.md)**
-
-Point Neolink.NET at a vision-capable LLM and every detection event gets a
-written description and a **GREEN / YELLOW / RED threat classification**, in
-the web UI (banner in the event players, colored dots on event rows), in the
-event metadata (`/api/events`), and in Home Assistant (per-camera **Last AI
-description** and **AI threat level** sensors, the automation hook for
-"notify loudly on RED").
-
-The short version:
-
-- **Enable** it globally in Settings → **AI** (backend, endpoint, model: any
-  **vision-capable** model your backend runs), then per camera under
-  camera ⚙ → EVENTS. Tested with **llama.cpp**, **Ollama** and
-  **LM Studio**; Anthropic-style APIs are implemented to spec. It's
-  **beta: feedback is very welcome**.
-- **Frames come from the stream itself** when an ffmpeg is present (the
-  Docker image ships one): a passive keyframe tap that costs the camera
-  nothing, plus up to three **pre-roll frames from the moments before the
-  trigger**, usually the best look at whatever caused the event. Without
-  ffmpeg, the camera's own snapshot command carries the event as before.
-  Frames **spread across the whole event** and the model is told each one's
-  time offset; the sampling density and per-event frame cap in Settings → AI
-  are the quality levers, paid for in answer latency.
-- **Tune it to your property**: per-camera **scene notes** (what this camera
-  watches, what is normal there) are the biggest threat-level win, and the
-  instruction prompt sets the global voice. The classification contract is
-  appended automatically so your edits can't break it.
-- Descriptions run on an isolated background queue: a slow or dead model can
-  never delay recording or streaming; at worst an event goes undescribed
-  with a log line.
-- **AI Search** on the Events page builds on the descriptions: ask in plain
-  language ("people wearing something red last week") and the LLM picks the
-  matching events by reading what it wrote. Works best on cameras with
-  descriptions enabled; events without one can only be found by type,
-  camera and date. Without an AI backend the bar still does basic
-  structured + word search.
-
-## Using with Frigate
-
-```yaml
-cameras:
-  driveway:
-    ffmpeg:
-      inputs:
-        - path: rtsp://<neolink-host>:8654/driveway/subStream
-          roles: [detect]
-        - path: rtsp://<neolink-host>:8654/driveway/mainStream
-          roles: [record]
-```
-
-Neolink.NET keeps exactly one connection per camera stream regardless of how many
-Frigate roles/consumers attach, and hands stalled ffmpeg processes a hard disconnect
-within 10 s so Frigate's watchdog recovers quickly. For headless Frigate boxes set
-`"webui": false` (or `"web_port": 0`).
-
-### PTZ buttons in Frigate
-
-Frigate drives PTZ only over ONVIF, which many Reolink models lack. Neolink.NET
-can answer it for them: pan/tilt, the camera's presets, and zoom on zoom lenses.
-Turn it on per camera under **Cameras → Edit → External connection**, which also
-shows the Frigate config to paste.
-
-- **Shared port** (Frigate 0.18+): `"ptz_share": true`. Each such camera is a
-  profile on `ptz_port` (8656), named after the camera, which Frigate's
-  `onvif.profile` picks.
-- **Own port** (older Frigate): `"ptz_port": 8657` on the camera.
-
-```yaml
-onvif:
-  host: <neolink-host>
-  port: 8656
-  user: <RTSP user permitted on the camera>
-  password: <its password>
-  profile: office
-```
-
-- Frigate signs in as an RTSP user. With no users, PTZ only listens on a
-  loopback `ptz_bind`.
-- Presets come from the camera's HTTP API, or over Baichuan when it has none.
-  Zoom is untested on a real zoom camera.
-- Video stays on RTSP. In Docker, publish the PTZ port or use host networking.
-
-### Click-to-move and autotracking in Frigate (beta)
-
-> 📖 Setup and a sample Frigate config: **[docs/autotracking.md](docs/autotracking.md)**
-
-Frigate's click-to-move and [autotracking](https://docs.frigate.video/configuration/autotracking/)
-ask the camera to move by a fraction of the picture, which a Reolink head cannot
-do. Neolink.NET runs each such move as a timed pan followed by a timed tilt, worked
-out from the lens's angle of view and the head's speed. Turn it on under **Server
-settings → Cameras → Edit**: tick **This camera pans and tilts** in the
-beta *Click-to-move and autotracking* section, then give the lens's angle
-and how many seconds a full pan and a full tilt take. Or add the settings to a camera
-that already has `ptz_share` or `ptz_port`:
-
-```json
-{ "name": "office", "ptz_share": true, "ptz_fov_h": 87.5, "ptz_pan_rate": 30 }
-```
-
-| Option | Default | Description |
-|---|---|---|
-| `ptz_fov_h` | *required* | Horizontal angle of view in degrees, from the camera's spec sheet (a zoom lens: at its widest) |
-| `ptz_pan_rate` | *required* | Degrees per second the head pans at `ptz_speed`: time a pan over a known angle (end stop to end stop is the spec sheet's pan range) and divide. Frigate's arrow buttons drive at the default speed |
-| `ptz_fov_v` | from the picture's shape | Vertical angle of view in degrees |
-| `ptz_tilt_rate` | = `ptz_pan_rate` | Degrees per second of tilt. Most heads tilt slower than they pan, so time it too |
-| `ptz_lag_ms` | *learned, or 0* | Added to every move for the motor getting under way: raise it if short moves fall short. Left unset, a camera that reports its head position learns it |
-| `ptz_speed` | `32` | The camera's PTZ speed (1-64) moves run at, the one the rates are timed at. The Speed slider in the camera panel drives at any speed for timing |
-| `ptz_tele_fov_h` | *(none)* | Zoom lenses: the horizontal angle at full zoom, so that moves shrink as the lens zooms in |
-
-- **Tune it with click-to-move first.** Click a spot in Frigate's live view: if
-  the head goes past it, raise the rate; if it stops short, lower it. Sideways
-  misses are `ptz_pan_rate`, up and down ones `ptz_tilt_rate`.
-- **Then autotracking.** Follow Frigate's guide: a `return_preset` saved on the
-  camera, and one run with `calibrate_on_startup: true`. With these settings a
-  move to a preset counts as under way until the head is back, which the
-  calibration waits for. Zoom lenses also offer its `zooming: absolute`.
-- **A slow head.** If Frigate logs "Autotracking calibration failed", the head
-  is too slow at this speed for Frigate's movement prediction. Raise
-  `ptz_speed` and time both rates again at it; Frigate still tracks without the
-  prediction meanwhile.
-- **Expect limits.** The head turns one axis at a time, so a quick subject gets
-  away, and the timing rides on the network: cable the camera if you can. Zoom
-  lenses and position-reporting heads are untested on real cameras.
-
-## Battery cameras, Argus etc. (BETA)
-
-> ### 📖 Full guide: **[docs/battery-cameras.md](docs/battery-cameras.md)**
->
-> Setup for all three modes (constant power, battery, battery + router wake
-> hints), every setting, what gets recorded where, and troubleshooting.
-
-**Beta: under active development and testing.** Validated against real
-hardware, but sleep behavior varies by model and is still being tuned against
-field logs, so open an issue with the `[wake-diag]` log lines if yours
-misbehaves.
-
-**Confirmed working:** Argus Solar, Argus Eco Pro (UDP), and Duo 2 Battery
-with DNS wake hints
-([#66](https://github.com/borexola/neolink.net/issues/66)).
-
-The short version:
-
-- A camera that reports a battery is **auto-detected** and defaults to
-  **sleep-friendly mode**: Neolink.NET disconnects while nobody watches
-  (connection time is battery), shows an "asleep" badge, and reconnects when
-  you open a stream.
-- On solar/USB power, set `"always_on": true`: the camera then behaves
-  exactly like a wired one (permanent connection, 24/7 recording, live
-  events).
-- On battery, `"wake_capture": true` catches motion events while it sleeps,
-  and your network can feed **instant wake hints** (`wake_hints` in the
-  config): OPNsense/pfSense forward their firewall log, or, on any router
-  with DNS overrides (OpenWRT, Pi-hole, AdGuard, …), point
-  `pushx.reolink.com` at Neolink itself and the camera's own event push
-  becomes the signal. The DNS route costs you Reolink app notifications
-  (Home Assistant takes over), and push must be turned **on** in the app
-  *before* the DNS change (step-by-step in the guide).
-- A sleeping camera **cannot be woken from the network** (it wakes itself
-  on PIR), and it always keeps recording events to its own SD card.
-
-### UDP-only battery models (beta)
-
-Some battery models (parts of the Argus line) never listen on TCP: they log
-`Connection refused` forever and a port scan shows no open ports. They speak
-Baichuan **over UDP** instead:
-
-```jsonc
-{
-  "name": "Retro",
-  "username": "admin",
-  "password": "…",
-  "address": "192.168.178.50",
-  "uid": "95270000ABCDEFGH",
-  "udp": true
-}
-```
-
-| | |
-|---|---|
-| `"uid"` | the camera's UID (Reolink app → device info, or the sticker) |
-| `"udp": true` | selects the UDP transport |
-| `"address"` | its LAN IP; give it a DHCP reservation |
-| **host networking** | **in Docker/Podman: `network_mode: host` (compose) or `--network host` (run); in Home Assistant, the *Neolink.NET (host network)* add-on. Not optional** |
-
-Host networking is required because the Baichuan UDP handshake carries the
-client's port *inside* the packet and discovery relies on LAN broadcast;
-neither survives a bridge network. The tell in the log is a discovery sweep
-listing only container-internal broadcast addresses (`172.x.255.255`) ending
-in `UDP: SILENCE`. Drop the `ports:` / `-p` mappings when you switch; with
-host networking they do nothing and can collide. Once connected, everything
-works as over TCP (video, events, battery, recording, controls); these
-cameras carry a **UDP BETA** badge in the UI.
-
-Validated against real hardware (Argus Eco Pro), with thanks to
-**[Rihan9](https://github.com/Rihan9)**, whose patient testing and log captures
-across many beta rounds pinned down the protocol's keepalive and session
-behavior and made this support work
-([#39](https://github.com/borexola/neolink.net/issues/39)).
-
-## Web UI
-
-> ### 📖 Full guide: **[docs/web-ui.md](docs/web-ui.md)**: layouts, the
-> camera settings panel, events/timeline/export, SD-card playback, PWA
-> install, browser alerts, two-way talk, studio layout.
-
-The built-in browser UI is a multi-camera wall with sub-second live video (fMP4
-over WebSocket, no plugins, no transcoding), an event review strip, a synced
-multi-camera timeline with export, and per-camera settings discovered from
-the camera itself. It installs as an app (PWA), works behind a TLS reverse
-proxy, and every account keeps its own layouts server-side.
-
-## Windows desktop app (BETA)
-
-> ### 📖 Full guide: **[docs/desktop-app.md](docs/desktop-app.md)**: setup,
-> the notification panel, start-with-Windows, installing and upgrading,
-> building it yourself.
-
-An MSI-installed Windows app that puts the same web UI in its own window, sits
-in the system tray, and starts with Windows. By default it is a **client**:
-your server keeps running wherever it already does (Docker, the Home Assistant
-add-on, another machine), and nothing about that setup changes.
-
-The installer can also make the PC the whole system: tick **Local server
-(Windows service)** on the feature page and the full Neolink.NET server
-installs alongside the app and runs as a Windows service, recording and
-serving your cameras around the clock, whether anyone is signed in or not, no
-Docker or Home Assistant required. Its config and recordings live under
-`C:\ProgramData\Neolink.NET\` (a starter config is written on first launch;
-cameras, recording paths and everything else are then managed from the web
-UI at `http://localhost:8655`, which the desktop app's connect dialog
-prefills). The service log rolls in `ProgramData\Neolink.NET\logs\`, and the
-firewall is opened to your local subnet so phones and NVRs on the LAN can
-reach the web UI and RTSP. Uninstalling removes the service but leaves your
-config and footage in `ProgramData` for a later reinstall.
-
-What it adds over the PWA is being there when you are not looking: it runs its
-own alert connection, so detections, camera outages and server problems reach
-you as real Windows notifications no matter which page the window is showing,
-whether the window is even open, and on a plain-`http` LAN server, where a
-browser refuses to raise notifications at all. Per-camera and per-label alert
-rules are stored on your account, so they stay in step with the browser both
-ways; quiet hours, sound and cadence are per-machine.
-
-Grab the MSI from the [releases page](https://github.com/borexola/neolink.net/releases).
-It is not code-signed yet, so Windows shows *"Windows protected your PC"*;
-click **More info** → **Run anyway** (see the guide).
-Installing a newer build over an older one replaces it and shuts the running
-copy down by itself: no reboot, no duplicate entry in Add/Remove Programs.
-Linux and macOS keep the PWA for now; see the guide for what a port would take.
-
-## Versioning & releases
-
-The app's version lives in one place (`<Version>` in
-`src/Neolink.Server/Neolink.Server.csproj`) and shows up everywhere: the
-startup log, `neolink.net --version`, `/api/features`, and the bottom of the
-web UI's sidebar. **Releasing = pushing a git tag**: tag `vX.Y.Z` and the
-docker workflow builds the multi-arch images with that exact version baked in
-(`-p:Version` from the tag), so every release increments the reported version
-without a code change. Untagged builds report the csproj version.
-
-Pushing to the **`beta` branch** publishes `ghcr.io/borexola/neolink.net:beta`,
-a rolling pre-release channel, separate from `latest` and the version tags,
-for trying new features before a stable release.
-
-## Self-tests & development
-
-> ### 📖 Full guide: **[docs/development.md](docs/development.md)**: the
-> fake-camera simulator, testing uncommitted changes on a real server, and
-> the project layout.
-
-```bash
-dotnet run --project src/Neolink.Server -- selftest
-```
-
-The built-in suite needs no hardware and also runs inside every published
-image (`docker run --rm ghcr.io/borexola/neolink.net:latest selftest`).
-
-## Troubleshooting
-
-> ### 📖 Full list: **[docs/troubleshooting.md](docs/troubleshooting.md)**: the
-> common failure signatures and what each one means.
-
-First move: run with `--verbose` (or `NEOLINK_LOG=debug`) and read the service
-log: almost every symptom has a matching line the guide explains, from a
-camera rejecting its login and web tiles stuck on "connecting…" to a UDP
-battery camera that needs host networking in Docker.
-
-## Compared to the original Rust neolink
-
-Improvements: built-in web UI, no GStreamer/native dependencies, no transcoding of AAC,
-per-client backpressure, in-stream resynchronization.
-
-Not (yet) supported: TLS for RTSP (`rtsps://`; put a TLS-terminating proxy in front)
-and the UID/UDP discovery + relay transport (battery cameras work over direct TCP,
-see [Battery cameras](#battery-cameras-argus-etc-beta), but cameras reachable ONLY via
-Reolink's P2P relay are not). The auxiliary features (PIR, reboot, status LED,
-two-way talk) are covered by the web UI and API instead of CLI subcommands.
+- [Features in full](docs/features.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Development, self-tests and releases](docs/development.md)
+- [Changelog](CHANGELOG.md)
 
 ## Project status & disclaimer
 
@@ -1080,8 +191,8 @@ options did not fully meet my needs, and I publish it in the hope that it is use
 to others in the same situation.
 
 It is developed and validated on the cameras I personally own, a small slice of
-Reolink's range. Firmware behavior varies meaningfully between models (see *A note
-on camera coverage* at the top), and I cannot buy every camera to test against;
+Reolink's range. Firmware behavior varies meaningfully between models (see the camera coverage
+note at the top), and I cannot buy every camera to test against;
 reports with logs, and especially pull requests validated on hardware I do not
 have, are the most effective way to get a model-specific problem fixed.
 

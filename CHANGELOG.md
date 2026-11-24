@@ -1,8 +1,8 @@
 # Changelog
 
-Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docker
+Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z`: the docker
 workflow bakes the tag into the app as its version (see "Versioning & releases"
-in the README). Paste the matching section below into the GitHub release.
+in docs/development.md). Paste the matching section below into the GitHub release.
 
 ## 1.2.6
 

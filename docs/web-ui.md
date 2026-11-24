@@ -80,9 +80,9 @@ all work for them too.
 Each section appears only if that camera's ONVIF services answer for
 it; what ONVIF cannot do is left out rather than offered and refused (it can
 move an overlay but not switch it off, and there is no ONVIF hue,
-anti-flicker, flip/mirror, HDR or single focus slider). There is no PORTS tab — that table is
+anti-flicker, flip/mirror, HDR or single focus slider). There is no PORTS tab: that table is
 Baichuan's. A camera with ONVIF switched off still streams and records; its
-panel just shows less. See the README for where ONVIF is looked for and how
+panel just shows less. See [Non-Reolink cameras](generic-cameras.md) for where ONVIF is looked for and how
 to point it somewhere else.
 
 ### Detection zone

@@ -6,6 +6,9 @@ dotnet run --project src/Neolink.Server -- selftest
 dotnet run --project src/Neolink.Server -- selftest --config /path/to/rust/neolink-repo
 ```
 
+The built-in suite needs no hardware and also runs inside every published
+image (`docker run --rm ghcr.io/borexola/neolink.net:latest selftest`).
+
 `tools/fake_camera.py` implements enough of the camera side of the protocol to test the
 full pipeline without hardware:
 
@@ -13,6 +16,23 @@ full pipeline without hardware:
 python3 tools/fake_camera.py /path/to/rust-repo/crates/core/src/bcmedia/samples 9000 &
 # point a config at address = "127.0.0.1:9000", run neolink, then:
 ffprobe -rtsp_transport tcp rtsp://127.0.0.1:8654/testcam
+```
+
+## Quick start (from source)
+
+Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download).
+
+```bash
+git clone https://github.com/borexola/neolink.net.git
+cd neolink.net
+cp src/Neolink.Server/config.example.json src/Neolink.Server/config.json  # edit it
+dotnet run --project src/Neolink.Server -c Release
+```
+
+Single-file, self-contained binaries:
+
+```bash
+dotnet publish src/Neolink.Server -c Release -r linux-x64    # or win-x64, linux-arm64, ...
 ```
 
 ## Testing the ONVIF side without a third-party camera
@@ -111,6 +131,20 @@ Notes:
 - Old test images pile up; reclaim disk with `docker rmi neolink.net:<old-tag>`.
 - The image is built for the dev machine's Docker platform (typically
   linux/amd64). For an ARM server, add `--platform linux/arm64` to the build.
+
+## Versioning & releases
+
+The app's version lives in one place (`<Version>` in
+`src/Neolink.Server/Neolink.Server.csproj`) and shows up everywhere: the
+startup log, `neolink.net --version`, `/api/features`, and the bottom of the
+web UI's sidebar. **Releasing = pushing a git tag**: tag `vX.Y.Z` and the
+docker workflow builds the multi-arch images with that exact version baked in
+(`-p:Version` from the tag), so every release increments the reported version
+without a code change. Untagged builds report the csproj version.
+
+Pushing to the **`beta` branch** publishes `ghcr.io/borexola/neolink.net:beta`,
+a rolling pre-release channel, separate from `latest` and the version tags,
+for trying new features before a stable release.
 
 ## Project layout
 

@@ -358,12 +358,42 @@ The beta add-on publishes no ports, so it gets HTTP hints only.
 
 ## UDP-only models
 
-Parts of the Argus line never listen on TCP; the log shows `Connection
-refused` forever. Set `uid` + `"udp": true`, and in Docker/Podman use **host
-networking** (required: the UDP handshake and discovery don't survive a
-bridge network, and the tell is a discovery sweep listing `172.x.255.255` and
-ending in `UDP: SILENCE`). Compose/run snippets: README →
-[UDP-only battery models](../README.md#udp-only-battery-models-beta).
+Some battery models (parts of the Argus line) never listen on TCP: they log
+`Connection refused` forever and a port scan shows no open ports. They speak
+Baichuan **over UDP** instead:
+
+```jsonc
+{
+  "name": "Retro",
+  "username": "admin",
+  "password": "…",
+  "address": "192.168.178.50",
+  "uid": "95270000ABCDEFGH",
+  "udp": true
+}
+```
+
+| | |
+|---|---|
+| `"uid"` | the camera's UID (Reolink app → device info, or the sticker) |
+| `"udp": true` | selects the UDP transport |
+| `"address"` | its LAN IP; give it a DHCP reservation |
+| **host networking** | **in Docker/Podman: `network_mode: host` (compose) or `--network host` (run); in Home Assistant, the *Neolink.NET (host network)* add-on. Not optional** |
+
+Host networking is required because the Baichuan UDP handshake carries the
+client's port *inside* the packet and discovery relies on LAN broadcast;
+neither survives a bridge network. The tell in the log is a discovery sweep
+listing only container-internal broadcast addresses (`172.x.255.255`) ending
+in `UDP: SILENCE`. Drop the `ports:` / `-p` mappings when you switch; with
+host networking they do nothing and can collide. Once connected, everything
+works as over TCP (video, events, battery, recording, controls); these
+cameras carry a **UDP BETA** badge in the UI.
+
+Validated against real hardware (Argus Eco Pro), with thanks to
+**[Rihan9](https://github.com/Rihan9)**, whose patient testing and log captures
+across many beta rounds pinned down the protocol's keepalive and session
+behavior and made this support work
+([#39](https://github.com/borexola/neolink.net/issues/39)).
 
 ## Troubleshooting
 

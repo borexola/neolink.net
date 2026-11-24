@@ -13,7 +13,7 @@ propriétaire « Baichuan » sur le port TCP 9000 au lieu de RTSP/ONVIF standard
 (B800/D800, B400/D400, E1, Lumus, 510A, Duo, TrackMix et bien d'autres).
 Les autres caméras IP s'y ajoutent : Neolink.NET récupère leurs flux RTSP et
 lit leurs réglages et leurs détections via ONVIF
-([caméras non Reolink](../../README.md#non-reolink-cameras-generic-rtsp)).
+([caméras non Reolink](../generic-cameras.md#non-reolink-cameras-generic-rtsp)).
 
 Votre logiciel NVR (**Frigate**, Blue Iris, Home Assistant, Shinobi, VLC,
 ffmpeg…) se connecte à Neolink.NET, qui se connecte à la caméra, démultiplexe

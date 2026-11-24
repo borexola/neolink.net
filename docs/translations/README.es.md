@@ -13,7 +13,7 @@ Neolink.NET está pensado para cámaras IP Reolink que usan el protocolo propiet
 B400/D400, E1, Lumus, 510A, Duo, TrackMix y muchas otras).
 Otras cámaras IP pueden ir a su lado: Neolink.NET toma sus flujos RTSP y lee
 sus ajustes y detecciones por ONVIF
-([cámaras que no son Reolink](../../README.md#non-reolink-cameras-generic-rtsp)).
+([cámaras que no son Reolink](../generic-cameras.md#non-reolink-cameras-generic-rtsp)).
 
 Su software NVR (**Frigate**, Blue Iris, Home Assistant, Shinobi, VLC,
 ffmpeg…) se conecta a Neolink.NET, que inicia sesión en la cámara,

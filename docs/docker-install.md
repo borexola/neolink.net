@@ -93,7 +93,7 @@ services:
       - ./config:/config   # holds config.json + web-UI settings.json
       # Recording storage — uncomment and set "recording": { "path": "/recordings" } in config.json:
       # - ./recordings:/recordings
-      # Optional tiered storage (see "Tiered storage" in the README). Map a volume for EVERY tier
+      # Optional tiered storage (see "Tiered storage" in docs/recording.md). Map a volume for EVERY tier
       # path you set, or that footage lands inside the container and is lost on recreate:
       # - /mnt/fast-ssd/neolink:/clips     # fast SSD tier  → "clips_path": "/clips"
       # - /mnt/bigdisk/neolink:/archive    # cold archive   → "archive_path": "/archive"
@@ -146,7 +146,7 @@ Then:
 
 > **When you need host networking** (`network_mode: host`, or `--network host`,
 > instead of port mapping): for
-> [UDP-only battery cameras](../README.md#udp-only-battery-models-beta) — where
-> it is required, not optional — and for RTSP over **UDP** transport. Everything
+> [UDP-only battery cameras](battery-cameras.md#udp-only-models), where
+> it is required, not optional, and for RTSP over **UDP** transport. Everything
 > else, including TCP-interleaved RTSP (the default for ffmpeg/Frigate, and
 > `--rtsp-tcp` in VLC), works fine with plain port mapping.

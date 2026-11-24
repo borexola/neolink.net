@@ -1,6 +1,6 @@
 {
   // Neolink.NET configuration. Copy to config.json and edit; comments and trailing commas are fine.
-  // Most of this can also be set from the web UI (Server settings). Every option: README → Configuration.
+  // Most of this can also be set from the web UI (Server settings). Every option: docs/configuration.md.
 
   "bind": "0.0.0.0",     // "127.0.0.1" = this computer only
   "bind_port": 8654,     // RTSP (VLC, Frigate, Home Assistant, ...)

@@ -2,7 +2,7 @@
 
 The full recording reference: every `"recording": { ... }` option, tiered
 storage, capacity monitoring, and footage encryption. For the short version,
-see the [README's Recording section](../README.md#recording-recording---).
+see [Recording in the configuration reference](configuration.md#recording-recording---).
 
 > 💾 **Slow disks are handled**: all recording I/O runs on dedicated
 > low-priority writer threads behind a bounded memory budget, so an HDD that

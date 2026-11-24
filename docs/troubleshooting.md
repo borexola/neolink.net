@@ -41,9 +41,9 @@ matching line.
 - **Video works but picture settings / volume / scaled snapshots are missing,
   and the log says the HTTP API "REJECTED the login"**: the camera's HTTP API
   is refusing a password the video protocol accepts. Almost always a special
-  character (or a password over 31 chars) — set the camera's password to
-  letters and digits only in the Reolink app. See the README's
-  [Per camera](../README.md#per-camera) section.
+  character (or a password over 31 chars): set the camera's password to
+  letters and digits only in the Reolink app. See
+  [Per camera](configuration.md#per-camera) in the configuration reference.
 - **"the camera's HTTP API is not answering … responds too slowly"**: the HTTP
   port is open but the camera stalled — common for a Wi-Fi camera busy pushing
   video. Reads resume automatically when it recovers; nothing to do unless it
@@ -52,7 +52,7 @@ matching line.
 - **A UDP camera (`"udp": true`) times out while every other camera works, and
   the discovery sweep ends in `UDP: SILENCE`**: in Docker, the container is on a
   bridge network — UDP-only cameras need `network_mode: host` / `--network host`
-  (see [UDP-only battery models](../README.md#udp-only-battery-models-beta)); under
+  (see [UDP-only battery models](battery-cameras.md#udp-only-models)); under
   Home Assistant, install the **Neolink.NET (host network)** add-on instead.
   Read the sweep's `targets:` line to confirm: if the only broadcast address is
   container-internal (`172.x.255.255`) and none is on the camera's subnet, that

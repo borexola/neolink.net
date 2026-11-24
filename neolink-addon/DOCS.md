@@ -147,10 +147,10 @@ under the add-on, the difference is which ports reach it.
   it again.
 - **"no MQTT broker service found" in the log** — install the Mosquitto
   broker add-on (Settings → Add-ons), then restart this add-on.
-- **Camera shows offline** — verify the IP, and that the camera works in the
+- **Camera shows offline**: verify the IP, and that the camera works in the
   Reolink app from the same network. Battery cameras sleep: they are
-  unreachable until PIR motion or the app wakes them (see the project README's
-  battery section).
+  unreachable until PIR motion or the app wakes them (see the battery cameras guide in
+  the project's docs).
 - **Port conflict on 8654/8655** — change the host ports in the add-on's
   Network section; the web UI keeps working through **OPEN WEB UI**.
 - **A UDP-only battery camera (`"udp": true`) never connects** — these need

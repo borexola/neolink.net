@@ -6,8 +6,8 @@ the server runs as a Windows service that starts with Windows and records your
 cameras around the clock, and the desktop app is your window into it.
 
 > Companion guides: the [desktop app](desktop-app.md) (tray, notifications,
-> upgrading) and the main [README](../README.md) (features, configuration
-> reference).
+> upgrading), the [configuration reference](configuration.md) and the
+> [feature list](features.md).
 
 ## 1. Download the installer
 
