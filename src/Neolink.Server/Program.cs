@@ -301,6 +301,9 @@ if (config.Recording is { } recCfg)
         eventStore.Load();
         var backfillStore = eventStore;
         _ = Task.Run(() => backfillStore.BackfillClipLengthsAsync(shutdown.Token));
+        // Segment lengths outlive a restart, so the timeline does not re-read every header.
+        eventStore.UseSegmentLengthIndex(Path.Combine(stateDir, "segment-lengths"));
+        _ = Task.Run(() => backfillStore.RunSegmentLengthIndexAsync(shutdown.Token));
         // Runtime switches live in the state dir; older locations (config dir,
         // recordings root) are checked once for migration.
         recordingSettings = new RecordingSettings(stateDir, configDir, eventStore.Root);

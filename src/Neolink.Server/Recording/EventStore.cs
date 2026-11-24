@@ -512,9 +512,14 @@ public sealed class EventStore
     /// name. The timeline uses it to size coverage truthfully: a segment cut short
     /// (camera suspended/offline) must not claim minutes it doesn't have, or the
     /// cursor is sent past the end of the media.</summary>
-    public List<(string File, long Size, double Seconds)> ListSegments(string camera, string date)
+    public List<(string File, long Size, double Seconds)> ListSegments(string camera, string date) =>
+        ListSegments(camera, date, settle: false);
+
+    /// <param name="settle">Save the day's lengths even when this listing read no new header.</param>
+    private List<(string File, long Size, double Seconds)> ListSegments(string camera, string date, bool settle)
     {
         if (!IsDayName(date)) return new List<(string, long, double)>();
+        var lengths = new DayLengths(LengthsFile(camera, date));
         bool haveDay = DateTime.TryParseExact(date, "yyyy-MM-dd", null,
             System.Globalization.DateTimeStyles.None, out var day);
         var seen = new Dictionary<string, (long Size, double Seconds)>(StringComparer.OrdinalIgnoreCase);
@@ -526,7 +531,7 @@ public sealed class EventStore
             {
                 if (!IsSegmentName(f.Name) || seen.ContainsKey(f.Name)) continue;
                 double seconds = 0;
-                if (SegmentHeaderSeconds(f) is { } fromHeader)
+                if (SegmentHeaderSeconds(f, lengths) is { } fromHeader)
                     seconds = fromHeader;
                 else if (haveDay && TimeSpan.TryParseExact(Path.GetFileNameWithoutExtension(f.Name),
                         @"hh\-mm\-ss", null, out var start))
@@ -534,6 +539,7 @@ public sealed class EventStore
                 seen[f.Name] = (f.Length, seconds);
             }
         }
+        lengths.Save(settle);
         return seen.OrderBy(kv => kv.Key)
             .Select(kv => (kv.Key, kv.Value.Size, kv.Value.Seconds)).ToList();
     }
@@ -544,26 +550,226 @@ public sealed class EventStore
     private const int SegmentSecondsCacheLimit = 20_000;
 
     /// <summary>Seconds in a segment's mvhd; null when it has none yet (open or unfinalized file).</summary>
-    private double? SegmentHeaderSeconds(FileInfo f)
+    private double? SegmentHeaderSeconds(FileInfo f, DayLengths day)
     {
         // Under write (the writer flushes at least per GOP): no header length yet.
         if (DateTime.UtcNow - f.LastWriteTimeUtc < TimeSpan.FromSeconds(15)) return null;
+        double? seconds;
         if (_segmentSeconds.TryGetValue(f.FullName, out var hit)
             && hit.Length == f.Length && hit.MTime == f.LastWriteTimeUtc)
-            return hit.Seconds;
-        double? seconds = null;
+        {
+            seconds = hit.Seconds;
+        }
+        else
+        {
+            if (!day.TryFind(f, out seconds))
+            {
+                try
+                {
+                    using var file = FootageVault.OpenReadUnbuffered(f.FullName);
+                    if (ClipLength(file) is { } s && s > 0) seconds = s;
+                }
+                catch (Exception ex)
+                {
+                    Log.Debug($"{f.FullName}: cannot read segment length: {ex.Message}");
+                }
+                Interlocked.Increment(ref _segmentHeaderReads);
+                day.Learned = true;
+            }
+            if (_segmentSeconds.Count >= SegmentSecondsCacheLimit) _segmentSeconds.Clear();
+            _segmentSeconds[f.FullName] = (f.Length, f.LastWriteTimeUtc, seconds);
+        }
+        day.Note(f, seconds);
+        return seconds;
+    }
+
+    // ---- segment lengths on disk: one small file per camera and day, outside the footage tree
+
+    private string? _lengthsDir;
+    private long _segmentHeaderReads;
+
+    /// <summary>Segment headers opened so far (the self-tests watch it).</summary>
+    internal long SegmentHeaderReads => Interlocked.Read(ref _segmentHeaderReads);
+
+    /// <summary>Keeps segment lengths in <paramref name="dir"/> so a restart does not re-read every header.</summary>
+    public void UseSegmentLengthIndex(string dir) => _lengthsDir = Path.GetFullPath(dir);
+
+    private string? LengthsFile(string camera, string date) =>
+        _lengthsDir == null ? null : Path.Combine(_lengthsDir, SafeName(camera), date + ".tsv");
+
+    /// <summary>One camera-day of saved lengths: read on the first miss, rewritten when a listing learned something.</summary>
+    private sealed class DayLengths(string? file)
+    {
+        private Dictionary<string, (long Size, long MTime, double Seconds)>? _saved;
+        private readonly List<string> _lines = new();
+        public bool Learned;
+
+        /// <summary>True when the saved file knows this exact file; seconds stay null for one without a header.</summary>
+        public bool TryFind(FileInfo f, out double? seconds)
+        {
+            seconds = null;
+            if (file == null) return false;
+            _saved ??= Read(file);
+            if (!_saved.TryGetValue(f.Name, out var e) || e.Size != f.Length || e.MTime != f.LastWriteTimeUtc.Ticks)
+                return false;
+            if (e.Seconds > 0) seconds = e.Seconds;
+            return true;
+        }
+
+        /// <summary>Records one listed file; 0 seconds stands for "has no header".</summary>
+        public void Note(FileInfo f, double? seconds) =>
+            _lines.Add(FormattableString.Invariant($"{f.Name}\t{f.Length}\t{f.LastWriteTimeUtc.Ticks}\t{seconds ?? 0:R}"));
+
+        public void Save(bool force)
+        {
+            if (file == null || !(Learned || force)) return;
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+                var tmp = $"{file}.{Guid.NewGuid():N}.tmp";
+                File.WriteAllLines(tmp, _lines);
+                File.Move(tmp, file, overwrite: true);
+            }
+            catch (Exception ex)
+            {
+                Log.Debug($"{file}: cannot save segment lengths: {ex.Message}");
+            }
+        }
+
+        private static Dictionary<string, (long, long, double)> Read(string file)
+        {
+            var map = new Dictionary<string, (long, long, double)>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                var inv = System.Globalization.CultureInfo.InvariantCulture;
+                foreach (var line in File.ReadLines(file))
+                {
+                    var p = line.Split('\t');
+                    if (p.Length == 4 && long.TryParse(p[1], out var size) && long.TryParse(p[2], out var mtime)
+                        && double.TryParse(p[3], System.Globalization.NumberStyles.Float, inv, out var seconds))
+                        map[p[0]] = (size, mtime, seconds);
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // No file yet (a day never listed), or unreadable: the headers answer instead.
+            }
+            return map;
+        }
+    }
+
+    /// <summary>Keeps the saved lengths complete, so a day nobody has opened yet lists fast too: shortly after start, then hourly.</summary>
+    public async Task RunSegmentLengthIndexAsync(CancellationToken ct)
+    {
+        if (_lengthsDir == null) return;
         try
         {
-            using var file = FootageVault.OpenReadUnbuffered(f.FullName);
-            if (ClipLength(file) is { } s && s > 0) seconds = s;
+            await Task.Delay(TimeSpan.FromSeconds(30), ct).ConfigureAwait(false);
+            for (bool first = true; ; first = false)
+            {
+                try { await IndexSegmentLengthsAsync(first, ct).ConfigureAwait(false); }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    Log.Debug($"Recordings: segment length pass failed: {Log.Flatten(ex)}");
+                }
+                await Task.Delay(TimeSpan.FromHours(1), ct).ConfigureAwait(false);
+            }
         }
-        catch (Exception ex)
+        catch (OperationCanceledException) { }
+    }
+
+    /// <summary>One pass: lists every camera-day whose saved lengths are missing or out of date, and retires those of days that are gone.</summary>
+    internal async Task IndexSegmentLengthsAsync(bool announce, CancellationToken ct)
+    {
+        if (_lengthsDir == null) return;
+        var today = DateTime.Today;
+        TidySegmentLengths(); // first: a day whose storage came back gets its saved lengths back before it is judged
+        var todo = new HashSet<(string Camera, string Day)>();
+        foreach (var root in ContinuousRoots)
+            foreach (var camDir in SafeDirs(root))
+                foreach (var dayDir in SafeDirs(camDir))
+                {
+                    var (cam, day) = (Path.GetFileName(camDir)!, Path.GetFileName(dayDir)!);
+                    if (IsDayName(day) && Directory.Exists(Path.Combine(dayDir, "continuous"))
+                        && !LengthsSettled(cam, day, today))
+                        todo.Add((cam, day));
+                }
+        int past = todo.Count(t => string.CompareOrdinal(t.Day, $"{today:yyyy-MM-dd}") < 0);
+        if (announce && past > 0)
+            Log.Info($"Recordings: saving the segment lengths of {past} earlier camera day(s) in the background");
+        foreach (var (cam, day) in todo.OrderByDescending(t => t.Day))
         {
-            Log.Debug($"{f.FullName}: cannot read segment length: {ex.Message}");
+            ct.ThrowIfCancellationRequested();
+            ListSegments(cam, day, settle: true);
+            await Task.Delay(100, ct).ConfigureAwait(false);
         }
-        if (_segmentSeconds.Count >= SegmentSecondsCacheLimit) _segmentSeconds.Clear();
-        _segmentSeconds[f.FullName] = (f.Length, f.LastWriteTimeUtc, seconds);
-        return seconds;
+    }
+
+    /// <summary>A past day is settled once its lengths were saved after its last segment could have closed,
+    /// and after the last time files were added to or removed from its folder (an archive move, a cleanup).</summary>
+    private bool LengthsSettled(string camera, string day, DateTime today)
+    {
+        var date = DateTime.ParseExact(day, "yyyy-MM-dd", null);
+        if (date >= today) return false;
+        try
+        {
+            var file = new FileInfo(LengthsFile(camera, day)!);
+            return file.Exists && file.LastWriteTime > date.AddDays(1).AddMinutes(30)
+                && ContinuousRoots.Select(root => new DirectoryInfo(Path.Combine(root, camera, day, "continuous")))
+                    .All(dir => !dir.Exists || dir.LastWriteTimeUtc <= file.LastWriteTimeUtc);
+        }
+        catch { return false; }
+    }
+
+    /// <summary>How long saved lengths outlive their footage folder: an archive drive that is offline for a while costs nothing.</summary>
+    private static readonly TimeSpan LengthsGrace = TimeSpan.FromDays(7);
+
+    /// <summary>Saved lengths whose footage folder is missing in every root are set aside (".gone"),
+    /// deleted after the grace period, and put back if the folder returns.</summary>
+    private void TidySegmentLengths()
+    {
+        foreach (var camDir in SafeDirs(_lengthsDir!))
+        {
+            var cam = Path.GetFileName(camDir)!;
+            foreach (var file in SafeFiles(camDir))
+            {
+                try
+                {
+                    var name = Path.GetFileName(file)!;
+                    if (name.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // Left by a crash mid-save.
+                        if (File.GetLastWriteTimeUtc(file) < DateTime.UtcNow.AddHours(-1)) File.Delete(file);
+                        continue;
+                    }
+                    bool gone = name.EndsWith(".tsv.gone", StringComparison.OrdinalIgnoreCase);
+                    if (!gone && !name.EndsWith(".tsv", StringComparison.OrdinalIgnoreCase)) continue;
+                    var day = name[..Math.Min(10, name.Length)];
+                    if (!IsDayName(day)) continue;
+                    bool footage = ContinuousRoots.Any(root => Directory.Exists(Path.Combine(root, cam, day, "continuous")));
+                    var live = Path.Combine(camDir, day + ".tsv");
+                    if (!gone && !footage)
+                    {
+                        File.Move(file, live + ".gone", overwrite: true);
+                        File.SetLastWriteTimeUtc(live + ".gone", DateTime.UtcNow); // the grace period starts now
+                    }
+                    else if (gone && footage)
+                    {
+                        if (File.Exists(live)) File.Delete(file);
+                        else File.Move(file, live);
+                    }
+                    else if (gone && File.GetLastWriteTimeUtc(file) < DateTime.UtcNow - LengthsGrace)
+                    {
+                        File.Delete(file);
+                    }
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    Log.Debug($"{file}: cannot tidy saved segment lengths: {ex.Message}");
+                }
+            }
+            TryDeleteIfEmpty(camDir);
+        }
     }
 
     /// <summary>Absolute path of one segment (live first, then archive); strict name validation (no traversal).</summary>

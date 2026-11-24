@@ -3922,6 +3922,81 @@ public static class SelfTest
                 File.SetLastWriteTime(closedSeg, closedDay.AddHours(12).AddMinutes(35));
                 AssertEq((long)store2.ListSegments("cam1", closedDayName).Single().Seconds, 300L);
 
+                // Saved lengths: a second store (a restart) lists the day without opening a header.
+                var lenDir = Path.Combine(dir, "..", Path.GetFileName(dir) + "-lengths");
+                try
+                {
+                    var keptSeg = store2.NewSegmentPath("cam1", closedDay.AddHours(13));
+                    File.WriteAllBytes(keptSeg, SegBox("ftyp", "isom"u8.ToArray())
+                        .Concat(SegBox("free", new byte[500])).Concat(SegBox("moov", segMvhd)).ToArray());
+                    File.SetLastWriteTime(keptSeg, closedDay.AddHours(13));
+                    var keptName = Path.GetFileName(keptSeg);
+                    var first = new Recording.EventStore(dir);
+                    first.UseSegmentLengthIndex(lenDir);
+                    Assert(Math.Abs(first.ListSegments("cam1", closedDayName).Single(s => s.File == keptName).Seconds - 12.3) < 1e-9,
+                        "length read from the header the first time");
+                    Assert(first.SegmentHeaderReads > 0, "first listing opens the headers");
+                    Assert(File.Exists(Path.Combine(lenDir, "cam1", closedDayName + ".tsv")), "the day's lengths are saved");
+                    var restarted = new Recording.EventStore(dir);
+                    restarted.UseSegmentLengthIndex(lenDir);
+                    Assert(Math.Abs(restarted.ListSegments("cam1", closedDayName).Single(s => s.File == keptName).Seconds - 12.3) < 1e-9,
+                        "length served from the saved file after a restart");
+                    AssertEq(restarted.SegmentHeaderReads, 0L);
+                    // A changed file is read again, not served stale.
+                    File.SetLastWriteTime(keptSeg, closedDay.AddHours(13).AddMinutes(1));
+                    restarted = new Recording.EventStore(dir);
+                    restarted.UseSegmentLengthIndex(lenDir);
+                    restarted.ListSegments("cam1", closedDayName);
+                    AssertEq(restarted.SegmentHeaderReads, 1L);
+                    // The background pass fills in a day nobody listed, and retires a day whose footage is gone.
+                    var unseenDay = closedDay.AddDays(-1);
+                    var unseenSeg = store2.NewSegmentPath("cam1", unseenDay.AddHours(9));
+                    File.WriteAllBytes(unseenSeg, File.ReadAllBytes(keptSeg));
+                    File.SetLastWriteTime(unseenSeg, unseenDay.AddHours(9));
+                    var unseenFile = Path.Combine(lenDir, "cam1", $"{unseenDay:yyyy-MM-dd}.tsv");
+                    var goneFile = Path.Combine(lenDir, "cam1", "2001-01-01.tsv");
+                    File.WriteAllText(goneFile, "");
+                    restarted.IndexSegmentLengthsAsync(announce: false, CancellationToken.None).GetAwaiter().GetResult();
+                    Assert(File.Exists(unseenFile), "the pass saves the lengths of a day nobody opened");
+                    Assert(!File.Exists(goneFile) && File.Exists(goneFile + ".gone"),
+                        "lengths whose footage is gone are set aside, not deleted at once");
+                    var warm = new Recording.EventStore(dir);
+                    warm.UseSegmentLengthIndex(lenDir);
+                    warm.ListSegments("cam1", $"{unseenDay:yyyy-MM-dd}");
+                    AssertEq(warm.SegmentHeaderReads, 0L);
+                    long readsBefore = restarted.SegmentHeaderReads;
+                    var savedAt = File.GetLastWriteTimeUtc(unseenFile);
+                    restarted.IndexSegmentLengthsAsync(announce: false, CancellationToken.None).GetAwaiter().GetResult();
+                    Assert(restarted.SegmentHeaderReads == readsBefore && File.GetLastWriteTimeUtc(unseenFile) == savedAt,
+                        "a settled day costs the next pass nothing");
+                    // Set-aside lengths go after the grace period; storage that comes back gets its lengths back unread.
+                    File.SetLastWriteTimeUtc(goneFile + ".gone", DateTime.UtcNow.AddDays(-8));
+                    var unseenDir = Path.Combine(dir, "cam1", $"{unseenDay:yyyy-MM-dd}");
+                    Directory.Move(unseenDir, unseenDir + "-offline");
+                    restarted.IndexSegmentLengthsAsync(announce: false, CancellationToken.None).GetAwaiter().GetResult();
+                    Assert(!File.Exists(goneFile + ".gone"), "set-aside lengths are deleted after the grace period");
+                    Assert(!File.Exists(unseenFile) && File.Exists(unseenFile + ".gone"), "offline storage sets its lengths aside");
+                    Directory.Move(unseenDir + "-offline", unseenDir);
+                    var back = new Recording.EventStore(dir);
+                    back.UseSegmentLengthIndex(lenDir);
+                    back.IndexSegmentLengthsAsync(announce: false, CancellationToken.None).GetAwaiter().GetResult();
+                    Assert(File.Exists(unseenFile) && !File.Exists(unseenFile + ".gone"), "returning storage gets its lengths back");
+                    AssertEq(back.SegmentHeaderReads, 0L);
+                    // A file added to a settled day (an archive move) makes the pass look at that day again.
+                    var lateSeg = store2.NewSegmentPath("cam1", unseenDay.AddHours(10));
+                    File.WriteAllBytes(lateSeg, File.ReadAllBytes(keptSeg));
+                    File.SetLastWriteTime(lateSeg, unseenDay.AddHours(10));
+                    Directory.SetLastWriteTimeUtc(Path.GetDirectoryName(lateSeg)!, DateTime.UtcNow.AddMinutes(1));
+                    back.IndexSegmentLengthsAsync(announce: false, CancellationToken.None).GetAwaiter().GetResult();
+                    Assert(File.ReadAllText(unseenFile).Contains(Path.GetFileName(lateSeg)), "a changed day folder is listed again by the pass");
+                    File.Delete(keptSeg);
+                    Directory.Delete(Path.Combine(dir, "cam1", $"{unseenDay:yyyy-MM-dd}"), recursive: true);
+                }
+                finally
+                {
+                    try { Directory.Delete(lenDir, recursive: true); } catch { }
+                }
+
                 // A segment name already on disk is never handed out again: the
                 // repeated hour takes the next free second, and the first file survives.
                 var secondPass = store2.NewSegmentPath("cam1", closedDay.AddHours(12).AddMinutes(30));
