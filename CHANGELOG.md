@@ -4,6 +4,12 @@ Release notes for Neolink.NET. Releasing works by tagging `vX.Y.Z` — the docke
 workflow bakes the tag into the app as its version (see "Versioning & releases"
 in the README). Paste the matching section below into the GitHub release.
 
+## 1.2.6
+
+### Changed
+
+- **Test connection waits for a sleeping battery camera.** A UDP camera now gets 40 seconds to answer, with a prompt to wake it, and a camera that stays silent gets an explanation of what to try next.
+
 ## 1.2.5
 
 Click-to-move and autotracking in Frigate for Reolink pan/tilt cameras (experimental), presets on the pan/tilt pad, AI descriptions over HTTPS from your own CA, and pan/tilt commands that go out at once. One breaking change: the Home Assistant doorbell event now reports `ring` instead of `press`.

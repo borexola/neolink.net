@@ -2189,6 +2189,10 @@
                             {
                                 <div class="notice small @(_camTestOk ? "ok" : "fail")">@_camTestResult</div>
                             }
+                            @if (_camTestBusy && _camTestUdp && _camEdit == null)
+                            {
+                                <div class="notice small">@T["This can take up to a minute. If the camera runs on battery, wake it now: trigger its motion sensor or open it in the Reolink app."]</div>
+                            }
                             @if (_camsNeedRestart && _camEdit == null)
                             {
                                 <div class="notice warn small">
@@ -3171,6 +3175,10 @@
                         @if (_camTestResult != null)
                         {
                             <div class="notice small @(_camTestOk ? "ok" : "fail")">@_camTestResult</div>
+                        }
+                        @if (_camTestBusy && _camTestUdp)
+                        {
+                            <div class="notice small">@T["This can take up to a minute. If the camera runs on battery, wake it now: trigger its motion sensor or open it in the Reolink app."]</div>
                         }
                         <div class="settings-foot-btns">
                             @* The test dials whichever transport this camera uses, so a
@@ -5533,6 +5541,8 @@
     /// <summary>Which list row is being tested, so only that row reads "Testing…"
     /// (null when the test came from the edit form).</summary>
     private string? _camTestingName;
+    /// <summary>True while a UDP camera is being tested: that test waits for a sleeping camera.</summary>
+    private bool _camTestUdp;
 
     /// <summary>The add/edit form buffer. Password is write-only: blank keeps the
     /// stored one (or none); the server never sends passwords to the browser.</summary>
@@ -6129,20 +6139,21 @@
     /// field (address, credentials, uid, udp transport) from config.json, so this
     /// checks the camera exactly as the server will actually reach it.</summary>
     private Task TestStoredCameraAsync(ApiAdminCamera cam) =>
-        RunCameraTestAsync(new { name = cam.Name, type = cam.Type }, cam.Name);
+        RunCameraTestAsync(new { name = cam.Name, type = cam.Type }, cam.Name, cam.Udp);
 
     private async Task TestCameraAsync()
     {
         if (_camEdit is not { } e || CamFormError != null) return;
-        await RunCameraTestAsync(CamRequestBody(e, forSave: false), null).ConfigureAwait(false);
+        await RunCameraTestAsync(CamRequestBody(e, forSave: false), null, e.Type == "reolink" && e.Udp).ConfigureAwait(false);
     }
 
     /// <summary>The one place a connection test is issued — from the edit form (with
     /// whatever is typed) or from a list row (with what is saved).</summary>
-    private async Task RunCameraTestAsync(object body, string? rowName)
+    private async Task RunCameraTestAsync(object body, string? rowName, bool udp)
     {
         if (_camTestBusy) return;
         _camTestBusy = true;
+        _camTestUdp = udp;
         _camTestingName = rowName;
         _camTestResult = null;
         try
@@ -6167,6 +6178,7 @@
         finally
         {
             _camTestBusy = false;
+            _camTestUdp = false;
             _camTestingName = null;
         }
     }

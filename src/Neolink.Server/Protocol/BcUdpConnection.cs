@@ -164,7 +164,7 @@ public sealed class BcUdpConnection : IBcConnection
             ip = await ResolveV4Async(host, ct).ConfigureAwait(false)
                 ?? throw new IOException($"UDP: '{host}' has no IPv4 address");
         var session = await UdpDiscovery.EstablishAsync(ip, uid, timeout, ct, tag, camPort).ConfigureAwait(false)
-            ?? throw new IOException(ip != null
+            ?? throw new UdpNoAnswerException(ip != null
                 ? $"UDP handshake to {host} failed (camera asleep or unreachable)"
                 : "UDP broadcast discovery found no camera with this UID (asleep, off-subnet, or broadcast blocked)");
         return new BcUdpConnection(session, tag, ct);
@@ -800,3 +800,6 @@ public sealed class BcUdpConnection : IBcConnection
         _rawGate.Dispose();
     }
 }
+
+/// <summary>The UDP discovery handshake ended with no camera accepting it.</summary>
+public sealed class UdpNoAnswerException(string message) : IOException(message);

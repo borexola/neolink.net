@@ -1035,6 +1035,7 @@
  "Test failed: {0}": "Teste falhou: {0}",
  "Testing needs an address, or a UID with 'Connect over UDP' set": "O teste precisa de um endereço, ou de um UID com 'Conectar por UDP' ativado",
  "Testing…": "Testando…",
+ "This can take up to a minute. If the camera runs on battery, wake it now: trigger its motion sensor or open it in the Reolink app.": "Isso pode levar até um minuto. Se a câmera funciona a bateria, acorde-a agora: acione o sensor de movimento ou abra-a no app Reolink.",
  "Th": "Qui",
  "That event no longer exists; it may have been cleaned up.": "Esse evento não existe mais; pode ter sido limpo.",
  "The 60 minutes up to now": "Os 60 minutos até agora",

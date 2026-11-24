@@ -92,9 +92,9 @@ public sealed class BcCamera : IBcCamera
     /// handshake; everything above the transport (login, streaming, control) is
     /// identical to the TCP path.</summary>
     public static async Task<BcCamera> ConnectUdpAsync(string host, string uid, byte channelId, CancellationToken ct,
-        string? tag = null)
+        string? tag = null, TimeSpan? timeout = null)
     {
-        var conn = await BcUdpConnection.ConnectAsync(host, uid, TimeSpan.FromSeconds(15), ct, tag ?? $"ch{channelId}")
+        var conn = await BcUdpConnection.ConnectAsync(host, uid, timeout ?? TimeSpan.FromSeconds(15), ct, tag ?? $"ch{channelId}")
             .ConfigureAwait(false);
         return new BcCamera(conn, channelId, tag);
     }

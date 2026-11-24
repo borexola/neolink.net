@@ -211,6 +211,10 @@ public sealed class WebApiOptions
 /// </summary>
 public static class WebApi
 {
+    /// <summary>How long a camera test waits for UDP discovery. With the 12 s login
+    /// it stays under the 60 s read timeout common to reverse proxies.</summary>
+    private static readonly TimeSpan UdpTestWindow = TimeSpan.FromSeconds(40);
+
     private sealed record LedRequest(string? State, string? LightState,
         string? DoorbellLightState, int? IrBrightness);
     private sealed record PirRequest(bool? Enabled);
@@ -1795,9 +1799,14 @@ public static class WebApi
                 }
                 byte channel = (byte)Math.Clamp(req.ChannelId ?? stored?.ChannelId ?? 0, 0, 255);
 
+                // UDP discovery runs on its own window, long enough to wake a battery camera
+                // during the test; the 12 s budget restarts for the login.
+                if (udp) cts.CancelAfter(Timeout.InfiniteTimeSpan);
                 await using var camera = udp
-                    ? await Protocol.BcCamera.ConnectUdpAsync(host, uid!, channel, cts.Token, tag: "test")
+                    ? await Protocol.BcCamera.ConnectUdpAsync(host, uid!, channel, cts.Token, tag: "test",
+                        timeout: UdpTestWindow)
                     : await Protocol.BcCamera.ConnectAsync(host, port, channel, cts.Token, tag: "test");
+                if (udp) cts.CancelAfter(TimeSpan.FromSeconds(12));
                 // The stored camera's login override applies here too, or "Test"
                 // would report a failure the running bridge does not actually have.
                 await camera.LoginAsync(username!, password, cts.Token,
@@ -1819,14 +1828,26 @@ public static class WebApi
                                 : ""),
                 });
             }
+            catch (Protocol.UdpNoAnswerException)
+            {
+                return Results.Json(new
+                {
+                    ok = false,
+                    message = $"No camera answered over UDP in {UdpTestWindow.TotalSeconds:0} seconds. A battery camera "
+                        + "only answers while it is awake: trigger its motion sensor or open it in the Reolink app, then "
+                        + "test again. You can also save it as it is: the server keeps trying and connects when the "
+                        + "camera wakes. If it never answers, check the UID, that the camera is on this server's subnet, "
+                        + "and that Docker uses host networking (a bridge network blocks UDP discovery).",
+                });
+            }
             catch (OperationCanceledException) when (!ctx.RequestAborted.IsCancellationRequested)
             {
                 return Results.Json(new
                 {
                     ok = false,
                     message = udp
-                        ? "timed out — the camera did not answer UDP discovery. It may be asleep, on another "
-                          + "subnet, or broadcast may be blocked (a Docker bridge network blocks it; use host networking)."
+                        ? "The camera answered over UDP but the login timed out. It may have gone back to sleep: "
+                          + "wake it and test again."
                         : "timed out — is the address reachable from this server?",
                 });
             }
