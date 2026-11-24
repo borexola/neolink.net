@@ -460,7 +460,7 @@ warnings with fill-date forecasts, and AES-256-GCM footage encryption.
 | `permitted_users` | all users | Restrict this camera's mounts to specific `users` |
 | `ptz_share` | `false` | Offer this camera's PTZ to Frigate on the shared port ([PTZ buttons in Frigate](#ptz-buttons-in-frigate)) |
 | `ptz_port` | *(none)* | Give this camera's PTZ its own port instead (Frigate 0.17 and older) |
-| `ptz_fov_h`, `ptz_pan_rate` | *(none)* | **Experimental.** The lens's angle of view and the head's pan speed; together they turn on [click-to-move and autotracking in Frigate](#click-to-move-and-autotracking-in-frigate-experimental), which lists the optional `ptz_fov_v`, `ptz_tilt_rate`, `ptz_lag_ms`, `ptz_speed` and `ptz_tele_fov_h` |
+| `ptz_fov_h`, `ptz_pan_rate` | *(none)* | **Beta.** The lens's angle of view and the head's pan speed; together they turn on [click-to-move and autotracking in Frigate](#click-to-move-and-autotracking-in-frigate-beta), which lists the optional `ptz_fov_v`, `ptz_tilt_rate`, `ptz_lag_ms`, `ptz_speed` and `ptz_tele_fov_h` |
 | `record` | `true` | Initial default for this camera's "Detection events" switch (changeable in the web UI) |
 | `max_encryption` | `fullaes` | **Diagnostic.** Caps the encryption the login advertises: `none`, `bcencrypt`, `aes`, `fullaes`. Only for firmware that will not answer the default; see [troubleshooting](docs/troubleshooting.md) |
 | `legacy_login` | `false` | **Diagnostic.** Opens the login with the older credential framing instead of the header-only one. Pairs with `max_encryption`; see [troubleshooting](docs/troubleshooting.md) |
@@ -857,7 +857,7 @@ onvif:
   Zoom is untested on a real zoom camera.
 - Video stays on RTSP. In Docker, publish the PTZ port or use host networking.
 
-### Click-to-move and autotracking in Frigate (experimental)
+### Click-to-move and autotracking in Frigate (beta)
 
 > 📖 Setup and a sample Frigate config: **[docs/autotracking.md](docs/autotracking.md)**
 
@@ -866,7 +866,7 @@ ask the camera to move by a fraction of the picture, which a Reolink head cannot
 do. Neolink.NET runs each such move as a timed pan followed by a timed tilt, worked
 out from the lens's angle of view and the head's speed. Turn it on under **Server
 settings → Cameras → Edit**: tick **This camera pans and tilts** in the
-experimental *Click-to-move and autotracking* section, then give the lens's angle
+beta *Click-to-move and autotracking* section, then give the lens's angle
 and how many seconds a full pan and a full tilt take. Or add the settings to a camera
 that already has `ptz_share` or `ptz_port`:
 

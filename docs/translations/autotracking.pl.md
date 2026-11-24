@@ -5,7 +5,7 @@
 > **Uwaga**: to tłumaczenie wykonała SI. Rozstrzygająca jest
 > [wersja angielska](../autotracking.md).
 
-> **Eksperymentalne.** Przetestowane z Reolink E1 Pro.
+> **Beta.** Przetestowane z Reolink E1 Pro.
 
 Sterowanie kliknięciem i autośledzenie we Frigate wymagają kamery, która przesuwa się o część obrazu
 (ruchy względne ONVIF, `TranslationSpaceFov`). Głowice Reolink tego nie potrafią, więc punkt PTZ

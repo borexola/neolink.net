@@ -5,7 +5,7 @@ the sections between your installed version and the update on offer.
 
 ## 1.2.5
 
-Click-to-move and autotracking in Frigate for Reolink pan/tilt cameras (experimental), presets on the pan/tilt pad, AI descriptions over HTTPS from your own CA, and pan/tilt commands that go out at once. One breaking change: the Home Assistant doorbell event now reports `ring` instead of `press`.
+Click-to-move and autotracking in Frigate for Reolink pan/tilt cameras (beta), presets on the pan/tilt pad, AI descriptions over HTTPS from your own CA, and pan/tilt commands that go out at once. One breaking change: the Home Assistant doorbell event now reports `ring` instead of `press`.
 
 ### Breaking changes
 
@@ -13,7 +13,7 @@ Click-to-move and autotracking in Frigate for Reolink pan/tilt cameras (experime
 
 ### Added
 
-- **Click-to-move and autotracking in Frigate for Reolink pan/tilt cameras (experimental).** Tick *This camera pans and tilts* in the camera editor and give its lens angle and how long a full pan and tilt take (or `ptz_fov_h` and `ptz_pan_rate` in the config), and its PTZ endpoint takes Frigate's relative moves; zoom lenses also take exact zoom positions.
+- **Click-to-move and autotracking in Frigate for Reolink pan/tilt cameras (beta).** Tick *This camera pans and tilts* in the camera editor and give its lens angle and how long a full pan and tilt take (or `ptz_fov_h` and `ptz_pan_rate` in the config), and its PTZ endpoint takes Frigate's relative moves; zoom lenses also take exact zoom positions.
 - **Presets on the video's pan/tilt pad.** The pad's bookmark button lists the camera's saved positions; tap one to send the head there.
 - **AI descriptions can reach an LLM whose HTTPS certificate comes from your own CA.** Switch on *Accept self-signed certificates* in Settings → AI, or add the CA to the server's trusted certificates (see the AI descriptions guide).
 

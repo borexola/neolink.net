@@ -70,4 +70,4 @@ De uitgebreide documentatie (configuratie, Home Assistant, accucamera's,
 gelaagde opslag, Windows-desktopapp…) staat in de
 [Engelse README](../../README.md) en de map [docs/](../).
 
-Klikken om te bewegen en autotracking in Frigate (experimenteel): [handleiding](autotracking.nl.md).
+Klikken om te bewegen en autotracking in Frigate (bèta): [handleiding](autotracking.nl.md).

@@ -5,7 +5,7 @@
 > **Hinweis**: Diese Übersetzung wurde von einer KI erstellt. Maßgeblich ist die
 > [englische Fassung](../autotracking.md).
 
-> **Experimentell.** Getestet mit einer Reolink E1 Pro.
+> **Beta.** Getestet mit einer Reolink E1 Pro.
 
 Frigates Klicksteuerung und Autotracking brauchen eine Kamera, die sich um einen Teil des Bildes bewegt
 (relative ONVIF-Bewegungen, `TranslationSpaceFov`). Reolink-Köpfe können das nicht, also meldet der

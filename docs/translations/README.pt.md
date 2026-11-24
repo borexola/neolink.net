@@ -69,4 +69,4 @@ A documentação detalhada (configuração, Home Assistant, câmeras a bateria,
 armazenamento em camadas, aplicativo de desktop para Windows…) está no
 [README em inglês](../../README.md) e na pasta [docs/](../).
 
-Clique para mover e rastreamento automático no Frigate (experimental): [guia](autotracking.pt.md).
+Clique para mover e rastreamento automático no Frigate (beta): [guia](autotracking.pt.md).

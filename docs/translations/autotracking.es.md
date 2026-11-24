@@ -5,7 +5,7 @@
 > **Nota**: esta traducción la ha generado una IA. La
 > [versión en inglés](../autotracking.md) es la de referencia.
 
-> **Experimental.** Probado con una Reolink E1 Pro.
+> **Beta.** Probado con una Reolink E1 Pro.
 
 El clic para mover y el seguimiento automático de Frigate necesitan una cámara que se mueva una parte de la imagen
 (movimientos relativos ONVIF, `TranslationSpaceFov`). Los cabezales Reolink no pueden, así que el punto

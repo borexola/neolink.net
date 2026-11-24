@@ -69,4 +69,4 @@ Szczegółowa dokumentacja (konfiguracja, Home Assistant, kamery bateryjne,
 magazyn warstwowy, aplikacja desktopowa Windows…) znajduje się w
 [angielskim README](../../README.md) i w katalogu [docs/](../).
 
-Sterowanie kliknięciem i autośledzenie we Frigate (eksperymentalne): [poradnik](autotracking.pl.md).
+Sterowanie kliknięciem i autośledzenie we Frigate (beta): [poradnik](autotracking.pl.md).

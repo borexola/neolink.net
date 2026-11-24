@@ -2,7 +2,7 @@
 
 **English** · [Français](translations/autotracking.fr.md) · [Deutsch](translations/autotracking.de.md) · [Español](translations/autotracking.es.md) · [Nederlands](translations/autotracking.nl.md) · [Polski](translations/autotracking.pl.md) · [Português](translations/autotracking.pt.md)
 
-> **Experimental.** Tested on a Reolink E1 Pro.
+> **Beta.** Tested on a Reolink E1 Pro.
 
 Frigate's click-to-move and autotracking need a camera that moves by part of the picture
 (ONVIF relative moves, `TranslationSpaceFov`). Reolink heads can't, so Neolink.NET's PTZ

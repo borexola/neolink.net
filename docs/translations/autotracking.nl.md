@@ -5,7 +5,7 @@
 > **Let op**: deze vertaling is door AI gemaakt. De
 > [Engelse versie](../autotracking.md) is leidend.
 
-> **Experimenteel.** Getest met een Reolink E1 Pro.
+> **Bèta.** Getest met een Reolink E1 Pro.
 
 Frigates klikken om te bewegen en autotracking hebben een camera nodig die over een deel van het beeld beweegt
 (relatieve ONVIF-bewegingen, `TranslationSpaceFov`). Reolink-koppen kunnen dat niet, dus het PTZ-eindpunt

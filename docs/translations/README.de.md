@@ -69,4 +69,4 @@ Die ausführliche Dokumentation (Konfiguration, Home Assistant, Akkukameras,
 gestufter Speicher, Windows-Desktop-App …) findet sich im
 [englischen README](../../README.md) und im Ordner [docs/](../).
 
-Klicksteuerung und Autotracking in Frigate (experimentell): [Anleitung](autotracking.de.md).
+Klicksteuerung und Autotracking in Frigate (Beta): [Anleitung](autotracking.de.md).

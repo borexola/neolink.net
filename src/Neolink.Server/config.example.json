@@ -47,7 +47,7 @@
 
       // PTZ buttons in Frigate (port 8656, onvif.profile = this camera's name):
       // "ptz_share": true,
-      // Click-to-move and autotracking in Frigate (experimental, see docs/autotracking.md). Reolink E1 Pro values:
+      // Click-to-move and autotracking in Frigate (beta, see docs/autotracking.md). Reolink E1 Pro values:
       // "ptz_fov_h": 87.5,                 // horizontal lens angle, from the spec sheet
       // "ptz_pan_rate": 59.2,              // °/s panning: 355° in 6 s
       // "ptz_tilt_rate": 25,               // °/s tilting: 50° in 2 s
